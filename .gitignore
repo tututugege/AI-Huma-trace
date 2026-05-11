@@ -1,0 +1,42 @@
+# Build artifacts
+a.out
+/build/
+/build*/
+*.o
+*.d
+*.so
+*.out
+
+# Common simulation files
+*.log
+*.dump
+*.bin
+*.elf
+*.gz
+
+# CMake
+/CMakeFiles/
+/CMakeCache.txt
+/CMakeScripts/
+cmake_install.cmake
+Makefile
+!/Makefile
+!/baremetal/**/Makefile
+
+# Project specific
+baremetal/memory
+baremetal/linux.bin
+compile_commands.json
+
+# Cache and temporary files
+.cache/
+.DS_Store
+*.tmp
+*.swp
+__pycache__/
+*.txt
+
+# IDEs
+.vscode/
+.idea/
+.clangd/
