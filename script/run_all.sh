@@ -1,0 +1,184 @@
+#!/bin/bash
+
+# ================= 配置区域 =================
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
+
+SIMULATOR="${SIMULATOR:-./build/simulator}"
+CKPT_ROOT="${CKPT_ROOT:-${REPO_ROOT}/../456.hmmer_ref}"
+RESULT_DIR="${RESULT_DIR:-./results_456}"
+CKPT_WARMUP="${CKPT_WARMUP-10000000}"
+CKPT_MAX_COMMIT="${CKPT_MAX_COMMIT-10000000}"
+PIN_CPUS="${PIN_CPUS:-}"
+
+MAX_JOBS="${MAX_JOBS:-6}"
+
+# 捕获 Ctrl+C (SIGINT)，优雅退出
+trap 'echo -e "\n🛑 接收到退出信号，正在清理所有后台模拟器..."; kill 0; exit 1' SIGINT
+# ===========================================
+
+if [ ! -f "$SIMULATOR" ]; then
+  echo "Error: Simulator not found at $SIMULATOR"
+  exit 1
+fi
+
+if [ ! -d "$CKPT_ROOT" ]; then
+  echo "Error: Checkpoint root dir not found: $CKPT_ROOT"
+  exit 1
+fi
+
+if ! command -v taskset >/dev/null 2>&1; then
+  echo "Error: taskset is required"
+  exit 1
+fi
+
+if ! command -v lscpu >/dev/null 2>&1; then
+  echo "Error: lscpu is required"
+  exit 1
+fi
+
+discover_physical_cpus() {
+  lscpu -p=CPU,CORE,SOCKET,ONLINE | awk -F, -v max="$MAX_JOBS" '
+    /^#/ { next }
+    $4 != "Y" { next }
+    {
+      key = $3 ":" $2
+      if (!(key in seen)) {
+        seen[key] = 1
+        cpus[++n] = $1
+        if (n == max) {
+          exit
+        }
+      }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        printf "%s%s", (i == 1 ? "" : " "), cpus[i]
+      }
+      if (n > 0) {
+        printf "\n"
+      }
+    }
+  '
+}
+
+if [ -n "$PIN_CPUS" ]; then
+  read -r -a SELECTED_CPUS <<<"$(tr ',:' '  ' <<<"$PIN_CPUS")"
+else
+  read -r -a SELECTED_CPUS <<<"$(discover_physical_cpus)"
+fi
+
+if [ "${#SELECTED_CPUS[@]}" -lt "$MAX_JOBS" ]; then
+  echo "Error: Need $MAX_JOBS physical cores, got ${#SELECTED_CPUS[@]} CPUs: ${SELECTED_CPUS[*]:-<none>}"
+  exit 1
+fi
+SELECTED_CPUS=("${SELECTED_CPUS[@]:0:MAX_JOBS}")
+
+START_TIME=$(date +%s)
+echo "=================================================="
+echo "Start Time:     $(date)"
+echo "Mode:           Static Modulo Partitioning (Physical-Core Pinning)"
+echo "Parallel Jobs:  $MAX_JOBS"
+echo "Pinned CPUs:    ${SELECTED_CPUS[*]}"
+echo "=================================================="
+
+echo "Scanning for all checkpoint files..."
+mapfile -t SORTED_CKPTS < <(find "$CKPT_ROOT" -name "*.gz" | sort)
+ALL_CKPTS=()
+for ckpt in "${SORTED_CKPTS[@]}"; do
+  if [[ "$ckpt" == *"/429.mcf_ref/"* ]]; then
+    ALL_CKPTS+=("$ckpt")
+  fi
+done
+for ckpt in "${SORTED_CKPTS[@]}"; do
+  if [[ "$ckpt" != *"/429.mcf_ref/"* ]]; then
+    ALL_CKPTS+=("$ckpt")
+  fi
+done
+TOTAL_TASKS=${#ALL_CKPTS[@]}
+
+if [ "$TOTAL_TASKS" -eq 0 ]; then
+  echo "Error: No .gz files found in $CKPT_ROOT"
+  exit 1
+fi
+
+echo "Found $TOTAL_TASKS checkpoints. Preparing directories..."
+
+for ckpt_file in "${ALL_CKPTS[@]}"; do
+  bench_name=$(basename "$(dirname "$ckpt_file")")
+  mkdir -p "$RESULT_DIR/$bench_name"
+done
+
+# ================= 核心魔法：打印播音员 (防输出乱码) =================
+PRINT_FIFO="/tmp/sim_print_$$"
+mkfifo "$PRINT_FIFO"
+exec 4<>"$PRINT_FIFO"
+rm "$PRINT_FIFO"
+
+(
+  while read -u 4 msg; do
+    if [ "$msg" == "PRINT_EOF" ]; then
+      break
+    fi
+    echo "$msg"
+  done
+) &
+PRINTER_PID=$!
+
+# ================= 核心重构：静态取模分配 =================
+echo "Launching $MAX_JOBS dedicated workers pinned to physical-core CPUs: ${SELECTED_CPUS[*]}..."
+
+WORKER_PIDS=()
+
+for ((worker = 0; worker < MAX_JOBS; worker++)); do
+  (
+    core="${SELECTED_CPUS[$worker]}"
+
+    # 核心逻辑：这个 Worker 只认属于自己编号的任务
+    for ((i = worker; i < TOTAL_TASKS; i += MAX_JOBS)); do
+      ckpt_file="${ALL_CKPTS[$i]}"
+
+      bench_name=$(basename "$(dirname "$ckpt_file")")
+      ckpt_basename=$(basename "$ckpt_file" .gz)
+      log_file="$RESULT_DIR/$bench_name/${ckpt_basename}.log"
+
+      sim_args=("$SIMULATOR" --mode ckpt)
+      if [ -n "$CKPT_WARMUP" ]; then
+        sim_args+=(-w "$CKPT_WARMUP")
+      fi
+      if [ -n "$CKPT_MAX_COMMIT" ]; then
+        sim_args+=(-c "$CKPT_MAX_COMMIT")
+      fi
+
+      # 强行绑定物理核开跑
+      taskset -c "$core" "${sim_args[@]}" "$ckpt_file" >"$log_file" 2>&1
+
+      if [ $? -eq 0 ]; then
+        echo "[Done] Core $(printf "%03d" $core) | $bench_name/$ckpt_basename" >&4
+      else
+        echo "[Fail] Core $(printf "%03d" $core) | $bench_name/$ckpt_basename" >&4
+      fi
+    done
+  ) &
+  WORKER_PIDS+=($!)
+done
+
+# ================= 等待与收尾 =================
+wait "${WORKER_PIDS[@]}"
+
+echo "PRINT_EOF" >&4
+wait $PRINTER_PID
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+hours=$((DURATION / 3600))
+minutes=$(((DURATION % 3600) / 60))
+seconds=$((DURATION % 60))
+
+echo "=================================================="
+echo "End Time:        $(date)"
+echo "Total Duration:  ${hours}h ${minutes}m ${seconds}s"
+echo "All tasks processed safely."
+echo "=================================================="
