@@ -14,8 +14,6 @@ static_assert((DCACHE_WAYS_NUM & (DCACHE_WAYS_NUM - 1)) == 0,
 static_assert(DCACHE_BANK_NUM > 0, "DCACHE_BANK_NUM must be positive");
 static_assert((DCACHE_BANK_NUM & (DCACHE_BANK_NUM - 1)) == 0,
               "DCache bank conflict model requires power-of-two DCACHE_BANK_NUM");
-static_assert((DCACHE_SETS_NUM % DCACHE_BANK_NUM) == 0,
-              "DCACHE_BANK_NUM must divide DCACHE_SETS_NUM");
 constexpr int DCACHE_PLRU_TREE_BITS =
     (DCACHE_WAYS_NUM > 1) ? (DCACHE_WAYS_NUM - 1) : 1;
 extern wire<1>  plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS];
@@ -155,7 +153,9 @@ struct LruUpdate {
 };
 
 struct DcacheLineReadReq {
+    wire<1> valid;
     wire<DCACHE_SET_BITS> set_idx;
+    wire<DCACHE_OFFSET_BITS> word_off;
 };
 
 
@@ -163,7 +163,9 @@ struct DcacheLineReadResp {
     wire<1> valid[DCACHE_WAYS_NUM];
     wire<DCACHE_TAG_BITS> tag[DCACHE_WAYS_NUM];
     wire<1> dirty[DCACHE_WAYS_NUM];
-    wire<32> data[DCACHE_WAYS_NUM][DCACHE_WORD_NUM];
+    // Normal LSU reads return only the requested word from each way. Fill
+    // victim snapshots below still carry the full line for dirty writeback.
+    wire<32> data[DCACHE_WAYS_NUM];
 };
 struct FillIn {
     wire<1> valid_snap[DCACHE_WAYS_NUM];
