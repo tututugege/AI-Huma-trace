@@ -259,7 +259,9 @@ void RealDcache::stage1_comb() {
                 continue;
             }
 
+            out.dcachereadreq[i]->valid = true;
             out.dcachereadreq[i]->set_idx = f.set_idx;
+            out.dcachereadreq[i]->word_off = f.word_off;
             out.dcache2wb->bypass_req[i].valid = true;
             out.dcache2wb->bypass_req[i].addr = req.addr;
 
@@ -305,7 +307,9 @@ void RealDcache::stage1_comb() {
                 continue;
             }
 
+            out.dcachereadreq[idx]->valid = true;
             out.dcachereadreq[idx]->set_idx = f.set_idx;
+            out.dcachereadreq[idx]->word_off = f.word_off;
             out.dcache2wb->merge_req[i].valid = true;
             out.dcache2wb->merge_req[i].addr = req.addr;
             out.dcache2wb->merge_req[i].data = req.data;
@@ -427,7 +431,7 @@ void RealDcache::stage2_comb() {
             // ── Cache Hit ────────────────────────────────────────────────────
             resp.valid  = true;
             resp.replay = ReplayType::HIT;
-            resp.data   = line_resp.data[hit_way][f.word_off];
+            resp.data   = line_resp.data[hit_way];
             resp.req_id = slot.req_id;
             out.lru_updates[i]->valid = true;
             out.lru_updates[i]->set_idx = f.set_idx;

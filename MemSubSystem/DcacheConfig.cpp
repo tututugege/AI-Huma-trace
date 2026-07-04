@@ -48,8 +48,8 @@ AddrFields decode(uint32_t addr)
     AddrFields f;
     f.tag = addr >> (DCACHE_SET_BITS + DCACHE_OFFSET_BITS);
     f.set_idx = (addr >> DCACHE_OFFSET_BITS) & (DCACHE_SETS_NUM - 1);
-    f.bank = f.set_idx & (DCACHE_BANK_NUM - 1);
     f.word_off = (addr >> 2) & (DCACHE_WORD_NUM - 1);
+    f.bank = f.set_idx & (DCACHE_BANK_NUM - 1);
     return f;
 }
 
@@ -123,10 +123,16 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
 {
     for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
         const auto &req = read_req[i];
+        if (!req.valid) {
+            memset(&resp[i], 0, sizeof(resp[i]));
+            continue;
+        }
         memcpy(resp[i].valid, valid_array[req.set_idx], sizeof(valid_array[req.set_idx]));
         memcpy(resp[i].tag, tag_array[req.set_idx], sizeof(tag_array[req.set_idx]));
         memcpy(resp[i].dirty, dirty_array[req.set_idx], sizeof(dirty_array[req.set_idx]));
-        memcpy(resp[i].data, data_array[req.set_idx], sizeof(data_array[req.set_idx]));
+        for (int w = 0; w < DCACHE_WAYS_NUM; w++) {
+            resp[i].data[w] = data_array[req.set_idx][w][req.word_off];
+        }
     }
 
     if(fillout.valid){
