@@ -43,7 +43,7 @@ constexpr uint64_t div_round_u64(uint64_t numerator, uint64_t denominator) {
 constexpr uint64_t VIRTUAL_MEMORY_LENGTH =
     256ULL * 1024 * 1024; // 256M words = 1GB bytes
 constexpr uint64_t PHYSICAL_MEMORY_LENGTH =
-    256ULL * 1024 * 1024;                      // 256M words = 1GB bytes
+    32ULL * 1024 * 1024;                      // 32M words = 128MB bytes
 constexpr uint64_t RAM_SIZE = PHYSICAL_MEMORY_LENGTH * sizeof(uint32_t); // bytes
 constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 

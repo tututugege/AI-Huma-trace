@@ -10,12 +10,23 @@ struct SimMmioRange {
   uint32_t size;
 };
 
+inline constexpr uint32_t SIM_RESERVED_RAM_SIZE = 0x00100000u;
+static_assert(RAM_SIZE > SIM_RESERVED_RAM_SIZE,
+              "RAM must be larger than the reserved RAM window");
+static_assert(RAM_SIZE <= 0x80000000ull,
+              "RAM window must fit in the 32-bit physical address space");
+inline constexpr uint32_t SIM_RESERVED_RAM_BASE =
+    PMEM_RAM_BASE + static_cast<uint32_t>(RAM_SIZE) - SIM_RESERVED_RAM_SIZE;
+inline constexpr SimMmioRange kSimulatorUsableRamRange = {
+    PMEM_RAM_BASE, static_cast<uint32_t>(RAM_SIZE) - SIM_RESERVED_RAM_SIZE};
+
 inline constexpr SimMmioRange kSimulatorMmioRanges[] = {
     {UART_ADDR_BASE, UART_MMIO_SIZE},
     {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
     {TIMER_BASE, 0x00000010u},
     {0x1fe10000u, 0x00000064u},
     {0x4ff00000u, 0x00100000u},
+    {SIM_RESERVED_RAM_BASE, SIM_RESERVED_RAM_SIZE},
     {0xfff00000u, 0x00100000u},
 };
 
@@ -35,8 +46,9 @@ static constexpr bool simulator_ranges_overlap(uint32_t lhs_base,
 
 static constexpr bool simulator_mmio_range_overlaps_ram(
     const SimMmioRange &range) {
-  return simulator_ranges_overlap(range.base, range.size, PMEM_RAM_BASE,
-                                  RAM_SIZE);
+  return simulator_ranges_overlap(range.base, range.size,
+                                  kSimulatorUsableRamRange.base,
+                                  kSimulatorUsableRamRange.size);
 }
 
 static constexpr bool simulator_mmio_ranges_overlap_ram() {
@@ -49,7 +61,7 @@ static constexpr bool simulator_mmio_ranges_overlap_ram() {
 }
 
 static_assert(!simulator_mmio_ranges_overlap_ram(),
-              "simulator MMIO ranges must not overlap RAM");
+              "simulator MMIO ranges must not overlap usable RAM");
 
 static constexpr bool simulator_addr_in_range(uint32_t addr,
                                               const SimMmioRange &range) {
@@ -60,10 +72,6 @@ static constexpr bool simulator_addr_in_range(uint32_t addr,
 }
 
 static inline bool simulator_is_mmio_addr(uint32_t addr) {
-  if (simulator_addr_in_range(
-          addr, SimMmioRange{PMEM_RAM_BASE, static_cast<uint32_t>(RAM_SIZE)})) {
-    return false;
-  }
   for (const auto &range : kSimulatorMmioRanges) {
     if (simulator_addr_in_range(addr, range)) {
       return true;
