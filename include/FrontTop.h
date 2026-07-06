@@ -1,10 +1,13 @@
 #pragma once
 
 #include "front_IO.h"
+#include <memory>
 
 class PtwMemPort;
 class PtwWalkPort;
 class SimContext;
+struct FrontReadData;
+struct FrontUpdateRequest;
 namespace axi_interconnect {
 struct ReadMasterPort_t;
 }
@@ -29,9 +32,24 @@ public:
   ICacheMemPortReq *icache_mem_req_port = nullptr;
   ICacheMemPortResp *icache_mem_resp_port = nullptr;
   axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;
+  front_top_in back2front = {};
+  front_top_in back2front_1 = {};
+  reg<1> back2front_stall = false;
+  reg<1> back2front_stall_1 = false;
 
+  FrontTop();
+  ~FrontTop();
   void init();
+  void seq_read_bpu();
+  void comb_bpu();
+  void seq_write_bpu();
+  void seq_back2front();
+  void force_back2front_refetch(uint32_t pc);
   void step_bpu();
   void step_oracle();
   void dump_debug_state() const;
+
+private:
+  std::unique_ptr<FrontReadData> read_data_;
+  std::unique_ptr<FrontUpdateRequest> update_req_;
 };
