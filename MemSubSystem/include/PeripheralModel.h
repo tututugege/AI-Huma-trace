@@ -50,7 +50,7 @@ public:
     return in_range(paddr, UART_ADDR_BASE, UART_MMIO_SIZE) ||
            in_range(paddr, PLIC_ADDR_BASE, PLIC_MMIO_SIZE) ||
            in_range(paddr, DMA_ADDR_BASE, DMA_MMIO_SIZE) ||
-           in_range(paddr, OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE);
+           in_range(paddr, TIMER_BASE, TIMER_MMIO_SIZE);
   }
 
   uint32_t read_load(uint32_t paddr, uint8_t func3) const {
@@ -58,16 +58,16 @@ public:
       return 0;
     }
 
-    if (paddr == OPENSBI_TIMER_LOW_ADDR) {
+    if (paddr == TIMER_LOW_ADDR) {
       return static_cast<uint32_t>(effective_timer_value());
     }
-    if (paddr == OPENSBI_TIMER_HIGH_ADDR) {
+    if (paddr == TIMER_HIGH_ADDR) {
       return static_cast<uint32_t>(effective_timer_value() >> 32);
     }
-    if (paddr == OPENSBI_TIMERCMP_LOW_ADDR) {
+    if (paddr == TIMER_CMP_LOW_ADDR) {
       return static_cast<uint32_t>(timer_cmp_);
     }
-    if (paddr == OPENSBI_TIMERCMP_HIGH_ADDR) {
+    if (paddr == TIMER_CMP_HIGH_ADDR) {
       return static_cast<uint32_t>(timer_cmp_ >> 32);
     }
     if (paddr == DMA_SRC_ADDR) {
@@ -117,10 +117,10 @@ public:
       return;
     }
 
-    if (paddr == OPENSBI_TIMER_LOW_ADDR || paddr == OPENSBI_TIMER_HIGH_ADDR) {
+    if (paddr == TIMER_LOW_ADDR || paddr == TIMER_HIGH_ADDR) {
       const uint64_t current_timer = effective_timer_value();
       uint64_t new_timer = current_timer;
-      if (paddr == OPENSBI_TIMER_LOW_ADDR) {
+      if (paddr == TIMER_LOW_ADDR) {
         new_timer = (current_timer & 0xFFFFFFFF00000000ull) |
                     static_cast<uint64_t>(data);
       } else {
@@ -132,14 +132,14 @@ public:
       return;
     }
 
-    if (paddr == OPENSBI_TIMERCMP_LOW_ADDR) {
+    if (paddr == TIMER_CMP_LOW_ADDR) {
       timer_cmp_ =
           (timer_cmp_ & 0xFFFFFFFF00000000ull) | static_cast<uint64_t>(data);
       update_timer_irq();
       return;
     }
 
-    if (paddr == OPENSBI_TIMERCMP_HIGH_ADDR) {
+    if (paddr == TIMER_CMP_HIGH_ADDR) {
       timer_cmp_ = (static_cast<uint64_t>(data) << 32) |
                    (timer_cmp_ & 0x00000000FFFFFFFFull);
       update_timer_irq();

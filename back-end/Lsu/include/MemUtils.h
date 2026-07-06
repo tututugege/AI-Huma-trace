@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "../../../include/config.h"
+#include "mmio_address_map.h"
 
 struct StoreTag {
   reg<STQ_IDX_WIDTH> idx = 0;
@@ -113,15 +114,7 @@ template <typename PtrT>
 }
 
 [[maybe_unused]] static bool lsu_is_mmio_addr(uint32_t paddr) {
-  return ((paddr & UART_ADDR_MASK) == UART_ADDR_BASE) ||
-         ((paddr & PLIC_ADDR_MASK) == PLIC_ADDR_BASE) ||
-         (paddr >= XPS_INTC_ADDR_BASE &&
-          paddr < (XPS_INTC_ADDR_BASE + XPS_INTC_MMIO_SIZE)) ||
-         (paddr >= DMA_ADDR_BASE && paddr < (DMA_ADDR_BASE + DMA_MMIO_SIZE)) ||
-         (paddr == OPENSBI_TIMER_LOW_ADDR) ||
-         (paddr == OPENSBI_TIMER_HIGH_ADDR) ||
-         (paddr == OPENSBI_TIMERCMP_LOW_ADDR) ||
-         (paddr == OPENSBI_TIMERCMP_HIGH_ADDR);
+  return simulator_is_mmio_addr(paddr);
 }
 
 [[maybe_unused]] static bool lsu_mmio_is_oldest_unfinished(const RobBroadcastIO *rob_bcast,
@@ -169,9 +162,9 @@ template <typename PtrT>
 }
 
 [[maybe_unused]] static bool lsu_is_timer_addr(uint32_t paddr) {
-  return paddr == OPENSBI_TIMER_LOW_ADDR ||
-         paddr == OPENSBI_TIMER_HIGH_ADDR ||
-         paddr == OPENSBI_TIMERCMP_LOW_ADDR ||
-         paddr == OPENSBI_TIMERCMP_HIGH_ADDR;
+  return paddr == TIMER_LOW_ADDR ||
+         paddr == TIMER_HIGH_ADDR ||
+         paddr == TIMER_CMP_LOW_ADDR ||
+         paddr == TIMER_CMP_HIGH_ADDR;
 }
 } // namespace

@@ -1208,7 +1208,7 @@ void RefCpu::RV32IM() {
                                                       : 3;
       Assert((p_addr & alignment_mask) == 0 && "Load address misaligned!");
       if (is_modeled_mmio_addr(p_addr) ||
-          is_mmio_range(p_addr, OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE)) {
+          is_mmio_range(p_addr, TIMER_BASE, TIMER_MMIO_SIZE)) {
         is_mmio_load = true;
       }
       uint64_t data_l = (uint64_t)load_word(p_addr & ~0x3u);
@@ -1216,15 +1216,15 @@ void RefCpu::RV32IM() {
       uint64_t data64 = (data_h << 32) | data_l;
 
       uint32_t data;
-      if (p_addr == OPENSBI_TIMER_LOW_ADDR) {
+      if (p_addr == TIMER_LOW_ADDR) {
         data = static_cast<uint32_t>(ref_timer_now());
         push_oracle_timer(data);
-      } else if (p_addr == OPENSBI_TIMER_HIGH_ADDR) {
+      } else if (p_addr == TIMER_HIGH_ADDR) {
         data = static_cast<uint32_t>(ref_timer_now() >> 32);
         push_oracle_timer(data);
-      } else if (p_addr == OPENSBI_TIMERCMP_LOW_ADDR) {
+      } else if (p_addr == TIMER_CMP_LOW_ADDR) {
         data = static_cast<uint32_t>(g_ref_timer_cmp);
-      } else if (p_addr == OPENSBI_TIMERCMP_HIGH_ADDR) {
+      } else if (p_addr == TIMER_CMP_HIGH_ADDR) {
         data = static_cast<uint32_t>(g_ref_timer_cmp >> 32);
       } else {
         data = (uint32_t)(data64 >> ((p_addr & 0b11) * 8));
@@ -1270,7 +1270,7 @@ void RefCpu::RV32IM() {
                                                       : 3;
       Assert((p_addr & alignment_mask) == 0 && "Store address misaligned!");
       if (is_modeled_mmio_addr(p_addr) ||
-          is_mmio_range(p_addr, OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE)) {
+          is_mmio_range(p_addr, TIMER_BASE, TIMER_MMIO_SIZE)) {
         is_mmio_store = true;
       }
 
@@ -1618,24 +1618,24 @@ uint32_t RefCpu::load_word(uint32_t addr) const {
 
 void RefCpu::store_word(uint32_t addr, uint32_t data) {
   const uint32_t word_addr = addr & ~0x3u;
-  if (word_addr == OPENSBI_TIMER_LOW_ADDR) {
+  if (word_addr == TIMER_LOW_ADDR) {
     const uint64_t current = ref_timer_now();
     ref_write_timer_value((current & 0xFFFFFFFF00000000ull) |
                           static_cast<uint64_t>(data));
     return;
   }
-  if (word_addr == OPENSBI_TIMER_HIGH_ADDR) {
+  if (word_addr == TIMER_HIGH_ADDR) {
     const uint64_t current = ref_timer_now();
     ref_write_timer_value((static_cast<uint64_t>(data) << 32) |
                           (current & 0x00000000FFFFFFFFull));
     return;
   }
-  if (word_addr == OPENSBI_TIMERCMP_LOW_ADDR) {
+  if (word_addr == TIMER_CMP_LOW_ADDR) {
     g_ref_timer_cmp = (g_ref_timer_cmp & 0xFFFFFFFF00000000ull) |
                       static_cast<uint64_t>(data);
     return;
   }
-  if (word_addr == OPENSBI_TIMERCMP_HIGH_ADDR) {
+  if (word_addr == TIMER_CMP_HIGH_ADDR) {
     g_ref_timer_cmp = (static_cast<uint64_t>(data) << 32) |
                       (g_ref_timer_cmp & 0x00000000FFFFFFFFull);
     return;

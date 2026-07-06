@@ -448,7 +448,7 @@ constexpr std::array<CkptIoRange, 4> kExpectedIoLayout = {
     CkptIoRange{BOOT_IO_BASE, BOOT_IO_SIZE},
     CkptIoRange{UART_ADDR_BASE, UART_MMIO_SIZE},
     CkptIoRange{PLIC_ADDR_BASE, PLIC_MMIO_SIZE},
-    CkptIoRange{OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE},
+    CkptIoRange{TIMER_BASE, TIMER_MMIO_SIZE},
 };
 
 void gz_read_exact(gzFile file, uint8_t *dst, uint64_t total_bytes) {
