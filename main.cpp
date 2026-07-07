@@ -27,6 +27,7 @@ struct SimConfig {
 
   // 目标文件路径
   std::string target_file;
+  std::string sdcard_image_file;
   // 存储 Fast-forward 的指令数/周期数
   uint64_t fast_forward_count = 0;
   // CKPT 模式下，O3 目标 warmup 步数（0~checkpoint interval）
@@ -34,6 +35,7 @@ struct SimConfig {
   bool ckpt_warmup_target_set = false;
   uint64_t max_commit_inst = static_cast<uint64_t>(MAX_COMMIT_INST);
   bool max_commit_inst_set = false;
+  bool disable_difftest = false;
 };
 
 // 2. 帮助信息更新
@@ -43,6 +45,8 @@ void print_help(char *argv[]) {
   std::cout
       << "  -m, --mode <run|ckpt|fast|ref>  Set execution mode (default: run)"
       << std::endl;
+  std::cout << "      --sdcard-image <file>      Attach SD card image backend"
+            << std::endl;
   std::cout << "  -f, --fast-forward <num>    Number of cycles/insts to "
                "fast-forward (only for fast mode)"
             << std::endl;
@@ -137,6 +141,7 @@ int main(int argc, char *argv[]) {
   static struct option long_options[] = {
       {"mode", required_argument, 0, 'm'},
       {"fast-forward", required_argument, 0, 'f'}, // 快进参数
+      {"sdcard-image", required_argument, 0, 1002},
       {"warmup", required_argument, 0, 'w'},
       {"max-commit", required_argument, 0, 'c'},
       {"no-diff", no_argument, 0, 1000},
@@ -215,11 +220,14 @@ int main(int argc, char *argv[]) {
       }
       break;
     }
+    case 1002:
+      config.sdcard_image_file = optarg;
+      break;
     case 'h':
       print_help(argv);
       return 0;
     case 1000:
-      cpu.ctx.enable_difftest = false;
+      config.disable_difftest = true;
       break;
     default:
       print_help(argv);
@@ -267,12 +275,25 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
   cpu.init();
+  if (config.disable_difftest) {
+    cpu.ctx.enable_difftest = false;
+  }
 
   // --- D. 模拟器启动逻辑 ---
   if (config.mode == SimConfig::RUN) {
-    std::cout << "[Mode] RUN: Loading Binary Image..." << std::endl;
+    std::cout << "[Mode] RUN: Loading Execution Image..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
     cpu.back.load_image(config.target_file);
+    if (!config.sdcard_image_file.empty()) {
+      std::cout << "[SD] " << config.sdcard_image_file << std::endl;
+      cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
+    }
+#ifdef CONFIG_DIFFTEST
+    difftest_configure_run_assets(
+        config.sdcard_image_file.empty() ? nullptr
+                                         : config.sdcard_image_file.c_str());
+    difftest_init_run_state();
+#endif
   } else if (config.mode == SimConfig::CKPT) {
     std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
@@ -333,6 +354,7 @@ int main(int argc, char *argv[]) {
       difftest_ref_set_uart_print(false);
       difftest_ref_set_ref_only(true);
       difftest_ref_set_device_effects(true);
+      difftest_ref_set_interrupt_delivery(true);
       for (; ref_prewarm_done < ref_prewarm_target; ref_prewarm_done++) {
         difftest_step(false);
         if (difftest_ref_sim_end()) {
@@ -342,14 +364,16 @@ int main(int argc, char *argv[]) {
           break;
         }
       }
-      difftest_ref_set_device_effects(false);
-      difftest_ref_set_ref_only(false);
+      difftest_ref_set_interrupt_delivery(false);
+      difftest_ref_set_device_effects(true);
+      difftest_ref_set_ref_only(true);
       std::cout << "[Run] Ref prewarm done: " << ref_prewarm_done
                 << " steps." << std::endl;
     }
 
     std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
     cpu.back.restore_from_ref();
+    cpu.sync_mmio_devices_from_backing();
 #ifndef CONFIG_BPU
     std::cout << "[Oracle] Re-synced with ref snapshot together with DUT."
               << std::endl;
@@ -382,15 +406,28 @@ int main(int argc, char *argv[]) {
   } else if (config.mode == SimConfig::FAST) {
     std::cout << "[Mode] FAST: Hybrid Execution Strategy" << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
+    cpu.back.load_image(config.target_file);
+    if (!config.sdcard_image_file.empty()) {
+      std::cout << "[SD] " << config.sdcard_image_file << std::endl;
+      cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
+    }
     std::cout << "[Step 1] Fast-forwarding (Simple CPU) for "
               << config.fast_forward_count << " cycles..." << std::endl;
 
-    cpu.back.load_image(config.target_file);
+#ifdef CONFIG_DIFFTEST
+    difftest_configure_run_assets(
+        config.sdcard_image_file.empty() ? nullptr
+                                         : config.sdcard_image_file.c_str());
+    difftest_init_run_state();
+#endif
     difftest_ref_set_uart_print(true);
     difftest_ref_set_ref_only(true);
     difftest_ref_set_device_effects(true);
+    difftest_ref_set_interrupt_delivery(true);
 
-    for (uint64_t i = 0; i < config.fast_forward_count; i++) {
+    uint64_t ref_fast_done = 0;
+    for (; ref_fast_done < config.fast_forward_count; ref_fast_done++) {
+      sim_time = static_cast<long long>(ref_fast_done);
       difftest_step(false);
       if (difftest_ref_sim_end()) {
         cpu.ctx.exit_reason =
@@ -398,18 +435,24 @@ int main(int argc, char *argv[]) {
                                             : ExitReason::EBREAK;
         break;
       }
+      if (sim_time % 10000000 == 0) {
+        cout << dec << sim_time << endl;
+      }
     }
-    difftest_ref_set_device_effects(false);
-    difftest_ref_set_ref_only(false);
+    sim_time = static_cast<long long>(ref_fast_done);
+    difftest_ref_set_uart_print(false);
+    difftest_ref_set_interrupt_delivery(false);
+    difftest_ref_set_device_effects(true);
+    difftest_ref_set_ref_only(true);
 
     if (cpu.ctx.exit_reason == ExitReason::NONE) {
       cpu.back.restore_from_ref();
+      cpu.sync_mmio_devices_from_backing();
 #ifndef CONFIG_BPU
       std::cout << "[Oracle] Synced with ref snapshot before switching to O3."
                 << std::endl;
 #endif
       cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
-      difftest_ref_set_uart_print(false);
 
       std::cout << "[Step 2] Run O3 CPU ... " << endl;
     }
@@ -420,6 +463,7 @@ int main(int argc, char *argv[]) {
     difftest_ref_set_uart_print(true);
     difftest_ref_set_ref_only(true);
     difftest_ref_set_device_effects(true);
+    difftest_ref_set_interrupt_delivery(true);
 
     std::cout << "[Debug] Running Reference Model Standalone..." << std::endl;
 
@@ -457,7 +501,7 @@ int main(int argc, char *argv[]) {
 
   // 主循环
   if (cpu.ctx.exit_reason == ExitReason::NONE) {
-    for (sim_time = 0; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
+    for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
       if (sim_time % 10000000 == 0) {
         cout << dec << sim_time << endl;
       }

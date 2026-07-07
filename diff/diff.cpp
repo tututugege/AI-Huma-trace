@@ -1,6 +1,5 @@
 #include "diff.h"
 #include "Csr.h"
-#include "DcacheConfig.h"
 #include "DiffMemTrace.h"
 #include "PhysMemory.h"
 #include "RISCV.h"
@@ -13,6 +12,7 @@
 
 CPU_state dut_cpu;
 static RefCpuContext *ref_cpu_ctx = nullptr;
+static uint8_t dut_privilege = RISCV_MODE_M;
 
 namespace {
 struct IoRange {
@@ -24,9 +24,12 @@ constexpr IoRange kCkptIoRanges[] = {
     {BOOT_IO_BASE, BOOT_IO_SIZE},
     {UART_ADDR_BASE, UART_MMIO_SIZE},
     {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
-    {TIMER_BASE, TIMER_MMIO_SIZE},
+    {OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE},
     {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
 };
+
+std::string g_sdcard_image_path;
+uint64_t g_diff_total_steps = 0;
 
 RefCpuState to_ref_state(const CPU_state &state, uint8_t privilege) {
   RefCpuState ref_state{};
@@ -76,6 +79,14 @@ void ensure_ref_cpu() {
   }
 }
 
+void configure_ref_runtime() {
+  ensure_ref_cpu();
+  refcpu_set_uart_print(ref_cpu_ctx, false);
+  refcpu_set_ref_only(ref_cpu_ctx, true);
+  refcpu_set_device_effects(ref_cpu_ctx, true);
+  refcpu_set_interrupt_delivery(ref_cpu_ctx, false);
+}
+
 RefCpuState current_ref_state() {
   ensure_ref_cpu();
   RefCpuState state{};
@@ -102,29 +113,8 @@ inline void seed_ref_io_from_backing() {
   }
 }
 
-void dump_mem_subsystem_snapshot() {
-}
-
-void dump_code_line_snapshot(const char *tag, uint32_t pc) {
-  const uint32_t line_base =
-      pc & ~(static_cast<uint32_t>(ICACHE_LINE_SIZE) - 1u);
-  const uint32_t word_off = (pc - line_base) >> 2;
-  std::printf(
-      "[DIFF][ICACHE_LINE][%s] pc=0x%08x line_base=0x%08x word_off=%u\n", tag,
-      pc, line_base, word_off);
-  for (int row = 0; row < ICACHE_WORD_NUM; row += 4) {
-    std::printf("[DIFF][ICACHE_LINE][%s][DUT] +0x%02x: %08x %08x %08x %08x\n",
-                tag, row * 4, pmem_read(line_base + (row + 0) * 4u),
-                pmem_read(line_base + (row + 1) * 4u),
-                pmem_read(line_base + (row + 2) * 4u),
-                pmem_read(line_base + (row + 3) * 4u));
-    std::printf("[DIFF][ICACHE_LINE][%s][REF] +0x%02x: %08x %08x %08x %08x\n",
-                tag, row * 4,
-                refcpu_load_word(ref_cpu_ctx, line_base + (row + 0) * 4u),
-                refcpu_load_word(ref_cpu_ctx, line_base + (row + 1) * 4u),
-                refcpu_load_word(ref_cpu_ctx, line_base + (row + 2) * 4u),
-                refcpu_load_word(ref_cpu_ctx, line_base + (row + 3) * 4u));
-  }
+void diff_watchdog_tick() {
+  g_diff_total_steps++;
 }
 
 } // namespace
@@ -136,9 +126,28 @@ void init_difftest(int img_size) {
   }
   ref_cpu_ctx = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
   Assert(ref_cpu_ctx != nullptr && "init_difftest: refcpu_init failed");
-  refcpu_set_device_effects(ref_cpu_ctx, false);
+  configure_ref_runtime();
   refcpu_sync_ram_from_dut(ref_cpu_ctx, pmem_ram_ptr(),
                            static_cast<size_t>(img_size));
+  seed_ref_io_from_backing();
+}
+
+void difftest_configure_run_assets(const char *sdcard_image_path) {
+  g_sdcard_image_path = (sdcard_image_path == nullptr) ? "" : sdcard_image_path;
+}
+
+void difftest_init_run_state() {
+  if (ref_cpu_ctx != nullptr) {
+    refcpu_destroy(ref_cpu_ctx);
+  }
+  ref_cpu_ctx = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
+  Assert(ref_cpu_ctx != nullptr && "difftest_init_run_state: refcpu_init failed");
+  configure_ref_runtime();
+  if (!g_sdcard_image_path.empty()) {
+    refcpu_load_sdcard_image(ref_cpu_ctx, g_sdcard_image_path.c_str());
+  }
+  refcpu_sync_ram_from_dut(ref_cpu_ctx, pmem_ram_ptr(),
+                           static_cast<size_t>(RAM_SIZE));
   seed_ref_io_from_backing();
 }
 
@@ -149,7 +158,7 @@ void init_diff_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   }
   ref_cpu_ctx = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
   Assert(ref_cpu_ctx != nullptr && "init_diff_ckpt: refcpu_init failed");
-  refcpu_set_device_effects(ref_cpu_ctx, false);
+  configure_ref_runtime();
   RefCpuState ref_state = to_ref_state(ckpt_state, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
 
@@ -160,7 +169,7 @@ void init_diff_ckpt(CPU_state ckpt_state, uint8_t privilege) {
                            static_cast<size_t>(RAM_SIZE));
   seed_ref_io_from_backing();
 
-  // Keep checkpoint bootstrap aligned with RefCpu::exec(): only probe a
+  // Keep checkpoint bootstrap aligned with GenSimpoint ref execution: only probe a
   // translation when SATP is active, and do not require the restored PC to be
   // immediately translatable at init time.
   (void)refcpu_probe_pc_translation(ref_cpu_ctx);
@@ -192,18 +201,10 @@ static void checkregs() {
   uint32_t dut_csrs[CSR_NUM];
   std::memcpy(ref_csrs, ref_state.csr, sizeof(ref_csrs));
   std::memcpy(dut_csrs, dut_cpu.csr, sizeof(dut_csrs));
-
-  const uint32_t raw_inst = step_info.instruction;
-  const bool is_csr_inst = (raw_inst & 0x7fu) == 0x73u;
-  const uint32_t csr_addr = raw_inst >> 20;
-  const bool is_irq_csr_read =
-      is_csr_inst && (csr_addr == number_mip || csr_addr == number_sip);
-  if (!is_irq_csr_read) {
-    ref_csrs[csr_mip] &= ~(MIP_MEIP | MIP_MTIP);
-    dut_csrs[csr_mip] &= ~(MIP_MEIP | MIP_MTIP);
-    ref_csrs[csr_sip] = ref_csrs[csr_mip] & 0x00000333u;
-    dut_csrs[csr_sip] = dut_csrs[csr_mip] & 0x00000333u;
-  }
+  ref_csrs[csr_mip] &= ~MIP_MTIP;
+  dut_csrs[csr_mip] &= ~MIP_MTIP;
+  ref_csrs[csr_sip] = ref_csrs[csr_mip] & 0x00000333u;
+  dut_csrs[csr_sip] = dut_csrs[csr_mip] & 0x00000333u;
 
   if (ref_state.pc != dut_cpu.pc)
     goto fault;
@@ -247,6 +248,12 @@ static void checkregs() {
 fault:
   cout << "Difftest: error" << endl;
   cout << "cycle: " << dec << sim_time << endl;
+  const uint64_t suggested_fast_forward =
+      g_diff_total_steps > 100000 ? (g_diff_total_steps - 100000) : 0;
+  std::printf(
+      "[DIFF][COMMIT_COUNT] committed=%llu suggested_fast_forward=%llu\n",
+      static_cast<unsigned long long>(g_diff_total_steps),
+      static_cast<unsigned long long>(suggested_fast_forward));
 
   auto print_mismatch = [](const char *name, uint32_t ref, uint32_t dut) {
     printf("%10s:\t%08x\t%08x%s\n", name, ref, dut,
@@ -254,6 +261,8 @@ fault:
   };
 
   printf("        PC:\t%08x\t%08x\n", ref_state.pc, dut_cpu.pc);
+  printf(" privilege:\t%u\t%u%s\n", ref_state.privilege, dut_privilege,
+         (ref_state.privilege != dut_privilege ? "\t Error" : ""));
   cout << "\t\tReference\tDut" << endl;
   for (int i = 0; i < 32; i++) {
     print_mismatch(reg_names[i].c_str(), ref_state.gpr[i], dut_cpu.gpr[i]);
@@ -273,14 +282,9 @@ fault:
          dut_cpu.instruction);
   std::printf("Commit PC: 0x%08x\tDUT next PC: 0x%08x\tREF next PC: 0x%08x\n",
               dut_cpu.commit_pc, dut_cpu.pc, ref_state.pc);
-  std::printf("[DIFF] p_memory@a5(0x%08x)=0x%08x ref=0x%08x\n", dut_cpu.gpr[15],
-              pmem_read(dut_cpu.gpr[15]),
-              refcpu_load_word(ref_cpu_ctx, dut_cpu.gpr[15]));
-  dump_code_line_snapshot("commit_pc", dut_cpu.commit_pc);
 #if defined(LOG_ENABLE) && defined(LOG_LSU_MEM_ENABLE)
   diff_mem_trace::dump_recent();
 #endif
-  dump_mem_subsystem_snapshot();
 
   Assert(0 && "Difftest: Register or Memory mismatch detected.");
   exit(1);
@@ -288,15 +292,22 @@ fault:
 
 void difftest_sync_from_dut(uint8_t privilege) {
   ensure_ref_cpu();
+  dut_privilege = privilege;
   refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
   const RefCpuState ref_state = to_ref_state(dut_cpu, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
+  diff_watchdog_tick();
 }
+
+void difftest_set_dut_privilege(uint8_t privilege) { dut_privilege = privilege; }
 
 void difftest_step(bool check) {
   ensure_ref_cpu();
-  refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
+  if (!check) {
+    refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
+  }
   refcpu_step(ref_cpu_ctx, 1);
+  diff_watchdog_tick();
   if (check)
     checkregs();
 }
@@ -322,6 +333,7 @@ void difftest_ref_set_device_effects(bool enable) {
   refcpu_set_device_effects(ref_cpu_ctx, enable);
 }
 
-void difftest_dump_memory_line(const char *tag, uint32_t addr) {
-  dump_code_line_snapshot(tag, addr);
+void difftest_ref_set_interrupt_delivery(bool enable) {
+  ensure_ref_cpu();
+  refcpu_set_interrupt_delivery(ref_cpu_ctx, enable);
 }
