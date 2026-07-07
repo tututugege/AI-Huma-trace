@@ -22,9 +22,9 @@ struct IoRange {
 constexpr IoRange kCkptIoRanges[] = {
     {BOOT_IO_BASE, BOOT_IO_SIZE},
     {UART_ADDR_BASE, UART_MMIO_SIZE},
-    {PLIC_ADDR_BASE, PLIC_MMIO_SIZE},
+    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
     {TIMER_BASE, TIMER_MMIO_SIZE},
-    {DMA_ADDR_BASE, DMA_MMIO_SIZE},
+    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
 };
 
 RefCpuState dut_to_ref_state(uint8_t privilege) {

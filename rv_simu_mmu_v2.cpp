@@ -855,17 +855,26 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
     }
     dut_cpu.csr[csr_sip] = dut_cpu.csr[csr_mip] & 0x00000333u;
   } else {
-    if (static_cast<bool>(
-            back->csr_interrupt_inject_io.external_irq_pending_valid)) {
-      if (static_cast<bool>(back->csr_interrupt_inject_io.external_irq_pending)) {
-        dut_cpu.csr[csr_mip] |= MIP_MEIP;
-      } else {
-        dut_cpu.csr[csr_mip] &= ~MIP_MEIP;
-      }
+  if (static_cast<bool>(
+          back->csr_interrupt_inject_io.external_irq_pending_valid)) {
+    if (static_cast<bool>(back->csr_interrupt_inject_io.external_irq_pending)) {
+      dut_cpu.csr[csr_mip] |= MIP_MEIP;
+    } else {
+      dut_cpu.csr[csr_mip] &= ~MIP_MEIP;
     }
-    if (static_cast<bool>(back->csr_interrupt_inject_io.timer_irq_pending_valid)) {
-      if (static_cast<bool>(back->csr_interrupt_inject_io.timer_irq_pending)) {
-        dut_cpu.csr[csr_mip] |= MIP_MTIP;
+  }
+  if (static_cast<bool>(back->csr_interrupt_inject_io
+                            .supervisor_external_irq_pending_valid)) {
+    if (static_cast<bool>(back->csr_interrupt_inject_io
+                              .supervisor_external_irq_pending)) {
+      dut_cpu.csr[csr_mip] |= MIP_SEIP;
+    } else {
+      dut_cpu.csr[csr_mip] &= ~MIP_SEIP;
+    }
+  }
+  if (static_cast<bool>(back->csr_interrupt_inject_io.timer_irq_pending_valid)) {
+    if (static_cast<bool>(back->csr_interrupt_inject_io.timer_irq_pending)) {
+      dut_cpu.csr[csr_mip] |= MIP_MTIP;
       } else {
         dut_cpu.csr[csr_mip] &= ~MIP_MTIP;
       }
@@ -929,7 +938,6 @@ void SimCpu::init() {
   // 第三阶段：集中完成跨模块连线
   mem_subsystem.csr_interrupt_inject = &back.csr_interrupt_inject_io;
   mem_subsystem.memory = p_memory;
-  mem_subsystem.set_ram_sync_hook(difftest_sync_ram_range_from_dut);
   mem_subsystem.peripheral_req = &back.out.peripheral_req;
   mem_subsystem.peripheral_resp = &back.in.peripheral_resp;
   mem_subsystem.set_ptw_coherent_source(back.lsu);

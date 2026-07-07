@@ -44,7 +44,7 @@ constexpr uint64_t div_round_u64(uint64_t numerator, uint64_t denominator) {
 constexpr uint64_t VIRTUAL_MEMORY_LENGTH =
     256ULL * 1024 * 1024; // 256M words = 1GB bytes
 constexpr uint64_t PHYSICAL_MEMORY_LENGTH =
-    32ULL * 1024 * 1024;                      // 32M words = 128MB bytes
+    512ULL * 1024 * 1024;                     // 512M words = 2GB bytes
 constexpr uint64_t RAM_SIZE = PHYSICAL_MEMORY_LENGTH * sizeof(uint32_t); // bytes
 constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 
@@ -630,29 +630,32 @@ constexpr int FTQ_OFFSET_WIDTH = clog2(FETCH_WIDTH);
 constexpr uint32_t UART_ADDR_BASE = 0x10000000;
 constexpr uint32_t UART_MMIO_SIZE = 0x00000100;
 constexpr uint32_t UART_ADDR_MASK = 0xFFFFFFF0;
-constexpr uint32_t PLIC_ADDR_BASE = 0x0c000000;
-constexpr uint32_t PLIC_MMIO_SIZE = 0x00210000;
-constexpr uint32_t PLIC_ADDR_MASK = 0xFC000000;
-constexpr uint32_t PLIC_CLAIM_ADDR = 0x0c201004;
-constexpr uint32_t UART_PLIC_IRQ_ID = 0x0000000A;
-constexpr uint32_t DMA_PLIC_IRQ_ID = 0x0000000B;
 constexpr uint32_t XPS_INTC_ADDR_BASE = 0x1fb00000;
 constexpr uint32_t XPS_INTC_MMIO_SIZE = 0x00001000;
 constexpr uint32_t BOOT_IO_BASE = 0x00000000;
-constexpr uint32_t BOOT_IO_SIZE = 0x00002000;
+constexpr uint32_t BOOT_IO_SIZE = 0x00100000;
 constexpr uint32_t TIMER_BASE = 0x1fd0e000;
 constexpr uint32_t TIMER_MMIO_SIZE = 0x00000100;
 constexpr uint32_t TIMER_LOW_ADDR = 0x1fd0e000;
 constexpr uint32_t TIMER_HIGH_ADDR = 0x1fd0e004;
 constexpr uint32_t TIMER_CMP_LOW_ADDR = 0x1fd0e008;
 constexpr uint32_t TIMER_CMP_HIGH_ADDR = 0x1fd0e00c;
-constexpr uint32_t DMA_ADDR_BASE = 0x1fd0f000;
-constexpr uint32_t DMA_MMIO_SIZE = 0x00000100;
-constexpr uint32_t DMA_SRC_ADDR = 0x1fd0f000;
-constexpr uint32_t DMA_DST_ADDR = 0x1fd0f004;
-constexpr uint32_t DMA_LEN_ADDR = 0x1fd0f008;
-constexpr uint32_t DMA_CTRL_ADDR = 0x1fd0f00c;
-constexpr uint32_t DMA_STATUS_ADDR = 0x1fd0f010;
+constexpr uint32_t OPENSBI_TIMER_BASE = TIMER_BASE;
+constexpr uint32_t OPENSBI_TIMER_MMIO_SIZE = TIMER_MMIO_SIZE;
+constexpr uint32_t OPENSBI_TIMER_LOW_ADDR = TIMER_LOW_ADDR;
+constexpr uint32_t OPENSBI_TIMER_HIGH_ADDR = TIMER_HIGH_ADDR;
+constexpr uint32_t OPENSBI_TIMERCMP_LOW_ADDR = TIMER_CMP_LOW_ADDR;
+constexpr uint32_t OPENSBI_TIMERCMP_HIGH_ADDR = TIMER_CMP_HIGH_ADDR;
+constexpr uint32_t OCSDC_ADDR_BASE = 0x1fe10000;
+constexpr uint32_t OCSDC_MMIO_SIZE = 0x00000100;
+constexpr uint32_t SIM_UNCACHE_SDRAM_BASE = 0x4ff00000;
+constexpr uint32_t SIM_UNCACHE_SDRAM_SIZE = 0x00100000;
+constexpr uint32_t SIM_UNCACHE_DDR_RESERVED_BASE = 0x87f00000;
+constexpr uint32_t SIM_UNCACHE_DDR_RESERVED_SIZE = 0x00100000;
+constexpr uint32_t SIM_UNCACHE_HIGH_BASE = 0xfff00000;
+constexpr uint32_t SIM_UNCACHE_HIGH_SIZE = 0x00100000;
+constexpr uint32_t SD_DMA_POOL_BASE = SIM_UNCACHE_DDR_RESERVED_BASE;
+constexpr uint32_t SD_DMA_POOL_SIZE = SIM_UNCACHE_DDR_RESERVED_SIZE;
 
 
 #include "types.h"

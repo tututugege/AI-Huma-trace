@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
-#include <vector>
 
 CPU_state dut_cpu;
 static RefCpuContext *ref_cpu_ctx = nullptr;
@@ -24,9 +23,9 @@ struct IoRange {
 constexpr IoRange kCkptIoRanges[] = {
     {BOOT_IO_BASE, BOOT_IO_SIZE},
     {UART_ADDR_BASE, UART_MMIO_SIZE},
-    {PLIC_ADDR_BASE, PLIC_MMIO_SIZE},
+    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
     {TIMER_BASE, TIMER_MMIO_SIZE},
-    {DMA_ADDR_BASE, DMA_MMIO_SIZE},
+    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
 };
 
 RefCpuState to_ref_state(const CPU_state &state, uint8_t privilege) {
@@ -289,31 +288,13 @@ fault:
 
 void difftest_sync_from_dut(uint8_t privilege) {
   ensure_ref_cpu();
-  refcpu_set_dut_expected_faults(ref_cpu_ctx, dut_cpu.page_fault_inst,
-                                 dut_cpu.page_fault_load,
-                                 dut_cpu.page_fault_store);
   refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
   const RefCpuState ref_state = to_ref_state(dut_cpu, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
 }
 
-void difftest_sync_ram_range_from_dut(uint32_t paddr, size_t size_bytes) {
-  if (ref_cpu_ctx == nullptr || size_bytes == 0) {
-    return;
-  }
-  if (!pmem_is_ram_addr(paddr, static_cast<uint32_t>(size_bytes))) {
-    return;
-  }
-  std::vector<uint8_t> temp(size_bytes);
-  pmem_memcpy_from_ram(temp.data(), paddr, size_bytes);
-  refcpu_sync_ram_range_from_dut(ref_cpu_ctx, paddr, temp.data(), size_bytes);
-}
-
 void difftest_step(bool check) {
   ensure_ref_cpu();
-  refcpu_set_dut_expected_faults(ref_cpu_ctx, dut_cpu.page_fault_inst,
-                                 dut_cpu.page_fault_load,
-                                 dut_cpu.page_fault_store);
   refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
   refcpu_step(ref_cpu_ctx, 1);
   if (check)

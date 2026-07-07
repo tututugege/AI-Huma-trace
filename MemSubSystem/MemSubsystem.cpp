@@ -773,7 +773,12 @@ void MemSubsystem::on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3)
   peripheral_model_.on_commit_store(paddr, data, func3);
 }
 
+void MemSubsystem::load_sdcard_image(const std::string &path) {
+  peripheral_model_.load_sdcard_image(path);
+}
+
 void MemSubsystem::sync_mmio_devices_from_backing() {
+  peripheral_model_.sync_from_backing();
 #if AXI_KIT_RUNTIME_ENABLED
   if (memory != nullptr && axi_kit_runtime != nullptr) {
     axi_kit_runtime->uart0.sync_from_backing(memory);

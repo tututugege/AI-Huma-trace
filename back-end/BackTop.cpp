@@ -426,6 +426,24 @@ template <typename T> void gz_read_pod(gzFile file, T &data) {
 }
 
 namespace {
+void seed_uart_io_words() {
+  constexpr uint32_t kUartLsrThre = 0x20u;
+  constexpr uint32_t kUartLsrTemt = 0x40u;
+  constexpr uint32_t kUartIirNoInt = 0x01u;
+  constexpr uint32_t kUartIirFifoEnabled = 0xc0u;
+  constexpr uint32_t kUartMsrCts = 0x10u;
+  constexpr uint32_t kUartMsrDsr = 0x20u;
+  constexpr uint32_t kUartMsrDcd = 0x80u;
+
+  pmem_write(UART_ADDR_BASE + 0x00u,
+             (kUartIirNoInt | kUartIirFifoEnabled) << 16);
+  pmem_write(UART_ADDR_BASE + 0x04u,
+             0x00000003u |
+                 ((kUartLsrThre | kUartLsrTemt) << 8) |
+                 ((kUartMsrCts | kUartMsrDsr | kUartMsrDcd) << 16));
+  pmem_write(UART_ADDR_BASE + 0x08u, 0);
+}
+
 constexpr uint64_t kCkptSimpointRamBytes = RAM_SIZE;
 constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
@@ -444,11 +462,12 @@ typedef struct CkptIoRange {
   uint32_t size;
 } CkptIoRange;
 
-constexpr std::array<CkptIoRange, 4> kExpectedIoLayout = {
+constexpr std::array<CkptIoRange, 5> kExpectedIoLayout = {
     CkptIoRange{BOOT_IO_BASE, BOOT_IO_SIZE},
     CkptIoRange{UART_ADDR_BASE, UART_MMIO_SIZE},
-    CkptIoRange{PLIC_ADDR_BASE, PLIC_MMIO_SIZE},
+    CkptIoRange{XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
     CkptIoRange{TIMER_BASE, TIMER_MMIO_SIZE},
+    CkptIoRange{OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
 };
 
 void gz_read_exact(gzFile file, uint8_t *dst, uint64_t total_bytes) {
@@ -493,7 +512,7 @@ void BackTop::load_image(const std::string &filename) {
   pmem_write(0x4, 0x83e005b7);
   pmem_write(0x8, 0x800002b7);
   pmem_write(0xc, 0x00028067);
-  pmem_write(0x10000004, 0x00006000); // 和进入 OpenSBI 相关
+  seed_uart_io_words();
 
 #ifdef CONFIG_DIFFTEST
   init_difftest(size);
@@ -660,7 +679,7 @@ void BackTop::restore_checkpoint(const std::string &filename) {
     gz_read_pod(file, range);
     const auto &expected = kExpectedIoLayout[i];
 
-    const bool is_timer_range = (i == kExpectedIoLayout.size() - 1);
+    const bool is_timer_range = (expected.base == TIMER_BASE);
     const bool layout_match =
         is_timer_range ? (range.base == expected.base)
                        : (range.base == expected.base &&

@@ -1,8 +1,6 @@
 #pragma once
 #include "config.h"
 #include <cstdint>
-#include <cstring>
-#include <unordered_map>
 
 #define RISCV_MODE_U 0b00
 #define RISCV_MODE_S 0b01
@@ -83,55 +81,3 @@ typedef struct CPU_state {
   bool reserve_valid;
   uint32_t reserve_addr;
 } CPU_state;
-
-class RefCpu {
-public:
-  uint32_t *memory = nullptr;
-  std::unordered_map<uint32_t, uint32_t> io_words;
-  uint32_t Instruction;
-  CPU_state state;
-  uint8_t privilege;
-  bool asy;
-  bool page_fault_inst;
-  bool page_fault_load;
-  bool page_fault_store;
-  bool dut_pf_check_enable;
-  bool ref_only;
-  bool dut_expect_pf_inst;
-  bool dut_expect_pf_load;
-  bool dut_expect_pf_store;
-  bool illegal_exception;
-
-  bool M_software_interrupt;
-  bool M_timer_interrupt;
-  bool M_external_interrupt;
-  bool S_software_interrupt;
-  bool S_timer_interrupt;
-  bool S_external_interrupt;
-
-  bool sim_end = false;
-  bool uart_print = false;
-  uint64_t oracle_timer = 0;
-
-  void init(uint32_t reset_pc);
-  void exec();
-  void RISCV();
-  void RV32IM();
-  void RV32A();
-  void RV32CSR();
-  void RV32Zfinx();
-  void exception(uint32_t trap_val);
-  void store_data();
-  uint32_t load_word(uint32_t addr) const;
-  void store_word(uint32_t addr, uint32_t data);
-  bool va2pa_fix(uint32_t &p_addr, uint32_t v_addr, uint32_t type);
-  bool va2pa(uint32_t &p_addr, uint32_t v_addr, uint32_t type);
-
-  bool is_br;
-  bool br_taken;
-
-  bool is_csr;
-  bool is_exception;
-  bool is_mmio_load;
-  bool is_mmio_store;
-};
