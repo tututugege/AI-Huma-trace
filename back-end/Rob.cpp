@@ -462,7 +462,7 @@ void Rob::comb_commit() {
       } else if (decode_inst_type(uop.type) == EBREAK) {
         ctx->exit_reason = ExitReason::EBREAK;
       } else if (single_is_wfi) {
-        ctx->exit_reason = ExitReason::WFI;
+        // Bring-up semantics: retire WFI without exiting the simulator.
       } else if (decode_inst_type(uop.type) == CSR) {
         out.rob2csr->commit = true;
       } else if (decode_inst_type(uop.type) == SFENCE_VMA) {
@@ -620,7 +620,6 @@ void Rob::comb_complete() {
           entry_1[bank_idx][line_idx].uop.flush_pipe || wb.flush_pipe;
       entry_1[bank_idx][line_idx].uop.dbg.is_mmio =
           entry_1[bank_idx][line_idx].uop.dbg.is_mmio || wb.dbg.is_mmio;
-      entry_1[bank_idx][line_idx].uop.dbg.difftest_skip = wb.dbg.difftest_skip;
       if (is_branch_uop(wb.op)) {
         entry_1[bank_idx][line_idx].uop.diag_val = wb.diag_val;
         entry_1[bank_idx][line_idx].uop.mispred = wb.mispred;

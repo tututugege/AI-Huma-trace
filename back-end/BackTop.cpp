@@ -523,6 +523,102 @@ void BackTop::load_image(const std::string &filename) {
 #endif
 }
 
+void BackTop::load_flash_image(const std::string &filename) {
+  std::ifstream flash_data(filename, std::ios::binary);
+  if (!flash_data.is_open()) {
+    Assert(0 && "Error: Flash image does not exist");
+  }
+
+  flash_data.seekg(0, std::ios::end);
+  std::streamsize size = flash_data.tellg();
+  flash_data.seekg(0, std::ios::beg);
+
+  if (size < 0 || static_cast<uint64_t>(size) > BOOT_IO_SIZE) {
+    Assert(0 && "Flash image too large for configured boot window.");
+  }
+
+  std::vector<uint8_t> bytes(static_cast<size_t>(size));
+  if (size > 0 &&
+      !flash_data.read(reinterpret_cast<char *>(bytes.data()), size)) {
+    Assert(0 && "读取 flash 文件失败！");
+  }
+
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    const uint32_t addr = static_cast<uint32_t>(i);
+    const uint32_t word_addr = addr & ~0x3u;
+    const uint32_t shift = (addr & 0x3u) * 8u;
+    const uint32_t word = (pmem_read(word_addr) & ~(0xFFu << shift)) |
+                          (static_cast<uint32_t>(bytes[i]) << shift);
+    pmem_write(word_addr, word);
+  }
+
+  constexpr uint32_t kEmbeddedSdLoaderOffset = 0x60u;
+  constexpr uint32_t kSdLoaderLoadAddr = 0x83800000u;
+  if (bytes.size() > kEmbeddedSdLoaderOffset) {
+    const size_t loader_size = bytes.size() - kEmbeddedSdLoaderOffset;
+    if (!pmem_is_ram_addr(kSdLoaderLoadAddr,
+                          static_cast<uint32_t>(loader_size))) {
+      Assert(0 && "Embedded SD loader does not fit in RAM window.");
+    }
+    pmem_memcpy_to_ram(kSdLoaderLoadAddr,
+                       bytes.data() + kEmbeddedSdLoaderOffset, loader_size);
+
+    pmem_write(0x0, 0xf1402573); // csrrs a0, mhartid, zero
+    pmem_write(0x4, 0x83e005b7); // lui a1, 0x83e00
+    pmem_write(0x8, 0x838002b7); // lui t0, 0x83800
+    pmem_write(0xc, 0x00028067); // jalr zero, 0(t0)
+  }
+
+  seed_uart_io_words();
+}
+
+void BackTop::load_sd_boot_blob(const std::string &sdcard_image,
+                                uint32_t sector_offset) {
+  std::ifstream image(sdcard_image, std::ios::binary);
+  if (!image.is_open()) {
+    Assert(0 && "Error: SD card image does not exist");
+  }
+
+  constexpr uint32_t kSectorSize = 512u;
+  constexpr uint32_t kEntryCount = 4u;
+  std::array<uint32_t, kEntryCount * 3> header{};
+
+  image.seekg(static_cast<std::streamoff>(sector_offset) * kSectorSize,
+              std::ios::beg);
+  if (!image.read(reinterpret_cast<char *>(header.data()), sizeof(header))) {
+    Assert(0 && "Error: Failed to read SD boot blob header");
+  }
+
+  for (uint32_t i = 0; i < kEntryCount; ++i) {
+    const uint32_t load_addr = header[i * 3 + 0];
+    const uint32_t card_sector = header[i * 3 + 1];
+    const uint32_t len = header[i * 3 + 2];
+    if (load_addr == 0 || len == 0) {
+      continue;
+    }
+
+    const size_t byte_len = static_cast<size_t>(len) * kSectorSize;
+    if (!pmem_is_ram_addr(load_addr, static_cast<uint32_t>(byte_len))) {
+      Assert(0 && "SD boot blob segment does not fit in RAM");
+    }
+
+    std::vector<uint8_t> payload(byte_len);
+    const std::streamoff payload_off =
+        static_cast<std::streamoff>(sector_offset + card_sector) * kSectorSize;
+    image.seekg(payload_off, std::ios::beg);
+    if (!image.read(reinterpret_cast<char *>(payload.data()), payload.size())) {
+      Assert(0 && "Error: Failed to read SD boot blob payload");
+    }
+    pmem_memcpy_to_ram(load_addr, payload.data(), payload.size());
+  }
+
+  pmem_write(0x0, 0xf1402573); // csrrs a0, mhartid, zero
+  pmem_write(0x4, 0x83e005b7); // lui a1, 0x83e00
+  pmem_write(0x8, 0x800002b7); // lui t0, 0x80000
+  pmem_write(0xc, 0x00028067); // jalr zero, 0(t0)
+  seed_uart_io_words();
+}
+
 void BackTop::restore_from_ref() {
   CPU_state state;
   uint8_t privilege;

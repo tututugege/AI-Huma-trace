@@ -38,6 +38,7 @@ struct RobStoredInst {
   wire<1> is_atomic;
   wire<3> func3;
   wire<7> func7;
+  wire<32> imm;
   wire<ROB_IDX_WIDTH> rob_idx;
   wire<1> rob_flag;
   wire<STQ_IDX_WIDTH> stq_idx;
@@ -50,7 +51,6 @@ struct RobStoredInst {
   wire<1> page_fault_load;
   wire<1> page_fault_store;
   wire<1> illegal_inst;
-  wire<1> is_ret;
   wire<1> flush_pipe;
 
   wire<INST_TYPE_WIDTH> type;
@@ -75,6 +75,7 @@ struct RobStoredInst {
     dst.is_atomic = src.is_atomic;
     dst.func3 = src.func3;
     dst.func7 = src.func7;
+    dst.imm = src.imm;
     dst.rob_idx = src.rob_idx;
     dst.rob_flag = src.rob_flag;
     dst.stq_idx = src.stq_idx;
@@ -85,7 +86,6 @@ struct RobStoredInst {
     dst.page_fault_load = false;
     dst.page_fault_store = false;
     dst.illegal_inst = src.illegal_inst;
-    dst.is_ret = src.is_ret;
     dst.type = src.type;
     dst.tma = src.tma;
     dst.dbg = src.dbg;
@@ -97,6 +97,7 @@ struct RobStoredInst {
     RobCommitIO::RobCommitInst dst;
     dst.diag_val = diag_val;
     dst.dest_areg = dest_areg;
+    dst.src1_areg = src1_areg;
     dst.dest_preg = dest_preg;
     dst.old_dest_preg = old_dest_preg;
     dst.ftq_idx = ftq_idx;
@@ -106,6 +107,7 @@ struct RobStoredInst {
     dst.br_taken = br_taken;
     dst.dest_en = dest_en;
     dst.func7 = func7;
+    dst.imm = imm;
     dst.rob_idx = rob_idx;
     dst.rob_flag = rob_flag;
     dst.stq_idx = stq_idx;
@@ -114,7 +116,6 @@ struct RobStoredInst {
     dst.page_fault_load = page_fault_load;
     dst.page_fault_store = page_fault_store;
     dst.illegal_inst = illegal_inst;
-    dst.is_ret = is_ret;
     dst.type = type;
     dst.tma = tma;
     dst.dbg = dbg;

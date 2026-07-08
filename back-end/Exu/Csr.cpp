@@ -412,12 +412,6 @@ void Csr::seq() {
     CSR_RegFile[i] = CSR_RegFile_1[i];
   }
 
-  if (in.interrupt_inject != nullptr) {
-    in.interrupt_inject->external_irq_pending_valid = false;
-    in.interrupt_inject->supervisor_external_irq_pending_valid = false;
-    in.interrupt_inject->timer_irq_pending_valid = false;
-  }
-
   csr_idx = csr_idx_1;
   csr_wdata = csr_wdata_1;
   csr_wcmd = csr_wcmd_1;

@@ -27,7 +27,9 @@ struct SimConfig {
 
   // 目标文件路径
   std::string target_file;
+  std::string flash_image_file;
   std::string sdcard_image_file;
+  bool direct_opensbi = false;
   // 存储 Fast-forward 的指令数/周期数
   uint64_t fast_forward_count = 0;
   // CKPT 模式下，O3 目标 warmup 步数（0~checkpoint interval）
@@ -45,7 +47,11 @@ void print_help(char *argv[]) {
   std::cout
       << "  -m, --mode <run|ckpt|fast|ref>  Set execution mode (default: run)"
       << std::endl;
+  std::cout << "      --flash-image <file>       Load SPI flash image at 0x0 (RUN/FAST only)"
+            << std::endl;
   std::cout << "      --sdcard-image <file>      Attach SD card image backend"
+            << std::endl;
+  std::cout << "      --direct-opensbi          Load SD boot blob into RAM and jump to OpenSBI"
             << std::endl;
   std::cout << "  -f, --fast-forward <num>    Number of cycles/insts to "
                "fast-forward (only for fast mode)"
@@ -141,7 +147,9 @@ int main(int argc, char *argv[]) {
   static struct option long_options[] = {
       {"mode", required_argument, 0, 'm'},
       {"fast-forward", required_argument, 0, 'f'}, // 快进参数
+      {"flash-image", required_argument, 0, 1001},
       {"sdcard-image", required_argument, 0, 1002},
+      {"direct-opensbi", no_argument, 0, 1004},
       {"warmup", required_argument, 0, 'w'},
       {"max-commit", required_argument, 0, 'c'},
       {"no-diff", no_argument, 0, 1000},
@@ -220,8 +228,14 @@ int main(int argc, char *argv[]) {
       }
       break;
     }
+    case 1001:
+      config.flash_image_file = optarg;
+      break;
     case 1002:
       config.sdcard_image_file = optarg;
+      break;
+    case 1004:
+      config.direct_opensbi = true;
       break;
     case 'h':
       print_help(argv);
@@ -244,9 +258,14 @@ int main(int argc, char *argv[]) {
           << config.target_file << std::endl;
     }
   } else {
-    std::cerr << "Error: Missing target file argument." << std::endl;
-    print_help(argv);
-    return 1;
+    const bool can_boot_without_target =
+        (config.mode == SimConfig::RUN || config.mode == SimConfig::FAST) &&
+        (!config.flash_image_file.empty() || config.direct_opensbi);
+    if (!can_boot_without_target) {
+      std::cerr << "Error: Missing target file argument." << std::endl;
+      print_help(argv);
+      return 1;
+    }
   }
 
   // 快速模式逻辑校验
@@ -282,11 +301,26 @@ int main(int argc, char *argv[]) {
   // --- D. 模拟器启动逻辑 ---
   if (config.mode == SimConfig::RUN) {
     std::cout << "[Mode] RUN: Loading Execution Image..." << std::endl;
-    std::cout << "[File] " << config.target_file << std::endl;
-    cpu.back.load_image(config.target_file);
+    if (!config.target_file.empty()) {
+      std::cout << "[File] " << config.target_file << std::endl;
+      cpu.back.load_image(config.target_file);
+    }
+    if (!config.flash_image_file.empty()) {
+      std::cout << "[Flash] " << config.flash_image_file << std::endl;
+      cpu.back.load_flash_image(config.flash_image_file);
+    }
     if (!config.sdcard_image_file.empty()) {
       std::cout << "[SD] " << config.sdcard_image_file << std::endl;
       cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
+    }
+    if (config.direct_opensbi) {
+      if (config.sdcard_image_file.empty()) {
+        std::cerr << "Error: --direct-opensbi requires --sdcard-image."
+                  << std::endl;
+        return 1;
+      }
+      std::cout << "[Boot] direct OpenSBI from SD boot blob" << std::endl;
+      cpu.back.load_sd_boot_blob(config.sdcard_image_file);
     }
 #ifdef CONFIG_DIFFTEST
     difftest_configure_run_assets(
@@ -405,11 +439,26 @@ int main(int argc, char *argv[]) {
     }
   } else if (config.mode == SimConfig::FAST) {
     std::cout << "[Mode] FAST: Hybrid Execution Strategy" << std::endl;
-    std::cout << "[File] " << config.target_file << std::endl;
-    cpu.back.load_image(config.target_file);
+    if (!config.target_file.empty()) {
+      std::cout << "[File] " << config.target_file << std::endl;
+      cpu.back.load_image(config.target_file);
+    }
+    if (!config.flash_image_file.empty()) {
+      std::cout << "[Flash] " << config.flash_image_file << std::endl;
+      cpu.back.load_flash_image(config.flash_image_file);
+    }
     if (!config.sdcard_image_file.empty()) {
       std::cout << "[SD] " << config.sdcard_image_file << std::endl;
       cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
+    }
+    if (config.direct_opensbi) {
+      if (config.sdcard_image_file.empty()) {
+        std::cerr << "Error: --direct-opensbi requires --sdcard-image."
+                  << std::endl;
+        return 1;
+      }
+      std::cout << "[Boot] direct OpenSBI from SD boot blob" << std::endl;
+      cpu.back.load_sd_boot_blob(config.sdcard_image_file);
     }
     std::cout << "[Step 1] Fast-forwarding (Simple CPU) for "
               << config.fast_forward_count << " cycles..." << std::endl;

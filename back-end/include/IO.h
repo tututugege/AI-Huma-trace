@@ -39,7 +39,6 @@ struct DecRenIO {
 
     wire<1> page_fault_inst;
     wire<1> illegal_inst;
-    wire<1> is_ret;
 
     TmaMeta tma;
     DebugMeta dbg;
@@ -311,6 +310,7 @@ struct RobCommitIO {
   struct RobCommitInst {
     wire<32> diag_val;
     wire<AREG_IDX_WIDTH> dest_areg;
+    wire<AREG_IDX_WIDTH> src1_areg;
     wire<PRF_IDX_WIDTH> dest_preg;
     wire<PRF_IDX_WIDTH> old_dest_preg;
 
@@ -323,6 +323,7 @@ struct RobCommitIO {
 
     wire<1> dest_en;
     wire<7> func7;
+    wire<32> imm;
     wire<ROB_IDX_WIDTH> rob_idx;
     wire<1> rob_flag;
     wire<STQ_IDX_WIDTH> stq_idx;
@@ -332,7 +333,6 @@ struct RobCommitIO {
     wire<1> page_fault_load;
     wire<1> page_fault_store;
     wire<1> illegal_inst;
-    wire<1> is_ret;
 
     wire<INST_TYPE_WIDTH> type;
     TmaMeta tma;
@@ -346,6 +346,7 @@ struct RobCommitIO {
       dst.valid = valid;
       dst.uop.diag_val = diag_val;
       dst.uop.dest_areg = dest_areg;
+      dst.uop.src1_areg = src1_areg;
       dst.uop.dest_preg = dest_preg;
       dst.uop.old_dest_preg = old_dest_preg;
       dst.uop.ftq_idx = ftq_idx;
@@ -355,6 +356,7 @@ struct RobCommitIO {
       dst.uop.br_taken = br_taken;
       dst.uop.dest_en = dest_en;
       dst.uop.func7 = func7;
+      dst.uop.imm = imm;
       dst.uop.rob_idx = rob_idx;
       dst.uop.rob_flag = rob_flag;
       dst.uop.stq_idx = stq_idx;
@@ -363,7 +365,6 @@ struct RobCommitIO {
       dst.uop.page_fault_load = page_fault_load;
       dst.uop.page_fault_store = page_fault_store;
       dst.uop.illegal_inst = illegal_inst;
-      dst.uop.is_ret = is_ret;
       dst.uop.type = decode_inst_type(type);
       dst.uop.tma = tma;
       dst.uop.dbg = dbg;
@@ -466,7 +467,6 @@ struct DisRobIO {
 
     wire<1> page_fault_inst;
     wire<1> illegal_inst;
-    wire<1> is_ret;
     wire<1> flush_pipe;
 
     TmaMeta tma;
@@ -548,7 +548,6 @@ struct RenDisIO {
 
     wire<1> page_fault_inst;
     wire<1> illegal_inst;
-    wire<1> is_ret;
 
     TmaMeta tma;
     DebugMeta dbg;
@@ -580,7 +579,6 @@ struct RenDisIO {
       dst.cplt_mask = src.cplt_mask;
       dst.page_fault_inst = src.page_fault_inst;
       dst.illegal_inst = src.illegal_inst;
-      dst.is_ret = src.is_ret;
       dst.type = src.type;
       dst.tma = src.tma;
       dst.dbg = src.dbg;
@@ -1136,7 +1134,6 @@ struct MemReqMeta {
 struct MemRespMeta {
   wire<ROB_IDX_WIDTH> rob_idx;
   bool is_cache_miss;
-  bool difftest_skip;
 
   MemRespMeta() { std::memset(this, 0, sizeof(MemRespMeta)); }
 };

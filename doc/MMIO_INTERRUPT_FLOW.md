@@ -100,7 +100,6 @@ MMIO load 不是地址一出来就发，而是要等到比较严格的条件：
 
 - 直接本地返回
 - 不发 AXI
-- `uop.dbg.difftest_skip = true`
 
 返回数据来源：
 
@@ -152,7 +151,6 @@ LSU 在这里消费：
 1. 用 `uop.rob_idx` 找回对应 LDQ 槽位
    - 这里的 `rob_idx` 实际上被临时改成了 `ldq_idx`
 2. 把 `mmio_rdata` 写入 `entry.uop.result`
-3. 把 `difftest_skip` 带回 load uop
 4. 将该 load 放入 `finished_loads`
 5. 回收 LDQ 项
 

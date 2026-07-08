@@ -42,3 +42,14 @@ static inline bool simulator_is_mmio_addr(uint32_t addr) {
   }
   return false;
 }
+
+static inline bool simulator_is_uncached_memory_addr(uint32_t addr) {
+  return simulator_addr_in_range(
+             addr, {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE}) ||
+         simulator_addr_in_range(
+             addr,
+             {SIM_UNCACHE_DDR_RESERVED_BASE,
+              SIM_UNCACHE_DDR_RESERVED_SIZE}) ||
+         simulator_addr_in_range(
+             addr, {SIM_UNCACHE_HIGH_BASE, SIM_UNCACHE_HIGH_SIZE});
+}

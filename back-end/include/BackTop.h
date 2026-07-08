@@ -167,6 +167,9 @@ public:
   uint64_t ckpt_interval_inst_count = 0;
 
   void load_image(const std::string &filename);
+  void load_flash_image(const std::string &filename);
+  void load_sd_boot_blob(const std::string &sdcard_image,
+                         uint32_t sector_offset = 64u);
   void restore_checkpoint(const std::string &filename);
   void restore_from_ref();
 

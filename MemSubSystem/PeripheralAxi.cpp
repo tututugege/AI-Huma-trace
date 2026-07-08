@@ -1,6 +1,65 @@
 #include "PeripheralAxi.h"
 #include "PeripheralModel.h"
+#include "PhysMemory.h"
 #include "config.h"
+#include "mmio_address_map.h"
+
+namespace {
+uint8_t uncached_access_size_bytes(uint8_t func3) {
+  switch (func3 & 0x3u) {
+  case 0:
+    return 1;
+  case 1:
+    return 2;
+  default:
+    return 4;
+  }
+}
+
+uint32_t extract_uncached_read_data(uint32_t raw, uint8_t func3) {
+  switch (func3) {
+  case 0b000: {
+    uint32_t val = raw & 0xFFu;
+    return (val & 0x80u) ? (val | 0xFFFFFF00u) : val;
+  }
+  case 0b001: {
+    uint32_t val = raw & 0xFFFFu;
+    return (val & 0x8000u) ? (val | 0xFFFF0000u) : val;
+  }
+  case 0b100:
+    return raw & 0xFFu;
+  case 0b101:
+    return raw & 0xFFFFu;
+  default:
+    return raw;
+  }
+}
+
+uint32_t read_uncached_ram(uint32_t addr, uint8_t func3) {
+  const uint8_t size = uncached_access_size_bytes(func3);
+  uint32_t raw = 0;
+  for (uint8_t i = 0; i < size; i++) {
+    const uint32_t byte_addr = addr + i;
+    const uint32_t word = pmem_read(byte_addr & ~0x3u);
+    const uint32_t shift = (byte_addr & 0x3u) * 8u;
+    raw |= ((word >> shift) & 0xFFu) << (i * 8u);
+  }
+  return extract_uncached_read_data(raw, func3);
+}
+
+void write_uncached_ram(uint32_t addr, uint32_t data, uint8_t func3) {
+  const uint8_t size = uncached_access_size_bytes(func3);
+  for (uint8_t i = 0; i < size; i++) {
+    const uint32_t byte_addr = addr + i;
+    const uint32_t word_addr = byte_addr & ~0x3u;
+    const uint32_t shift = (byte_addr & 0x3u) * 8u;
+    const uint32_t mask = 0xFFu << shift;
+    const uint32_t byte_val = (data >> (i * 8u)) & 0xFFu;
+    const uint32_t old_word = pmem_read(word_addr);
+    pmem_write(word_addr, (old_word & ~mask) | (byte_val << shift));
+  }
+}
+} // namespace
 
 void PeripheralAxi::init() {
   in = {};
@@ -69,7 +128,7 @@ void PeripheralAxi::comb_outputs() {
 
   if (peripheral_resp != nullptr) {
     *peripheral_resp = {};
-    peripheral_resp->ready = !cur.busy;
+    peripheral_resp->ready = !cur.busy && !cur.resp_valid;
     if (cur.resp_valid) {
       peripheral_resp->is_mmio = 1;
       peripheral_resp->mmio_rdata = cur.rdata;
@@ -110,10 +169,34 @@ void PeripheralAxi::comb_inputs() {
 
   if (cur.resp_valid) {
     nxt.resp_valid = false;
+    if (peripheral_resp != nullptr) {
+      peripheral_resp->ready = false;
+    }
+    return;
   }
 
   if (!cur.busy) {
     if (peripheral_req != nullptr && peripheral_req->is_mmio) {
+      if (simulator_is_uncached_memory_addr(peripheral_req->mmio_addr)) {
+        nxt.busy = false;
+        nxt.write = peripheral_req->wen;
+        nxt.req_accepted = false;
+        nxt.resp_valid = true;
+        nxt.addr = peripheral_req->mmio_addr;
+        nxt.wdata = peripheral_req->mmio_wdata;
+        nxt.func3 = peripheral_req->mmio_fun3;
+        nxt.rdata = peripheral_req->wen
+                        ? 0
+                        : read_uncached_ram(peripheral_req->mmio_addr,
+                                            peripheral_req->mmio_fun3);
+        if (peripheral_req->wen) {
+          write_uncached_ram(peripheral_req->mmio_addr,
+                             peripheral_req->mmio_wdata,
+                             peripheral_req->mmio_fun3);
+        }
+        nxt.req_id = 0;
+        return;
+      }
       if (peripheral_model != nullptr &&
           PeripheralModel::is_modeled_mmio(peripheral_req->mmio_addr)) {
         nxt.busy = false;
@@ -171,7 +254,7 @@ void PeripheralAxi::comb_inputs() {
   }
 
   if (peripheral_resp != nullptr) {
-    peripheral_resp->ready = !nxt.busy;
+    peripheral_resp->ready = !nxt.busy && !nxt.resp_valid;
   }
 }
 

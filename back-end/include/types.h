@@ -70,12 +70,12 @@ struct DebugMeta {
   wire<32> instruction;
   wire<32> pc;
   bool is_mmio;
-  bool difftest_skip;
   int64_t inst_idx;
 };
 
 struct TmaMeta {
   bool is_cache_miss;
+  bool is_ret;
   bool mem_commit_is_load;
   bool mem_commit_is_store;
 };
@@ -121,7 +121,6 @@ struct InstInfo {
   wire<1> page_fault_store;
   wire<1> illegal_inst;
   wire<1> is_atomic;
-  wire<1> is_ret;
   wire<1> flush_pipe;
 
   InstType type;
@@ -174,7 +173,6 @@ struct MicroOp {
   wire<1> page_fault_load;
   wire<1> page_fault_store;
   wire<1> illegal_inst;
-  wire<1> is_ret;
 
   UopType op;
   TmaMeta tma;
@@ -221,15 +219,14 @@ struct MicroOp {
     this->page_fault_load = info.page_fault_load;
     this->page_fault_store = info.page_fault_store;
     this->illegal_inst = info.illegal_inst;
-    this->is_ret = info.is_ret;
     this->tma.is_cache_miss = info.tma.is_cache_miss;
+    this->tma.is_ret = info.tma.is_ret;
     this->tma.mem_commit_is_load = info.tma.mem_commit_is_load;
     this->tma.mem_commit_is_store = info.tma.mem_commit_is_store;
     this->is_atomic = info.is_atomic;
     this->dbg.instruction = info.dbg.instruction;
     this->dbg.pc = info.dbg.pc;
     this->dbg.is_mmio = info.dbg.is_mmio;
-    this->dbg.difftest_skip = info.dbg.difftest_skip;
     this->dbg.inst_idx = info.dbg.inst_idx;
     this->flush_pipe = info.flush_pipe;
   }

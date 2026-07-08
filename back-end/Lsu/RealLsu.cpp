@@ -1012,7 +1012,6 @@ void RealLsu::comb_lsu2exe() {
         wb_uop.dest_en = true;
         wb_uop.dbg.is_mmio = ldq_entry.is_mmio;
 
-        wb_uop.dbg.difftest_skip = !ldq_entry.page_fault && lsu_is_timer_addr(ldq_entry.p_addr);
         out.lsu2exe->wb_req[issue_ld].uop =
             LsuExeIO::LsuExeRespUop::from_micro_op(wb_uop);
 

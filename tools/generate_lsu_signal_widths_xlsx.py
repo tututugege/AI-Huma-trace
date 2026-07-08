@@ -122,7 +122,6 @@ def add_debug_meta(rows, scope, prefix, dims=None):
     add(rows, scope, f"{prefix}.instruction", "wire<32>", 32, dims)
     add(rows, scope, f"{prefix}.pc", "wire<32>", 32, dims)
     add(rows, scope, f"{prefix}.mem_align_mask", "uint8_t", 8, dims)
-    add(rows, scope, f"{prefix}.difftest_skip", "bool", 1, dims)
     add(rows, scope, f"{prefix}.inst_idx", "int64_t", 64, dims)
 
 

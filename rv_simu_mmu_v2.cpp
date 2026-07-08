@@ -760,7 +760,7 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
          "SimCpu::commit_sync: invalid commit slot");
   const auto &ftq_info = back->ftq_commit_info.resp[commit_slot];
   if (inst->type == JALR) {
-    if (inst->is_ret) {
+    if (inst->tma.is_ret) {
       this->ctx.perf.ret_br_num++;
     } else {
       this->ctx.perf.jalr_br_num++;
@@ -771,7 +771,7 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
 
   if (inst->mispred) {
     if (inst->type == JALR) {
-      if (inst->is_ret) {
+      if (inst->tma.is_ret) {
         this->ctx.perf.ret_mispred_num++;
         const bool pred_taken = ftq_info.pred_taken;
         if (!pred_taken) {
@@ -1325,7 +1325,7 @@ void SimCpu::back2front_comb() {
       if (inst->type == JAL && inst->dest_en && inst->dest_areg == 1) {
         br_type = BR_CALL;
       } else if (inst->type == JALR) {
-        if (inst->is_ret)
+        if (inst->src1_areg == 1 && inst->dest_areg == 0 && inst->imm == 0)
           br_type = BR_RET;
         else
           br_type = BR_IDIRECT;

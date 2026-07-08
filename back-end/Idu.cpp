@@ -290,7 +290,6 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
   // 操作数来源以及type
   // uint32_t imm;
   uop.dbg.instruction = inst;
-  uop.dbg.difftest_skip = false;
 
   uint32_t opcode = BITS(inst, 6, 0);
   uint32_t number_funct3_unsigned = BITS(inst, 14, 12);
@@ -314,9 +313,9 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
   uop.illegal_inst = false;
   uop.type = encode_inst_type(NOP);
   uop.tma.is_cache_miss = false;
+  uop.tma.is_ret = false;
   uop.tma.mem_commit_is_load = false;
   uop.tma.mem_commit_is_store = false;
-  uop.is_ret = false;
   static uint64_t global_inst_idx = 0;
   uop.dbg.inst_idx = global_inst_idx++;
 
@@ -532,8 +531,8 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
   }
 
   InstType inst_type = decode_inst_type(uop.type);
-  uop.is_ret = (inst_type == JALR && uop.src1_areg == 1 &&
-                uop.dest_areg == 0 && uop.imm == 0);
+  uop.tma.is_ret = (inst_type == JALR && uop.src1_areg == 1 &&
+                    uop.dest_areg == 0 && uop.imm == 0);
   uop.tma.mem_commit_is_load =
       (inst_type == LOAD ||
        (inst_type == AMO && (uop.func7 >> 2) != AmoOp::SC));

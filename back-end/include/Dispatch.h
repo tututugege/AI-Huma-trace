@@ -76,7 +76,6 @@ private:
       dst.rob_flag = rob_flag;
       dst.page_fault_inst = page_fault_inst;
       dst.illegal_inst = illegal_inst;
-      dst.is_ret = is_ret;
       dst.type = type;
       dst.tma = tma;
       dst.dbg = dbg;
