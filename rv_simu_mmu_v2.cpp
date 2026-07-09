@@ -1289,6 +1289,7 @@ void SimCpu::back2front_comb() {
   front.back2front_1.fence_i = back.out.fence_i;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     InstInfo *inst = &back.out.commit_entry[i].uop;
+    const auto &commit_extra = back.rob->out.commit_extra[i];
     const auto &ftq_info = back.ftq_commit_info.resp[i];
     front.back2front_1.back2front_valid[i] = back.out.commit_entry[i].valid;
     for (int j = 0; j < 4; j++) {
@@ -1325,7 +1326,8 @@ void SimCpu::back2front_comb() {
       if (inst->type == JAL && inst->dest_en && inst->dest_areg == 1) {
         br_type = BR_CALL;
       } else if (inst->type == JALR) {
-        if (inst->src1_areg == 1 && inst->dest_areg == 0 && inst->imm == 0)
+        if (commit_extra.src1_areg == 1 && inst->dest_areg == 0 &&
+            commit_extra.imm == 0)
           br_type = BR_RET;
         else
           br_type = BR_IDIRECT;

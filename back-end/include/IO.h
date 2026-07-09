@@ -310,7 +310,6 @@ struct RobCommitIO {
   struct RobCommitInst {
     wire<32> diag_val;
     wire<AREG_IDX_WIDTH> dest_areg;
-    wire<AREG_IDX_WIDTH> src1_areg;
     wire<PRF_IDX_WIDTH> dest_preg;
     wire<PRF_IDX_WIDTH> old_dest_preg;
 
@@ -323,7 +322,6 @@ struct RobCommitIO {
 
     wire<1> dest_en;
     wire<7> func7;
-    wire<32> imm;
     wire<ROB_IDX_WIDTH> rob_idx;
     wire<1> rob_flag;
     wire<STQ_IDX_WIDTH> stq_idx;
@@ -346,7 +344,6 @@ struct RobCommitIO {
       dst.valid = valid;
       dst.uop.diag_val = diag_val;
       dst.uop.dest_areg = dest_areg;
-      dst.uop.src1_areg = src1_areg;
       dst.uop.dest_preg = dest_preg;
       dst.uop.old_dest_preg = old_dest_preg;
       dst.uop.ftq_idx = ftq_idx;
@@ -356,7 +353,6 @@ struct RobCommitIO {
       dst.uop.br_taken = br_taken;
       dst.uop.dest_en = dest_en;
       dst.uop.func7 = func7;
-      dst.uop.imm = imm;
       dst.uop.rob_idx = rob_idx;
       dst.uop.rob_flag = rob_flag;
       dst.uop.stq_idx = stq_idx;

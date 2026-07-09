@@ -2,12 +2,20 @@
 #include "IO.h"
 #include "config.h"
 
+struct RobCommitExtra {
+  wire<AREG_IDX_WIDTH> src1_areg;
+  wire<32> imm;
+
+  RobCommitExtra() { std::memset(this, 0, sizeof(RobCommitExtra)); }
+};
+
 struct RobOut {
   RobDisIO *rob2dis;
   RobCsrIO *rob2csr;
   RobCommitIO *rob_commit;
   RobBroadcastIO *rob_bcast;
   FtqRobPcReqIO *ftq_pc_req;
+  RobCommitExtra commit_extra[COMMIT_WIDTH];
 };
 
 struct RobIn {
@@ -97,7 +105,6 @@ struct RobStoredInst {
     RobCommitIO::RobCommitInst dst;
     dst.diag_val = diag_val;
     dst.dest_areg = dest_areg;
-    dst.src1_areg = src1_areg;
     dst.dest_preg = dest_preg;
     dst.old_dest_preg = old_dest_preg;
     dst.ftq_idx = ftq_idx;
@@ -107,7 +114,6 @@ struct RobStoredInst {
     dst.br_taken = br_taken;
     dst.dest_en = dest_en;
     dst.func7 = func7;
-    dst.imm = imm;
     dst.rob_idx = rob_idx;
     dst.rob_flag = rob_flag;
     dst.stq_idx = stq_idx;
@@ -120,6 +126,13 @@ struct RobStoredInst {
     dst.tma = tma;
     dst.dbg = dbg;
     dst.flush_pipe = flush_pipe;
+    return dst;
+  }
+
+  RobCommitExtra to_commit_extra() const {
+    RobCommitExtra dst;
+    dst.src1_areg = src1_areg;
+    dst.imm = imm;
     return dst;
   }
 };
