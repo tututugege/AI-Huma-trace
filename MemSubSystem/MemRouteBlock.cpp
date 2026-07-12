@@ -60,8 +60,12 @@ void MemRouteBlock::comb_response() {
         out.ptw_events->req_id = cur.issued_tags.req_id;
       }
     } else if (replay == ReplayType::CONFLICT) {
+      const bool icache_retry =
+          (owner == Owner::ICACHE) &&
+          in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].retry;
       out.icache_resp->resp_valid = (owner == Owner::ICACHE);
-      out.icache_resp->resp_miss = (owner == Owner::ICACHE);
+      out.icache_resp->resp_retry = icache_retry;
+      out.icache_resp->resp_miss = (owner == Owner::ICACHE) && !icache_retry;
       out.wakeup->dtlb = (owner == Owner::PTW_DTLB);
       out.wakeup->itlb = (owner == Owner::PTW_ITLB);
       out.wakeup->walk = (owner == Owner::PTW_WALK);

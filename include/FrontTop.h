@@ -18,6 +18,7 @@ struct ICacheMemPortReq{
 };
 struct ICacheMemPortResp{
   bool resp_valid = false;
+  bool resp_retry = false;
   bool resp_miss = false;
   uint32_t resp_data;
 };

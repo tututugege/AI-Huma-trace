@@ -406,6 +406,7 @@ void RealDcache::stage2_comb() {
 
         if(slot.replayed){
             resp.valid  = true;
+            resp.retry = true;
             resp.replay = ReplayType::CONFLICT; // This load has been replayed due to MSHR full or conflict, so replay again to give chance for the MSHR state to be updated and avoid starvation when there are multiple back-to-back misses.
             resp.req_id = slot.req_id;
             COUNT_L1D_REPLAY(ctx, slot.req_id, false, slot.perf_replay,
@@ -426,6 +427,7 @@ void RealDcache::stage2_comb() {
             resp.valid = true;
             resp.data = in.wb2dcache->bypass_resp[i].data;
             resp.req_id = slot.req_id;
+            resp.retry = false;
             resp.replay = ReplayType::HIT;
         }else if (hit_way >= 0 ) {
             // ── Cache Hit ────────────────────────────────────────────────────
@@ -433,6 +435,7 @@ void RealDcache::stage2_comb() {
             resp.replay = ReplayType::HIT;
             resp.data   = line_resp.data[hit_way];
             resp.req_id = slot.req_id;
+            resp.retry = false;
             out.lru_updates[i]->valid = true;
             out.lru_updates[i]->set_idx = f.set_idx;
             out.lru_updates[i]->way = hit_way;
@@ -442,6 +445,7 @@ void RealDcache::stage2_comb() {
                 // ICache coherent probes are lookup-only: report miss to the
                 // front-end route block without allocating an MSHR.
                 resp.valid = true;
+                resp.retry = false;
                 resp.replay = ReplayType::CONFLICT;
                 resp.req_id = slot.req_id;
                 continue;

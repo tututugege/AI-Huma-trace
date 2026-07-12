@@ -1295,6 +1295,7 @@ struct LoadResp {
   wire<1> valid;
   wire<32> data;
   wire<32> req_id;
+  wire<1> retry;
   ReplayType replay;
 };
 
