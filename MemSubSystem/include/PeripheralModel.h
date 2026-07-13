@@ -273,6 +273,16 @@ public:
   }
   bool timer_irq_level() const { return effective_timer_value() >= timer_cmp_; }
 
+  bool consume_dma_write(uint32_t &paddr, size_t &size) {
+    if (!dma_write_pending_) {
+      return false;
+    }
+    paddr = dma_write_paddr_;
+    size = dma_write_size_;
+    dma_write_pending_ = false;
+    return true;
+  }
+
 private:
   static uint64_t current_sim_time_u64() {
     return sim_time >= 0 ? static_cast<uint64_t>(sim_time) : 0ull;
@@ -381,6 +391,9 @@ private:
   uint32_t xps_intc_isr_ = 0;
   uint32_t xps_intc_ier_ = 0;
   uint32_t xps_intc_mer_ = 0;
+  bool dma_write_pending_ = false;
+  uint32_t dma_write_paddr_ = 0;
+  size_t dma_write_size_ = 0;
 
   struct SdCardId {
     uint32_t ocr;
@@ -409,6 +422,9 @@ private:
   }
 
   void ocsdc_reset() {
+    dma_write_pending_ = false;
+    dma_write_paddr_ = 0;
+    dma_write_size_ = 0;
     ocsdc_regs_.clear();
     ocsdc_regs_[kOcsdcArgument] = 0;
     ocsdc_regs_[kOcsdcCommand] = 0;
@@ -540,6 +556,9 @@ private:
       throw std::runtime_error("OCSDC DMA destination is not RAM");
     }
     pmem_memcpy_to_ram(dst_addr, src, len);
+    dma_write_pending_ = true;
+    dma_write_paddr_ = dst_addr;
+    dma_write_size_ = len;
   }
 
   void write_data_buffer(uint32_t dst_addr, size_t sd_offset_bytes,

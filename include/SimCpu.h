@@ -45,4 +45,5 @@ public:
   // 由 SimContext 在提交路径调用的本地辅助逻辑。
   void commit_sync(InstInfo *inst, int commit_slot);
   void difftest_prepare(InstEntry *inst_entry, bool *sync);
+  void difftest_prepare_interrupt();
 };

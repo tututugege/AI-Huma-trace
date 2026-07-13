@@ -30,8 +30,6 @@ inline bool rob_is_load(const RobStoredInst &uop) {
   return uop.tma.mem_commit_is_load;
 }
 
-inline bool rob_is_mmio(const RobStoredInst &uop) { return uop.dbg.is_mmio; }
-
 inline bool rob_is_page_fault(const RobStoredInst &uop) {
   return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store;
 }
@@ -279,8 +277,7 @@ void Rob::comb_commit() {
       if ((entry[i][deq_ptr].valid &&
            (rob_is_flush_inst(entry[i][deq_ptr].uop) ||
             rob_is_fence_inst(entry[i][deq_ptr].uop) ||
-            rob_is_wfi(entry[i][deq_ptr].uop) ||
-            rob_is_mmio(entry[i][deq_ptr].uop))) ||
+            rob_is_wfi(entry[i][deq_ptr].uop))) ||
           interrupt_pending) {
         single_commit = true;
         break;
@@ -624,6 +621,11 @@ void Rob::comb_complete() {
           entry_1[bank_idx][line_idx].uop.flush_pipe || wb.flush_pipe;
       entry_1[bank_idx][line_idx].uop.dbg.is_mmio =
           entry_1[bank_idx][line_idx].uop.dbg.is_mmio || wb.dbg.is_mmio;
+      if (wb.dbg.mmio_read_valid) {
+        entry_1[bank_idx][line_idx].uop.dbg.mmio_read_valid = true;
+        entry_1[bank_idx][line_idx].uop.dbg.mmio_read_result =
+            wb.dbg.mmio_read_result;
+      }
       if (is_branch_uop(wb.op)) {
         entry_1[bank_idx][line_idx].uop.diag_val = wb.diag_val;
         entry_1[bank_idx][line_idx].uop.mispred = wb.mispred;

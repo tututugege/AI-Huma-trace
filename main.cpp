@@ -399,7 +399,7 @@ int main(int argc, char *argv[]) {
         }
       }
       difftest_ref_set_interrupt_delivery(false);
-      difftest_ref_set_device_effects(true);
+      difftest_ref_set_device_effects(false);
       difftest_ref_set_ref_only(true);
       std::cout << "[Run] Ref prewarm done: " << ref_prewarm_done
                 << " steps." << std::endl;
@@ -491,7 +491,7 @@ int main(int argc, char *argv[]) {
     sim_time = static_cast<long long>(ref_fast_done);
     difftest_ref_set_uart_print(false);
     difftest_ref_set_interrupt_delivery(false);
-    difftest_ref_set_device_effects(true);
+    difftest_ref_set_device_effects(false);
     difftest_ref_set_ref_only(true);
 
     if (cpu.ctx.exit_reason == ExitReason::NONE) {

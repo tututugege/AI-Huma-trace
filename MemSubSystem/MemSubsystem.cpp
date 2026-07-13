@@ -773,6 +773,10 @@ void MemSubsystem::on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3)
   peripheral_model_.on_commit_store(paddr, data, func3);
 }
 
+bool MemSubsystem::consume_dma_write(uint32_t &paddr, size_t &size) {
+  return peripheral_model_.consume_dma_write(paddr, size);
+}
+
 void MemSubsystem::load_sdcard_image(const std::string &path) {
   peripheral_model_.load_sdcard_image(path);
 }

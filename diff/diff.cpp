@@ -83,7 +83,7 @@ void configure_ref_runtime() {
   ensure_ref_cpu();
   refcpu_set_uart_print(ref_cpu_ctx, false);
   refcpu_set_ref_only(ref_cpu_ctx, true);
-  refcpu_set_device_effects(ref_cpu_ctx, true);
+  refcpu_set_device_effects(ref_cpu_ctx, false);
   refcpu_set_interrupt_delivery(ref_cpu_ctx, false);
 }
 
@@ -201,8 +201,9 @@ static void checkregs() {
   uint32_t dut_csrs[CSR_NUM];
   std::memcpy(ref_csrs, ref_state.csr, sizeof(ref_csrs));
   std::memcpy(dut_csrs, dut_cpu.csr, sizeof(dut_csrs));
-  ref_csrs[csr_mip] &= ~MIP_MTIP;
-  dut_csrs[csr_mip] &= ~MIP_MTIP;
+  constexpr uint32_t kAsyncPendingMask = MIP_MTIP | MIP_MEIP | MIP_SEIP;
+  ref_csrs[csr_mip] &= ~kAsyncPendingMask;
+  dut_csrs[csr_mip] &= ~kAsyncPendingMask;
   ref_csrs[csr_sip] = ref_csrs[csr_mip] & 0x00000333u;
   dut_csrs[csr_sip] = dut_csrs[csr_mip] & 0x00000333u;
 
@@ -297,6 +298,43 @@ void difftest_sync_from_dut(uint8_t privilege) {
   const RefCpuState ref_state = to_ref_state(dut_cpu, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
   diff_watchdog_tick();
+}
+
+void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {
+  ensure_ref_cpu();
+  if (size == 0) {
+    return;
+  }
+  Assert(size <= UINT32_MAX &&
+         pmem_is_ram_addr(paddr, static_cast<uint32_t>(size)) &&
+         "difftest DMA sync range is outside DUT RAM");
+  uint32_t *dut_ram = pmem_ram_ptr();
+  uint32_t *ref_ram = refcpu_get_ram_ptr(ref_cpu_ctx);
+  Assert(dut_ram != nullptr && ref_ram != nullptr &&
+         "difftest DMA sync RAM is not initialized");
+  const size_t offset = static_cast<size_t>(paddr - PMEM_RAM_BASE);
+  std::memcpy(reinterpret_cast<uint8_t *>(ref_ram) + offset,
+              reinterpret_cast<const uint8_t *>(dut_ram) + offset, size);
+}
+
+void difftest_ref_set_next_mmio_read(uint32_t paddr, uint32_t result) {
+  ensure_ref_cpu();
+  refcpu_set_next_mmio_read(ref_cpu_ctx, paddr, result);
+}
+
+void difftest_ref_set_next_csr_read(uint32_t csr_addr, uint32_t value) {
+  ensure_ref_cpu();
+  refcpu_set_next_csr_read(ref_cpu_ctx, csr_addr, value);
+}
+
+void difftest_take_interrupt(uint32_t cause, uint8_t target_privilege,
+                             uint32_t pending_snapshot) {
+  ensure_ref_cpu();
+  dut_privilege = target_privilege;
+  const bool taken = refcpu_take_forced_interrupt(
+      ref_cpu_ctx, cause, target_privilege, pending_snapshot);
+  Assert(taken && "reference rejected DUT forced interrupt");
+  checkregs();
 }
 
 void difftest_set_dut_privilege(uint8_t privilege) { dut_privilege = privilege; }
