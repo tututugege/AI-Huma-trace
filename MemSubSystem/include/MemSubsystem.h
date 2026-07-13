@@ -75,6 +75,8 @@ public:
   void seq();
   void dcache_fast_comb(bool inject_slow_request);
   void dcache_fast_seq(bool sample_mshr_perf = false);
+  void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
+                                   uint32_t max_cycles);
   void on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3);
   bool consume_dma_write(uint32_t &paddr, size_t &size);
   void load_sdcard_image(const std::string &path);

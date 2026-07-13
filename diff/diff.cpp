@@ -207,6 +207,9 @@ static void checkregs() {
   ref_csrs[csr_sip] = ref_csrs[csr_mip] & 0x00000333u;
   dut_csrs[csr_sip] = dut_csrs[csr_mip] & 0x00000333u;
 
+  if (ref_state.privilege != dut_privilege)
+    goto fault;
+
   if (ref_state.pc != dut_cpu.pc)
     goto fault;
 
@@ -233,10 +236,9 @@ static void checkregs() {
       goto fault;
   }
 
+  if (dut_cpu.store != ref_state.store)
+    goto fault;
   if (ref_state.store) {
-    if (dut_cpu.store != ref_state.store)
-      goto fault;
-
     if (dut_cpu.store_data != ref_state.store_data)
       goto fault;
 
@@ -289,15 +291,6 @@ fault:
 
   Assert(0 && "Difftest: Register or Memory mismatch detected.");
   exit(1);
-}
-
-void difftest_sync_from_dut(uint8_t privilege) {
-  ensure_ref_cpu();
-  dut_privilege = privilege;
-  refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
-  const RefCpuState ref_state = to_ref_state(dut_cpu, privilege);
-  refcpu_set_state(ref_cpu_ctx, &ref_state);
-  diff_watchdog_tick();
 }
 
 void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {

@@ -785,19 +785,24 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   }
 }
 
-void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
+void SimCpu::difftest_capture_registers() {
+  BackTop *back = &this->back;
+  for (int i = 0; i < ARF_NUM; i++) {
+    // Observe same-cycle PRF writeback through the combinational state.
+    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
+  }
+  for (int i = 0; i < CSR_NUM; i++) {
+    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
+  }
+}
+
+void SimCpu::difftest_prepare(InstEntry *inst_entry) {
   Assert(inst_entry != nullptr &&
          "SimCpu::difftest_prepare: inst_entry is null");
-  Assert(sync != nullptr && "SimCpu::difftest_prepare: sync is null");
   BackTop *back = &this->back;
   InstInfo *inst = &inst_entry->uop;
 
-  for (int i = 0; i < ARF_NUM; i++) {
-    // With same-cycle EXU->ROB completion, commit-side architectural mapping
-    // (arch_RAT_1) can point to a preg whose value is produced in this cycle's
-    // comb writeback path. Use reg_file_1 to observe the up-to-date comb state.
-    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
-  }
+  difftest_capture_registers();
 
   if (inst->tma.mem_commit_is_store && !inst->page_fault_store) {
     StqEntry e = back->lsu->get_stq_entry(inst->stq_idx, inst->stq_flag);
@@ -826,10 +831,6 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
     }
   } else {
     dut_cpu.store = false;
-  }
-
-  for (int i = 0; i < CSR_NUM; i++) {
-    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
   }
 
   if (static_cast<bool>(
@@ -871,13 +872,7 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
 
 void SimCpu::difftest_prepare_interrupt() {
   BackTop *back = &this->back;
-
-  for (int i = 0; i < ARF_NUM; i++) {
-    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
-  }
-  for (int i = 0; i < CSR_NUM; i++) {
-    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
-  }
+  difftest_capture_registers();
 
   dut_cpu.pc = back->csr->out.csr2front->trap_pc;
   dut_cpu.store = false;
@@ -906,8 +901,7 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
   if (!enable_difftest) {
     return;
   }
-  bool sync = false;
-  cpu->difftest_prepare(inst_entry, &sync);
+  cpu->difftest_prepare(inst_entry);
   difftest_set_dut_privilege(static_cast<uint8_t>(cpu->back.csr->privilege_1));
   const InstInfo &inst = inst_entry->uop;
   if (inst.dbg.mmio_read_valid) {
@@ -923,11 +917,7 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
       (csr_addr == number_mip || csr_addr == number_sip)) {
     difftest_ref_set_next_csr_read(csr_addr, dut_cpu.gpr[rd]);
   }
-  if (sync) {
-    difftest_sync_from_dut(static_cast<uint8_t>(cpu->back.csr->privilege_1));
-  } else {
-    difftest_step(true);
-  }
+  difftest_step(true);
 }
 
 void SimContext::run_difftest_interrupt() {

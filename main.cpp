@@ -6,6 +6,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
 #include <getopt.h>
 #include <unistd.h>
 #include "RISCV.h"
@@ -38,6 +39,9 @@ struct SimConfig {
   uint64_t max_commit_inst = static_cast<uint64_t>(MAX_COMMIT_INST);
   bool max_commit_inst_set = false;
   bool disable_difftest = false;
+  uint64_t irq_seed = 1;
+  uint32_t irq_delay_min = 8;
+  uint32_t irq_delay_max = 64;
 };
 
 // 2. 帮助信息更新
@@ -66,6 +70,12 @@ void print_help(char *argv[]) {
          "MAX_COMMIT_INST otherwise)"
       << std::endl;
   std::cout << "      --no-diff               Disable commit-time difftest checks"
+            << std::endl;
+  std::cout << "      --irq-seed <num>        Seed for deterministic IRQ latency"
+            << std::endl;
+  std::cout << "      --irq-delay-min <cycles> Minimum IRQ assertion delay (>= 1)"
+            << std::endl;
+  std::cout << "      --irq-delay-max <cycles> Maximum IRQ assertion delay"
             << std::endl;
   std::cout << "  -h, --help                  Show this message" << std::endl;
   std::cout << "\nExamples:" << std::endl;
@@ -150,6 +160,9 @@ int main(int argc, char *argv[]) {
       {"flash-image", required_argument, 0, 1001},
       {"sdcard-image", required_argument, 0, 1002},
       {"direct-opensbi", no_argument, 0, 1004},
+      {"irq-seed", required_argument, 0, 1005},
+      {"irq-delay-min", required_argument, 0, 1006},
+      {"irq-delay-max", required_argument, 0, 1007},
       {"warmup", required_argument, 0, 'w'},
       {"max-commit", required_argument, 0, 'c'},
       {"no-diff", no_argument, 0, 1000},
@@ -237,6 +250,44 @@ int main(int argc, char *argv[]) {
     case 1004:
       config.direct_opensbi = true;
       break;
+    case 1005:
+      try {
+        config.irq_seed = std::stoull(optarg);
+        if (config.irq_seed == 0) {
+          throw std::out_of_range("irq-seed");
+        }
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-seed must be a positive integer, got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
+    case 1006:
+      try {
+        const uint64_t value = std::stoull(optarg);
+        if (value == 0 || value > UINT32_MAX) {
+          throw std::out_of_range("irq-delay-min");
+        }
+        config.irq_delay_min = static_cast<uint32_t>(value);
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-delay-min must be in [1, 2^32-1], got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
+    case 1007:
+      try {
+        const uint64_t value = std::stoull(optarg);
+        if (value == 0 || value > UINT32_MAX) {
+          throw std::out_of_range("irq-delay-max");
+        }
+        config.irq_delay_max = static_cast<uint32_t>(value);
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-delay-max must be in [1, 2^32-1], got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
     case 'h':
       print_help(argv);
       return 0;
@@ -288,11 +339,21 @@ int main(int argc, char *argv[]) {
                  "mode."
               << std::endl;
   }
+  if (config.irq_delay_max < config.irq_delay_min) {
+    std::cerr << "Error: --irq-delay-max must be >= --irq-delay-min."
+              << std::endl;
+    return 1;
+  }
 
   if (!pmem_init()) {
     std::cerr << "Error: Failed to allocate memory!" << std::endl;
     exit(1);
   }
+  cpu.mem_subsystem.configure_interrupt_latency(
+      config.irq_seed, config.irq_delay_min, config.irq_delay_max);
+  std::cout << "[CONFIG][IRQ] seed=" << config.irq_seed
+            << " assertion_delay=" << config.irq_delay_min << ".."
+            << config.irq_delay_max << " cycles" << std::endl;
   cpu.init();
   if (config.disable_difftest) {
     cpu.ctx.enable_difftest = false;
