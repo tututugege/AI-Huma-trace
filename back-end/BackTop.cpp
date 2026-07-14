@@ -31,7 +31,7 @@ void BackTop::init() {
   lsu = new RealLsu(ctx);
   dtlb_mmu =
       std::make_unique<TlbMmu>(ctx, nullptr, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
-  
+
   out.fire = pre2front.fire;
 
   pre->out.pre2front = &pre2front;
@@ -144,7 +144,7 @@ void BackTop::init() {
   lsu->in.dec_bcast = &dec_bcast;
   lsu->in.rob_commit = &rob_commit;
   lsu->in.peripheral_resp = &in.peripheral_resp;
-  lsu->in.dcache2lsu  = &in.dcache2lsu;
+  lsu->in.dcache2lsu = &in.dcache2lsu;
   lsu->in.mmu2lsu = &mmu2lsu_io;
 
   lsu->out.lsu2exe = &lsu2exe;
@@ -277,6 +277,7 @@ void BackTop::comb() {
   csr->comb_begin();
 
   // 每个空行表示分层  下层会依赖上层产生的某个信号
+  idu->comb_branch();
   pre->comb_accept_front();
   idu->comb_decode();
   csr->comb_interrupt();
@@ -288,8 +289,6 @@ void BackTop::comb() {
   lsu->comb_cal();
   lsu->comb_lsu2dis();
   lsu->comb_lsu2rob();
-
-  idu->comb_branch();
 
   rob->comb_ready();
   rob->comb_ftq_pc_req();
@@ -321,7 +320,6 @@ void BackTop::comb() {
   prf->comb_req_ftq();
   pre->comb_ftq_lookup_prf();
   prf->comb_read();
-
 
   isu->comb_awake();
   isu->comb_calc_latency_next();
@@ -413,13 +411,15 @@ void BackTop::seq() {
 }
 
 // --- 辅助函数：简化 zlib 读写 POD 类型 ---
-template <typename T> void gz_write_pod(gzFile file, const T &data) {
+template <typename T>
+void gz_write_pod(gzFile file, const T &data) {
   if (gzwrite(file, &data, sizeof(T)) != sizeof(T)) {
     Assert(0 && "Error writing data to gzip file.");
   }
 }
 
-template <typename T> void gz_read_pod(gzFile file, T &data) {
+template <typename T>
+void gz_read_pod(gzFile file, T &data) {
   if (gzread(file, &data, sizeof(T)) != sizeof(T)) {
     Assert(0 && "Error reading data from gzip file.");
   }
@@ -696,14 +696,22 @@ void BackTop::restore_checkpoint(const std::string &filename) {
 
   // 1. 恢复 header + 状态
   gz_read_pod(file, ckpt_header);
-  Assert(ckpt_header.magic == kCkptMagic &&
-         "Error: Invalid checkpoint magic.");
-  Assert(ckpt_header.format_ver == kCkptFormatVersion &&
-         "Error: Unsupported checkpoint version.");
-  Assert(ckpt_header.ram_size == static_cast<uint32_t>(kCkptSimpointRamBytes) &&
-         "Error: Checkpoint RAM size mismatch.");
-  Assert(ckpt_header.io_range_count == kExpectedIoLayout.size() &&
-         "Error: Checkpoint IO layout count mismatch.");
+  if (ckpt_header.magic != kCkptMagic) {
+    std::cerr << "Error: Invalid checkpoint magic." << std::endl;
+    std::exit(1);
+  }
+  if (ckpt_header.format_ver != kCkptFormatVersion) {
+    std::cerr << "Error: Unsupported checkpoint version: "
+              << ckpt_header.format_ver << std::endl;
+    std::exit(1);
+  }
+  if (ckpt_header.ram_size == 0 ||
+      ckpt_header.ram_size > kCkptSimpointRamBytes) {
+    std::cerr << "Error: RAM-only checkpoint size is incompatible: file=0x"
+              << std::hex << ckpt_header.ram_size << " sim=0x"
+              << kCkptSimpointRamBytes << std::dec << std::endl;
+    std::exit(1);
+  }
 
   gz_read_pod(file, ckpt_state);
   gz_read_pod(file, interval_inst_count);
@@ -764,39 +772,21 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   pmem_clear_all();
 
   std::cout << "Restoring Memory... format=simpoint-v2(header+ranges)"
+            << " file_ram=0x" << std::hex << ckpt_header.ram_size
+            << " sim_ram=0x" << kCkptSimpointRamBytes << std::dec
             << std::endl;
 
   uint8_t *ram_dst = reinterpret_cast<uint8_t *>(pmem_ram_ptr());
-  gz_read_exact(file, ram_dst, kCkptSimpointRamBytes);
+  gz_read_exact(file, ram_dst, ckpt_header.ram_size);
 
-  // 3. 恢复并校验 IO 布局（range descriptor + raw bytes）
-  for (uint32_t i = 0; i < ckpt_header.io_range_count; ++i) {
-    CkptIoRange range = {};
-    gz_read_pod(file, range);
-    const auto &expected = kExpectedIoLayout[i];
-
-    const bool is_timer_range = (expected.base == TIMER_BASE);
-    const bool layout_match =
-        is_timer_range ? (range.base == expected.base)
-                       : (range.base == expected.base &&
-                          range.size == expected.size);
-    Assert(layout_match && "Error: Checkpoint IO layout mismatch.");
-
-    std::vector<uint8_t> io_bytes(range.size, 0);
-    gz_read_exact(file, io_bytes.data(), io_bytes.size());
-    for (uint32_t off = 0; off + 4 <= range.size; off += 4) {
-      const uint32_t word =
-          static_cast<uint32_t>(io_bytes[off + 0]) |
-          (static_cast<uint32_t>(io_bytes[off + 1]) << 8) |
-          (static_cast<uint32_t>(io_bytes[off + 2]) << 16) |
-          (static_cast<uint32_t>(io_bytes[off + 3]) << 24);
-      if (word != 0) {
-        pmem_write(range.base + off, word);
-      }
-    }
-  }
-
+  seed_uart_io_words();
+  pmem_write(OPENSBI_TIMERCMP_LOW_ADDR, UINT32_MAX);
+  pmem_write(OPENSBI_TIMERCMP_HIGH_ADDR, UINT32_MAX);
   gzclose(file);
+  std::cout << "[CKPT][RAM-ONLY] Ignored " << ckpt_header.io_range_count
+            << " serialized MMIO ranges; UART is transmit-ready and all "
+               "interrupt sources are reset."
+            << std::endl;
   std::cout << "Checkpoint restored from " << final_name << std::endl;
 
   init_diff_ckpt(state, restored_privilege);

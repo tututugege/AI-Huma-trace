@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-static InstructionBufferEntry push_entries[FETCH_WIDTH];
+static InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH];
 static int push_count = 0;
 
 static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry,
@@ -103,7 +103,7 @@ void PreIduQueue::comb_begin() {
 #endif
 
   out.pre2front->ready = false;
-  for (int i = 0; i < FETCH_WIDTH; i++) {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     out.pre2front->fire[i] = false;
   }
 
@@ -117,7 +117,7 @@ void PreIduQueue::comb_accept_front() {
   }
 
   int incoming_valid_num = 0;
-  for (int i = 0; i < FETCH_WIDTH; i++) {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     incoming_valid_num += in.front2pre->valid[i] ? 1 : 0;
   }
 
@@ -139,7 +139,7 @@ void PreIduQueue::comb_accept_front() {
   FTQEntry ftq_lookup_entry;
   FTQTrainMetaEntry ftq_train_meta_entry;
   ftq_lookup_entry.next_pc = in.front2pre->predict_next_fetch_address[0];
-  for (int i = 0; i < FETCH_WIDTH; i++) {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     ftq_lookup_entry.slot_pc[i] = in.front2pre->pc[i];
     ftq_lookup_entry.pred_taken_mask[i] = in.front2pre->predict_dir[i];
     ftq_train_meta_entry.alt_pred[i] = in.front2pre->alt_pred[i];
@@ -170,18 +170,18 @@ void PreIduQueue::comb_accept_front() {
   ftq_train_meta_fifo_1[ftq_alloc_idx] = ftq_train_meta_entry;
   ftq_valid_1[ftq_alloc_idx] = true;
 
-  for (int i = 0; i < FETCH_WIDTH; i++) {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     out.pre2front->fire[i] = in.front2pre->valid[i];
   }
 
   int last_fire_idx = -1;
-  for (int i = FETCH_WIDTH - 1; i >= 0; i--) {
+  for (int i = BACKEND_FETCH_WIDTH - 1; i >= 0; i--) {
     if (out.pre2front->fire[i]) {
       last_fire_idx = i;
       break;
     }
   }
-  for (int i = 0; i < FETCH_WIDTH; i++) {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     if (!out.pre2front->fire[i]) {
       continue;
     }

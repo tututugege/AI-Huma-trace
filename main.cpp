@@ -627,7 +627,12 @@ int main(int argc, char *argv[]) {
         return 130;
       }
 
-    if (cpu.ctx.perf.commit_num >= config.max_commit_inst) {
+    // CKPT mode owns a two-phase commit budget: warmup first, then a fresh
+    // measurement counter. Ren.cpp performs both transitions. Applying the
+    // generic limit here would incorrectly stop during warmup whenever
+    // --max-commit is smaller than the warmup target.
+    if (config.mode != SimConfig::CKPT &&
+        cpu.ctx.perf.commit_num >= config.max_commit_inst) {
         cpu.ctx.exit_reason = ExitReason::SIMPOINT;
         std::cout << "[sim] Reached MAX_COMMIT_INST=" << std::dec
                   << config.max_commit_inst << std::endl;

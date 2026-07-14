@@ -40,29 +40,30 @@ struct front_top_in {
 };
 
 struct front_top_out {
-  // to back-end
+  // Fixed-width interface to the backend. Lanes at or above
+  // FETCH_WIDTH are kept invalid by front_output_comb().
   wire1_t FIFO_valid;
   wire1_t commit_stall;
-  pc_t pc[FETCH_WIDTH];
-  inst_word_t instructions[FETCH_WIDTH];
-  wire1_t predict_dir[FETCH_WIDTH];
+  pc_t pc[BACKEND_FETCH_WIDTH];
+  inst_word_t instructions[BACKEND_FETCH_WIDTH];
+  wire1_t predict_dir[BACKEND_FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  wire1_t page_fault_inst[FETCH_WIDTH];
-  wire1_t inst_valid[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  wire1_t alt_pred[BACKEND_FETCH_WIDTH];
+  pcpn_t altpcpn[BACKEND_FETCH_WIDTH];
+  pcpn_t pcpn[BACKEND_FETCH_WIDTH];
+  wire1_t page_fault_inst[BACKEND_FETCH_WIDTH];
+  wire1_t inst_valid[BACKEND_FETCH_WIDTH];
+  tage_idx_t tage_idx[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
+  tage_tag_t tage_tag[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
+  wire1_t sc_used[BACKEND_FETCH_WIDTH];
+  wire1_t sc_pred[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_sum_t sc_sum[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_idx_t sc_idx[BACKEND_FETCH_WIDTH][BPU_SCL_META_NTABLE];
+  wire1_t loop_used[BACKEND_FETCH_WIDTH];
+  wire1_t loop_hit[BACKEND_FETCH_WIDTH];
+  wire1_t loop_pred[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_idx_t loop_idx[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH];
 };
 
 struct BPU_in {

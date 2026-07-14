@@ -277,10 +277,11 @@ void print_soc_config_banner() {
           : "ROB_OLDEST_FIRST";
 
   std::printf(
-      "[CFG][WIDTH] fetch=%d decode=%d issue_ports=%d commit=%d "
+      "[CFG][WIDTH] frontend_fetch=%d backend_fetch_if=%d decode=%d "
+      "issue_ports=%d commit=%d "
       "max_dispatch(iq/ldq/stq)=%d/%d/%d\n",
-      FETCH_WIDTH, DECODE_WIDTH, ISSUE_WIDTH, COMMIT_WIDTH, MAX_IQ_DISPATCH_WIDTH,
-      MAX_LDQ_DISPATCH_WIDTH, MAX_STQ_DISPATCH_WIDTH);
+      FETCH_WIDTH, BACKEND_FETCH_WIDTH, DECODE_WIDTH, ISSUE_WIDTH, COMMIT_WIDTH,
+      MAX_IQ_DISPATCH_WIDTH, MAX_LDQ_DISPATCH_WIDTH, MAX_STQ_DISPATCH_WIDTH);
   std::printf(
       "[CFG][CACHE] L1I=%lluKB(%d sets x %d ways x %dB) "
       "L1D=%lluKB(%d sets x %d ways x %dB)\n",
@@ -1125,7 +1126,7 @@ void SimCpu::cycle() {
   if (back.out.mispred || back.out.flush) {
     back.number_PC = back.out.redirect_pc;
   } else if (back.out.stall) {
-    for (int j = 0; j < FETCH_WIDTH; j++) {
+    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       if (back.out.fire[j])
         back.in.valid[j] = false;
     }
@@ -1143,7 +1144,7 @@ void SimCpu::front_comb_before_back() {
     if (front.in.FIFO_read_enable && !front.out.FIFO_valid) {
       ctx.perf.front2back_read_empty_cycle_total++;
     }
-    for (int j = 0; j < FETCH_WIDTH; j++) {
+    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       if (back.in.valid[j]) {
         ctx.perf.front2back_fetched_inst_total++;
       }
@@ -1166,7 +1167,7 @@ void SimCpu::front_comb_before_back() {
     front.comb_bpu();
 
     bool no_taken = true;
-    for (int j = 0; j < FETCH_WIDTH; j++) {
+    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       back.in.valid[j] =
           no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
       back.in.pc[j] = front.out.pc[j];
@@ -1229,7 +1230,7 @@ void SimCpu::front_comb_before_back() {
 #ifndef CONFIG_ORACLE_STEADY_FETCH_WIDTH
   bool no_taken = true;
 #endif
-  for (int j = 0; j < FETCH_WIDTH; j++) {
+  for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
 #ifdef CONFIG_ORACLE_STEADY_FETCH_WIDTH
     back.in.valid[j] = front.out.FIFO_valid && front.out.inst_valid[j];
 #else

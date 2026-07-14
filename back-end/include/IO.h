@@ -96,7 +96,7 @@ struct IduConsumeIO {
 
 struct PreFrontIO {
 
-  wire<1> fire[FETCH_WIDTH];
+  wire<1> fire[BACKEND_FETCH_WIDTH];
   wire<1> ready;
 
   PreFrontIO() {
@@ -108,28 +108,28 @@ struct PreFrontIO {
 
 struct FrontPreIO {
 
-  wire<32> inst[FETCH_WIDTH];
-  wire<32> pc[FETCH_WIDTH];
-  wire<1> valid[FETCH_WIDTH];
+  wire<32> inst[BACKEND_FETCH_WIDTH];
+  wire<32> pc[BACKEND_FETCH_WIDTH];
+  wire<1> valid[BACKEND_FETCH_WIDTH];
   wire<1> front_stall;
-  wire<1> predict_dir[FETCH_WIDTH];
+  wire<1> predict_dir[BACKEND_FETCH_WIDTH];
 
-  wire<1> alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  wire<32> predict_next_fetch_address[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire<1> sc_used[FETCH_WIDTH];
-  wire<1> sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire<1> loop_used[FETCH_WIDTH];
-  wire<1> loop_hit[FETCH_WIDTH];
-  wire<1> loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
-  wire<1> page_fault_inst[FETCH_WIDTH];
+  wire<1> alt_pred[BACKEND_FETCH_WIDTH];
+  pcpn_t altpcpn[BACKEND_FETCH_WIDTH];
+  pcpn_t pcpn[BACKEND_FETCH_WIDTH];
+  wire<32> predict_next_fetch_address[BACKEND_FETCH_WIDTH];
+  tage_idx_t tage_idx[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
+  tage_tag_t tage_tag[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
+  wire<1> sc_used[BACKEND_FETCH_WIDTH];
+  wire<1> sc_pred[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_sum_t sc_sum[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_idx_t sc_idx[BACKEND_FETCH_WIDTH][BPU_SCL_META_NTABLE];
+  wire<1> loop_used[BACKEND_FETCH_WIDTH];
+  wire<1> loop_hit[BACKEND_FETCH_WIDTH];
+  wire<1> loop_pred[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_idx_t loop_idx[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH];
+  wire<1> page_fault_inst[BACKEND_FETCH_WIDTH];
 
   FrontPreIO() {
     for (auto &v : inst)

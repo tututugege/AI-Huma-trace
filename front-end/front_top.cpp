@@ -896,6 +896,11 @@ static void front_output_comb(const FrontOutputCombIn &input,
         output.out.loop_tag[i] = out_src->loop_tag[i];
         output.out.inst_valid[i] = out_src->inst_valid[i];
     }
+    for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {
+        output.out.instructions[i] = INST_NOP;
+        output.out.page_fault_inst[i] = false;
+        output.out.inst_valid[i] = false;
+    }
     output.out.predict_next_fetch_address = out_src->predict_next_fetch_address_corrected;
 }
 
