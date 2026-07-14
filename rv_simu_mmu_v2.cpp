@@ -42,40 +42,6 @@ bool is_dcache_write_master(int master) {
          master == axi_interconnect::MASTER_DCACHE_W;
 }
 
-bool is_difftest_timer_mmio_addr(uint32_t paddr) {
-  return paddr == OPENSBI_TIMER_LOW_ADDR || paddr == OPENSBI_TIMER_HIGH_ADDR ||
-         paddr == OPENSBI_TIMERCMP_LOW_ADDR ||
-         paddr == OPENSBI_TIMERCMP_HIGH_ADDR;
-}
-
-uint32_t difftest_expected_trap_pc(uint32_t tvec, uint32_t cause) {
-  constexpr uint32_t kInterruptBit = 1u << 31;
-  const bool vectored = (tvec & 1u) != 0;
-  const bool interrupt = (cause & kInterruptBit) != 0;
-  if (vectored && interrupt) {
-    return (tvec & 0xfffffffcu) + 4u * (cause & 0x7fffffffu);
-  }
-  return tvec;
-}
-
-bool difftest_dut_took_timer_interrupt(const CPU_state &state) {
-  constexpr uint32_t kInterruptBit = 1u << 31;
-  constexpr uint32_t kCauseMask = 0x7fffffffu;
-  const uint32_t mcause = state.csr[csr_mcause];
-  if ((mcause & kInterruptBit) != 0 && (mcause & kCauseMask) == 7u &&
-      state.pc == difftest_expected_trap_pc(state.csr[csr_mtvec], mcause)) {
-    return true;
-  }
-
-  const uint32_t scause = state.csr[csr_scause];
-  if ((scause & kInterruptBit) != 0 && (scause & kCauseMask) == 5u &&
-      state.pc == difftest_expected_trap_pc(state.csr[csr_stvec], scause)) {
-    return true;
-  }
-
-  return false;
-}
-
 template <typename InterconnectT>
 void clear_axi_master_inputs(InterconnectT &interconnect) {
   for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) {
@@ -806,23 +772,37 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
                                   e.rob_flag == inst->rob_flag;
     if (!store_suppressed && e.paddr_valid && e.data_valid) {
       mem_subsystem.on_commit_store(e.paddr, e.data, e.func3);
+      uint32_t dma_paddr = 0;
+      size_t dma_size = 0;
+      while (mem_subsystem.consume_dma_write(dma_paddr, dma_size)) {
+#ifdef CONFIG_DIFFTEST
+        if (ctx.enable_difftest) {
+          difftest_sync_ram_from_dut(dma_paddr, dma_size);
+        }
+#endif
+      }
     }
   }
 }
 
-void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
+void SimCpu::difftest_capture_registers() {
+  BackTop *back = &this->back;
+  for (int i = 0; i < ARF_NUM; i++) {
+    // Observe same-cycle PRF writeback through the combinational state.
+    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
+  }
+  for (int i = 0; i < CSR_NUM; i++) {
+    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
+  }
+}
+
+void SimCpu::difftest_prepare(InstEntry *inst_entry) {
   Assert(inst_entry != nullptr &&
          "SimCpu::difftest_prepare: inst_entry is null");
-  Assert(sync != nullptr && "SimCpu::difftest_prepare: sync is null");
   BackTop *back = &this->back;
   InstInfo *inst = &inst_entry->uop;
 
-  for (int i = 0; i < ARF_NUM; i++) {
-    // With same-cycle EXU->ROB completion, commit-side architectural mapping
-    // (arch_RAT_1) can point to a preg whose value is produced in this cycle's
-    // comb writeback path. Use reg_file_1 to observe the up-to-date comb state.
-    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
-  }
+  difftest_capture_registers();
 
   if (inst->tma.mem_commit_is_store && !inst->page_fault_store) {
     StqEntry e = back->lsu->get_stq_entry(inst->stq_idx, inst->stq_flag);
@@ -853,16 +833,6 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
     dut_cpu.store = false;
   }
 
-  if (inst->tma.mem_commit_is_load && !inst->page_fault_load) {
-    if (is_difftest_timer_mmio_addr(inst->diag_val)) {
-      *sync = true;
-    }
-  }
-
-  for (int i = 0; i < CSR_NUM; i++) {
-    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
-  }
-
   if (static_cast<bool>(
           back->csr_interrupt_inject_io.external_irq_pending_valid)) {
     if (static_cast<bool>(back->csr_interrupt_inject_io.external_irq_pending)) {
@@ -882,10 +852,15 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
   }
   dut_cpu.csr[csr_sip] = dut_cpu.csr[csr_mip] & 0x00000333u;
 
-  dut_cpu.pc = (is_branch(inst->type) || inst->type == JAL ||
-                back->rob->out.rob_bcast->flush)
-                   ? inst_entry->uop.diag_val
-                   : inst->dbg.pc + 4;
+  if (back->rob->out.rob_bcast->mret || back->rob->out.rob_bcast->sret) {
+    dut_cpu.pc = back->csr->out.csr2front->epc;
+  } else if (back->rob->out.rob_bcast->exception) {
+    dut_cpu.pc = back->csr->out.csr2front->trap_pc;
+  } else if (is_branch(inst->type) || inst->type == JAL) {
+    dut_cpu.pc = inst_entry->uop.diag_val;
+  } else {
+    dut_cpu.pc = inst->dbg.pc + 4;
+  }
   dut_cpu.instruction = inst->dbg.instruction;
   dut_cpu.page_fault_inst = inst->page_fault_inst;
   dut_cpu.page_fault_load = inst->page_fault_load;
@@ -893,9 +868,19 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry, bool *sync) {
   dut_cpu.inst_idx = inst->dbg.inst_idx;
   dut_cpu.commit_pc = inst->dbg.pc;
 
-  if (difftest_dut_took_timer_interrupt(dut_cpu)) {
-    *sync = true;
-  }
+}
+
+void SimCpu::difftest_prepare_interrupt() {
+  BackTop *back = &this->back;
+  difftest_capture_registers();
+
+  dut_cpu.pc = back->csr->out.csr2front->trap_pc;
+  dut_cpu.store = false;
+  dut_cpu.instruction = 0;
+  dut_cpu.page_fault_inst = false;
+  dut_cpu.page_fault_load = false;
+  dut_cpu.page_fault_store = false;
+  dut_cpu.commit_pc = back->rob->out.rob_bcast->pc;
 }
 
 void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
@@ -916,14 +901,37 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
   if (!enable_difftest) {
     return;
   }
-  bool sync = false;
-  cpu->difftest_prepare(inst_entry, &sync);
+  cpu->difftest_prepare(inst_entry);
   difftest_set_dut_privilege(static_cast<uint8_t>(cpu->back.csr->privilege_1));
-  if (sync) {
-    difftest_sync_from_dut(static_cast<uint8_t>(cpu->back.csr->privilege_1));
-  } else {
-    difftest_step(true);
+  const InstInfo &inst = inst_entry->uop;
+  if (inst.dbg.mmio_read_valid) {
+    difftest_ref_set_next_mmio_read(inst.diag_val,
+                                    inst.dbg.mmio_read_result);
   }
+  const uint32_t raw_inst = inst.dbg.instruction;
+  const uint32_t opcode = raw_inst & 0x7fu;
+  const uint32_t funct3 = (raw_inst >> 12) & 0x7u;
+  const uint32_t rd = (raw_inst >> 7) & 0x1fu;
+  const uint32_t csr_addr = raw_inst >> 20;
+  if (opcode == 0x73u && funct3 != 0 && rd != 0 &&
+      (csr_addr == number_mip || csr_addr == number_sip)) {
+    difftest_ref_set_next_csr_read(csr_addr, dut_cpu.gpr[rd]);
+  }
+  difftest_step(true);
+}
+
+void SimContext::run_difftest_interrupt() {
+  Assert(cpu != nullptr && "SimContext::run_difftest_interrupt: cpu is null");
+  if (!enable_difftest) {
+    return;
+  }
+  cpu->difftest_prepare_interrupt();
+  const uint8_t target_privilege =
+      static_cast<uint8_t>(cpu->back.csr->privilege_1);
+  const uint32_t cause = target_privilege == RISCV_MODE_M
+                             ? dut_cpu.csr[csr_mcause]
+                             : dut_cpu.csr[csr_scause];
+  difftest_take_interrupt(cause, target_privilege, dut_cpu.csr[csr_mip]);
 }
 
 // 复位逻辑

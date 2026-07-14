@@ -295,6 +295,7 @@ void encode_packed_input(bool *po, const ICache_in_t &in,
   write_packed_line(po, bit, in.mem_resp_data);
   bit += ICache::kPackedLineDataWidth;
   write_packed_bit(po, bit++, in.dcache_resp_valid);
+  write_packed_bit(po, bit++, in.dcache_resp_retry);
   write_packed_bit(po, bit++, in.dcache_resp_miss);
   write_packed_uint(po, bit, ICACHE_V1_WORD_BITS, in.dcache_resp_data);
 }
@@ -323,6 +324,7 @@ bool decode_packed_input(const bool *pi, ICache_in_t &in) {
   read_packed_line(pi, bit, in.mem_resp_data);
   bit += ICache::kPackedLineDataWidth;
   in.dcache_resp_valid = read_packed_bit(pi, bit++);
+  in.dcache_resp_retry = read_packed_bit(pi, bit++);
   in.dcache_resp_miss = read_packed_bit(pi, bit++);
   in.dcache_resp_data = read_packed_uint(pi, bit, ICACHE_V1_WORD_BITS);
   return allow_lookup_data_phase;
@@ -1067,7 +1069,9 @@ void ICache::eval_state_machine() {
 
     if (io.regs.dcache_probe_inflight_r && io.in.dcache_resp_valid) {
       io.reg_write.dcache_probe_inflight_r = false;
-      if (io.in.dcache_resp_miss) {
+      if (io.in.dcache_resp_retry) {
+        // Retry the same probe word. Bank conflicts are not D-cache misses.
+      } else if (io.in.dcache_resp_miss) {
         step.done = true;
         step.hit = false;
         io.reg_write.dcache_probe_done_r = true;

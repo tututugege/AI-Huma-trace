@@ -269,28 +269,32 @@ void Ren::comb_fire() {
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     if (in.rob_commit->commit_entry[i].valid) {
       const auto &commit_uop = in.rob_commit->commit_entry[i].uop;
-      ctx->perf.commit_num++;
-      if (is_load(commit_uop)) {
-        ctx->perf.commit_load_num++;
-      }
-      if (is_store(commit_uop)) {
-        ctx->perf.commit_store_num++;
-      }
-
-      if (ctx->is_ckpt) {
-        if (!ctx->perf.perf_start &&
-            ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
-          std::cout << "[CKPT] O3 warmup done at commit " << std::dec
-                    << ctx->perf.commit_num << "/" << ctx->ckpt_warmup_commit_target
-                    << ". Resetting perf counters and starting measure phase."
-                    << std::endl;
-          ctx->perf.perf_reset();
-          ctx->perf.perf_start = true;
+      const bool interrupt_nop = in.rob_bcast->interrupt;
+      if (!interrupt_nop) {
+        ctx->perf.commit_num++;
+        if (is_load(commit_uop)) {
+          ctx->perf.commit_load_num++;
+        }
+        if (is_store(commit_uop)) {
+          ctx->perf.commit_store_num++;
         }
 
-        if (ctx->perf.perf_start &&
-            ctx->perf.commit_num >= ctx->ckpt_measure_commit_target) {
-          ctx->exit_reason = ExitReason::SIMPOINT;
+        if (ctx->is_ckpt) {
+          if (!ctx->perf.perf_start &&
+              ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
+            std::cout << "[CKPT] O3 warmup done at commit " << std::dec
+                      << ctx->perf.commit_num << "/"
+                      << ctx->ckpt_warmup_commit_target
+                      << ". Resetting perf counters and starting measure phase."
+                      << std::endl;
+            ctx->perf.perf_reset();
+            ctx->perf.perf_start = true;
+          }
+
+          if (ctx->perf.perf_start &&
+              ctx->perf.commit_num >= ctx->ckpt_measure_commit_target) {
+            ctx->exit_reason = ExitReason::SIMPOINT;
+          }
         }
       }
 
@@ -314,12 +318,19 @@ void Ren::comb_fire() {
       if (inst->dest_en && !is_exception(*inst) && !in.rob_bcast->interrupt) {
         arch_RAT_1[inst->dest_areg] = inst->dest_preg;
       }
-      ctx->run_commit_inst(&commit_entry, i);
+      if (!interrupt_nop) {
+        ctx->run_commit_inst(&commit_entry, i);
 #ifdef CONFIG_DIFFTEST
-      ctx->run_difftest_inst(&commit_entry);
+        ctx->run_difftest_inst(&commit_entry);
 #endif
+      }
     }
   }
+#ifdef CONFIG_DIFFTEST
+  if (in.rob_bcast->interrupt) {
+    ctx->run_difftest_interrupt();
+  }
+#endif
 
   // 在 comb_fire 直接决定下一拍 freelist/RAT 状态。
   if (in.rob_bcast->flush) {

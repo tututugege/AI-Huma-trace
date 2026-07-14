@@ -34,6 +34,16 @@ public:
   uint64_t timer_offset_ = 0;
   uint64_t timer_cmp_ = UINT64_MAX;
 
+  void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
+                                   uint32_t max_cycles) {
+    irq_delay_min_cycles_ = min_cycles == 0 ? 1u : min_cycles;
+    irq_delay_max_cycles_ =
+        max_cycles < irq_delay_min_cycles_ ? irq_delay_min_cycles_ : max_cycles;
+    irq_rng_state_ = seed == 0 ? 1u : seed;
+    timer_irq_delay_ = {};
+    external_irq_delay_ = {};
+  }
+
   void bind(CsrInterruptInjectIO *csr_interrupt_inject_ptr,
             uint32_t *memory_ptr) {
     csr_interrupt_inject = csr_interrupt_inject_ptr;
@@ -273,6 +283,16 @@ public:
   }
   bool timer_irq_level() const { return effective_timer_value() >= timer_cmp_; }
 
+  bool consume_dma_write(uint32_t &paddr, size_t &size) {
+    if (!dma_write_pending_) {
+      return false;
+    }
+    paddr = dma_write_paddr_;
+    size = dma_write_size_;
+    dma_write_pending_ = false;
+    return true;
+  }
+
 private:
   static uint64_t current_sim_time_u64() {
     return sim_time >= 0 ? static_cast<uint64_t>(sim_time) : 0ull;
@@ -318,9 +338,10 @@ private:
     if (csr_interrupt_inject == nullptr) {
       return;
     }
+    update_delayed_irq(timer_irq_delay_,
+                       effective_timer_value() >= timer_cmp_);
     csr_interrupt_inject->timer_irq_pending_valid = true;
-    csr_interrupt_inject->timer_irq_pending =
-        effective_timer_value() >= timer_cmp_;
+    csr_interrupt_inject->timer_irq_pending = timer_irq_delay_.delivered;
   }
 
   void update_external_irq() {
@@ -332,10 +353,12 @@ private:
         (kXpsMerMe | kXpsMerHie);
     const bool xps_pending =
         xps_global_enable && ((xps_intc_isr_ & xps_intc_ier_) != 0);
+    update_delayed_irq(external_irq_delay_, xps_pending);
     csr_interrupt_inject->external_irq_pending_valid = true;
     csr_interrupt_inject->external_irq_pending = false;
     csr_interrupt_inject->supervisor_external_irq_pending_valid = true;
-    csr_interrupt_inject->supervisor_external_irq_pending = xps_pending;
+    csr_interrupt_inject->supervisor_external_irq_pending =
+        external_irq_delay_.delivered;
   }
 
   static constexpr uint32_t kOcsdcArgument = 0x00;
@@ -381,6 +404,56 @@ private:
   uint32_t xps_intc_isr_ = 0;
   uint32_t xps_intc_ier_ = 0;
   uint32_t xps_intc_mer_ = 0;
+  bool dma_write_pending_ = false;
+  uint32_t dma_write_paddr_ = 0;
+  size_t dma_write_size_ = 0;
+
+  struct DelayedIrq {
+    bool raw = false;
+    bool delivered = false;
+    bool waiting = false;
+    uint64_t due_cycle = 0;
+  };
+
+  DelayedIrq timer_irq_delay_;
+  DelayedIrq external_irq_delay_;
+  uint64_t irq_rng_state_ = 1;
+  uint32_t irq_delay_min_cycles_ = 8;
+  uint32_t irq_delay_max_cycles_ = 64;
+
+  uint32_t next_irq_delay_cycles() {
+    uint64_t x = irq_rng_state_;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    irq_rng_state_ = x;
+    const uint64_t span =
+        static_cast<uint64_t>(irq_delay_max_cycles_) -
+        static_cast<uint64_t>(irq_delay_min_cycles_) + 1u;
+    return irq_delay_min_cycles_ + static_cast<uint32_t>(x % span);
+  }
+
+  void update_delayed_irq(DelayedIrq &irq, bool raw) {
+    const uint64_t now = current_sim_time_u64();
+    if (!raw) {
+      irq.raw = false;
+      irq.delivered = false;
+      irq.waiting = false;
+      irq.due_cycle = 0;
+      return;
+    }
+
+    if (!irq.raw) {
+      irq.raw = true;
+      irq.delivered = false;
+      irq.waiting = true;
+      irq.due_cycle = now + next_irq_delay_cycles();
+    }
+    if (irq.waiting && now >= irq.due_cycle) {
+      irq.waiting = false;
+      irq.delivered = true;
+    }
+  }
 
   struct SdCardId {
     uint32_t ocr;
@@ -409,6 +482,9 @@ private:
   }
 
   void ocsdc_reset() {
+    dma_write_pending_ = false;
+    dma_write_paddr_ = 0;
+    dma_write_size_ = 0;
     ocsdc_regs_.clear();
     ocsdc_regs_[kOcsdcArgument] = 0;
     ocsdc_regs_[kOcsdcCommand] = 0;
@@ -540,6 +616,9 @@ private:
       throw std::runtime_error("OCSDC DMA destination is not RAM");
     }
     pmem_memcpy_to_ram(dst_addr, src, len);
+    dma_write_pending_ = true;
+    dma_write_paddr_ = dst_addr;
+    dma_write_size_ = len;
   }
 
   void write_data_buffer(uint32_t dst_addr, size_t sd_offset_bytes,

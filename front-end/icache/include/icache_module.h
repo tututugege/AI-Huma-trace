@@ -198,6 +198,7 @@ struct ICache_in_t {
   wire<ICACHE_WORD_BITS> mem_resp_data[ICACHE_WORD_NUM] = {0}; // Data from memory (Cache line)
   // Input from DCache coherent word probe path.
   wire<1> dcache_resp_valid = false;
+  wire<1> dcache_resp_retry = false;
   wire<1> dcache_resp_miss = true;
   wire<ICACHE_WORD_BITS> dcache_resp_data = 0;
 };
@@ -305,7 +306,7 @@ public:
       1 + 4 +                     // mem req accepted/id
       1 + 4 +                     // mem resp valid/id
       kPackedLineDataWidth +      // mem resp data
-      1 + 1 + ICACHE_V1_WORD_BITS;// dcache resp valid/miss/data
+      1 + 1 + 1 + ICACHE_V1_WORD_BITS;// dcache resp valid/retry/miss/data
 
   static constexpr int kPackedLookupInWidth =
       kPackedLookupMetaWidth +    // predecoded meta lookup result

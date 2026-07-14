@@ -385,6 +385,7 @@ struct MemReadView {
 
 struct DcacheProbeView {
   bool resp_valid = false;
+  bool resp_retry = false;
   bool resp_miss = true;
   uint32_t resp_data = 0;
 };
@@ -505,6 +506,7 @@ DcacheProbeView dcache_probe_comb_view(ICacheMemPortResp *port) {
     return view;
   }
   view.resp_valid = port->resp_valid;
+  view.resp_retry = port->resp_retry;
   view.resp_miss = port->resp_miss;
   view.resp_data = port->resp_data;
   return view;
@@ -920,6 +922,7 @@ public:
       icache_hw.io.in.mem_resp_data[i] = mem.resp_data[i];
     }
     icache_hw.io.in.dcache_resp_valid = dcache_probe.resp_valid;
+    icache_hw.io.in.dcache_resp_retry = dcache_probe.resp_retry;
     icache_hw.io.in.dcache_resp_miss = dcache_probe.resp_miss;
     icache_hw.io.in.dcache_resp_data = dcache_probe.resp_data;
 

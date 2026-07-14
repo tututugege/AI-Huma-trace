@@ -621,6 +621,11 @@ void Rob::comb_complete() {
           entry_1[bank_idx][line_idx].uop.flush_pipe || wb.flush_pipe;
       entry_1[bank_idx][line_idx].uop.dbg.is_mmio =
           entry_1[bank_idx][line_idx].uop.dbg.is_mmio || wb.dbg.is_mmio;
+      if (wb.dbg.mmio_read_valid) {
+        entry_1[bank_idx][line_idx].uop.dbg.mmio_read_valid = true;
+        entry_1[bank_idx][line_idx].uop.dbg.mmio_read_result =
+            wb.dbg.mmio_read_result;
+      }
       if (is_branch_uop(wb.op)) {
         entry_1[bank_idx][line_idx].uop.diag_val = wb.diag_val;
         entry_1[bank_idx][line_idx].uop.mispred = wb.mispred;
