@@ -208,6 +208,8 @@ void BackTop::comb_csr_status() {
   out.privilege = csr->out.csr_status->privilege;
 }
 
+void BackTop::clear_comb_inputs() { in = Back_in{}; }
+
 void BackTop::comb() {
   // CSR 状态由 SimCpu::cycle() 在进入 front/back 组合逻辑前统一刷新。
 #if CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN

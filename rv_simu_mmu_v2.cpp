@@ -903,11 +903,13 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
     return;
   }
   cpu->difftest_prepare(inst_entry);
-  difftest_set_dut_privilege(static_cast<uint8_t>(cpu->back.csr->privilege_1));
+  const uint8_t privilege =
+      static_cast<uint8_t>(cpu->back.csr->privilege_1);
+  difftest_set_dut_privilege(privilege);
   const InstInfo &inst = inst_entry->uop;
-  if (inst.dbg.mmio_read_valid) {
-    difftest_ref_set_next_mmio_read(inst.diag_val,
-                                    inst.dbg.mmio_read_result);
+  if (inst.dbg.is_mmio) {
+    difftest_sync_from_dut(privilege);
+    return;
   }
   const uint32_t raw_inst = inst.dbg.instruction;
   const uint32_t opcode = raw_inst & 0x7fu;
@@ -998,6 +1000,10 @@ void SimCpu::init() {
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
+  front2back_hold = {};
+  front2back_hold_1 = {};
+  peripheral_resp_hold = {};
+  peripheral_resp_hold_1 = {};
 }
 
 void SimCpu::reinit_frontend_after_restore() {
@@ -1008,6 +1014,8 @@ void SimCpu::reinit_frontend_after_restore() {
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
+  front2back_hold = {};
+  front2back_hold_1 = {};
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -1024,6 +1032,8 @@ void SimCpu::restore_pc(uint32_t pc) {
   front.in.refetch = true;
   front.in.refetch_address = pc;
   front.force_back2front_refetch(pc);
+  front2back_hold = {};
+  front2back_hold_1 = {};
   back.out.flush = true;
   back.out.mispred = true;
   back.out.redirect_pc = pc;
@@ -1035,6 +1045,11 @@ void SimCpu::restore_pc(uint32_t pc) {
 void SimCpu::cycle() {
   FRONTEND_HOST_PROFILE_SCOPE(SimCycle);
   ctx.perf.cycle++;
+  // BackTop inputs are combinational wires. Re-drive the only intentionally
+  // retained payload from an explicit top-level register before producers run.
+  back.clear_comb_inputs();
+  static_cast<FrontPreIO &>(back.in) = front2back_hold;
+  back.in.peripheral_resp = peripheral_resp_hold;
   // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimCsrStatus);
@@ -1078,6 +1093,7 @@ void SimCpu::cycle() {
     FRONTEND_HOST_PROFILE_SCOPE(SimMemCombInputs);
     mem_subsystem.comb_inputs();
   }
+  peripheral_resp_hold_comb();
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimBridgeMemToAxi);
@@ -1094,6 +1110,10 @@ void SimCpu::cycle() {
     FRONTEND_HOST_PROFILE_SCOPE(SimBack2Front);
     back2front_comb();
   }
+  {
+    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldComb);
+    front2back_hold_comb();
+  }
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimFrontSeq);
@@ -1102,6 +1122,11 @@ void SimCpu::cycle() {
 #endif
     front.seq_back2front();
   }
+  {
+    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldSeq);
+    front2back_hold_seq();
+  }
+  peripheral_resp_hold_seq();
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimBackSeq);
@@ -1125,12 +1150,31 @@ void SimCpu::cycle() {
 
   if (back.out.mispred || back.out.flush) {
     back.number_PC = back.out.redirect_pc;
-  } else if (back.out.stall) {
-    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-      if (back.out.fire[j])
-        back.in.valid[j] = false;
+  }
+}
+
+void SimCpu::front2back_hold_comb() {
+  front2back_hold_1 = {};
+  if (back.out.mispred || back.out.flush || !back.out.stall) {
+    return;
+  }
+
+  front2back_hold_1 = static_cast<const FrontPreIO &>(back.in);
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; ++i) {
+    if (back.out.fire[i]) {
+      front2back_hold_1.valid[i] = false;
     }
   }
+}
+
+void SimCpu::front2back_hold_seq() { front2back_hold = front2back_hold_1; }
+
+void SimCpu::peripheral_resp_hold_comb() {
+  peripheral_resp_hold_1 = back.in.peripheral_resp;
+}
+
+void SimCpu::peripheral_resp_hold_seq() {
+  peripheral_resp_hold = peripheral_resp_hold_1;
 }
 
 void SimCpu::front_comb_before_back() {
