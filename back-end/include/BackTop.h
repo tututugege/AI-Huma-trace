@@ -139,6 +139,7 @@ public:
   FtqCommitInfoIO ftq_commit_info;
   CsrInterruptInjectIO csr_interrupt_inject_io;
   void init();
+  void clear_comb_inputs();
   void comb_csr_status();
   void comb();
   void seq();

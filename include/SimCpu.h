@@ -32,6 +32,14 @@ public:
   // Oracle 模式下的一拍保留寄存，避免“后端当拍阻塞”导致前端指令丢失。
   bool oracle_pending_valid = false;
   front_top_out oracle_pending_out = {};
+  // Explicit front-to-back hold register. Previously BackTop::in itself
+  // retained this payload across a backend stall.
+  FrontPreIO front2back_hold{};
+  FrontPreIO front2back_hold_1{};
+  // PeripheralAxi produces this response after BackTop::comb(). Model the
+  // intended one-cycle delay explicitly instead of retaining BackTop::in.
+  PeripheralRespIO peripheral_resp_hold{};
+  PeripheralRespIO peripheral_resp_hold_1{};
 
   void init();
   void sync_mmio_devices_from_backing();
@@ -39,6 +47,10 @@ public:
   void restore_pc(uint32_t pc);
   void cycle();
   void front_comb_before_back();
+  void front2back_hold_comb();
+  void front2back_hold_seq();
+  void peripheral_resp_hold_comb();
+  void peripheral_resp_hold_seq();
   void back2front_comb();
   bool ready_to_exit() const;
   uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }

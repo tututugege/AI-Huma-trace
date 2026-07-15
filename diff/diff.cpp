@@ -293,6 +293,15 @@ fault:
   exit(1);
 }
 
+void difftest_sync_from_dut(uint8_t privilege) {
+  ensure_ref_cpu();
+  dut_privilege = privilege;
+  refcpu_set_sim_time(ref_cpu_ctx, static_cast<uint64_t>(sim_time));
+  const RefCpuState ref_state = to_ref_state(dut_cpu, privilege);
+  refcpu_set_state(ref_cpu_ctx, &ref_state);
+  diff_watchdog_tick();
+}
+
 void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {
   ensure_ref_cpu();
   if (size == 0) {
@@ -308,11 +317,6 @@ void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {
   const size_t offset = static_cast<size_t>(paddr - PMEM_RAM_BASE);
   std::memcpy(reinterpret_cast<uint8_t *>(ref_ram) + offset,
               reinterpret_cast<const uint8_t *>(dut_ram) + offset, size);
-}
-
-void difftest_ref_set_next_mmio_read(uint32_t paddr, uint32_t result) {
-  ensure_ref_cpu();
-  refcpu_set_next_mmio_read(ref_cpu_ctx, paddr, result);
 }
 
 void difftest_ref_set_next_csr_read(uint32_t csr_addr, uint32_t value) {

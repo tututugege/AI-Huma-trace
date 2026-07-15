@@ -43,6 +43,7 @@ constexpr std::array<const char *, kSlotCount> kSlotNames = {
     "sim.cycle_total",
     "sim.csr_status",
     "sim.clear_axi_inputs",
+    "sim.front_comb_before_back",
     "sim.front_cycle",
     "sim.back_comb",
     "sim.mem.llc_comb_outputs",
@@ -54,6 +55,9 @@ constexpr std::array<const char *, kSlotCount> kSlotNames = {
     "sim.bridge_mem_to_axi",
     "sim.axi_inputs",
     "sim.back2front",
+    "sim.front2back_hold_comb",
+    "sim.front_seq",
+    "sim.front2back_hold_seq",
     "sim.back_seq",
     "sim.mem.seq",
     "sim.mem.llc_seq",
@@ -190,9 +194,14 @@ void print_summary() {
       slot_est_ns(Slot::SimMemLlcSeq);
   const uint64_t submodule_ns =
       slot_est_ns(Slot::SimCsrStatus) + slot_est_ns(Slot::SimClearAxiInputs) +
+      slot_est_ns(Slot::SimFrontCombBeforeBack) +
       slot_est_ns(Slot::SimAxiOutputs) + slot_est_ns(Slot::SimBridgeAxiToMem) +
       slot_est_ns(Slot::SimBridgeMemToAxi) + slot_est_ns(Slot::SimAxiInputs) +
-      slot_est_ns(Slot::SimBack2Front) + slot_est_ns(Slot::SimAxiSeq);
+      slot_est_ns(Slot::SimBack2Front) +
+      slot_est_ns(Slot::SimFront2BackHoldComb) +
+      slot_est_ns(Slot::SimFrontSeq) +
+      slot_est_ns(Slot::SimFront2BackHoldSeq) +
+      slot_est_ns(Slot::SimAxiSeq);
   const uint64_t categorized_ns =
       frontend_ns + backend_ns + memsubsystem_ns + submodule_ns;
   const uint64_t uncategorized_ns =
@@ -215,14 +224,18 @@ void print_summary() {
     std::printf("%-18s %14.3f %9.2f%%\n", row.name, est_ms, share);
   }
 
-  const std::array<RollupRow, 8> glue_rows = {{
+  const std::array<RollupRow, 12> glue_rows = {{
       {"csr_status", slot_est_ns(Slot::SimCsrStatus)},
       {"clear_axi_inputs", slot_est_ns(Slot::SimClearAxiInputs)},
+      {"front_comb_before_back", slot_est_ns(Slot::SimFrontCombBeforeBack)},
       {"axi_outputs", slot_est_ns(Slot::SimAxiOutputs)},
       {"bridge_axi_to_mem", slot_est_ns(Slot::SimBridgeAxiToMem)},
       {"bridge_mem_to_axi", slot_est_ns(Slot::SimBridgeMemToAxi)},
       {"axi_inputs", slot_est_ns(Slot::SimAxiInputs)},
       {"back2front", slot_est_ns(Slot::SimBack2Front)},
+      {"front2back_hold_comb", slot_est_ns(Slot::SimFront2BackHoldComb)},
+      {"front_seq", slot_est_ns(Slot::SimFrontSeq)},
+      {"front2back_hold_seq", slot_est_ns(Slot::SimFront2BackHoldSeq)},
       {"axi_seq", slot_est_ns(Slot::SimAxiSeq)},
   }};
   std::printf("\n=== Sim Submodule/Glue Breakdown ===\n");

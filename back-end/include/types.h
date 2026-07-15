@@ -70,8 +70,6 @@ struct DebugMeta {
   wire<32> instruction;
   wire<32> pc;
   bool is_mmio;
-  bool mmio_read_valid;
-  wire<32> mmio_read_result;
   int64_t inst_idx;
 };
 

@@ -277,10 +277,11 @@ void print_soc_config_banner() {
           : "ROB_OLDEST_FIRST";
 
   std::printf(
-      "[CFG][WIDTH] fetch=%d decode=%d issue_ports=%d commit=%d "
+      "[CFG][WIDTH] frontend_fetch=%d backend_fetch_if=%d decode=%d "
+      "issue_ports=%d commit=%d "
       "max_dispatch(iq/ldq/stq)=%d/%d/%d\n",
-      FETCH_WIDTH, DECODE_WIDTH, ISSUE_WIDTH, COMMIT_WIDTH, MAX_IQ_DISPATCH_WIDTH,
-      MAX_LDQ_DISPATCH_WIDTH, MAX_STQ_DISPATCH_WIDTH);
+      FETCH_WIDTH, BACKEND_FETCH_WIDTH, DECODE_WIDTH, ISSUE_WIDTH, COMMIT_WIDTH,
+      MAX_IQ_DISPATCH_WIDTH, MAX_LDQ_DISPATCH_WIDTH, MAX_STQ_DISPATCH_WIDTH);
   std::printf(
       "[CFG][CACHE] L1I=%lluKB(%d sets x %d ways x %dB) "
       "L1D=%lluKB(%d sets x %d ways x %dB)\n",
@@ -902,11 +903,13 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
     return;
   }
   cpu->difftest_prepare(inst_entry);
-  difftest_set_dut_privilege(static_cast<uint8_t>(cpu->back.csr->privilege_1));
+  const uint8_t privilege =
+      static_cast<uint8_t>(cpu->back.csr->privilege_1);
+  difftest_set_dut_privilege(privilege);
   const InstInfo &inst = inst_entry->uop;
-  if (inst.dbg.mmio_read_valid) {
-    difftest_ref_set_next_mmio_read(inst.diag_val,
-                                    inst.dbg.mmio_read_result);
+  if (inst.dbg.is_mmio) {
+    difftest_sync_from_dut(privilege);
+    return;
   }
   const uint32_t raw_inst = inst.dbg.instruction;
   const uint32_t opcode = raw_inst & 0x7fu;
@@ -997,6 +1000,10 @@ void SimCpu::init() {
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
+  front2back_hold = {};
+  front2back_hold_1 = {};
+  peripheral_resp_hold = {};
+  peripheral_resp_hold_1 = {};
 }
 
 void SimCpu::reinit_frontend_after_restore() {
@@ -1007,6 +1014,8 @@ void SimCpu::reinit_frontend_after_restore() {
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
+  front2back_hold = {};
+  front2back_hold_1 = {};
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -1023,6 +1032,8 @@ void SimCpu::restore_pc(uint32_t pc) {
   front.in.refetch = true;
   front.in.refetch_address = pc;
   front.force_back2front_refetch(pc);
+  front2back_hold = {};
+  front2back_hold_1 = {};
   back.out.flush = true;
   back.out.mispred = true;
   back.out.redirect_pc = pc;
@@ -1034,6 +1045,11 @@ void SimCpu::restore_pc(uint32_t pc) {
 void SimCpu::cycle() {
   FRONTEND_HOST_PROFILE_SCOPE(SimCycle);
   ctx.perf.cycle++;
+  // BackTop inputs are combinational wires. Re-drive the only intentionally
+  // retained payload from an explicit top-level register before producers run.
+  back.clear_comb_inputs();
+  static_cast<FrontPreIO &>(back.in) = front2back_hold;
+  back.in.peripheral_resp = peripheral_resp_hold;
   // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimCsrStatus);
@@ -1077,6 +1093,7 @@ void SimCpu::cycle() {
     FRONTEND_HOST_PROFILE_SCOPE(SimMemCombInputs);
     mem_subsystem.comb_inputs();
   }
+  peripheral_resp_hold_comb();
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimBridgeMemToAxi);
@@ -1093,6 +1110,10 @@ void SimCpu::cycle() {
     FRONTEND_HOST_PROFILE_SCOPE(SimBack2Front);
     back2front_comb();
   }
+  {
+    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldComb);
+    front2back_hold_comb();
+  }
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimFrontSeq);
@@ -1101,6 +1122,11 @@ void SimCpu::cycle() {
 #endif
     front.seq_back2front();
   }
+  {
+    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldSeq);
+    front2back_hold_seq();
+  }
+  peripheral_resp_hold_seq();
 
   {
     FRONTEND_HOST_PROFILE_SCOPE(SimBackSeq);
@@ -1124,12 +1150,31 @@ void SimCpu::cycle() {
 
   if (back.out.mispred || back.out.flush) {
     back.number_PC = back.out.redirect_pc;
-  } else if (back.out.stall) {
-    for (int j = 0; j < FETCH_WIDTH; j++) {
-      if (back.out.fire[j])
-        back.in.valid[j] = false;
+  }
+}
+
+void SimCpu::front2back_hold_comb() {
+  front2back_hold_1 = {};
+  if (back.out.mispred || back.out.flush || !back.out.stall) {
+    return;
+  }
+
+  front2back_hold_1 = static_cast<const FrontPreIO &>(back.in);
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; ++i) {
+    if (back.out.fire[i]) {
+      front2back_hold_1.valid[i] = false;
     }
   }
+}
+
+void SimCpu::front2back_hold_seq() { front2back_hold = front2back_hold_1; }
+
+void SimCpu::peripheral_resp_hold_comb() {
+  peripheral_resp_hold_1 = back.in.peripheral_resp;
+}
+
+void SimCpu::peripheral_resp_hold_seq() {
+  peripheral_resp_hold = peripheral_resp_hold_1;
 }
 
 void SimCpu::front_comb_before_back() {
@@ -1143,7 +1188,7 @@ void SimCpu::front_comb_before_back() {
     if (front.in.FIFO_read_enable && !front.out.FIFO_valid) {
       ctx.perf.front2back_read_empty_cycle_total++;
     }
-    for (int j = 0; j < FETCH_WIDTH; j++) {
+    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       if (back.in.valid[j]) {
         ctx.perf.front2back_fetched_inst_total++;
       }
@@ -1166,7 +1211,7 @@ void SimCpu::front_comb_before_back() {
     front.comb_bpu();
 
     bool no_taken = true;
-    for (int j = 0; j < FETCH_WIDTH; j++) {
+    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       back.in.valid[j] =
           no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
       back.in.pc[j] = front.out.pc[j];
@@ -1184,6 +1229,17 @@ void SimCpu::front_comb_before_back() {
       back.in.alt_pred[j] = front.out.alt_pred[j];
       back.in.altpcpn[j] = front.out.altpcpn[j];
       back.in.pcpn[j] = front.out.pcpn[j];
+      back.in.sc_used[j] = front.out.sc_used[j];
+      back.in.sc_pred[j] = front.out.sc_pred[j];
+      back.in.sc_sum[j] = front.out.sc_sum[j];
+      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+        back.in.sc_idx[j][t] = front.out.sc_idx[j][t];
+      }
+      back.in.loop_used[j] = front.out.loop_used[j];
+      back.in.loop_hit[j] = front.out.loop_hit[j];
+      back.in.loop_pred[j] = front.out.loop_pred[j];
+      back.in.loop_idx[j] = front.out.loop_idx[j];
+      back.in.loop_tag[j] = front.out.loop_tag[j];
       for (int k = 0; k < 4; k++) { // TN_MAX = 4 (分支预测相关索引)
         back.in.tage_idx[j][k] = front.out.tage_idx[j][k];
         back.in.tage_tag[j][k] = front.out.tage_tag[j][k];
@@ -1229,7 +1285,7 @@ void SimCpu::front_comb_before_back() {
 #ifndef CONFIG_ORACLE_STEADY_FETCH_WIDTH
   bool no_taken = true;
 #endif
-  for (int j = 0; j < FETCH_WIDTH; j++) {
+  for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
 #ifdef CONFIG_ORACLE_STEADY_FETCH_WIDTH
     back.in.valid[j] = front.out.FIFO_valid && front.out.inst_valid[j];
 #else

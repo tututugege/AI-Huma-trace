@@ -53,8 +53,11 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 // Frontend / Backend Width
 // ============================================================
 constexpr int FETCH_WIDTH = 4;
+constexpr int BACKEND_FETCH_WIDTH = FETCH_WIDTH;
 constexpr int DECODE_WIDTH = 2;
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
+static_assert(BACKEND_FETCH_WIDTH >= FETCH_WIDTH,
+              "BACKEND_FETCH_WIDTH must cover every frontend lane");
 static_assert(DECODE_WIDTH > 0, "DECODE_WIDTH must be positive");
 static_assert(DECODE_WIDTH <= FETCH_WIDTH,
               "DECODE_WIDTH must be <= FETCH_WIDTH");
@@ -621,7 +624,7 @@ constexpr int BR_TAG_WIDTH = clog2(MAX_BR_NUM);
 constexpr int BR_MASK_WIDTH = MAX_BR_NUM;
 constexpr int CSR_IDX_WIDTH = 12; // Standard RISC-V CSR address width
 constexpr int FTQ_IDX_WIDTH = clog2(FTQ_SIZE);
-constexpr int FTQ_OFFSET_WIDTH = clog2(FETCH_WIDTH);
+constexpr int FTQ_OFFSET_WIDTH = clog2(BACKEND_FETCH_WIDTH);
 
 // ============================================================
 // MMIO Address Space

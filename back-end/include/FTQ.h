@@ -4,12 +4,12 @@
 #include <cstdint>
 
 struct FTQEntry {
-  wire<32> slot_pc[FETCH_WIDTH];
+  wire<32> slot_pc[BACKEND_FETCH_WIDTH];
   wire<32> next_pc; // Predicted Target of the block
-  wire<1> pred_taken_mask[FETCH_WIDTH];
+  wire<1> pred_taken_mask[BACKEND_FETCH_WIDTH];
 
   FTQEntry() {
-    for (int i = 0; i < FETCH_WIDTH; i++) {
+    for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
       slot_pc[i] = 0;
       pred_taken_mask[i] = false;
     }
@@ -20,24 +20,24 @@ struct FTQEntry {
 // Prediction/training sideband metadata that backend execution path does not
 // need to random-read. This payload is consumed in FIFO order with FTQ blocks.
 struct FTQTrainMetaEntry {
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // Moved from InstUop
-  tage_tag_t tage_tag[FETCH_WIDTH][4];
-  wire<1> mid_pred[FETCH_WIDTH]; // For future use (mid-block prediction)
-  wire<1> alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  wire<1> sc_used[FETCH_WIDTH];
-  wire<1> sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire<1> loop_used[FETCH_WIDTH];
-  wire<1> loop_hit[FETCH_WIDTH];
-  wire<1> loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  tage_idx_t tage_idx[BACKEND_FETCH_WIDTH][4]; // Moved from InstUop
+  tage_tag_t tage_tag[BACKEND_FETCH_WIDTH][4];
+  wire<1> mid_pred[BACKEND_FETCH_WIDTH]; // For future use (mid-block prediction)
+  wire<1> alt_pred[BACKEND_FETCH_WIDTH];
+  pcpn_t altpcpn[BACKEND_FETCH_WIDTH];
+  pcpn_t pcpn[BACKEND_FETCH_WIDTH];
+  wire<1> sc_used[BACKEND_FETCH_WIDTH];
+  wire<1> sc_pred[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_sum_t sc_sum[BACKEND_FETCH_WIDTH];
+  tage_scl_meta_idx_t sc_idx[BACKEND_FETCH_WIDTH][BPU_SCL_META_NTABLE];
+  wire<1> loop_used[BACKEND_FETCH_WIDTH];
+  wire<1> loop_hit[BACKEND_FETCH_WIDTH];
+  wire<1> loop_pred[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_idx_t loop_idx[BACKEND_FETCH_WIDTH];
+  tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH];
 
   FTQTrainMetaEntry() {
-    for (int i = 0; i < FETCH_WIDTH; i++) {
+    for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
       mid_pred[i] = false;
       alt_pred[i] = false;
       altpcpn[i] = 0;

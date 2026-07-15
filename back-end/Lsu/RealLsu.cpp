@@ -1011,9 +1011,6 @@ void RealLsu::comb_lsu2exe() {
         wb_uop.page_fault_load = ldq_entry.page_fault;
         wb_uop.dest_en = true;
         wb_uop.dbg.is_mmio = ldq_entry.is_mmio;
-        wb_uop.dbg.mmio_read_valid =
-            ldq_entry.is_mmio && !ldq_entry.page_fault;
-        wb_uop.dbg.mmio_read_result = ldq_entry.result;
 
         out.lsu2exe->wb_req[issue_ld].uop =
             LsuExeIO::LsuExeRespUop::from_micro_op(wb_uop);
