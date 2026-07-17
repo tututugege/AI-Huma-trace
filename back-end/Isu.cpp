@@ -337,43 +337,26 @@ void Isu::comb_awake() {
     out.iss_awake->wake[i].preg = 0;
   }
 
-  uint64_t delayed_mask = OP_MASK_MUL | OP_MASK_DIV | OP_MASK_FP | OP_MASK_CSR;
   uint64_t fast_mask = OP_MASK_ALU;
 
   int lsu_base = 0;
-  int delayed_base = lsu_base + LSU_LOAD_WB_WIDTH;
-  int fast_base = delayed_base + count_ports_with_mask(delayed_mask);
+  int mul_base = lsu_base + LSU_LOAD_WB_WIDTH;
+  int div_base = mul_base + count_ports_with_mask(OP_MASK_MUL);
+  int fp_base = div_base + count_ports_with_mask(OP_MASK_DIV);
+  int fast_base = fp_base + count_ports_with_mask(OP_MASK_FP);
 
-  int delayed_ch_map[ISSUE_WIDTH];
   int fast_ch_map[ISSUE_WIDTH];
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    delayed_ch_map[i] = -1;
     fast_ch_map[i] = -1;
   }
-  
-  int cur_del = delayed_base;
+
   int cur_fst = fast_base;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     uint64_t cap = get_port_capability(i);
-    if (cap & delayed_mask) {
-      delayed_ch_map[i] = cur_del++;
-    }
     if (cap & fast_mask) {
       fast_ch_map[i] = cur_fst++;
     }
   }
-
-
-  auto get_port_for_unit = [](uint64_t op_mask, int unit_idx) {
-    int seen = 0;
-    for (int p = 0; p < ISSUE_WIDTH; p++) {
-      if (get_port_capability(p) & op_mask) {
-        if (seen == unit_idx) return p;
-        seen++;
-      }
-    }
-    return -1;
-  };
 
   // 来源 A: 慢速唤醒 (来自写回阶段：Load / 缓存缺失)
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
@@ -388,9 +371,7 @@ void Isu::comb_awake() {
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++) {
     const auto &slot = div_wake_slots[i];
     if (slot.valid && slot.countdown == 0) {
-      int port = get_port_for_unit(OP_MASK_DIV, i);
-      int ch = delayed_ch_map[port];
-      Assert(ch != -1);
+      int ch = div_base + i;
       Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
       out.iss_awake->wake[ch].valid = true;
       out.iss_awake->wake[ch].preg = slot.dest_preg;
@@ -401,9 +382,7 @@ void Isu::comb_awake() {
   for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++) {
     const auto &slot = fp_wake_slots[i];
     if (slot.valid && slot.countdown == 0) {
-      int port = get_port_for_unit(OP_MASK_FP, i);
-      int ch = delayed_ch_map[port];
-      Assert(ch != -1);
+      int ch = fp_base + i;
       Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
       out.iss_awake->wake[ch].valid = true;
       out.iss_awake->wake[ch].preg = slot.dest_preg;
@@ -415,9 +394,7 @@ void Isu::comb_awake() {
     if (MUL_MAX_LATENCY > 1) {
       const auto &slot = mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i];
       if (slot.valid) {
-        int port = get_port_for_unit(OP_MASK_MUL, i);
-        int ch = delayed_ch_map[port];
-        Assert(ch != -1);
+        int ch = mul_base + i;
         Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
         out.iss_awake->wake[ch].valid = true;
         out.iss_awake->wake[ch].preg = slot.dest_preg;
