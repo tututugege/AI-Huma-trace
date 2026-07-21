@@ -662,10 +662,15 @@ void MemSubsystem::init() {
   dcache_resp_pending_ = {};
   dcache_resp_route_ = {};
   dcache_empty_req_ = LsuDcacheIO{};
-  std::memset(dcache_resp_meta_cur_, 0, sizeof(dcache_resp_meta_cur_));
-  std::memset(dcache_resp_meta_nxt_, 0, sizeof(dcache_resp_meta_nxt_));
-  std::memset(dcache_resp_pending_meta_, 0,
-              sizeof(dcache_resp_pending_meta_));
+  for (auto &meta : dcache_resp_meta_cur_) {
+    meta = {};
+  }
+  for (auto &meta : dcache_resp_meta_nxt_) {
+    meta = {};
+  }
+  for (auto &meta : dcache_resp_pending_meta_) {
+    meta = {};
+  }
 
   mshr_dcache_io_ = {};
   dcache_mshr_io_ = {};
@@ -833,10 +838,12 @@ void MemSubsystem::dcache_domain_comb_outputs() {
 }
 
 void MemSubsystem::record_dcache_stage1_metadata() {
-  std::memset(dcache_resp_meta_nxt_, 0, sizeof(dcache_resp_meta_nxt_));
-  const LsuDcacheIO &req = *dcache_.in.lsu2dcache;
+  for (auto &meta : dcache_resp_meta_nxt_) {
+    meta = {};
+  }
+  const S1S2Reg &stage1 = dcache_.stage1_next_state();
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    const LoadReq &load = req.req_ports.load_ports[i];
+    const auto &load = stage1.loads[i];
     if (!load.valid) {
       continue;
     }
@@ -845,7 +852,7 @@ void MemSubsystem::record_dcache_stage1_metadata() {
     dcache_resp_meta_nxt_[i].addr = load.addr;
   }
   for (int i = 0; i < LSU_STA_COUNT; i++) {
-    const StoreReq &store = req.req_ports.store_ports[i];
+    const auto &store = stage1.stores[i];
     if (!store.valid) {
       continue;
     }
@@ -863,22 +870,24 @@ void MemSubsystem::capture_dcache_raw_response() {
     if (!dcache_resp_raw_.resp_ports.load_resps[i].valid) {
       continue;
     }
+    const DcacheRespMeta &meta = dcache_resp_meta_cur_[i];
     Assert(!dcache_resp_pending_.resp_ports.load_resps[i].valid &&
            "DCache load response latch overflow");
     dcache_resp_pending_.resp_ports.load_resps[i] =
         dcache_resp_raw_.resp_ports.load_resps[i];
-    dcache_resp_pending_meta_[i] = dcache_resp_meta_cur_[i];
+    dcache_resp_pending_meta_[i] = meta;
   }
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     if (!dcache_resp_raw_.resp_ports.store_resps[i].valid) {
       continue;
     }
+    const int meta_idx = LSU_LDU_COUNT + i;
+    const DcacheRespMeta &meta = dcache_resp_meta_cur_[meta_idx];
     Assert(!dcache_resp_pending_.resp_ports.store_resps[i].valid &&
            "DCache store response latch overflow");
     dcache_resp_pending_.resp_ports.store_resps[i] =
         dcache_resp_raw_.resp_ports.store_resps[i];
-    dcache_resp_pending_meta_[LSU_LDU_COUNT + i] =
-        dcache_resp_meta_cur_[LSU_LDU_COUNT + i];
+    dcache_resp_pending_meta_[meta_idx] = meta;
   }
   if (dcache_resp_raw_.mshr_fill) {
 #if !BSD_CONFIG
@@ -945,11 +954,25 @@ void MemSubsystem::publish_pending_dcache_response() {
 
 void MemSubsystem::clear_pending_dcache_response() {
   dcache_resp_pending_ = {};
-  std::memset(dcache_resp_pending_meta_, 0,
-              sizeof(dcache_resp_pending_meta_));
+  for (auto &meta : dcache_resp_pending_meta_) {
+    meta = {};
+  }
 }
 
 void MemSubsystem::dcache_domain_comb_inputs() {
+  bool load_resp_blocked[LSU_LDU_COUNT] = {};
+  bool store_resp_blocked[LSU_STA_COUNT] = {};
+  for (int i = 0; i < LSU_LDU_COUNT; i++) {
+    load_resp_blocked[i] =
+        dcache_resp_pending_.resp_ports.load_resps[i].valid;
+  }
+  for (int i = 0; i < LSU_STA_COUNT; i++) {
+    store_resp_blocked[i] =
+        dcache_resp_pending_.resp_ports.store_resps[i].valid;
+  }
+  dcache_.set_hidden_bank_retry_blocked(load_resp_blocked,
+                                        store_resp_blocked);
+
   dcache_.stage1_comb();
   record_dcache_stage1_metadata();
 
@@ -965,8 +988,9 @@ void MemSubsystem::dcache_domain_comb_inputs() {
 
 void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
   dcache_.seq();
-  std::memcpy(dcache_resp_meta_cur_, dcache_resp_meta_nxt_,
-              sizeof(dcache_resp_meta_cur_));
+  for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
+    dcache_resp_meta_cur_[i] = dcache_resp_meta_nxt_[i];
+  }
   mshr_.seq(sample_mshr_perf);
   wb_.seq();
 }

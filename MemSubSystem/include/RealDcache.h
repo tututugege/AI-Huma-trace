@@ -59,6 +59,17 @@ public:
 
     void stage1_comb();
     void stage2_comb();
+    const S1S2Reg &stage1_next_state() const { return s1s2_nxt; }
+    void set_hidden_bank_retry_blocked(
+        const bool load_blocked[LSU_LDU_COUNT],
+        const bool store_blocked[LSU_STA_COUNT]) {
+        for (int i = 0; i < LSU_LDU_COUNT; i++) {
+            bank_retry_load_blocked[i] = load_blocked[i];
+        }
+        for (int i = 0; i < LSU_STA_COUNT; i++) {
+            bank_retry_store_blocked[i] = store_blocked[i];
+        }
+    }
 
     void dump_debug_state(FILE *out) const;
 private:
@@ -68,11 +79,32 @@ private:
         wire<32> data = 0;
         wire<8> strb = 0;
     };
+    struct BankRetryLoad {
+        reg<1> valid = false;
+        reg<32> addr = 0;
+        reg<32> req_id = 0;
+    };
+    struct BankRetryStore {
+        reg<1> valid = false;
+        reg<32> addr = 0;
+        reg<32> data = 0;
+        reg<8> strb = 0;
+        reg<32> req_id = 0;
+    };
+    struct BankRetryState {
+        BankRetryLoad loads[LSU_LDU_COUNT];
+        BankRetryStore stores[LSU_STA_COUNT];
+    };
 
     S1S2Reg s1s2_cur; // latched at start of cycle
     S1S2Reg s1s2_nxt; // computed by comb(); committed by seq()
+    BankRetryState bank_retry_cur; // per-port hidden retry latches for LSU bank conflicts
+    BankRetryState bank_retry_nxt;
     // Combinational scratch from stage2_comb() to stage1_comb(); not sequenced state.
     FillReqMerge fill_req_merge_wires[LSU_STA_COUNT] = {};
+    BankRetryState bank_retry_issue_wires = {};
+    bool bank_retry_load_blocked[LSU_LDU_COUNT] = {};
+    bool bank_retry_store_blocked[LSU_STA_COUNT] = {};
 #if !BSD_CONFIG
     SimContext *ctx = nullptr;
 #endif
