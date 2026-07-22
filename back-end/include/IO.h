@@ -1296,12 +1296,14 @@ struct LoadResp {
   wire<32> data;
   wire<32> req_id;
   wire<1> retry;
+  wire<1> bank_conflict;
   ReplayType replay;
 };
 
 // Store响应结构
 struct StoreResp {
   wire<1> valid;
+  wire<1> bank_conflict;
   ReplayType replay;
   wire<32>  req_id;
 };

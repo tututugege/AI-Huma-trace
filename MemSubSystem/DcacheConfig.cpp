@@ -1,5 +1,7 @@
 #include "DcacheConfig.h"
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 uint32_t tag_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
@@ -11,6 +13,48 @@ bool plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS] = {};
 namespace {
 inline bool invalid_set_or_way(uint32_t set_idx, uint32_t way) {
     return set_idx >= DCACHE_SETS_NUM || way >= DCACHE_WAYS_NUM;
+}
+
+struct DataBankAccessRecord {
+    bool valid = false;
+    const char *op = "";
+    const char *source = "";
+    uint32_t set_idx = 0;
+};
+
+DataBankAccessRecord data_bank_access[DCACHE_BANK_NUM] = {};
+
+inline uint32_t data_bank_from_set(uint32_t set_idx) {
+    return set_idx & (DCACHE_BANK_NUM - 1);
+}
+
+inline void begin_data_bank_cycle() {
+    for (auto &record : data_bank_access) {
+        record = {};
+    }
+}
+
+inline void check_data_bank_access(uint32_t set_idx, const char *op, const char *source) {
+    const uint32_t bank = data_bank_from_set(set_idx);
+    auto &record = data_bank_access[bank];
+    if (record.valid) {
+        std::fprintf(stderr,
+                     "[DCacheConfig] data_array bank conflict: bank=%u new=%s/%s set=%u previous=%s/%s set=%u\n",
+                     bank,
+                     op,
+                     source,
+                     set_idx,
+                     record.op,
+                     record.source,
+                     record.set_idx);
+        std::fflush(stderr);
+        std::abort();
+    }
+
+    record.valid = true;
+    record.op = op;
+    record.source = source;
+    record.set_idx = set_idx;
 }
 
 inline void plru_touch_way(uint32_t set_idx, uint32_t way) {
@@ -41,6 +85,7 @@ void init_dcache()
     std::memset(valid_array, 0, sizeof(valid_array));
     std::memset(dirty_array, 0, sizeof(dirty_array));
     std::memset(plru_tree_state, 0, sizeof(plru_tree_state));
+    begin_data_bank_cycle();
 }
 
 AddrFields decode(uint32_t addr)
@@ -96,6 +141,8 @@ void apply_strobe(uint32_t &dst, uint32_t src, uint8_t strb)
 
 void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, const uint32_t data[DCACHE_WORD_NUM])
 {
+    check_data_bank_access(set_idx, "write", "fill_line");
+
     uint32_t target_way = way;
     for (uint32_t w = 0; w < DCACHE_WAYS_NUM; w++)
     {
@@ -121,12 +168,15 @@ bool cache_line_match(uint32_t addr1, uint32_t addr2){
 }
 void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],DcacheLineReadResp resp[LSU_LDU_COUNT+LSU_STA_COUNT], const FillOut &fillout,FillIn &fillin)
 {
+    begin_data_bank_cycle();
+
     for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
         const auto &req = read_req[i];
         if (!req.valid) {
             memset(&resp[i], 0, sizeof(resp[i]));
             continue;
         }
+        check_data_bank_access(req.set_idx, "read", "read_req");
         memcpy(resp[i].valid, valid_array[req.set_idx], sizeof(valid_array[req.set_idx]));
         memcpy(resp[i].tag, tag_array[req.set_idx], sizeof(tag_array[req.set_idx]));
         memcpy(resp[i].dirty, dirty_array[req.set_idx], sizeof(dirty_array[req.set_idx]));
@@ -136,6 +186,7 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
     }
 
     if(fillout.valid){
+        // check_data_bank_access(fillout.set_idx, "read", "fillout");
         memcpy(fillin.valid_snap,valid_array[fillout.set_idx], sizeof(valid_array[fillout.set_idx]));
         memcpy(fillin.tag_snap,tag_array[fillout.set_idx], sizeof(tag_array[fillout.set_idx]));
         memcpy(fillin.dirty_snap,dirty_array[fillout.set_idx], sizeof(dirty_array[fillout.set_idx]));
@@ -151,6 +202,7 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
         const PendingWrite &pw = pws[i];
         const LruUpdate &lru_update = lru_updates[i];
         if(pw.valid){
+            // check_data_bank_access(pw.set_idx, "write", "pending_write");
             apply_strobe(data_array[pw.set_idx][pw.way_idx][pw.word_off], pw.data, pw.strb);
             dirty_array[pw.set_idx][pw.way_idx] = true;
         }
