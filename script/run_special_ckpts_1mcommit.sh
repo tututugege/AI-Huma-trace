@@ -5,12 +5,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-SIMULATOR="${SIMULATOR:-./build/simulator}"
-SPECIAL_ROOT="${SPECIAL_ROOT:-/share/personal/S/houruyao/simpoint/special}"
-RESULT_DIR="${RESULT_DIR:-./results_special_1mcommit}"
+EDA04_SIMULATOR="/home/S/houruyao/simulator-checkpoint-v3/build/simulator"
+EDA04_SPECIAL_ROOT="/share/personal/S/houruyao/simpoint/special/qimeng1_20260724_mmio_v3"
+
+DEFAULT_SIMULATOR="./build/simulator"
+if [[ "$(hostname -s)" == "eda-04" && -x "${EDA04_SIMULATOR}" ]]; then
+  DEFAULT_SIMULATOR="${EDA04_SIMULATOR}"
+fi
+
+SIMULATOR="${SIMULATOR:-${DEFAULT_SIMULATOR}}"
+SPECIAL_ROOT="${SPECIAL_ROOT:-${EDA04_SPECIAL_ROOT}}"
+SDCARD_IMAGE="${SDCARD_IMAGE:-${SPECIAL_ROOT}/sdcard.img}"
+RESULT_DIR="${RESULT_DIR:-./results_special_1mcommit_$(date +%Y%m%d_%H%M%S)}"
 COMMIT_LIMIT="${COMMIT_LIMIT:-1000000}"
-TIMEOUT_SECS="${TIMEOUT_SECS:-0}"
-MAX_JOBS="${MAX_JOBS:-8}"
+TIMEOUT_SECS="${TIMEOUT_SECS:-1800}"
+MAX_JOBS="${MAX_JOBS:-4}"
+EXPECTED_CKPTS="${EXPECTED_CKPTS:-12}"
 PIN_CPUS="${PIN_CPUS:-}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -20,14 +30,17 @@ Usage:
   script/run_special_ckpts_1mcommit.sh
 
 Environment overrides:
-  SIMULATOR        Simulator binary. Default: ./build/simulator
-  SPECIAL_ROOT     Directory containing special checkpoints.
-                   Default: /share/personal/S/houruyao/simpoint/special
+  SIMULATOR        Simulator binary. On eda-04, defaults to the deployed
+                   checkpoint-v3 build; elsewhere defaults to ./build/simulator.
+  SPECIAL_ROOT     Directory containing special checkpoints. Default:
+                   /share/personal/S/houruyao/simpoint/special/qimeng1_20260724_mmio_v3
+  SDCARD_IMAGE     SD-card backing image. Default: SPECIAL_ROOT/sdcard.img
   RESULT_DIR       Output directory for per-checkpoint logs and summary.
-                   Default: ./results_special_1mcommit
+                   Default: a timestamped directory under the repository root.
   COMMIT_LIMIT     Pass threshold in committed instructions. Default: 1000000
-  TIMEOUT_SECS     Optional per-checkpoint timeout. 0 disables timeout.
-  MAX_JOBS         Parallel workers. Default: 8
+  TIMEOUT_SECS     Per-checkpoint timeout. Default: 1800; 0 disables timeout.
+  MAX_JOBS         Parallel workers. Default: 4
+  EXPECTED_CKPTS   Required number of checkpoints. Default: 12; 0 disables.
   PIN_CPUS         Comma/space separated logical CPU IDs to use.
                    If unset, the script selects one online logical CPU from each
                    physical core via lscpu, avoiding hyperthread siblings.
@@ -54,6 +67,7 @@ fi
 [[ "${TIMEOUT_SECS}" =~ ^[0-9]+$ ]] || die "TIMEOUT_SECS must be a non-negative integer"
 [[ "${MAX_JOBS}" =~ ^[0-9]+$ ]] || die "MAX_JOBS must be a positive integer, got: ${MAX_JOBS}"
 (( MAX_JOBS > 0 )) || die "MAX_JOBS must be > 0"
+[[ "${EXPECTED_CKPTS}" =~ ^[0-9]+$ ]] || die "EXPECTED_CKPTS must be a non-negative integer"
 [[ "${DRY_RUN}" =~ ^[01]$ ]] || die "DRY_RUN must be 0 or 1"
 
 [[ -d "${SPECIAL_ROOT}" ]] || die "special checkpoint directory not found: ${SPECIAL_ROOT}"
@@ -61,12 +75,16 @@ command -v taskset >/dev/null 2>&1 || die "taskset is required"
 command -v lscpu >/dev/null 2>&1 || die "lscpu is required"
 
 [[ -x "${SIMULATOR}" ]] || die "simulator not found or not executable: ${SIMULATOR}"
+[[ -f "${SDCARD_IMAGE}" ]] || die "SD-card image not found: ${SDCARD_IMAGE}"
 
 mkdir -p "${RESULT_DIR}"
 
 mapfile -t CKPTS < <(find "${SPECIAL_ROOT}" -maxdepth 1 -type f -name '*.gz' | sort)
 (( ${#CKPTS[@]} > 0 )) || die "no .gz checkpoint files found in ${SPECIAL_ROOT}"
 TOTAL_TASKS="${#CKPTS[@]}"
+if (( EXPECTED_CKPTS > 0 && TOTAL_TASKS != EXPECTED_CKPTS )); then
+  die "expected ${EXPECTED_CKPTS} checkpoints, found ${TOTAL_TASKS} in ${SPECIAL_ROOT}"
+fi
 
 discover_physical_cpus() {
   lscpu -p=CPU,CORE,SOCKET,ONLINE \
@@ -112,10 +130,12 @@ printf "checkpoint\tstatus\treason\tlog\n" >"${SUMMARY_TSV}"
 echo "=================================================="
 echo "Start Time:   $(date)"
 echo "Simulator:    ${SIMULATOR}"
+echo "SD Card:      ${SDCARD_IMAGE}"
 echo "Special Root: ${SPECIAL_ROOT}"
 echo "Result Dir:   ${RESULT_DIR}"
 echo "Commit Limit: ${COMMIT_LIMIT}"
 echo "Checkpoints:  ${TOTAL_TASKS}"
+echo "Expected:     ${EXPECTED_CKPTS}"
 echo "Timeout Secs: ${TIMEOUT_SECS}"
 echo "Workers:      ${MAX_JOBS}"
 echo "Pinned CPUs:  ${SELECTED_CPUS[*]}"
@@ -162,14 +182,23 @@ run_worker() {
 
     echo "[Start] worker=${worker_id} cpu=${cpu} ckpt=${base}"
 
+    local simulator_cmd=(
+      "${SIMULATOR}"
+      --mode ckpt
+      -w 0
+      -c "${COMMIT_LIMIT}"
+      --sdcard-image "${SDCARD_IMAGE}"
+      "${ckpt}"
+    )
+
     set +e
     if (( TIMEOUT_SECS > 0 )); then
       timeout --preserve-status "${TIMEOUT_SECS}" \
-        taskset -c "${cpu}" "${SIMULATOR}" --mode ckpt -w 0 -c "${COMMIT_LIMIT}" "${ckpt}" \
+        taskset -c "${cpu}" "${simulator_cmd[@]}" \
         >"${log_file}" 2>&1
       rc=$?
     else
-      taskset -c "${cpu}" "${SIMULATOR}" --mode ckpt -w 0 -c "${COMMIT_LIMIT}" "${ckpt}" \
+      taskset -c "${cpu}" "${simulator_cmd[@]}" \
         >"${log_file}" 2>&1
       rc=$?
     fi
@@ -177,10 +206,32 @@ run_worker() {
 
     status="FAIL"
     reason="unknown"
-    if [[ "${rc}" -eq 0 ]] && grep -q "Reached MAX_COMMIT_INST=${COMMIT_LIMIT}" "${log_file}"; then
+
+    local reported_commits=""
+    reported_commits="$(
+      sed -nE \
+        's/.*committed\(total\/load\/store\)=[[:space:]]*([0-9]+)[[:space:]]*\/.*/\1/p' \
+        "${log_file}" | tail -n 1
+    )"
+    if [[ -z "${reported_commits}" ]]; then
+      reported_commits="$(
+        sed -nE 's/.*instruction num:[[:space:]]*([0-9]+).*/\1/p' \
+          "${log_file}" | tail -n 1
+      )"
+    fi
+
+    local reached_limit=0
+    if grep -q "Reached MAX_COMMIT_INST=${COMMIT_LIMIT}" "${log_file}"; then
+      reached_limit=1
+    elif [[ "${reported_commits}" =~ ^[0-9]+$ ]] &&
+      (( reported_commits >= COMMIT_LIMIT )); then
+      reached_limit=1
+    fi
+
+    if [[ "${rc}" -eq 0 && "${reached_limit}" -eq 1 ]]; then
       status="PASS"
       reason="reached_${COMMIT_LIMIT}_commits"
-    elif grep -Eq "Assertion failed|SIG[A-Z]+|received signal|Program received signal" "${log_file}"; then
+    elif grep -Eq "Assertion failed|SIG[A-Z]+|received signal|Program received signal|terminate called" "${log_file}"; then
       reason="crash_or_assert_before_${COMMIT_LIMIT}_commits"
       failed=1
     elif (( TIMEOUT_SECS > 0 )) && [[ "${rc}" -eq 124 ]]; then
@@ -243,6 +294,7 @@ done <"${SUMMARY_TSV}"
   echo "special checkpoint smoke summary"
   echo "end_time=$(date)"
   echo "simulator=${SIMULATOR}"
+  echo "sdcard_image=${SDCARD_IMAGE}"
   echo "special_root=${SPECIAL_ROOT}"
   echo "result_dir=${RESULT_DIR}"
   echo "commit_limit=${COMMIT_LIMIT}"
