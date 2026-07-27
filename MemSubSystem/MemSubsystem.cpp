@@ -1,4 +1,5 @@
 #include "MemSubsystem.h"
+#include "PhysMemory.h"
 #include "config.h"
 #include "icache/GenericTable.h"
 #include <assert.h>
@@ -795,8 +796,14 @@ void MemSubsystem::load_sdcard_image(const std::string &path) {
 void MemSubsystem::sync_mmio_devices_from_backing() {
   peripheral_model_.sync_from_backing();
 #if AXI_KIT_RUNTIME_ENABLED
-  if (memory != nullptr && axi_kit_runtime != nullptr) {
-    axi_kit_runtime->uart0.sync_from_backing(memory);
+  if (axi_kit_runtime != nullptr) {
+    for (uint32_t reg_off = 1; reg_off < 8; ++reg_off) {
+      const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
+      const uint32_t shift = (reg_off & 0x3u) * 8u;
+      const uint8_t value =
+          static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
+      axi_kit_runtime->uart0.write(UART_ADDR_BASE + reg_off, &value, 1u, 1u);
+    }
   }
 #endif
 }

@@ -392,7 +392,17 @@ int main(int argc, char *argv[]) {
   } else if (config.mode == SimConfig::CKPT) {
     std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
+    if (!config.sdcard_image_file.empty()) {
+      std::cout << "[SD] " << config.sdcard_image_file << std::endl;
+      cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
+    }
+#ifdef CONFIG_DIFFTEST
+    difftest_configure_run_assets(
+        config.sdcard_image_file.empty() ? nullptr
+                                         : config.sdcard_image_file.c_str());
+#endif
     cpu.back.restore_checkpoint(config.target_file);
+    cpu.sync_mmio_devices_from_backing();
 #ifndef CONFIG_BPU
     std::cout << "[Oracle] Synced to checkpoint snapshot in Step 0."
               << std::endl;

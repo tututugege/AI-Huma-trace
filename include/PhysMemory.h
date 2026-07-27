@@ -7,13 +7,16 @@
 // 物理内存统一接口
 //
 // 约定地址空间：
-// - RAM: [PMEM_RAM_BASE, PMEM_RAM_BASE + RAM_SIZE) 连续存储
+// - SDRAM: [0x40000000, 0x50000000) 独立连续存储
+// - DDR: [0x80000000, 0x100000000) 独立连续存储
 // - IO : 其余 32-bit 物理地址，离散字存储（按 word 对齐）
 //
 // p_memory 指向 RAM 窗口基址（对应物理地址 0x8000_0000）。
 // 代码应优先使用 pmem_read / pmem_write，而非直接 p_memory[] 下标。
 // ============================================================
 
+constexpr uint32_t PMEM_SDRAM_BASE = 0x40000000u;
+constexpr uint32_t PMEM_SDRAM_SIZE = 0x10000000u;
 constexpr uint32_t PMEM_RAM_BASE = 0x80000000u;
 
 extern uint32_t *p_memory;
@@ -23,6 +26,7 @@ void pmem_release();
 void pmem_clear_all();
 
 bool pmem_is_ram_addr(uint32_t paddr, uint32_t size = 4u);
+bool pmem_is_sdram_addr(uint32_t paddr, uint32_t size = 4u);
 uint32_t pmem_read(uint32_t paddr);
 void pmem_write(uint32_t paddr, uint32_t data);
 
@@ -32,3 +36,4 @@ void pmem_memcpy_from_ram(void *dst, uint32_t ram_paddr, size_t len);
 
 // 返回 RAM 基址指针（对应物理地址 PMEM_RAM_BASE）。
 uint32_t *pmem_ram_ptr();
+uint32_t *pmem_sdram_ptr();

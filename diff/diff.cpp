@@ -4,6 +4,7 @@
 #include "PhysMemory.h"
 #include "RISCV.h"
 #include "config.h"
+#include "mmio_address_map.h"
 #include "util.h"
 
 #include <algorithm>
@@ -15,19 +16,6 @@ static RefCpuContext *ref_cpu_ctx = nullptr;
 static uint8_t dut_privilege = RISCV_MODE_M;
 
 namespace {
-struct IoRange {
-  uint32_t base;
-  uint32_t size;
-};
-
-constexpr IoRange kCkptIoRanges[] = {
-    {BOOT_IO_BASE, BOOT_IO_SIZE},
-    {UART_ADDR_BASE, UART_MMIO_SIZE},
-    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
-    {OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE},
-    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
-};
-
 std::string g_sdcard_image_path;
 uint64_t g_diff_total_steps = 0;
 
@@ -87,6 +75,14 @@ void configure_ref_runtime() {
   refcpu_set_interrupt_delivery(ref_cpu_ctx, false);
 }
 
+void sync_all_memory_to_ref() {
+  ensure_ref_cpu();
+  refcpu_sync_ram_from_dut(ref_cpu_ctx, pmem_ram_ptr(),
+                           static_cast<size_t>(RAM_SIZE));
+  refcpu_sync_sdram_from_dut(ref_cpu_ctx, pmem_sdram_ptr(),
+                             static_cast<size_t>(PMEM_SDRAM_SIZE));
+}
+
 RefCpuState current_ref_state() {
   ensure_ref_cpu();
   RefCpuState state{};
@@ -104,13 +100,14 @@ RefCpuStepInfo current_step_info() {
 inline void seed_ref_io_from_backing() {
   ensure_ref_cpu();
   refcpu_clear_io_words(ref_cpu_ctx);
-  for (const auto &range : kCkptIoRanges) {
+  for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
       const uint32_t addr = range.base + off;
       const uint32_t data = pmem_read(addr);
       refcpu_set_io_word(ref_cpu_ctx, addr, data);
     }
   }
+  refcpu_sync_mmio_devices_from_backing(ref_cpu_ctx);
 }
 
 void diff_watchdog_tick() {
@@ -129,6 +126,8 @@ void init_difftest(int img_size) {
   configure_ref_runtime();
   refcpu_sync_ram_from_dut(ref_cpu_ctx, pmem_ram_ptr(),
                            static_cast<size_t>(img_size));
+  refcpu_sync_sdram_from_dut(ref_cpu_ctx, pmem_sdram_ptr(),
+                             static_cast<size_t>(PMEM_SDRAM_SIZE));
   seed_ref_io_from_backing();
 }
 
@@ -146,8 +145,7 @@ void difftest_init_run_state() {
   if (!g_sdcard_image_path.empty()) {
     refcpu_load_sdcard_image(ref_cpu_ctx, g_sdcard_image_path.c_str());
   }
-  refcpu_sync_ram_from_dut(ref_cpu_ctx, pmem_ram_ptr(),
-                           static_cast<size_t>(RAM_SIZE));
+  sync_all_memory_to_ref();
   seed_ref_io_from_backing();
 }
 
@@ -159,14 +157,15 @@ void init_diff_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   ref_cpu_ctx = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
   Assert(ref_cpu_ctx != nullptr && "init_diff_ckpt: refcpu_init failed");
   configure_ref_runtime();
+  if (!g_sdcard_image_path.empty()) {
+    refcpu_load_sdcard_image(ref_cpu_ctx, g_sdcard_image_path.c_str());
+  }
   RefCpuState ref_state = to_ref_state(ckpt_state, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
 
-  const uint32_t *ckpt_memory = pmem_ram_ptr();
-  Assert(ckpt_memory != nullptr &&
-         "init_diff_ckpt: pmem RAM backend is not initialized");
-  refcpu_sync_ram_from_dut(ref_cpu_ctx, ckpt_memory,
-                           static_cast<size_t>(RAM_SIZE));
+  Assert(pmem_ram_ptr() != nullptr && pmem_sdram_ptr() != nullptr &&
+         "init_diff_ckpt: pmem backends are not initialized");
+  sync_all_memory_to_ref();
   seed_ref_io_from_backing();
 
   // Keep checkpoint bootstrap aligned with GenSimpoint ref execution: only probe a
@@ -180,12 +179,16 @@ void get_state(CPU_state &dut_state, uint8_t &privilege) {
   dut_state = from_ref_state(ref_state);
   privilege = ref_state.privilege;
   uint32_t *dut_memory = pmem_ram_ptr();
-  Assert(dut_memory != nullptr &&
-         "get_state: pmem RAM backend is not initialized");
+  uint32_t *dut_sdram = pmem_sdram_ptr();
+  Assert(dut_memory != nullptr && dut_sdram != nullptr &&
+         "get_state: pmem backends are not initialized");
   uint32_t *ref_memory = refcpu_get_ram_ptr(ref_cpu_ctx);
-  Assert(ref_memory != nullptr && "get_state: refcpu RAM is not initialized");
+  uint32_t *ref_sdram = refcpu_get_sdram_ptr(ref_cpu_ctx);
+  Assert(ref_memory != nullptr && ref_sdram != nullptr &&
+         "get_state: refcpu memory is not initialized");
   std::memcpy(dut_memory, ref_memory, static_cast<size_t>(RAM_SIZE));
-  for (const auto &range : kCkptIoRanges) {
+  std::memcpy(dut_sdram, ref_sdram, static_cast<size_t>(PMEM_SDRAM_SIZE));
+  for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
       const uint32_t addr = range.base + off;
       pmem_write(addr, refcpu_get_io_word(ref_cpu_ctx, addr));
@@ -310,11 +313,15 @@ void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {
   Assert(size <= UINT32_MAX &&
          pmem_is_ram_addr(paddr, static_cast<uint32_t>(size)) &&
          "difftest DMA sync range is outside DUT RAM");
-  uint32_t *dut_ram = pmem_ram_ptr();
-  uint32_t *ref_ram = refcpu_get_ram_ptr(ref_cpu_ctx);
+  const bool is_sdram = pmem_is_sdram_addr(paddr, static_cast<uint32_t>(size));
+  uint32_t *dut_ram = is_sdram ? pmem_sdram_ptr() : pmem_ram_ptr();
+  uint32_t *ref_ram =
+      is_sdram ? refcpu_get_sdram_ptr(ref_cpu_ctx)
+               : refcpu_get_ram_ptr(ref_cpu_ctx);
   Assert(dut_ram != nullptr && ref_ram != nullptr &&
          "difftest DMA sync RAM is not initialized");
-  const size_t offset = static_cast<size_t>(paddr - PMEM_RAM_BASE);
+  const uint32_t base = is_sdram ? PMEM_SDRAM_BASE : PMEM_RAM_BASE;
+  const size_t offset = static_cast<size_t>(paddr - base);
   std::memcpy(reinterpret_cast<uint8_t *>(ref_ram) + offset,
               reinterpret_cast<const uint8_t *>(dut_ram) + offset, size);
 }

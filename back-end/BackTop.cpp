@@ -5,6 +5,7 @@
 #include "RealLsu.h"
 #include "config.h"
 #include "diff.h"
+#include "mmio_address_map.h"
 #include "oracle.h"
 #include "ref.h"
 #include "util.h"
@@ -448,8 +449,10 @@ void seed_uart_io_words() {
 
 constexpr uint64_t kCkptSimpointRamBytes = RAM_SIZE;
 constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
+constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
-constexpr uint16_t kCkptFormatVersion = 2u;
+constexpr uint16_t kCkptFormatVersion = 3u;
+constexpr uint16_t kCkptLegacyFormatVersion = 2u;
 
 typedef struct CkptHeader {
   uint32_t magic;
@@ -463,14 +466,6 @@ typedef struct CkptIoRange {
   uint32_t base;
   uint32_t size;
 } CkptIoRange;
-
-constexpr std::array<CkptIoRange, 5> kExpectedIoLayout = {
-    CkptIoRange{BOOT_IO_BASE, BOOT_IO_SIZE},
-    CkptIoRange{UART_ADDR_BASE, UART_MMIO_SIZE},
-    CkptIoRange{XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
-    CkptIoRange{TIMER_BASE, TIMER_MMIO_SIZE},
-    CkptIoRange{OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
-};
 
 void gz_read_exact(gzFile file, uint8_t *dst, uint64_t total_bytes) {
   uint64_t remain = total_bytes;
@@ -702,10 +697,21 @@ void BackTop::restore_checkpoint(const std::string &filename) {
     std::cerr << "Error: Invalid checkpoint magic." << std::endl;
     std::exit(1);
   }
-  if (ckpt_header.format_ver != kCkptFormatVersion) {
+  if (ckpt_header.format_ver != kCkptFormatVersion &&
+      ckpt_header.format_ver != kCkptLegacyFormatVersion) {
     std::cerr << "Error: Unsupported checkpoint version: "
               << ckpt_header.format_ver << std::endl;
     std::exit(1);
+  }
+  uint32_t checkpoint_sdram_size = 0;
+  if (ckpt_header.format_ver >= kCkptFormatVersion) {
+    gz_read_pod(file, checkpoint_sdram_size);
+    if (checkpoint_sdram_size != PMEM_SDRAM_SIZE) {
+      std::cerr << "Error: SDRAM checkpoint size is incompatible: file=0x"
+                << std::hex << checkpoint_sdram_size << " sim=0x"
+                << PMEM_SDRAM_SIZE << std::dec << std::endl;
+      std::exit(1);
+    }
   }
   if (ckpt_header.ram_size == 0 ||
       ckpt_header.ram_size > kCkptSimpointRamBytes) {
@@ -768,27 +774,81 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
 
   // 2. 恢复内存
-  if (pmem_ram_ptr() == nullptr) {
-    Assert(0 && "Error: Memory not allocated during checkpoint restore.");
+  if (pmem_ram_ptr() == nullptr || pmem_sdram_ptr() == nullptr) {
+    Assert(0 &&
+           "Error: Memory backends not allocated during checkpoint restore.");
   }
   pmem_clear_all();
 
-  std::cout << "Restoring Memory... format=simpoint-v2(header+ranges)"
+  std::cout << "Restoring Memory... format=simpoint-v"
+            << ckpt_header.format_ver << "(header+ranges)"
             << " file_ram=0x" << std::hex << ckpt_header.ram_size
             << " sim_ram=0x" << kCkptSimpointRamBytes << std::dec
             << std::endl;
 
   uint8_t *ram_dst = reinterpret_cast<uint8_t *>(pmem_ram_ptr());
   gz_read_exact(file, ram_dst, ckpt_header.ram_size);
+  if (checkpoint_sdram_size != 0) {
+    uint8_t *sdram_dst = reinterpret_cast<uint8_t *>(pmem_sdram_ptr());
+    gz_read_exact(file, sdram_dst, checkpoint_sdram_size);
+  }
 
-  seed_uart_io_words();
-  pmem_write(OPENSBI_TIMERCMP_LOW_ADDR, UINT32_MAX);
-  pmem_write(OPENSBI_TIMERCMP_HIGH_ADDR, UINT32_MAX);
+  if (ckpt_header.io_range_count > 64u) {
+    Assert(0 && "Error: unreasonable checkpoint MMIO range count");
+  }
+  if (ckpt_header.format_ver >= kCkptFormatVersion &&
+      ckpt_header.io_range_count !=
+          sizeof(kCheckpointMmioRanges) / sizeof(kCheckpointMmioRanges[0])) {
+    Assert(0 && "Error: checkpoint v3 MMIO range count mismatch");
+  }
+
+  uint32_t restored_mmio_ranges = 0;
+  for (uint32_t i = 0; i < ckpt_header.io_range_count; ++i) {
+    CkptIoRange range{};
+    gz_read_pod(file, range);
+    if (range.size > kMaxCkptIoRangeSize) {
+      Assert(0 && "Error: checkpoint MMIO range is unreasonably large");
+    }
+
+    const SimMmioRange *expected = nullptr;
+    if (ckpt_header.format_ver >= kCkptFormatVersion) {
+      expected = &kCheckpointMmioRanges[i];
+      if (range.base != expected->base || range.size != expected->size) {
+        Assert(0 && "Error: checkpoint v3 MMIO layout mismatch");
+      }
+    } else {
+      for (const auto &candidate : kCheckpointMmioRanges) {
+        if (range.base == candidate.base && range.size == candidate.size) {
+          expected = &candidate;
+          break;
+        }
+      }
+    }
+
+    std::vector<uint8_t> payload(range.size, 0);
+    gz_read_exact(file, payload.data(), payload.size());
+    if (expected == nullptr) {
+      std::cout << "[CKPT][MMIO] Skipping legacy range base=0x" << std::hex
+                << range.base << " size=0x" << range.size << std::dec
+                << std::endl;
+      continue;
+    }
+    if ((range.size & 0x3u) != 0) {
+      Assert(0 && "Error: checkpoint MMIO range is not word aligned");
+    }
+    for (uint32_t off = 0; off < range.size; off += 4u) {
+      const uint32_t word = static_cast<uint32_t>(payload[off + 0]) |
+                            (static_cast<uint32_t>(payload[off + 1]) << 8) |
+                            (static_cast<uint32_t>(payload[off + 2]) << 16) |
+                            (static_cast<uint32_t>(payload[off + 3]) << 24);
+      pmem_write(range.base + off, word);
+    }
+    ++restored_mmio_ranges;
+  }
+
   gzclose(file);
-  std::cout << "[CKPT][RAM-ONLY] Ignored " << ckpt_header.io_range_count
-            << " serialized MMIO ranges; UART is transmit-ready and all "
-               "interrupt sources are reset."
-            << std::endl;
+  std::cout << "[CKPT] Restored DDR, SDRAM and " << restored_mmio_ranges
+            << " MMIO ranges." << std::endl;
   std::cout << "Checkpoint restored from " << final_name << std::endl;
 
   init_diff_ckpt(state, restored_privilege);

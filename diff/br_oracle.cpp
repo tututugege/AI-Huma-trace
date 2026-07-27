@@ -4,6 +4,7 @@
 #include "PhysMemory.h"
 #include "front_IO.h"
 #include "frontend.h"
+#include "mmio_address_map.h"
 #include "util.h"
 #include <cstdint>
 #include <cstdio>
@@ -14,19 +15,6 @@ static RefCpuContext *oracle_ctx = nullptr;
 static std::queue<uint32_t> oracle_timer_queue;
 
 namespace {
-struct IoRange {
-  uint32_t base;
-  uint32_t size;
-};
-
-constexpr IoRange kCkptIoRanges[] = {
-    {BOOT_IO_BASE, BOOT_IO_SIZE},
-    {UART_ADDR_BASE, UART_MMIO_SIZE},
-    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
-    {TIMER_BASE, TIMER_MMIO_SIZE},
-    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
-};
-
 RefCpuState dut_to_ref_state(uint8_t privilege) {
   RefCpuState state{};
   std::memcpy(state.gpr, dut_cpu.gpr, sizeof(state.gpr));
@@ -72,13 +60,14 @@ RefCpuStepInfo current_oracle_step_info() {
 inline void seed_oracle_io_from_backing() {
   ensure_oracle();
   refcpu_clear_io_words(oracle_ctx);
-  for (const auto &range : kCkptIoRanges) {
+  for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
       const uint32_t addr = range.base + off;
       const uint32_t data = pmem_read(addr);
       refcpu_set_io_word(oracle_ctx, addr, data);
     }
   }
+  refcpu_sync_mmio_devices_from_backing(oracle_ctx);
 }
 
 inline void sync_oracle_control_state(const front_top_in &in) {
@@ -141,6 +130,8 @@ void init_oracle(int img_size) {
   refcpu_set_uart_print(oracle_ctx, false);
   refcpu_sync_ram_from_dut(oracle_ctx, pmem_ram_ptr(),
                            static_cast<size_t>(img_size));
+  refcpu_sync_sdram_from_dut(oracle_ctx, pmem_sdram_ptr(),
+                             static_cast<size_t>(PMEM_SDRAM_SIZE));
   seed_oracle_io_from_backing();
 }
 
@@ -172,11 +163,12 @@ void init_oracle_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   state.privilege = privilege;
   refcpu_set_state(oracle_ctx, &state);
 
-  const uint32_t *ckpt_memory = pmem_ram_ptr();
-  Assert(ckpt_memory != nullptr &&
-         "init_oracle_ckpt: pmem RAM backend is not initialized");
-  refcpu_sync_ram_from_dut(oracle_ctx, ckpt_memory,
+  Assert(pmem_ram_ptr() != nullptr && pmem_sdram_ptr() != nullptr &&
+         "init_oracle_ckpt: pmem backends are not initialized");
+  refcpu_sync_ram_from_dut(oracle_ctx, pmem_ram_ptr(),
                            static_cast<size_t>(RAM_SIZE));
+  refcpu_sync_sdram_from_dut(oracle_ctx, pmem_sdram_ptr(),
+                             static_cast<size_t>(PMEM_SDRAM_SIZE));
   seed_oracle_io_from_backing();
   (void)refcpu_probe_pc_translation(oracle_ctx);
 }

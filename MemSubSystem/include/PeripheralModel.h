@@ -87,7 +87,9 @@ public:
         static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_LOW_ADDR)) |
         (static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_HIGH_ADDR)) << 32);
     const uint64_t now = sim_time >= 0 ? static_cast<uint64_t>(sim_time) : 0ull;
-    timer_offset_ = timer_value >= now ? (timer_value - now) : 0ull;
+    // Preserve the serialized 64-bit timer value modulo 2^64. Saturating here
+    // would change when the next compare interrupt becomes pending.
+    timer_offset_ = timer_value - now;
     timer_cmp_ =
         static_cast<uint64_t>(pmem_read(OPENSBI_TIMERCMP_LOW_ADDR)) |
         (static_cast<uint64_t>(pmem_read(OPENSBI_TIMERCMP_HIGH_ADDR)) << 32);
@@ -100,6 +102,11 @@ public:
     for (uint32_t off = 0; off + 4u <= OCSDC_MMIO_SIZE; off += 4u) {
       ocsdc_regs_[off] = pmem_read(OCSDC_ADDR_BASE + off);
     }
+    // OCSDC DMA completes atomically in this model, so no transaction may be
+    // carried across the checkpoint boundary.
+    dma_write_pending_ = false;
+    dma_write_paddr_ = 0;
+    dma_write_size_ = 0;
     update_external_irq();
     update_timer_irq();
   }

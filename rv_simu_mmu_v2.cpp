@@ -32,6 +32,20 @@
 
 namespace {
 constexpr bool kDcacheFastDomainEnabled = CONFIG_DCACHE_FAST_DOMAIN != 0;
+
+void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
+  // The AXI UART model is TX-only: register 0 is a consumed THR and must stay
+  // empty after restore. Restore the remaining software-visible registers
+  // without replaying a transmit write.
+  for (uint32_t reg_off = 1; reg_off < 8; ++reg_off) {
+    const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
+    const uint32_t shift = (reg_off & 0x3u) * 8u;
+    const uint8_t value =
+        static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
+    uart.write(UART_ADDR_BASE + reg_off, &value, 1u, 1u);
+  }
+}
+
 bool is_dcache_read_master(int master) {
   return kDcacheFastDomainEnabled &&
          master == axi_interconnect::MASTER_DCACHE_R;
@@ -1019,7 +1033,7 @@ void SimCpu::reinit_frontend_after_restore() {
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
-  axi_uart.sync_from_backing(pmem_ram_ptr());
+  sync_uart_registers_from_backing(axi_uart);
   mem_subsystem.sync_mmio_devices_from_backing();
 }
 

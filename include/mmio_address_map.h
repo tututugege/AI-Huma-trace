@@ -14,6 +14,16 @@ static_assert(RAM_SIZE <= 0x80000000ull,
               "RAM window must fit in the 32-bit physical address space");
 static_assert(PMEM_RAM_BASE + RAM_SIZE == 0x100000000ull,
               "DDR window must cover [0x80000000, 0x100000000)");
+static_assert(PMEM_SDRAM_BASE + PMEM_SDRAM_SIZE == 0x50000000ull,
+              "SDRAM window must cover [0x40000000, 0x50000000)");
+
+inline constexpr SimMmioRange kCheckpointMmioRanges[] = {
+    {BOOT_IO_BASE, BOOT_IO_SIZE},
+    {UART_ADDR_BASE, UART_MMIO_SIZE},
+    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
+    {TIMER_BASE, TIMER_MMIO_SIZE},
+    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
+};
 
 inline constexpr SimMmioRange kSimulatorMmioRanges[] = {
     {BOOT_IO_BASE, BOOT_IO_SIZE},
