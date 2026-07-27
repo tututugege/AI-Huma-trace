@@ -66,8 +66,8 @@ void MSHR::comb_outputs_dcache()
             }
         }
         nxt.find_hit[i] = hit;
-        out.mshr2dcache->find_resp[i].valid = hit;
-        out.mshr2dcache->find_resp[i].hit = hit;
+        out.mshr2dcache->find_resp[i].valid = cur.find_hit[i];
+        out.mshr2dcache->find_resp[i].hit = cur.find_hit[i];
     }
 
     if(nxt.axi_resp_hold_valid){

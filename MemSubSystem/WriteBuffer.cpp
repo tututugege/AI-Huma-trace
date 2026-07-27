@@ -64,8 +64,8 @@ void WriteBuffer::comb_outputs_dcache() {
                                   .word_off];
             }
         }
-        out.wb2dcache->bypass_resp[i].valid = nxt.bypassvalid[i];
-        out.wb2dcache->bypass_resp[i].data = nxt.bypassdata[i];
+        out.wb2dcache->bypass_resp[i].valid = cur.bypassvalid[i];
+        out.wb2dcache->bypass_resp[i].data = cur.bypassdata[i];
     }
 
     for(int i=0;i<LSU_STA_COUNT;i++){
@@ -89,8 +89,8 @@ void WriteBuffer::comb_outputs_dcache() {
                 }
             }
         }
-        out.wb2dcache->merge_resp[i].valid = nxt.mergevalid[i];
-        out.wb2dcache->merge_resp[i].busy = nxt.mergebusy[i];
+        out.wb2dcache->merge_resp[i].valid = cur.mergevalid[i];
+        out.wb2dcache->merge_resp[i].busy = cur.mergebusy[i];
     }
 }
 void WriteBuffer::comb_outputs_axi() {
