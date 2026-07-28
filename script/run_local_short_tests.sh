@@ -20,7 +20,8 @@ usage() {
     cat <<'EOF'
 Usage: script/run_local_short_tests.sh [options]
 
-Build the default simulator and run every local short cpu-test.
+Initialize submodules, build the default simulator, and run every local short
+cpu-test. Each selected baremetal program is compiled automatically.
 
 Options:
   --include-long       Also run tests classified as long.
@@ -126,11 +127,24 @@ else
     LOG_ROOT=$(cd -- "$LOG_ROOT" && pwd)
 fi
 
+if [[ ! -f $REPO_ROOT/GenSimpoint/Makefile ||
+      ! -f $REPO_ROOT/axi-interconnect-kit/axi_interconnect/AXI_Interconnect.cpp ]]; then
+    command -v git >/dev/null 2>&1 || die "git is required to initialize submodules"
+    echo "[setup] initialize git submodules"
+    if ! git -C "$REPO_ROOT" submodule update --init --recursive; then
+        die "failed to initialize git submodules"
+    fi
+fi
+
 echo "[build] GenSimpoint reference library"
-make -C "$REPO_ROOT/GenSimpoint" -j"$JOBS" librefcpu.a
+if ! make -C "$REPO_ROOT/GenSimpoint" -j"$JOBS" librefcpu.a; then
+    die "failed to build GenSimpoint/librefcpu.a"
+fi
 
 echo "[build] default simulator"
-make -C "$REPO_ROOT" -j"$JOBS" default
+if ! make -C "$REPO_ROOT" -j"$JOBS" default; then
+    die "failed to build the default simulator"
+fi
 
 export PROFILE=default
 passed=0
