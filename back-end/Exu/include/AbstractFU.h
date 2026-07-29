@@ -116,8 +116,10 @@ public:
   void seq() override { pipeline = pipeline_1; }
 
   void comb_ctrl() override {
+    const wire<BR_MASK_WIDTH> all_flush_mask =
+        ~wire<BR_MASK_WIDTH>(0);
     if (in.flush) {
-      if (in.flush_mask == ~wire<BR_MASK_WIDTH>(0)) {
+      if (in.flush_mask == all_flush_mask) {
         pipeline_1.clear();
       } else {
         auto it = pipeline_1.begin();
@@ -202,8 +204,10 @@ public:
   }
 
   void comb_ctrl() override {
+    const wire<BR_MASK_WIDTH> all_flush_mask =
+        ~wire<BR_MASK_WIDTH>(0);
     if (in.flush && busy_1 &&
-        (in.flush_mask == ~wire<BR_MASK_WIDTH>(0) ||
+        (in.flush_mask == all_flush_mask ||
          (current_inst_1.br_mask & in.flush_mask) != 0)) {
       busy_1 = false;
       done_cycle_1 = 0;
