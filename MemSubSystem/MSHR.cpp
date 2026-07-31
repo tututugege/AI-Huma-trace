@@ -65,9 +65,8 @@ void MSHR::comb_outputs_dcache()
                 }
             }
         }
-        nxt.find_hit[i] = hit;
-        out.mshr2dcache->find_resp[i].valid = cur.find_hit[i];
-        out.mshr2dcache->find_resp[i].hit = cur.find_hit[i];
+        out.mshr2dcache->find_resp[i].valid = hit;
+        out.mshr2dcache->find_resp[i].hit = hit;
     }
 
     if(nxt.axi_resp_hold_valid){
@@ -163,19 +162,6 @@ void MSHR::comb_inputs_dcache()
                 nxt.axi_resp_hold_id = 0;
                 std::memset(nxt.axi_resp_hold_data, 0,
                             sizeof(nxt.axi_resp_hold_data));
-            }
-        }
-    }
-    for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){
-        nxt.find_hit[i] = false;
-        if(in.dcache2mshr->find_req[i].valid){
-            for(int j=0;j<DCACHE_MSHR_ENTRIES;j++){
-                const MSHREntry &e = nxt.mshr_entries[j];
-                uint32_t find_addr = get_addr(in.dcache2mshr->find_req[i].set_idx, in.dcache2mshr->find_req[i].tag, 0);
-                if(e.valid && e.addr == find_addr){
-                    nxt.find_hit[i] = true;
-                    break;
-                }
             }
         }
     }

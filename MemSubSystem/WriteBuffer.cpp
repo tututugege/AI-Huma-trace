@@ -50,36 +50,41 @@ void WriteBuffer::comb_outputs_dcache() {
     
     out.clear();
     out.wb2dcache->free = DCACHE_WB_ENTRIES - nxt.count;
+
+    // reg<1> bypassvalid[LSU_LDU_COUNT];
+    // reg<32> bypassdata[LSU_LDU_COUNT];
     for(int i=0;i<LSU_LDU_COUNT;i++){
-        nxt.bypassvalid[i] = false;
-        nxt.bypassdata[i] = 0;
+        bool bypassvalid = false;
+        uint32_t bypassdata = 0;
         if(in.dcache2wb->bypass_req[i].valid){
             int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
                                        in.dcache2wb->bypass_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
-                nxt.bypassvalid[i] = true;
-                nxt.bypassdata[i] =
+                bypassvalid = true;
+                bypassdata =
                     nxt.write_buffer[wb_idx]
                         .data[decode(in.dcache2wb->bypass_req[i].addr)
                                   .word_off];
             }
         }
-        out.wb2dcache->bypass_resp[i].valid = cur.bypassvalid[i];
-        out.wb2dcache->bypass_resp[i].data = cur.bypassdata[i];
+        out.wb2dcache->bypass_resp[i].valid = bypassvalid;
+        out.wb2dcache->bypass_resp[i].data = bypassdata;
     }
 
+    // reg<1> mergevalid[LSU_STA_COUNT];
+    // reg<1> mergebusy[LSU_STA_COUNT];
     for(int i=0;i<LSU_STA_COUNT;i++){
-        nxt.mergevalid[i] = false;
-        nxt.mergebusy[i] = false;
+        bool mergevalid = false;
+        bool mergebusy = false;
         if(in.dcache2wb->merge_req[i].valid){
             int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
                                        in.dcache2wb->merge_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
                 if(wb_idx == nxt.head && nxt.count > 0 && nxt.send != 0){
-                    nxt.mergebusy[i] = true;
+                    mergebusy = true;
                 }
                 else{
-                    nxt.mergevalid[i] = true;
+                    mergevalid = true;
                     WriteBufferEntry &e = nxt.write_buffer[wb_idx];
                     uint32_t word_off =
                         decode(in.dcache2wb->merge_req[i].addr).word_off;
@@ -89,8 +94,8 @@ void WriteBuffer::comb_outputs_dcache() {
                 }
             }
         }
-        out.wb2dcache->merge_resp[i].valid = cur.mergevalid[i];
-        out.wb2dcache->merge_resp[i].busy = cur.mergebusy[i];
+        out.wb2dcache->merge_resp[i].valid = mergevalid;
+        out.wb2dcache->merge_resp[i].busy = mergebusy;
     }
 }
 void WriteBuffer::comb_outputs_axi() {
