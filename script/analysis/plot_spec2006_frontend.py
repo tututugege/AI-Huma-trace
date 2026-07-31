@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Plot SPEC2006 frontend bottlenecks from simulator logs."""
+
 import argparse
 import csv
 import math
@@ -558,33 +560,42 @@ def write_csv(stats, csv_path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot SPEC2006 front-end bottleneck charts from FALCON logs")
-    parser.add_argument("--input", type=Path, default=Path("/home/watts/results_restore"), help="Input directory")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=Path.cwd(),
+        help="Input result directory (default: current directory)",
+    )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/home/watts/results_restore/spec2006_frontend_bottleneck.png"),
-        help="Output figure path",
+        default=None,
+        help="Output figure path (default: INPUT/spec2006_frontend_bottleneck.png)",
     )
     parser.add_argument(
         "--csv",
         type=Path,
-        default=Path("/home/watts/results_restore/spec2006_frontend_bottleneck_summary.csv"),
-        help="Output CSV path",
+        default=None,
+        help="Output CSV path (default: INPUT/spec2006_frontend_bottleneck_summary.csv)",
     )
     parser.add_argument("--title-prefix", type=str, default="SPEC2006", help="Title prefix")
     parser.add_argument("--dpi", type=int, default=180, help="Figure DPI")
     args = parser.parse_args()
 
+    args.input = args.input.resolve()
+    output = args.output or args.input / "spec2006_frontend_bottleneck.png"
+    csv_output = args.csv or args.input / "spec2006_frontend_bottleneck_summary.csv"
+
     stats = collect_stats(args.input)
     if not stats:
         raise SystemExit(f"No valid logs parsed from: {args.input}")
 
-    draw_plots(stats, args.output, args.title_prefix, args.dpi)
-    write_csv(stats, args.csv)
+    draw_plots(stats, output, args.title_prefix, args.dpi)
+    write_csv(stats, csv_output)
 
     print(f"Parsed benchmarks: {len(stats)}")
-    print(f"Figure written to: {args.output}")
-    print(f"CSV written to:    {args.csv}")
+    print(f"Figure written to: {output}")
+    print(f"CSV written to:    {csv_output}")
 
 
 if __name__ == "__main__":

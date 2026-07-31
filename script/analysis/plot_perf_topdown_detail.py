@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Plot detailed second- and third-level Top-Down metrics."""
+
 import argparse
 import math
 import os

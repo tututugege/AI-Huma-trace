@@ -1,3 +1,4 @@
+# Non-interactive crash capture defaults.
 set pagination off
 set confirm off
 set print pretty on

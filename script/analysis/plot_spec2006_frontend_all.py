@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""Batch frontend-bottleneck plotting for multiple result directories."""
+
 import argparse
 import os
 import re
@@ -118,8 +120,8 @@ def main():
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path(__file__).resolve().parent,
-        help="Root directory containing config subfolders (default: script directory)",
+        default=Path.cwd(),
+        help="Root directory containing config subfolders (default: current directory)",
     )
     parser.add_argument(
         "--output-name",

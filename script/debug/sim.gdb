@@ -1,3 +1,4 @@
+# Interactive simulator debugging defaults.
 set pagination off
 set confirm off
 set print pretty on

@@ -1,19 +1,22 @@
+#!/usr/bin/env python3
+
+"""Aggregate weighted SPEC2006 checkpoint logs and estimate SPEC ratios."""
+
 import os
 import re
 import glob
 import ast
 from datetime import datetime
 
-# ================= 用户配置区域 =================
 CPU_FREQ_GHZ = float(os.environ.get("CPU_FREQ_GHZ", "1.0"))
-LOG_ROOT_DIR = os.environ.get("LOG_ROOT_DIR", "./results_456")
+LOG_ROOT_DIR = os.environ.get("LOG_ROOT_DIR", ".")
 WEIGHTS_DIR = os.environ.get(
-    "WEIGHTS_DIR", "/home/renli/qimeng/fix-fence.i/456.hmmer_ref_bbv"
+    "WEIGHTS_DIR", "/share/personal/S/houruyao/simpoint_20260719/simpoints"
 )
-DEBUG = os.environ.get("DEBUG", "1") not in ("0", "false", "False")
+DEBUG = os.environ.get("DEBUG", "0") not in ("0", "false", "False")
 LOG_STATUS_REPORT = LOG_ROOT_DIR + "/log_status_report.txt"
 PERF_REPORT = LOG_ROOT_DIR + "/perf_report.txt"
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 REF_TIMES = {
     "400.perlbench": 9770,

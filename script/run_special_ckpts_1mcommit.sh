@@ -5,14 +5,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-EDA04_SIMULATOR="/home/S/houruyao/simulator-checkpoint-v3/build/simulator"
 EDA04_SPECIAL_ROOT="/share/personal/S/houruyao/simpoint/special/qimeng1_20260724_mmio_v3"
 
 DEFAULT_SIMULATOR="./build/simulator"
-if [[ "$(hostname -s)" == "eda-04" && -x "${EDA04_SIMULATOR}" ]]; then
-  DEFAULT_SIMULATOR="${EDA04_SIMULATOR}"
-fi
-
 SIMULATOR="${SIMULATOR:-${DEFAULT_SIMULATOR}}"
 SPECIAL_ROOT="${SPECIAL_ROOT:-${EDA04_SPECIAL_ROOT}}"
 SDCARD_IMAGE="${SDCARD_IMAGE:-${SPECIAL_ROOT}/sdcard.img}"
@@ -30,8 +25,8 @@ Usage:
   script/run_special_ckpts_1mcommit.sh
 
 Environment overrides:
-  SIMULATOR        Simulator binary. On eda-04, defaults to the deployed
-                   checkpoint-v3 build; elsewhere defaults to ./build/simulator.
+  SIMULATOR        Simulator binary. Default: ./build/simulator. Set this
+                   explicitly when using a deployed build on a server.
   SPECIAL_ROOT     Directory containing special checkpoints. Default:
                    /share/personal/S/houruyao/simpoint/special/qimeng1_20260724_mmio_v3
   SDCARD_IMAGE     SD-card backing image. Default: SPECIAL_ROOT/sdcard.img

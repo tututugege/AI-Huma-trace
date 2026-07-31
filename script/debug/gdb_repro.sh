@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 MODE="run"
@@ -12,12 +12,12 @@ WARMUP=""
 MAX_COMMIT=""
 PROFILE="${PROFILE:-default}"
 BUILD_BEFORE_RUN=1
-GDB_CMDS="$ROOT_DIR/script/gdb/sim.gdb"
+GDB_CMDS="$ROOT_DIR/script/debug/sim.gdb"
 
 usage() {
   cat <<'EOF'
 Usage:
-  script/gdb_repro.sh [options] [target]
+  script/debug/gdb_repro.sh [options] [target]
 
 Options:
   --mode <run|ckpt|fast|ref>   Simulator mode (default: run)
@@ -30,9 +30,9 @@ Options:
   -h, --help                   Show this help
 
 Examples:
-  script/gdb_repro.sh
-  script/gdb_repro.sh --mode fast -f 1000000 ./baremetal/memory
-  script/gdb_repro.sh --mode ckpt -w 500000 -c 2000000 /path/to/ckpt.gz
+  script/debug/gdb_repro.sh
+  script/debug/gdb_repro.sh --mode fast -f 1000000 ./baremetal/memory
+  script/debug/gdb_repro.sh --mode ckpt -w 500000 -c 2000000 /path/to/ckpt.gz
 EOF
 }
 
