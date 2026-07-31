@@ -8,7 +8,7 @@
 
 1. 本地截断路径
    - 由 `PeripheralModel` 处理。
-   - 当前覆盖 `UART/PLIC` 地址段，以及 OpenSBI timer 特殊读。
+   - 当前覆盖 `UART/XPS INTC/OCSDC` 地址段，以及 OpenSBI timer 特殊读。
    - 这部分请求不会发到外部 AXI。
 
 2. 外部 AXI 路径
@@ -116,7 +116,8 @@ MMIO load 不是地址一出来就发，而是要等到比较严格的条件：
 当前覆盖：
 
 - `UART`
-- `PLIC`
+- `XPS INTC`
+- `OCSDC`
 
 处理方式：
 
@@ -235,7 +236,8 @@ LSU 发出的请求内容：
 3. `PeripheralModel::on_commit_store()` 再去更新：
    - `memory[]` 里的 MMIO 镜像
    - `mip/sip`
-   - `PLIC claim`
+   - `XPS INTC` 状态/应答
+   - `OCSDC` 中断状态
    - `UART` 命令副作用
 
 也就是说：
@@ -250,7 +252,8 @@ LSU 发出的请求内容：
 1. OpenSBI timer 特殊读
 2. `PeripheralModel` 覆盖的地址
    - `UART`
-   - `PLIC`
+   - `XPS INTC`
+   - `OCSDC`
 
 ### 会发 AXI
 
