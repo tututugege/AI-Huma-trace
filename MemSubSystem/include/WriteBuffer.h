@@ -24,11 +24,11 @@ struct WBState {
     bool axi_write_lsu_origin;
 #endif
 
-    reg<1> bypassvalid[LSU_LDU_COUNT];
-    reg<32> bypassdata[LSU_LDU_COUNT];
+    // reg<1> bypassvalid[LSU_LDU_COUNT];
+    // reg<32> bypassdata[LSU_LDU_COUNT];
 
-    reg<1> mergevalid[LSU_STA_COUNT];
-    reg<1> mergebusy[LSU_STA_COUNT];
+    // reg<1> mergevalid[LSU_STA_COUNT];
+    // reg<1> mergebusy[LSU_STA_COUNT];
 
     WriteBufferEntry write_buffer[DCACHE_WB_ENTRIES];
 };

@@ -38,7 +38,7 @@ struct MSHR_STATE{
     reg<8> axi_resp_hold_id;
     reg<32> axi_resp_hold_data[DCACHE_WORD_NUM];
 
-    reg<1> find_hit[LSU_LDU_COUNT + LSU_STA_COUNT]; // combinational hit result for each load/store slot
+    // reg<1> find_hit[LSU_LDU_COUNT + LSU_STA_COUNT]; // combinational hit result for each load/store slot
     MSHREntry mshr_entries[DCACHE_MSHR_ENTRIES];
 };
 
