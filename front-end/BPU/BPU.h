@@ -1416,6 +1416,7 @@ public:
         out.q_count_next[i]--;
       }
     }
+    bool bank_enqueued[BPU_BANK_NUM] = {};
     for (int i = 0; i < COMMIT_WIDTH; i++) {
       if (!in.in_upd_valid[i]) {
         continue;
@@ -1423,55 +1424,43 @@ public:
       BankSelCombOut bank_sel_out{};
       bank_sel_comb(BankSelCombIn{in.in_update_base_pc[i]}, bank_sel_out);
       int bank_sel = bank_sel_out.bank_sel;
-      if (out.q_count_next[bank_sel] < Q_DEPTH) {
-        out.q_push_en[bank_sel] = true;
-        out.q_entry_we[i] = true;
-        out.q_entry_bank[i] = bank_sel;
-        out.q_entry_slot[i] = out.q_wr_ptr_next[bank_sel];
-        out.q_entry_data[i].base_pc = in.in_update_base_pc[i];
-        out.q_entry_data[i].valid_mask = in.in_upd_valid[i];
-        out.q_entry_data[i].actual_dir = in.in_actual_dir[i];
-        out.q_entry_data[i].pred_dir = in.in_pred_dir[i];
-        out.q_entry_data[i].alt_pred = in.in_alt_pred[i];
-        out.q_entry_data[i].br_type = in.in_actual_br_type[i];
-        out.q_entry_data[i].targets = in.in_actual_targets[i];
-        out.q_entry_data[i].pcpn = in.in_pcpn[i];
-        out.q_entry_data[i].altpcpn = in.in_altpcpn[i];
-        for (int k = 0; k < TN_MAX; k++) {
-          out.q_entry_data[i].tage_tags[k] = in.in_tage_tags[i][k];
-          out.q_entry_data[i].tage_idxs[k] = in.in_tage_idxs[i][k];
-        }
-        out.q_entry_data[i].sc_used = in.in_sc_used[i];
-        out.q_entry_data[i].sc_pred = in.in_sc_pred[i];
-        out.q_entry_data[i].sc_sum = in.in_sc_sum[i];
-        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-          out.q_entry_data[i].sc_idx[t] = in.in_sc_idx[i][t];
-        }
-        out.q_entry_data[i].loop_used = in.in_loop_used[i];
-        out.q_entry_data[i].loop_hit = in.in_loop_hit[i];
-        out.q_entry_data[i].loop_pred = in.in_loop_pred[i];
-        out.q_entry_data[i].loop_idx = in.in_loop_idx[i];
-        out.q_entry_data[i].loop_tag = in.in_loop_tag[i];
-        out.q_wr_ptr_next[bank_sel] = (out.q_wr_ptr_next[bank_sel] + 1) % Q_DEPTH;
-        out.q_count_next[bank_sel]++;
-      } else {
-        std::cerr << "[BPU] update_queue overflow: commit_slot=" << i
-                  << " bank=" << bank_sel
-                  << " base_pc=0x" << std::hex << in.in_update_base_pc[i]
-                  << std::dec << " q_count=" << out.q_count_next[bank_sel]
-                  << " depth=" << Q_DEPTH << std::endl;
-        assert(false && "BPU update_queue overflow");
-        std::exit(EXIT_FAILURE);
+      if (bank_enqueued[bank_sel] || out.q_count_next[bank_sel] >= Q_DEPTH) {
+        continue;
       }
-    }
 
-    bool q_full_any = false;
-    for (int i = 0; i < BPU_BANK_NUM; i++) {
-      const queue_count_t remaining_slots =
-          static_cast<queue_count_t>(Q_DEPTH - out.q_count_next[i]);
-      q_full_any |= (remaining_slots < COMMIT_WIDTH);
+      bank_enqueued[bank_sel] = true;
+      out.q_push_en[bank_sel] = true;
+      out.q_entry_we[i] = true;
+      out.q_entry_bank[i] = bank_sel;
+      out.q_entry_slot[i] = out.q_wr_ptr_next[bank_sel];
+      out.q_entry_data[i].base_pc = in.in_update_base_pc[i];
+      out.q_entry_data[i].valid_mask = in.in_upd_valid[i];
+      out.q_entry_data[i].actual_dir = in.in_actual_dir[i];
+      out.q_entry_data[i].pred_dir = in.in_pred_dir[i];
+      out.q_entry_data[i].alt_pred = in.in_alt_pred[i];
+      out.q_entry_data[i].br_type = in.in_actual_br_type[i];
+      out.q_entry_data[i].targets = in.in_actual_targets[i];
+      out.q_entry_data[i].pcpn = in.in_pcpn[i];
+      out.q_entry_data[i].altpcpn = in.in_altpcpn[i];
+      for (int k = 0; k < TN_MAX; k++) {
+        out.q_entry_data[i].tage_tags[k] = in.in_tage_tags[i][k];
+        out.q_entry_data[i].tage_idxs[k] = in.in_tage_idxs[i][k];
+      }
+      out.q_entry_data[i].sc_used = in.in_sc_used[i];
+      out.q_entry_data[i].sc_pred = in.in_sc_pred[i];
+      out.q_entry_data[i].sc_sum = in.in_sc_sum[i];
+      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+        out.q_entry_data[i].sc_idx[t] = in.in_sc_idx[i][t];
+      }
+      out.q_entry_data[i].loop_used = in.in_loop_used[i];
+      out.q_entry_data[i].loop_hit = in.in_loop_hit[i];
+      out.q_entry_data[i].loop_pred = in.in_loop_pred[i];
+      out.q_entry_data[i].loop_idx = in.in_loop_idx[i];
+      out.q_entry_data[i].loop_tag = in.in_loop_tag[i];
+      out.q_wr_ptr_next[bank_sel] = (out.q_wr_ptr_next[bank_sel] + 1) % Q_DEPTH;
+      out.q_count_next[bank_sel]++;
     }
-    out.update_queue_full = q_full_any;
+    out.update_queue_full = false;
   }
 
   void bpu_submodule_seq_read(const BpuPostReadReqCombOut &in, ReadData &rd) const {

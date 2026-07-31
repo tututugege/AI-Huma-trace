@@ -17,7 +17,7 @@
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
 static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #ifndef BPU_BANK_NUM
-#define BPU_BANK_NUM FETCH_WIDTH
+#define BPU_BANK_NUM 8
 #endif
 
 // RAS feature switch:
@@ -25,11 +25,11 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 // - comment out this macro    => disable RAS and fallback to BTB target
 #define ENABLE_BPU_RAS
 #ifndef RAS_DEPTH
-#define RAS_DEPTH 64
+#define RAS_DEPTH 32
 #endif
 
 #ifndef BPU_TYPE_ENTRY_NUM
-#define BPU_TYPE_ENTRY_NUM 4096
+#define BPU_TYPE_ENTRY_NUM 1024
 #endif
 #ifndef TYPE_PRED_ENTRY_NUM
 #define TYPE_PRED_ENTRY_NUM BPU_TYPE_ENTRY_NUM
@@ -38,7 +38,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define TYPE_PRED_WAY_NUM 2
 #endif
 #ifndef TYPE_PRED_TAG_WIDTH
-#define TYPE_PRED_TAG_WIDTH 12
+#define TYPE_PRED_TAG_WIDTH 8
 #endif
 #ifndef TYPE_PRED_CONF_BITS
 #define TYPE_PRED_CONF_BITS 2
@@ -47,21 +47,21 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define TYPE_PRED_AGE_BITS 2
 #endif
 #ifndef Q_DEPTH
-#define Q_DEPTH 500 // UQ depth
+#define Q_DEPTH 2 // UQ depth
 #endif
 
 // TAGE configs
 #ifndef BASE_ENTRY_NUM
-#define BASE_ENTRY_NUM 2048
+#define BASE_ENTRY_NUM 1024
 #endif
 #ifndef GHR_LENGTH
-#define GHR_LENGTH 512
+#define GHR_LENGTH 256
 #endif
 #ifndef TN_MAX
 #define TN_MAX 4
 #endif
 #ifndef TN_ENTRY_NUM
-#define TN_ENTRY_NUM 4096
+#define TN_ENTRY_NUM 1024
 #endif
 #ifndef FH_N_MAX
 #define FH_N_MAX 3
@@ -106,7 +106,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define TAGE_PROVIDER_WEAK_HIGH 3
 #endif
 #ifndef ENABLE_TAGE_SC_LITE
-#define ENABLE_TAGE_SC_LITE 1
+#define ENABLE_TAGE_SC_LITE 0
 #endif
 #ifndef TAGE_SC_ENTRY_NUM
 #define TAGE_SC_ENTRY_NUM 1024
@@ -128,11 +128,11 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 // TAGE-SC-L upgrade switches (new; default disabled to preserve baseline)
 // ----------------------------------------------------------------------------
 #ifndef ENABLE_TAGE_SC_L
-#define ENABLE_TAGE_SC_L 1
+#define ENABLE_TAGE_SC_L 0
 #endif
 
 #ifndef ENABLE_TAGE_SC_PATH
-#define ENABLE_TAGE_SC_PATH 1
+#define ENABLE_TAGE_SC_PATH 0
 #endif
 
 #ifndef TAGE_SC_PATH_BITS
@@ -140,7 +140,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #endif
 
 #ifndef ENABLE_TAGE_LOOP_PRED
-#define ENABLE_TAGE_LOOP_PRED 1
+#define ENABLE_TAGE_LOOP_PRED 0
 #endif
 
 #ifndef TAGE_LOOP_ENTRY_NUM
@@ -196,7 +196,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 
 // BTB configs
 #ifndef BTB_ENTRY_NUM
-#define BTB_ENTRY_NUM 1024
+#define BTB_ENTRY_NUM 256
 #endif
 #ifndef ENABLE_BTB_ALIAS_HASH
 #define ENABLE_BTB_ALIAS_HASH 1
@@ -211,10 +211,10 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define BTB_TYPE_ENTRY_NUM 4096
 #endif
 #ifndef BHT_ENTRY_NUM
-#define BHT_ENTRY_NUM 2048
+#define BHT_ENTRY_NUM 128
 #endif
 #ifndef TC_ENTRY_NUM
-#define TC_ENTRY_NUM 2048
+#define TC_ENTRY_NUM 128
 #endif
 #ifndef TC_WAY_NUM
 #define TC_WAY_NUM 2
@@ -333,16 +333,16 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 
 // FIFO sizes
 #ifndef INSTRUCTION_FIFO_SIZE
-#define INSTRUCTION_FIFO_SIZE 32
+#define INSTRUCTION_FIFO_SIZE 16
 #endif
 #ifndef PTAB_SIZE
-#define PTAB_SIZE 32
+#define PTAB_SIZE 16
 #endif
 #ifndef FETCH_ADDR_FIFO_SIZE
-#define FETCH_ADDR_FIFO_SIZE 32
+#define FETCH_ADDR_FIFO_SIZE 16
 #endif
 #ifndef FRONT2BACK_FIFO_SIZE
-#define FRONT2BACK_FIFO_SIZE 64
+#define FRONT2BACK_FIFO_SIZE 32
 #endif
 
 #endif

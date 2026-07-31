@@ -47,6 +47,14 @@ Environment overrides:
   RESUME           1 skips checkpoints already marked PASS in RESULT_DIR.
   DRY_RUN          1 validates inputs and prints the launch plan only.
 
+Scheduling and safety:
+  - workers pull from a shared queue, so an idle CPU immediately takes the
+    next checkpoint instead of waiting for a statically assigned worker
+  - RESULT_DIR is locked against duplicate runners
+  - run_config.txt prevents mixing results from different simulator binaries
+    or warmup/measure/difftest configurations
+  - progress.txt reports claimed/completed/pass/fail/running/pending live
+
 Examples:
   script/run_all.sh
   MAX_JOBS=36 script/run_all.sh
@@ -75,6 +83,9 @@ fi
 
 command -v taskset >/dev/null 2>&1 || die "taskset is required"
 command -v lscpu >/dev/null 2>&1 || die "lscpu is required"
+command -v flock >/dev/null 2>&1 || die "flock is required"
+command -v setsid >/dev/null 2>&1 || die "setsid is required"
+command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
 [[ -x "${SIMULATOR}" ]] || die "simulator not found or not executable: ${SIMULATOR}"
 [[ -d "${CKPT_ROOT}" ]] || die "checkpoint root not found: ${CKPT_ROOT}"
 if [[ -n "${SDCARD_IMAGE}" ]]; then
@@ -105,10 +116,23 @@ discover_physical_cpus() {
 }
 
 if [[ -n "${PIN_CPUS}" ]]; then
-  read -r -a AVAILABLE_CPUS <<<"$(tr ',:' '  ' <<<"${PIN_CPUS}")"
+  read -r -a CANDIDATE_CPUS <<<"$(tr ',:' '  ' <<<"${PIN_CPUS}")"
 else
-  read -r -a AVAILABLE_CPUS <<<"$(discover_physical_cpus)"
+  read -r -a CANDIDATE_CPUS <<<"$(discover_physical_cpus)"
 fi
+
+AVAILABLE_CPUS=()
+declare -A SEEN_CPUS=()
+for cpu in "${CANDIDATE_CPUS[@]}"; do
+  [[ "${cpu}" =~ ^[0-9]+$ ]] || die "invalid CPU ID: ${cpu}"
+  [[ -z "${SEEN_CPUS[$cpu]+x}" ]] || die "duplicate CPU ID selected: ${cpu}"
+  SEEN_CPUS["${cpu}"]=1
+  if taskset -c "${cpu}" true >/dev/null 2>&1; then
+    AVAILABLE_CPUS+=("${cpu}")
+  elif [[ -n "${PIN_CPUS}" ]]; then
+    die "CPU ${cpu} is not available in this process affinity mask"
+  fi
+done
 (( ${#AVAILABLE_CPUS[@]} > 0 )) || die "no usable CPUs found"
 
 if [[ "${MAX_JOBS}" == "auto" ]]; then
@@ -124,11 +148,6 @@ if (( JOBS > TOTAL_TASKS )); then
   JOBS="${TOTAL_TASKS}"
 fi
 SELECTED_CPUS=("${AVAILABLE_CPUS[@]:0:JOBS}")
-
-mkdir -p "${RESULT_DIR}"
-for ckpt in "${ALL_CKPTS[@]}"; do
-  mkdir -p "${RESULT_DIR}/$(basename "$(dirname "${ckpt}")")"
-done
 
 SIM_ARGS=("${SIMULATOR}" --mode ckpt -w "${CKPT_WARMUP}" -c "${CKPT_MAX_COMMIT}")
 if [[ -n "${SDCARD_IMAGE}" ]]; then
@@ -150,20 +169,101 @@ echo "Difftest:         $([[ "${NO_DIFF}" == "1" ]] && echo disabled || echo ena
 echo "Workers:          ${JOBS}"
 echo "Pinned CPUs:      ${SELECTED_CPUS[*]}"
 echo "CPU Policy:       one logical CPU per physical core; SMT siblings unused"
+echo "Scheduler:        dynamic shared queue; idle workers pull the next checkpoint"
 echo "Resume:           ${RESUME}"
 echo "=================================================="
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   for ((worker = 0; worker < JOBS; worker++)); do
-    count=$(((TOTAL_TASKS - 1 - worker) / JOBS + 1))
-    echo "[DryRun] worker=${worker} cpu=${SELECTED_CPUS[$worker]} tasks=${count}"
+    echo "[DryRun] worker=${worker} cpu=${SELECTED_CPUS[$worker]} scheduler=dynamic"
   done
   exit 0
+fi
+
+mkdir -p "${RESULT_DIR}"
+for ckpt in "${ALL_CKPTS[@]}"; do
+  mkdir -p "${RESULT_DIR}/$(basename "$(dirname "${ckpt}")")"
+done
+
+RUN_LOCK_FILE="${RESULT_DIR}/.run_all.lock"
+exec {RUN_LOCK_FD}>"${RUN_LOCK_FILE}"
+flock -n "${RUN_LOCK_FD}" \
+  || die "another run_all.sh is already using RESULT_DIR=${RESULT_DIR}"
+if [[ -f "${RESULT_DIR}/runner.pid" ]]; then
+  previous_runner_pid="$(sed -n '1p' "${RESULT_DIR}/runner.pid")"
+  if [[ "${previous_runner_pid}" =~ ^[0-9]+$ ]] \
+    && kill -0 "${previous_runner_pid}" 2>/dev/null \
+    && ps -p "${previous_runner_pid}" -o args= 2>/dev/null | grep -Fq 'run_all.sh'; then
+    die "runner PID ${previous_runner_pid} is still active for RESULT_DIR=${RESULT_DIR}"
+  fi
+fi
+printf "%s\n" "$$" >"${RESULT_DIR}/runner.pid"
+
+SIMULATOR_REAL="$(readlink -f "${SIMULATOR}")"
+CKPT_ROOT_REAL="$(readlink -f "${CKPT_ROOT}")"
+if [[ -n "${SDCARD_IMAGE}" ]]; then
+  SDCARD_IMAGE_REAL="$(readlink -f "${SDCARD_IMAGE}")"
+else
+  SDCARD_IMAGE_REAL=""
+fi
+RUN_CONFIG_FILE="${RESULT_DIR}/run_config.txt"
+RUN_CONFIG_TMP="${RUN_CONFIG_FILE}.tmp.${BASHPID}"
+{
+  echo "format_version=2"
+  echo "simulator=${SIMULATOR_REAL}"
+  echo "simulator_sha256=$(sha256sum "${SIMULATOR_REAL}" | awk '{print $1}')"
+  echo "checkpoint_root=${CKPT_ROOT_REAL}"
+  echo "sdcard_image=${SDCARD_IMAGE_REAL}"
+  echo "warmup_commits=${CKPT_WARMUP}"
+  echo "measure_commits=${CKPT_MAX_COMMIT}"
+  echo "difftest=$([[ "${NO_DIFF}" == "1" ]] && echo disabled || echo enabled)"
+  echo "checkpoint_count=${TOTAL_TASKS}"
+} >"${RUN_CONFIG_TMP}"
+if [[ -f "${RUN_CONFIG_FILE}" ]] && ! cmp -s "${RUN_CONFIG_FILE}" "${RUN_CONFIG_TMP}"; then
+  rm -f "${RUN_CONFIG_TMP}"
+  die "RESULT_DIR contains results from a different simulator or run configuration: ${RESULT_DIR}"
+fi
+if [[ ! -f "${RUN_CONFIG_FILE}" ]]; then
+  if find "${RESULT_DIR}" -type f -name '*.status' -print -quit | grep -q .; then
+    echo "Warning: adopting legacy result directory without run_config.txt: ${RESULT_DIR}" >&2
+  fi
+  mv "${RUN_CONFIG_TMP}" "${RUN_CONFIG_FILE}"
+else
+  rm -f "${RUN_CONFIG_TMP}"
 fi
 
 START_TIME="$(date +%s)"
 WORKER_PIDS=()
 WORKER_RESULT_FILES=()
+QUEUE_LOCK_FILE="${RESULT_DIR}/.queue.lock"
+QUEUE_STATE_FILE="${RESULT_DIR}/.queue.state"
+PROGRESS_FILE="${RESULT_DIR}/progress.txt"
+printf "0 0 0 0 0\n" >"${QUEUE_STATE_FILE}"
+
+write_progress_locked() {
+  local next="$1"
+  local completed="$2"
+  local passed="$3"
+  local failed="$4"
+  local resumed="$5"
+  local running=$((next - completed))
+  local pending=$((TOTAL_TASKS - next))
+  local tmp="${PROGRESS_FILE}.tmp.${BASHPID}"
+  {
+    echo "updated=$(date '+%F %T %Z')"
+    echo "total=${TOTAL_TASKS}"
+    echo "claimed=${next}"
+    echo "completed=${completed}"
+    echo "pass=${passed}"
+    echo "fail=${failed}"
+    echo "resumed=${resumed}"
+    echo "running=${running}"
+    echo "pending=${pending}"
+  } >"${tmp}"
+  mv "${tmp}" "${PROGRESS_FILE}"
+}
+
+write_progress_locked 0 0 0 0 0
 
 terminate_workers() {
   echo
@@ -181,9 +281,65 @@ run_worker() {
   local cpu="$2"
   local result_file="${RESULT_DIR}/worker_${worker_id}.tsv"
   local failed=0
+  local queue_lock_fd
+  local current_job_pgid=""
   : >"${result_file}"
 
-  for ((task = worker_id; task < TOTAL_TASKS; task += JOBS)); do
+  exec {queue_lock_fd}>"${QUEUE_LOCK_FILE}"
+
+  stop_worker() {
+    if [[ -n "${current_job_pgid}" ]]; then
+      kill -TERM -- "-${current_job_pgid}" 2>/dev/null || true
+      sleep 1
+      kill -KILL -- "-${current_job_pgid}" 2>/dev/null || true
+      wait "${current_job_pgid}" 2>/dev/null || true
+    fi
+    exit 130
+  }
+  trap stop_worker INT TERM
+
+  claim_task() {
+    local next completed passed fail_count resumed
+    flock -x "${queue_lock_fd}"
+    read -r next completed passed fail_count resumed <"${QUEUE_STATE_FILE}"
+    if (( next >= TOTAL_TASKS )); then
+      flock -u "${queue_lock_fd}"
+      return 1
+    fi
+    task="${next}"
+    next=$((next + 1))
+    printf "%s %s %s %s %s\n" \
+      "${next}" "${completed}" "${passed}" "${fail_count}" "${resumed}" \
+      >"${QUEUE_STATE_FILE}"
+    write_progress_locked "${next}" "${completed}" "${passed}" "${fail_count}" "${resumed}"
+    claimed_count="${next}"
+    flock -u "${queue_lock_fd}"
+  }
+
+  record_completion() {
+    local completion_status="$1"
+    local was_resumed="$2"
+    local next completed passed fail_count resumed
+    flock -x "${queue_lock_fd}"
+    read -r next completed passed fail_count resumed <"${QUEUE_STATE_FILE}"
+    completed=$((completed + 1))
+    if [[ "${completion_status}" == "PASS" ]]; then
+      passed=$((passed + 1))
+    else
+      fail_count=$((fail_count + 1))
+    fi
+    resumed=$((resumed + was_resumed))
+    printf "%s %s %s %s %s\n" \
+      "${next}" "${completed}" "${passed}" "${fail_count}" "${resumed}" \
+      >"${QUEUE_STATE_FILE}"
+    write_progress_locked "${next}" "${completed}" "${passed}" "${fail_count}" "${resumed}"
+    progress_completed="${completed}"
+    progress_passed="${passed}"
+    progress_failed="${fail_count}"
+    flock -u "${queue_lock_fd}"
+  }
+
+  while claim_task; do
     local ckpt="${ALL_CKPTS[$task]}"
     local bench base log_file status_file tmp_status
     local started finished elapsed rc status reason reported_commits reached_limit
@@ -196,20 +352,24 @@ run_worker() {
       && grep -q '^PASS[[:space:]]' "${status_file}"; then
       printf "%s\t%s\tPASS\tresumed\t0\t0\t%s\t%s\n" \
         "${bench}" "${base}" "${cpu}" "${log_file}" >>"${result_file}"
-      echo "[Skip] worker=${worker_id} cpu=${cpu} ${bench}/${base} already PASS"
+      record_completion PASS 1
+      echo "[Skip] worker=${worker_id} cpu=${cpu} ${bench}/${base} already PASS progress=${progress_completed}/${TOTAL_TASKS}"
       continue
     fi
 
-    echo "[Start] worker=${worker_id} cpu=${cpu} ${bench}/${base}"
+    echo "[Start] worker=${worker_id} cpu=${cpu} queue=${claimed_count}/${TOTAL_TASKS} ${bench}/${base}"
     started="$(date +%s)"
+    local -a launch_cmd
     if (( TIMEOUT_SECS > 0 )); then
-      timeout --preserve-status "${TIMEOUT_SECS}" \
-        taskset -c "${cpu}" "${SIM_ARGS[@]}" "${ckpt}" >"${log_file}" 2>&1
-      rc=$?
+      launch_cmd=(timeout "${TIMEOUT_SECS}" taskset -c "${cpu}" "${SIM_ARGS[@]}" "${ckpt}")
     else
-      taskset -c "${cpu}" "${SIM_ARGS[@]}" "${ckpt}" >"${log_file}" 2>&1
-      rc=$?
+      launch_cmd=(taskset -c "${cpu}" "${SIM_ARGS[@]}" "${ckpt}")
     fi
+    setsid "${launch_cmd[@]}" >"${log_file}" 2>&1 &
+    current_job_pgid="$!"
+    wait "${current_job_pgid}"
+    rc=$?
+    current_job_pgid=""
     finished="$(date +%s)"
     elapsed=$((finished - started))
 
@@ -220,6 +380,12 @@ run_worker() {
         's/.*committed\(total\/load\/store\)=[[:space:]]*([0-9]+)[[:space:]]*\/.*/\1/p' \
         "${log_file}" | tail -n 1
     )"
+    if [[ -z "${reported_commits}" ]]; then
+      reported_commits="$(
+        sed -nE 's/.*instruction num:[[:space:]]*([0-9]+).*/\1/p' \
+          "${log_file}" | tail -n 1
+      )"
+    fi
     reached_limit=0
     if grep -Fq "Reached MAX_COMMIT_INST=${CKPT_MAX_COMMIT}" "${log_file}"; then
       reached_limit=1
@@ -233,7 +399,7 @@ run_worker() {
       reason="reached_${CKPT_MAX_COMMIT}_commits"
     elif (( TIMEOUT_SECS > 0 && rc == 124 )); then
       reason="timeout_before_${CKPT_MAX_COMMIT}_commits"
-    elif grep -Eq 'Assertion failed|SIG[A-Z]+|received signal|terminate called|Error:' "${log_file}"; then
+    elif grep -Eq 'Assertion failed|SIG[A-Z]+|received signal|Program received signal|terminate called|Error:' "${log_file}"; then
       reason="crash_or_error_before_${CKPT_MAX_COMMIT}_commits"
     fi
 
@@ -244,10 +410,12 @@ run_worker() {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "${bench}" "${base}" "${status}" "${reason}" "${rc}" \
       "${elapsed}" "${cpu}" "${log_file}" >>"${result_file}"
-    echo "[${status}] worker=${worker_id} cpu=${cpu} ${bench}/${base} elapsed=${elapsed}s reason=${reason}"
+    record_completion "${status}" 0
+    echo "[${status}] worker=${worker_id} cpu=${cpu} ${bench}/${base} elapsed=${elapsed}s reason=${reason} progress=${progress_completed}/${TOTAL_TASKS} pass=${progress_passed} fail=${progress_failed}"
     [[ "${status}" == "PASS" ]] || failed=1
   done
 
+  exec {queue_lock_fd}>&-
   return "${failed}"
 }
 
@@ -266,10 +434,16 @@ done
 
 SUMMARY_TSV="${RESULT_DIR}/summary.tsv"
 SUMMARY_TXT="${RESULT_DIR}/summary.txt"
-printf "benchmark\tcheckpoint\tstatus\treason\trc\telapsed_seconds\tcpu\tlog\n" >"${SUMMARY_TSV}"
+SUMMARY_TMP="${SUMMARY_TSV}.tmp.${BASHPID}"
+printf "benchmark\tcheckpoint\tstatus\treason\trc\telapsed_seconds\tcpu\tlog\n" >"${SUMMARY_TMP}"
 for result_file in "${WORKER_RESULT_FILES[@]}"; do
-  [[ -f "${result_file}" ]] && cat "${result_file}" >>"${SUMMARY_TSV}"
+  [[ -f "${result_file}" ]] && cat "${result_file}" >>"${SUMMARY_TMP}"
 done
+{
+  head -n 1 "${SUMMARY_TMP}"
+  tail -n +2 "${SUMMARY_TMP}" | sort -t $'\t' -k1,1 -k2,2
+} >"${SUMMARY_TSV}"
+rm -f "${SUMMARY_TMP}" "${QUEUE_STATE_FILE}" "${QUEUE_LOCK_FILE}"
 
 PASS_COUNT="$(awk -F '\t' 'NR > 1 && $3 == "PASS" { n++ } END { print n + 0 }' "${SUMMARY_TSV}")"
 FAIL_COUNT="$(awk -F '\t' 'NR > 1 && $3 == "FAIL" { n++ } END { print n + 0 }' "${SUMMARY_TSV}")"
@@ -286,6 +460,7 @@ DURATION=$((END_TIME - START_TIME))
   echo "measure_commits=${CKPT_MAX_COMMIT}"
   echo "difftest=$([[ "${NO_DIFF}" == "1" ]] && echo disabled || echo enabled)"
   echo "workers=${JOBS}"
+  echo "scheduler=dynamic_shared_queue"
   echo "pinned_cpus=${SELECTED_CPUS[*]}"
   echo "total=${TOTAL_TASKS}"
   echo "pass=${PASS_COUNT}"

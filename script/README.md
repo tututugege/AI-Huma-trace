@@ -45,6 +45,8 @@ script/run_all.sh
 - 10M committed instructions measure
 - difftest 开启
 - 自动选择每个物理核的一个逻辑 CPU，避免使用 SMT sibling
+- 使用共享动态任务队列；任一 worker 完成后立即领取下一个 checkpoint，避免静态
+  分片在尾部留下空闲核心
 - 预期 checkpoint 数量为 629
 - 不设置超时，避免长 checkpoint 被提前终止
 
@@ -69,10 +71,15 @@ script/run_all.sh
 - 每个 checkpoint 的 `.log`
 - 每个 checkpoint 的 `.status`
 - 每个 worker 的 TSV 结果
+- `progress.txt`：实时的 claimed/completed/pass/fail/running/pending 计数
+- `run_config.txt`：simulator 哈希及本轮关键参数，防止断点续跑时混入其他版本
 - `summary.tsv`
 - `summary.txt`
 
 脚本只有在 simulator 返回成功并确认达到 measure commit 上限时才标记 PASS。
+同一个 `RESULT_DIR` 同时只允许一个 runner；收到中断时会终止对应 worker 的整个
+simulator 进程组，避免遗留孤儿进程。最终 `summary.tsv` 按 benchmark/checkpoint
+稳定排序。
 
 ### 2. 一键计算 SPECint2006 估算分数
 
@@ -133,9 +140,9 @@ python3 script/analysis/plot_perf_topdown_memory.py \
 
 ### `run_all.sh`
 
-全量 SPEC2006 checkpoint runner。负责物理核绑定、并行任务分配、difftest、
-SD 卡、断点续跑、严格 PASS 判断和最终汇总。它是普通 checkpoint 回放的统一
-入口，不再保留其他功能重叠的通用 checkpoint runner。
+全量 SPEC2006 checkpoint runner。负责物理核绑定、动态任务调度、difftest、
+SD 卡、断点续跑、运行配置校验、实时进度、严格 PASS 判断和最终汇总。它是普通
+checkpoint 回放的统一入口，不再保留其他功能重叠的通用 checkpoint runner。
 
 ### `score_spec2006.sh`
 
@@ -243,7 +250,7 @@ script/debug/gdb_repro.sh --mode ckpt -w 500000 -c 2000000 /path/to/ckpt.gz
 
 ## 依赖
 
-- Shell runner：Bash、`taskset`、`lscpu`
+- Shell runner：Bash、`taskset`、`lscpu`、`flock`、`setsid`、`sha256sum`
 - 分析和绘图：Python 3、NumPy、Matplotlib
 - GDB 复现：GDB
 - SPEC 算分：对应结果日志和 12 个 SimPoint `.weights` 文件
