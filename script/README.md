@@ -8,6 +8,7 @@ Qimeng1 SPEC2006 checkpoint 环境，但关键路径均可通过参数或环境�
 ```text
 script/
 ├── README.md
+├── review_risk_with_rem.py
 ├── run_all.sh
 ├── score_spec2006.sh
 ├── run_local_short_tests.sh
@@ -201,6 +202,27 @@ CoreMark/Dhrystone 的默认单项 wall-time 上限为 7200 秒，避免慢速 d
 预编译 baremetal 负载保存在 Runner 本地，不上传到 GitHub。构建时只通过
 `ci/apply_gcc13_compat.sh` 对 AXI 子模块做 GCC 13 的等价初始化语法兼容，不修改
 子模块版本。
+
+`.github/workflows/rem-risk-review.yml` 使用 GitHub 托管 Runner 调用审查 AI
+Rem，进行非阻塞式风险审查：
+
+- PR 在 opened、reopened 和每次 synchronize 时审核当前完整 diff，并更新同一条
+  PR 评论；
+- push 到 `main` 时，逐个审核该 push 包含的 commit，并把报告评论到对应 commit；
+- `HIGH`/`CRITICAL` 目前只产生 GitHub Actions warning，不阻塞合并或部署；
+- PR 审查只 checkout 默认分支中的可信脚本，不执行 PR 提交中的代码；
+- GitHub 仓库必须配置 Actions Secret `REM_API_KEY`，密钥不能写入仓库。
+
+Rem 的表达风格以《Re:从零开始的异世界生活》中的蕾姆为灵感，会在报告中加入少量
+角色口吻；风险等级、代码依据、触发条件和修改建议仍保持明确，角色表达不会取代技术
+内容。
+
+### `review_risk_with_rem.py`
+
+Rem 风险审查 workflow 的实现脚本。它从 git 读取 PR diff 或一次 main push 中的
+每个 commit，调用 `DeepSeek-V4-Flash-0731`，并输出供 GitHub Actions 发布评论的
+JSON。只使用 Python 标准库；超大 diff 会保留开头和结尾并明确标记截断。通常由
+workflow 调用，不需要手工运行。
 
 ### `run_special_ckpts_1mcommit.sh`
 

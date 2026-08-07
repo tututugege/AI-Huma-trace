@@ -1,0 +1,167 @@
+name: Rem Risk Review
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # A newer update may cancel a stale review of the same PR. Push runs use the
+  # commit SHA so rapid pushes cannot cancel reviews for earlier commits.
+  group: rem-risk-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  review-pr:
+    name: Review PR risk
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout trusted reviewer
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch PR commits without executing them
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+
+      - name: Run Rem review
+        shell: bash
+        env:
+          REM_API_KEY: ${{ secrets.REM_API_KEY }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 script/review_risk_with_rem.py pr \
+            --prompt-file .github/ai-review/risk-review.md \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$RUNNER_TEMP/rem-review.json"
+
+      - name: Create or update PR review comment
+        uses: actions/github-script@v7
+        env:
+          REVIEW_FILE: ${{ runner.temp }}/rem-review.json
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- rem-risk-review -->';
+            const result = JSON.parse(fs.readFileSync(process.env.REVIEW_FILE, 'utf8'));
+            let body;
+            if (result.reviews.length === 0) {
+              body = `${marker}\n## 💙 Rem 风险审查\n\n⚠️ ${result.message || '蕾姆暂时无法完成本次审查。'}`;
+            } else {
+              const review = result.reviews[0];
+              const truncated = review.truncated
+                ? '\n\n> ⚠️ Diff 过大，模型审查了截取后的开头和结尾。'
+                : '';
+              body = `${marker}\n## 💙 Rem 风险审查\n\n` +
+                `审核 commit：\`${review.sha.slice(0, 12)}\`\n\n${review.body}${truncated}`;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const previous = comments.find(comment =>
+              comment.user.type === 'Bot' && comment.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  review-main-commits:
+    name: Review main commits
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Rem review for every pushed commit
+        shell: bash
+        env:
+          REM_API_KEY: ${{ secrets.REM_API_KEY }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          python3 script/review_risk_with_rem.py push \
+            --prompt-file .github/ai-review/risk-review.md \
+            --before "$BEFORE_SHA" \
+            --after "$AFTER_SHA" \
+            --output "$RUNNER_TEMP/rem-review.json"
+
+      - name: Create or update commit comments
+        uses: actions/github-script@v7
+        env:
+          REVIEW_FILE: ${{ runner.temp }}/rem-review.json
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync(process.env.REVIEW_FILE, 'utf8'));
+            if (result.reviews.length === 0) {
+              core.warning(result.message || 'Rem risk review was skipped');
+              return;
+            }
+            for (const review of result.reviews) {
+              const marker = `<!-- rem-risk-review:${review.sha} -->`;
+              const truncated = review.truncated
+                ? '\n\n> ⚠️ Diff 过大，模型审查了截取后的开头和结尾。'
+                : '';
+              const body = `${marker}\n## 💙 Rem 风险审查\n\n${review.body}${truncated}`;
+              const comments = await github.paginate(github.rest.repos.listCommentsForCommit, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: review.sha,
+                per_page: 100,
+              });
+              const previous = comments.find(comment => comment.body.includes(marker));
+              if (previous) {
+                await github.rest.repos.updateCommitComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: previous.id,
+                  body,
+                });
+              } else {
+                await github.rest.repos.createCommitComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: review.sha,
+                  body,
+                });
+              }
+              if (['HIGH', 'CRITICAL'].includes(review.risk_level)) {
+                core.warning(`${review.sha.slice(0, 12)} risk level: ${review.risk_level}`);
+              }
+            }
