@@ -20,6 +20,9 @@ LINUX_TIMEOUT_SECONDS=${LINUX_TIMEOUT_SECONDS:-0}
 LINUX_POLL_SECONDS=${LINUX_POLL_SECONDS:-30}
 LINUX_MAX_COMMIT=${LINUX_MAX_COMMIT:-200000000000}
 NO_DIFF=${NO_DIFF:-0}
+RUN_SHORT=${RUN_SHORT:-1}
+RUN_DHRYSTONE=${RUN_DHRYSTONE:-1}
+RUN_COREMARK=${RUN_COREMARK:-1}
 RUN_LINUX=${RUN_LINUX:-1}
 
 usage() {
@@ -28,8 +31,8 @@ Usage: script/run_serial_regression.sh
 
 Run the following regression serially on one logical CPU:
   1. all prebuilt short cpu-test binaries (memory-stress is not included)
-  2. CoreMark
-  3. Dhrystone
+  2. Dhrystone
+  3. CoreMark
   4. SD-card Linux boot and SPEC2006 test 462.libquantum
 
 Environment overrides:
@@ -47,6 +50,9 @@ Environment overrides:
   LINUX_POLL_SECONDS     default: 30
   LINUX_MAX_COMMIT       default: 200000000000
   NO_DIFF                0 keeps difftest enabled; 1 disables it
+  RUN_SHORT              1 runs short cpu-tests; 0 skips them
+  RUN_DHRYSTONE          1 runs Dhrystone; 0 skips it
+  RUN_COREMARK           1 runs CoreMark; 0 skips it
   RUN_LINUX              1 runs Linux + 462.libquantum; 0 skips it
 EOF
 }
@@ -77,22 +83,35 @@ is_non_negative_integer "$LINUX_TIMEOUT_SECONDS" || die "LINUX_TIMEOUT_SECONDS m
 is_positive_integer "$LINUX_POLL_SECONDS" || die "LINUX_POLL_SECONDS must be positive"
 is_positive_integer "$LINUX_MAX_COMMIT" || die "LINUX_MAX_COMMIT must be positive"
 [[ $NO_DIFF =~ ^[01]$ ]] || die "NO_DIFF must be 0 or 1"
+[[ $RUN_SHORT =~ ^[01]$ ]] || die "RUN_SHORT must be 0 or 1"
+[[ $RUN_DHRYSTONE =~ ^[01]$ ]] || die "RUN_DHRYSTONE must be 0 or 1"
+[[ $RUN_COREMARK =~ ^[01]$ ]] || die "RUN_COREMARK must be 0 or 1"
 [[ $RUN_LINUX =~ ^[01]$ ]] || die "RUN_LINUX must be 0 or 1"
+(( RUN_SHORT + RUN_DHRYSTONE + RUN_COREMARK + RUN_LINUX > 0 )) \
+  || die "at least one RUN_* test selector must be enabled"
 
 for command_name in taskset timeout flock sha256sum stdbuf; do
   command -v "$command_name" >/dev/null 2>&1 || die "missing command: $command_name"
 done
 
 [[ -x $SIMULATOR ]] || die "simulator not executable: $SIMULATOR"
-[[ -d $SHORT_BIN_DIR ]] || die "short-test directory missing: $SHORT_BIN_DIR"
-[[ -f $COREMARK_BIN ]] || die "CoreMark binary missing: $COREMARK_BIN"
-[[ -f $DHRYSTONE_BIN ]] || die "Dhrystone binary missing: $DHRYSTONE_BIN"
-[[ -f $SPIFLASH_IMAGE ]] || die "spiflash image missing: $SPIFLASH_IMAGE"
-[[ -f $LIBQUANTUM_SDCARD ]] || die "462.libquantum SD-card image missing: $LIBQUANTUM_SDCARD"
+(( RUN_SHORT == 0 )) || [[ -d $SHORT_BIN_DIR ]] \
+  || die "short-test directory missing: $SHORT_BIN_DIR"
+(( RUN_COREMARK == 0 )) || [[ -f $COREMARK_BIN ]] \
+  || die "CoreMark binary missing: $COREMARK_BIN"
+(( RUN_DHRYSTONE == 0 )) || [[ -f $DHRYSTONE_BIN ]] \
+  || die "Dhrystone binary missing: $DHRYSTONE_BIN"
+(( RUN_LINUX == 0 )) || [[ -f $SPIFLASH_IMAGE ]] \
+  || die "spiflash image missing: $SPIFLASH_IMAGE"
+(( RUN_LINUX == 0 )) || [[ -f $LIBQUANTUM_SDCARD ]] \
+  || die "462.libquantum SD-card image missing: $LIBQUANTUM_SDCARD"
 taskset -c "$PIN_CPU" true >/dev/null 2>&1 || die "CPU $PIN_CPU is unavailable"
 
-mapfile -t SHORT_BINS < <(find "$SHORT_BIN_DIR" -maxdepth 1 -type f -name '*.bin' | sort)
-(( ${#SHORT_BINS[@]} > 0 )) || die "no short-test binaries found in $SHORT_BIN_DIR"
+SHORT_BINS=()
+if (( RUN_SHORT == 1 )); then
+  mapfile -t SHORT_BINS < <(find "$SHORT_BIN_DIR" -maxdepth 1 -type f -name '*.bin' | sort)
+  (( ${#SHORT_BINS[@]} > 0 )) || die "no short-test binaries found in $SHORT_BIN_DIR"
+fi
 
 mkdir -p "$RESULT_ROOT"
 RESULT_ROOT=$(cd -- "$RESULT_ROOT" && pwd)
@@ -119,6 +138,16 @@ cleanup() {
 }
 trap 'cleanup; exit 130' INT TERM
 
+config_sha() {
+  local enabled=$1
+  local path=$2
+  if (( enabled == 1 )); then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    echo skipped
+  fi
+}
+
 write_config() {
   {
     echo "started=$(date --iso-8601=seconds)"
@@ -126,16 +155,19 @@ write_config() {
     echo "simulator=$SIMULATOR"
     echo "simulator_sha256=$(sha256sum "$SIMULATOR" | awk '{print $1}')"
     echo "short_test_count=${#SHORT_BINS[@]}"
-    echo "coremark_sha256=$(sha256sum "$COREMARK_BIN" | awk '{print $1}')"
-    echo "dhrystone_sha256=$(sha256sum "$DHRYSTONE_BIN" | awk '{print $1}')"
-    echo "spiflash_sha256=$(sha256sum "$SPIFLASH_IMAGE" | awk '{print $1}')"
-    echo "libquantum_sdcard_sha256=$(sha256sum "$LIBQUANTUM_SDCARD" | awk '{print $1}')"
+    echo "coremark_sha256=$(config_sha "$RUN_COREMARK" "$COREMARK_BIN")"
+    echo "dhrystone_sha256=$(config_sha "$RUN_DHRYSTONE" "$DHRYSTONE_BIN")"
+    echo "spiflash_sha256=$(config_sha "$RUN_LINUX" "$SPIFLASH_IMAGE")"
+    echo "libquantum_sdcard_sha256=$(config_sha "$RUN_LINUX" "$LIBQUANTUM_SDCARD")"
     echo "pin_cpu=$PIN_CPU"
     echo "difftest=$([[ $NO_DIFF == 1 ]] && echo disabled || echo enabled)"
     echo "short_timeout_seconds=$SHORT_TIMEOUT_SECONDS"
     echo "bench_timeout_seconds=$BENCH_TIMEOUT_SECONDS"
     echo "linux_timeout_seconds=$LINUX_TIMEOUT_SECONDS"
     echo "linux_max_commit=$LINUX_MAX_COMMIT"
+    echo "run_short=$RUN_SHORT"
+    echo "run_dhrystone=$RUN_DHRYSTONE"
+    echo "run_coremark=$RUN_COREMARK"
     echo "run_linux=$RUN_LINUX"
   } >"$RUN_DIR/run_config.txt"
 }
@@ -232,25 +264,32 @@ echo "Results: $RUN_DIR"
 echo "Simulator: $SIMULATOR"
 echo "Difftest: $([[ $NO_DIFF == 1 ]] && echo disabled || echo enabled)"
 echo "Pinned CPU: $PIN_CPU"
-echo "Short tests: ${#SHORT_BINS[@]}"
+echo "Short tests: $([[ $RUN_SHORT == 1 ]] && echo "${#SHORT_BINS[@]} enabled" || echo skipped)"
+echo "Dhrystone: $([[ $RUN_DHRYSTONE == 1 ]] && echo enabled || echo skipped)"
+echo "CoreMark: $([[ $RUN_COREMARK == 1 ]] && echo enabled || echo skipped)"
 echo "Linux + 462.libquantum: $([[ $RUN_LINUX == 1 ]] && echo enabled || echo skipped)"
 
 failures=0
-for binary in "${SHORT_BINS[@]}"; do
-  test_name=$(basename "$binary" .bin)
-  run_binary "short/$test_name" "$binary" "$SHORT_TIMEOUT_SECONDS" \
-    "$RUN_DIR/short/$test_name.log" || ((failures += 1))
-done
-
-run_binary coremark "$COREMARK_BIN" "$BENCH_TIMEOUT_SECONDS" \
-  "$RUN_DIR/coremark.log" 'Correct operation validated.' || ((failures += 1))
-run_binary dhrystone "$DHRYSTONE_BIN" "$BENCH_TIMEOUT_SECONDS" \
-  "$RUN_DIR/dhrystone.log" 'Dhrystones per Second:' || ((failures += 1))
+if (( RUN_SHORT == 1 )); then
+  for binary in "${SHORT_BINS[@]}"; do
+    test_name=$(basename "$binary" .bin)
+    run_binary "short/$test_name" "$binary" "$SHORT_TIMEOUT_SECONDS" \
+      "$RUN_DIR/short/$test_name.log" || ((failures += 1))
+  done
+fi
+if (( RUN_DHRYSTONE == 1 )); then
+  run_binary dhrystone "$DHRYSTONE_BIN" "$BENCH_TIMEOUT_SECONDS" \
+    "$RUN_DIR/dhrystone.log" 'Dhrystones per Second:' || ((failures += 1))
+fi
+if (( RUN_COREMARK == 1 )); then
+  run_binary coremark "$COREMARK_BIN" "$BENCH_TIMEOUT_SECONDS" \
+    "$RUN_DIR/coremark.log" 'Correct operation validated.' || ((failures += 1))
+fi
 if (( RUN_LINUX == 1 )); then
   run_linux_libquantum || ((failures += 1))
 fi
 
-total=$(( ${#SHORT_BINS[@]} + 2 + RUN_LINUX ))
+total=$(( ${#SHORT_BINS[@]} + RUN_DHRYSTONE + RUN_COREMARK + RUN_LINUX ))
 passed=$((total - failures))
 {
   echo "finished=$(date --iso-8601=seconds)"

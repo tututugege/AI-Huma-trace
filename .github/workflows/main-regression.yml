@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  full-regression:
-    name: default + full serial Linux regression
+  build:
+    name: Build default simulator
     runs-on: [self-hosted, Linux, X64, qm1-regression]
-    timeout-minutes: 720
+    timeout-minutes: 120
 
     steps:
       - name: Checkout source and submodules
@@ -48,54 +48,207 @@ jobs:
           make -C GenSimpoint -j16 librefcpu.a
           make -j16 default
 
-      - name: Run full serial regression
+      - name: Upload simulator
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: build/simulator
+          if-no-files-found: error
+          retention-days: 7
+
+  cpu-tests:
+    name: CPU tests (39)
+    needs: build
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
+      - name: Download simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
+      - name: Run CPU tests
         shell: bash
         env:
-          RUN_LINUX: "1"
-          SIMULATOR: ${{ github.workspace }}/build/simulator
+          RUN_SHORT: "1"
+          RUN_DHRYSTONE: "0"
+          RUN_COREMARK: "0"
+          RUN_LINUX: "0"
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
           SHORT_BIN_DIR: /home/houruyao/qimeng1-serial-regression/source/baremetal/test/build
-          COREMARK_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/coremark/build/coremark.bin
-          DHRYSTONE_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/dhrystone/build/dhrystone.bin
-          SPIFLASH_IMAGE: /home/houruyao/qimeng1-serial-regression/source/regression-images/spiflash.bin
-          LIBQUANTUM_SDCARD: /home/houruyao/qimeng1-serial-regression/source/regression-images/462.libquantum-sdcard.img
-          RESULT_ROOT: ${{ runner.temp }}/qm1-main-results
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-cpu-results
           PIN_CPU: "0"
-        run: ./script/run_serial_regression.sh
-
-      - name: Publish regression summary
-        if: always()
-        shell: bash
         run: |
-          mkdir -p "${{ runner.temp }}/qm1-main-results"
-          result_dir=$(find "${{ runner.temp }}/qm1-main-results" \
-            -mindepth 1 -maxdepth 1 -type d -name 'serial-*' 2>/dev/null \
-            | sort | tail -n 1)
-          if [[ -n $result_dir ]]; then
-            echo "## QM1 full regression" >> "$GITHUB_STEP_SUMMARY"
-            if [[ -f $result_dir/final_status.txt ]]; then
-              sed 's/^/- /' "$result_dir/final_status.txt" >> "$GITHUB_STEP_SUMMARY"
-            fi
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Results: \`$result_dir\`" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          chmod +x "$SIMULATOR"
+          ./script/run_serial_regression.sh
 
-      - name: Upload regression logs
+      - name: Upload CPU-test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qm1-main-${{ github.run_id }}
-          path: ${{ runner.temp }}/qm1-main-results
+          name: qm1-main-cpu-tests-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-cpu-results
           if-no-files-found: warn
           retention-days: 30
 
+  dhrystone:
+    name: Dhrystone
+    needs: cpu-tests
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 130
+
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
+      - name: Download simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
+      - name: Run Dhrystone
+        shell: bash
+        env:
+          RUN_SHORT: "0"
+          RUN_DHRYSTONE: "1"
+          RUN_COREMARK: "0"
+          RUN_LINUX: "0"
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          DHRYSTONE_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/dhrystone/build/dhrystone.bin
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-dhrystone-results
+          PIN_CPU: "0"
+        run: |
+          chmod +x "$SIMULATOR"
+          ./script/run_serial_regression.sh
+
+      - name: Upload Dhrystone log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-main-dhrystone-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-dhrystone-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  coremark:
+    name: CoreMark
+    needs: dhrystone
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 130
+
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
+      - name: Download simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
+      - name: Run CoreMark
+        shell: bash
+        env:
+          RUN_SHORT: "0"
+          RUN_DHRYSTONE: "0"
+          RUN_COREMARK: "1"
+          RUN_LINUX: "0"
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          COREMARK_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/coremark/build/coremark.bin
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-coremark-results
+          PIN_CPU: "0"
+        run: |
+          chmod +x "$SIMULATOR"
+          ./script/run_serial_regression.sh
+
+      - name: Upload CoreMark log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-main-coremark-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-coremark-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  linux-libquantum:
+    name: Linux boot + SPEC2006 462.libquantum
+    needs: coremark
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 720
+
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
+      - name: Download simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
+      - name: Boot Linux and run 462.libquantum
+        shell: bash
+        env:
+          RUN_SHORT: "0"
+          RUN_DHRYSTONE: "0"
+          RUN_COREMARK: "0"
+          RUN_LINUX: "1"
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          SPIFLASH_IMAGE: /home/houruyao/qimeng1-serial-regression/source/regression-images/spiflash.bin
+          LIBQUANTUM_SDCARD: /home/houruyao/qimeng1-serial-regression/source/regression-images/462.libquantum-sdcard.img
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-linux-results
+          PIN_CPU: "0"
+        run: |
+          chmod +x "$SIMULATOR"
+          ./script/run_serial_regression.sh
+
+      - name: Publish Linux regression summary
+        if: always()
+        shell: bash
+        run: |
+          result_dir=$(find "${{ runner.temp }}/qm1-main-linux-results" \
+            -mindepth 1 -maxdepth 1 -type d -name 'serial-*' 2>/dev/null \
+            | sort | tail -n 1)
+          if [[ -n $result_dir && -f $result_dir/final_status.txt ]]; then
+            echo "## Linux + 462.libquantum" >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/- /' "$result_dir/final_status.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Linux regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-main-linux-libquantum-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-linux-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  deploy:
+    name: Deploy validated simulator
+    needs: linux-libquantum
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 15
+
+    steps:
+      - name: Download simulator
+        uses: actions/download-artifact@v4
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
       - name: Deploy validated simulator
-        if: success()
         shell: bash
         run: |
           deploy_root=/home/houruyao/qimeng1-ci-deploy
           release_dir=$deploy_root/releases/$GITHUB_SHA
           mkdir -p "$release_dir"
-          install -m 0755 build/simulator "$release_dir/simulator"
+          install -m 0755 ci-artifacts/simulator "$release_dir/simulator"
           sha256sum "$release_dir/simulator" > "$release_dir/SHA256SUMS"
           printf '%s\n' \
             "git_sha=$GITHUB_SHA" \
