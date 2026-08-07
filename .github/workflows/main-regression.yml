@@ -1,0 +1,106 @@
+name: QM1 Main Regression
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "doc/**"
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qm1-main-regression
+  cancel-in-progress: false
+
+jobs:
+  full-regression:
+    name: default + full serial Linux regression
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 720
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Wait for standalone regression
+        shell: bash
+        run: |
+          pid_file=/home/houruyao/qimeng1-serial-regression/runner.pid
+          while [[ -f $pid_file ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; do
+            echo "Standalone serial regression is still running; wait 60 seconds"
+            sleep 60
+          done
+
+      - name: Apply GCC 13 compatibility patch
+        shell: bash
+        run: ./ci/apply_gcc13_compat.sh
+
+      - name: Build default simulator
+        shell: bash
+        run: |
+          make -C GenSimpoint -j16 librefcpu.a
+          make -j16 default
+
+      - name: Run full serial regression
+        shell: bash
+        env:
+          RUN_LINUX: "1"
+          SIMULATOR: ${{ github.workspace }}/build/simulator
+          SHORT_BIN_DIR: /home/houruyao/qimeng1-serial-regression/source/baremetal/test/build
+          COREMARK_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/coremark/build/coremark.bin
+          DHRYSTONE_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/dhrystone/build/dhrystone.bin
+          SPIFLASH_IMAGE: /home/houruyao/qimeng1-serial-regression/source/regression-images/spiflash.bin
+          LIBQUANTUM_SDCARD: /home/houruyao/qimeng1-serial-regression/source/regression-images/462.libquantum-sdcard.img
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-results
+          PIN_CPU: "0"
+        run: ./script/run_serial_regression.sh
+
+      - name: Publish regression summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/qm1-main-results"
+          result_dir=$(find "${{ runner.temp }}/qm1-main-results" \
+            -mindepth 1 -maxdepth 1 -type d -name 'serial-*' 2>/dev/null \
+            | sort | tail -n 1)
+          if [[ -n $result_dir ]]; then
+            echo "## QM1 full regression" >> "$GITHUB_STEP_SUMMARY"
+            if [[ -f $result_dir/final_status.txt ]]; then
+              sed 's/^/- /' "$result_dir/final_status.txt" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Results: \`$result_dir\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-main-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-results
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Deploy validated simulator
+        if: success()
+        shell: bash
+        run: |
+          deploy_root=/home/houruyao/qimeng1-ci-deploy
+          release_dir=$deploy_root/releases/$GITHUB_SHA
+          mkdir -p "$release_dir"
+          install -m 0755 build/simulator "$release_dir/simulator"
+          sha256sum "$release_dir/simulator" > "$release_dir/SHA256SUMS"
+          printf '%s\n' \
+            "git_sha=$GITHUB_SHA" \
+            "workflow_run=$GITHUB_RUN_ID" \
+            "deployed=$(date --iso-8601=seconds)" \
+            > "$release_dir/manifest.txt"
+          ln -sfn "$release_dir" "$deploy_root/current.new"
+          mv -Tf "$deploy_root/current.new" "$deploy_root/current"

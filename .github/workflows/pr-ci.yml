@@ -1,0 +1,84 @@
+name: QM1 PR CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qm1-pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-regression:
+    name: default + short + CoreMark + Dhrystone
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Wait for standalone regression
+        shell: bash
+        run: |
+          pid_file=/home/houruyao/qimeng1-serial-regression/runner.pid
+          while [[ -f $pid_file ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; do
+            echo "Standalone serial regression is still running; wait 60 seconds"
+            sleep 60
+          done
+
+      - name: Apply GCC 13 compatibility patch
+        shell: bash
+        run: ./ci/apply_gcc13_compat.sh
+
+      - name: Build default simulator
+        shell: bash
+        run: |
+          make -C GenSimpoint -j16 librefcpu.a
+          make -j16 default
+
+      - name: Run serial quick regression
+        shell: bash
+        env:
+          RUN_LINUX: "0"
+          SIMULATOR: ${{ github.workspace }}/build/simulator
+          SHORT_BIN_DIR: /home/houruyao/qimeng1-serial-regression/source/baremetal/test/build
+          COREMARK_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/coremark/build/coremark.bin
+          DHRYSTONE_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/dhrystone/build/dhrystone.bin
+          SPIFLASH_IMAGE: /home/houruyao/qimeng1-serial-regression/source/regression-images/spiflash.bin
+          LIBQUANTUM_SDCARD: /home/houruyao/qimeng1-serial-regression/source/regression-images/462.libquantum-sdcard.img
+          RESULT_ROOT: ${{ runner.temp }}/qm1-pr-results
+          PIN_CPU: "0"
+        run: ./script/run_serial_regression.sh
+
+      - name: Publish regression summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/qm1-pr-results"
+          result_dir=$(find "${{ runner.temp }}/qm1-pr-results" \
+            -mindepth 1 -maxdepth 1 -type d -name 'serial-*' 2>/dev/null \
+            | sort | tail -n 1)
+          if [[ -n $result_dir ]]; then
+            echo "## QM1 quick regression" >> "$GITHUB_STEP_SUMMARY"
+            if [[ -f $result_dir/final_status.txt ]]; then
+              sed 's/^/- /' "$result_dir/final_status.txt" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Results: \`$result_dir\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload regression logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qm1-pr-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-pr-results
+          if-no-files-found: warn
+          retention-days: 14

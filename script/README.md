@@ -11,6 +11,7 @@ script/
 ├── run_all.sh
 ├── score_spec2006.sh
 ├── run_local_short_tests.sh
+├── run_serial_regression.sh
 ├── run_special_ckpts_1mcommit.sh
 ├── analysis/
 │   ├── cal_spec.py
@@ -160,6 +161,37 @@ script/run_local_short_tests.sh
 script/run_local_short_tests.sh --include-long
 script/run_local_short_tests.sh --list
 ```
+
+### `run_serial_regression.sh`
+
+面向单机日常回归的串行入口，不使用 checkpoint。它依次运行预编译的 39 个
+短测、CoreMark、Dhrystone，然后启动 SD 卡 Linux 并运行 SPEC2006 test
+`462.libquantum`。默认保留 difftest，并以 guest 输出的
+`@@SPEC_BENCH_DONE 462.libquantum 0@@` 作为 Linux 项 PASS 条件。
+
+```bash
+script/run_serial_regression.sh
+```
+
+部署目录中的镜像路径可以通过 `SPIFLASH_IMAGE`、`LIBQUANTUM_SDCARD` 覆盖；
+结果默认写入 `regression-results/serial-<timestamp>`。脚本使用文件锁保证同一
+结果根目录内只有一个串行回归任务。
+
+设置 `RUN_LINUX=0` 时只运行 39 个短测、CoreMark 和 Dhrystone，供 PR CI 使用；
+默认 `RUN_LINUX=1` 会继续启动 Linux 并运行 `462.libquantum`。
+
+## GitHub Actions CI/CD
+
+- `.github/workflows/pr-ci.yml`：PR 和手动触发，编译 default simulator，串行
+  运行短测、CoreMark、Dhrystone。
+- `.github/workflows/main-regression.yml`：main push、每天北京时间 02:00 和手动
+  触发，运行完整 Linux + `462.libquantum` 回归。PASS 后将 simulator 原子部署
+  到 `/home/houruyao/qimeng1-ci-deploy/current`。
+
+两条 workflow 使用带 `qm1-regression` 标签的自托管 Runner。1 GiB SD 镜像和
+预编译 baremetal 负载保存在 Runner 本地，不上传到 GitHub。构建时只通过
+`ci/apply_gcc13_compat.sh` 对 AXI 子模块做 GCC 13 的等价初始化语法兼容，不修改
+子模块版本。
 
 ### `run_special_ckpts_1mcommit.sh`
 
