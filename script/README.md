@@ -179,6 +179,8 @@ script/run_serial_regression.sh
 
 设置 `RUN_LINUX=0` 时只运行 39 个短测、CoreMark 和 Dhrystone，供 PR CI 使用；
 默认 `RUN_LINUX=1` 会继续启动 Linux 并运行 `462.libquantum`。
+CoreMark/Dhrystone 的默认单项 wall-time 上限为 7200 秒，避免慢速 difftest
+运行在接近完成时被 30 分钟上限截断。
 
 ## GitHub Actions CI/CD
 
