@@ -62,7 +62,7 @@ jobs:
           make -j16 default
 
       - name: Upload simulator
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: |
@@ -79,7 +79,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -102,7 +102,7 @@ jobs:
 
       - name: Upload CPU-test logs
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-main-cpu-tests-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-main-cpu-results
@@ -117,7 +117,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -140,7 +140,7 @@ jobs:
 
       - name: Upload Dhrystone log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-main-dhrystone-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-main-dhrystone-results
@@ -155,7 +155,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -178,7 +178,7 @@ jobs:
 
       - name: Upload CoreMark log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-main-coremark-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-main-coremark-results
@@ -193,7 +193,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -229,7 +229,7 @@ jobs:
 
       - name: Upload Linux regression log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-main-linux-libquantum-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-main-linux-results
@@ -244,7 +244,7 @@ jobs:
 
     steps:
       - name: Download simulator
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-main-simulator-${{ github.run_id }}
           path: ci-artifacts

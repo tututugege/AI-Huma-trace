@@ -57,7 +57,7 @@ jobs:
           make -j16 default
 
       - name: Upload simulator
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: |
@@ -74,7 +74,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -97,7 +97,7 @@ jobs:
 
       - name: Upload CPU-test logs
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-pr-cpu-tests-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-cpu-results
@@ -112,7 +112,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -135,7 +135,7 @@ jobs:
 
       - name: Upload Dhrystone log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-pr-dhrystone-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-dhrystone-results
@@ -150,7 +150,7 @@ jobs:
 
     steps:
       - name: Download simulator and regression script
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -173,7 +173,7 @@ jobs:
 
       - name: Upload CoreMark log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: qm1-pr-coremark-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-coremark-results
