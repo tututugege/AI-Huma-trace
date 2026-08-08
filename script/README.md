@@ -166,8 +166,9 @@ script/run_local_short_tests.sh --list
 ### `run_serial_regression.sh`
 
 面向单机日常回归的串行入口，不使用 checkpoint。它依次运行预编译的 39 个
-短测、Dhrystone、CoreMark，然后启动 SD 卡 Linux 并运行 SPEC2006 test
-`462.libquantum`。默认保留 difftest，并以 guest 输出的
+短测、Dhrystone、CoreMark、CoreMark-Pro `linear_alg-mid-100x100-sp` Zfinx
+浮点测试，然后启动 SD 卡 Linux 并运行 SPEC2006 test `462.libquantum`。
+默认保留 difftest，并以 guest 输出的
 `@@SPEC_BENCH_DONE 462.libquantum 0@@` 作为 Linux 项 PASS 条件。
 
 ```bash
@@ -178,25 +179,30 @@ script/run_serial_regression.sh
 结果默认写入 `regression-results/serial-<timestamp>`。脚本使用文件锁保证同一
 结果根目录内只有一个串行回归任务。
 
-`RUN_SHORT`、`RUN_DHRYSTONE`、`RUN_COREMARK`、`RUN_LINUX` 可以分别控制四类
-测试，取值均为 `0` 或 `1`，默认全部启用。例如只运行 Dhrystone：
+每个 PASS 项都会把 IPC、提交指令数、周期数、BPU accuracy、L1I/L1D miss
+提取到 `performance.md`，同时在终端打印一行 `PERF ...`。GitHub Actions 会把
+该表追加到对应 Job 的 Step Summary，完整 simulator 输出仍保留在日志 artifact。
+
+`RUN_SHORT`、`RUN_DHRYSTONE`、`RUN_COREMARK`、`RUN_FPMARK`、`RUN_LINUX` 可以
+分别控制五类测试，取值均为 `0` 或 `1`，默认全部启用。例如只运行 Dhrystone：
 
 ```bash
-RUN_SHORT=0 RUN_DHRYSTONE=1 RUN_COREMARK=0 RUN_LINUX=0 \
+RUN_SHORT=0 RUN_DHRYSTONE=1 RUN_COREMARK=0 RUN_FPMARK=0 RUN_LINUX=0 \
   script/run_serial_regression.sh
 ```
 
-CoreMark/Dhrystone 的默认单项 wall-time 上限为 7200 秒，避免慢速 difftest
-运行在接近完成时被 30 分钟上限截断。
+Dhrystone、CoreMark 和 CoreMark-Pro FP 的默认单项 wall-time 上限为 7200 秒，
+避免慢速 difftest 运行在接近完成时被较短上限截断。
 
 ## GitHub Actions CI/CD
 
 - `.github/workflows/pr-ci.yml`：PR 和手动触发，按 `build → CPU tests →
-  Dhrystone → CoreMark` 的顺序运行，每一项是 GitHub 页面中独立可见的 Job。
+  Dhrystone → CoreMark → CoreMark-Pro FP linear_alg` 的顺序运行，每一项是
+  GitHub 页面中独立可见的 Job。
 - `.github/workflows/main-regression.yml`：main push、每天北京时间 02:00 和手动
-  触发，按 `build → CPU tests → Dhrystone → CoreMark → Linux +
-  462.libquantum → deploy` 的顺序运行。全部 PASS 后将 simulator 原子部署到
-  `/home/houruyao/qimeng1-ci-deploy/current`。
+  触发，按 `build → CPU tests → Dhrystone → CoreMark → CoreMark-Pro FP
+  linear_alg → Linux + 462.libquantum → deploy` 的顺序运行。全部 PASS 后将
+  simulator 原子部署到 `/home/houruyao/qimeng1-ci-deploy/current`。
 
 两条 workflow 使用带 `qm1-regression` 标签的自托管 Runner。1 GiB SD 镜像和
 预编译 baremetal 负载保存在 Runner 本地，不上传到 GitHub。构建时只通过

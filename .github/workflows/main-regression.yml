@@ -67,6 +67,7 @@ jobs:
           name: qm1-main-simulator-${{ github.run_id }}
           path: |
             build/simulator
+            baremetal/linear_alg-mid-100x100-sp.bin
             script/run_serial_regression.sh
           if-no-files-found: error
           retention-days: 7
@@ -90,6 +91,7 @@ jobs:
           RUN_SHORT: "1"
           RUN_DHRYSTONE: "0"
           RUN_COREMARK: "0"
+          RUN_FPMARK: "0"
           RUN_LINUX: "0"
           SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
           REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
@@ -128,6 +130,7 @@ jobs:
           RUN_SHORT: "0"
           RUN_DHRYSTONE: "1"
           RUN_COREMARK: "0"
+          RUN_FPMARK: "0"
           RUN_LINUX: "0"
           SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
           REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
@@ -166,6 +169,7 @@ jobs:
           RUN_SHORT: "0"
           RUN_DHRYSTONE: "0"
           RUN_COREMARK: "1"
+          RUN_FPMARK: "0"
           RUN_LINUX: "0"
           SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
           REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
@@ -185,9 +189,48 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  fp-linear:
+    name: CoreMark-Pro FP linear_alg
+    needs: coremark
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 130
+
+    steps:
+      - name: Download simulator, FP image, and regression script
+        uses: actions/download-artifact@v7
+        with:
+          name: qm1-main-simulator-${{ github.run_id }}
+          path: ci-artifacts
+
+      - name: Run linear_alg-mid-100x100-sp
+        shell: bash
+        env:
+          RUN_SHORT: "0"
+          RUN_DHRYSTONE: "0"
+          RUN_COREMARK: "0"
+          RUN_FPMARK: "1"
+          RUN_LINUX: "0"
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
+          REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
+          FPMARK_BIN: ${{ github.workspace }}/ci-artifacts/baremetal/linear_alg-mid-100x100-sp.bin
+          RESULT_ROOT: ${{ runner.temp }}/qm1-main-fp-linear-results
+          PIN_CPU: "0"
+        run: |
+          chmod +x "$SIMULATOR"
+          bash "$REGRESSION_SCRIPT"
+
+      - name: Upload FP linear_alg log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qm1-main-fp-linear-${{ github.run_id }}
+          path: ${{ runner.temp }}/qm1-main-fp-linear-results
+          if-no-files-found: warn
+          retention-days: 30
+
   linux-libquantum:
     name: Linux boot + SPEC2006 462.libquantum
-    needs: coremark
+    needs: fp-linear
     runs-on: [self-hosted, Linux, X64, qm1-regression]
     timeout-minutes: 720
 
@@ -204,6 +247,7 @@ jobs:
           RUN_SHORT: "0"
           RUN_DHRYSTONE: "0"
           RUN_COREMARK: "0"
+          RUN_FPMARK: "0"
           RUN_LINUX: "1"
           SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
           REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh

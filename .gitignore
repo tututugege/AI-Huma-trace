@@ -11,6 +11,7 @@ a.out
 *.log
 *.dump
 *.bin
+!/baremetal/linear_alg-mid-100x100-sp.bin
 *.elf
 *.gz
 
@@ -43,4 +44,3 @@ __pycache__/
 .vscode/
 .idea/
 .clangd/
-

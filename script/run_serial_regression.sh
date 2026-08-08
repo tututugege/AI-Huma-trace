@@ -9,6 +9,7 @@ SIMULATOR=${SIMULATOR:-$REPO_ROOT/build/simulator}
 SHORT_BIN_DIR=${SHORT_BIN_DIR:-$REPO_ROOT/baremetal/test/build}
 COREMARK_BIN=${COREMARK_BIN:-$REPO_ROOT/baremetal/coremark/build/coremark.bin}
 DHRYSTONE_BIN=${DHRYSTONE_BIN:-$REPO_ROOT/baremetal/dhrystone/build/dhrystone.bin}
+FPMARK_BIN=${FPMARK_BIN:-$REPO_ROOT/baremetal/linear_alg-mid-100x100-sp.bin}
 SPIFLASH_IMAGE=${SPIFLASH_IMAGE:-$REPO_ROOT/regression-images/spiflash.bin}
 LIBQUANTUM_SDCARD=${LIBQUANTUM_SDCARD:-$REPO_ROOT/regression-images/462.libquantum-sdcard.img}
 RESULT_ROOT=${RESULT_ROOT:-$REPO_ROOT/regression-results}
@@ -23,6 +24,7 @@ NO_DIFF=${NO_DIFF:-0}
 RUN_SHORT=${RUN_SHORT:-1}
 RUN_DHRYSTONE=${RUN_DHRYSTONE:-1}
 RUN_COREMARK=${RUN_COREMARK:-1}
+RUN_FPMARK=${RUN_FPMARK:-1}
 RUN_LINUX=${RUN_LINUX:-1}
 
 usage() {
@@ -33,19 +35,21 @@ Run the following regression serially on one logical CPU:
   1. all prebuilt short cpu-test binaries (memory-stress is not included)
   2. Dhrystone
   3. CoreMark
-  4. SD-card Linux boot and SPEC2006 test 462.libquantum
+  4. CoreMark-Pro linear_alg-mid-100x100-sp (Zfinx)
+  5. SD-card Linux boot and SPEC2006 test 462.libquantum
 
 Environment overrides:
   SIMULATOR              default: ./build/simulator
   SHORT_BIN_DIR          default: ./baremetal/test/build
   COREMARK_BIN           default: ./baremetal/coremark/build/coremark.bin
   DHRYSTONE_BIN          default: ./baremetal/dhrystone/build/dhrystone.bin
+  FPMARK_BIN             default: ./baremetal/linear_alg-mid-100x100-sp.bin
   SPIFLASH_IMAGE         default: ./regression-images/spiflash.bin
   LIBQUANTUM_SDCARD      default: ./regression-images/462.libquantum-sdcard.img
   RESULT_ROOT            default: ./regression-results
   PIN_CPU                default: 0
   SHORT_TIMEOUT_SECONDS  default: 180 per short test
-  BENCH_TIMEOUT_SECONDS  default: 7200 per CoreMark/Dhrystone test
+  BENCH_TIMEOUT_SECONDS  default: 7200 per Dhrystone/CoreMark/CoreMark-Pro test
   LINUX_TIMEOUT_SECONDS  default: 0 (no wall-time limit)
   LINUX_POLL_SECONDS     default: 30
   LINUX_MAX_COMMIT       default: 200000000000
@@ -53,6 +57,7 @@ Environment overrides:
   RUN_SHORT              1 runs short cpu-tests; 0 skips them
   RUN_DHRYSTONE          1 runs Dhrystone; 0 skips it
   RUN_COREMARK           1 runs CoreMark; 0 skips it
+  RUN_FPMARK             1 runs linear_alg-mid-100x100-sp; 0 skips it
   RUN_LINUX              1 runs Linux + 462.libquantum; 0 skips it
 EOF
 }
@@ -86,8 +91,9 @@ is_positive_integer "$LINUX_MAX_COMMIT" || die "LINUX_MAX_COMMIT must be positiv
 [[ $RUN_SHORT =~ ^[01]$ ]] || die "RUN_SHORT must be 0 or 1"
 [[ $RUN_DHRYSTONE =~ ^[01]$ ]] || die "RUN_DHRYSTONE must be 0 or 1"
 [[ $RUN_COREMARK =~ ^[01]$ ]] || die "RUN_COREMARK must be 0 or 1"
+[[ $RUN_FPMARK =~ ^[01]$ ]] || die "RUN_FPMARK must be 0 or 1"
 [[ $RUN_LINUX =~ ^[01]$ ]] || die "RUN_LINUX must be 0 or 1"
-(( RUN_SHORT + RUN_DHRYSTONE + RUN_COREMARK + RUN_LINUX > 0 )) \
+(( RUN_SHORT + RUN_DHRYSTONE + RUN_COREMARK + RUN_FPMARK + RUN_LINUX > 0 )) \
   || die "at least one RUN_* test selector must be enabled"
 
 for command_name in taskset timeout flock sha256sum stdbuf; do
@@ -101,6 +107,8 @@ done
   || die "CoreMark binary missing: $COREMARK_BIN"
 (( RUN_DHRYSTONE == 0 )) || [[ -f $DHRYSTONE_BIN ]] \
   || die "Dhrystone binary missing: $DHRYSTONE_BIN"
+(( RUN_FPMARK == 0 )) || [[ -f $FPMARK_BIN ]] \
+  || die "CoreMark-Pro FP binary missing: $FPMARK_BIN"
 (( RUN_LINUX == 0 )) || [[ -f $SPIFLASH_IMAGE ]] \
   || die "spiflash image missing: $SPIFLASH_IMAGE"
 (( RUN_LINUX == 0 )) || [[ -f $LIBQUANTUM_SDCARD ]] \
@@ -123,6 +131,11 @@ flock -n 9 || die "another serial regression is already running"
 
 SUMMARY=$RUN_DIR/summary.tsv
 printf 'test\tstatus\trc\telapsed_seconds\tlog\n' >"$SUMMARY"
+PERF_SUMMARY=$RUN_DIR/performance.md
+cat >"$PERF_SUMMARY" <<'EOF'
+| Test | IPC | Instructions | Cycles | BPU accuracy | L1I misses | L1D misses | Wall time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+EOF
 
 DIFF_ARGS=()
 if (( NO_DIFF == 1 )); then
@@ -157,6 +170,7 @@ write_config() {
     echo "short_test_count=${#SHORT_BINS[@]}"
     echo "coremark_sha256=$(config_sha "$RUN_COREMARK" "$COREMARK_BIN")"
     echo "dhrystone_sha256=$(config_sha "$RUN_DHRYSTONE" "$DHRYSTONE_BIN")"
+    echo "fpmark_sha256=$(config_sha "$RUN_FPMARK" "$FPMARK_BIN")"
     echo "spiflash_sha256=$(config_sha "$RUN_LINUX" "$SPIFLASH_IMAGE")"
     echo "libquantum_sdcard_sha256=$(config_sha "$RUN_LINUX" "$LIBQUANTUM_SDCARD")"
     echo "pin_cpu=$PIN_CPU"
@@ -168,8 +182,42 @@ write_config() {
     echo "run_short=$RUN_SHORT"
     echo "run_dhrystone=$RUN_DHRYSTONE"
     echo "run_coremark=$RUN_COREMARK"
+    echo "run_fpmark=$RUN_FPMARK"
     echo "run_linux=$RUN_LINUX"
   } >"$RUN_DIR/run_config.txt"
+}
+
+extract_perf_metric() {
+  local label=$1
+  local log=$2
+  local line
+  line=$(grep -aF "$label" "$log" 2>/dev/null | tail -n 1 || true)
+  if [[ -z $line ]]; then
+    printf '%s' '-'
+    return
+  fi
+  printf '%s\n' "$line" | sed -E 's/.*:[[:space:]]*([-+0-9.eE]+).*/\1/'
+}
+
+record_performance() {
+  local name=$1
+  local elapsed=$2
+  local log=$3
+  local ipc instructions cycles bpu_accuracy l1i_misses l1d_misses
+
+  ipc=$(extract_perf_metric 'ipc            :' "$log")
+  instructions=$(extract_perf_metric 'instruction num:' "$log")
+  cycles=$(extract_perf_metric 'cycle       num:' "$log")
+  bpu_accuracy=$(extract_perf_metric 'bpu   accuracy :' "$log")
+  l1i_misses=$(extract_perf_metric 'L1I miss        :' "$log")
+  l1d_misses=$(extract_perf_metric 'dcache miss         :' "$log")
+
+  printf '| %s | %s | %s | %s | %s | %s | %s | %ss |\n' \
+    "$name" "$ipc" "$instructions" "$cycles" "$bpu_accuracy" \
+    "$l1i_misses" "$l1d_misses" "$elapsed" >>"$PERF_SUMMARY"
+  printf 'PERF %-27s ipc=%s instructions=%s cycles=%s bpu_accuracy=%s l1i_miss=%s l1d_miss=%s\n' \
+    "$name" "$ipc" "$instructions" "$cycles" "$bpu_accuracy" \
+    "$l1i_misses" "$l1d_misses"
 }
 
 record_result() {
@@ -180,6 +228,9 @@ record_result() {
   local log=$5
   printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$rc" "$elapsed" "$log" >>"$SUMMARY"
   printf '%-32s %s (%ss)\n' "$name" "$status" "$elapsed"
+  if [[ $status == PASS ]]; then
+    record_performance "$name" "$elapsed" "$log"
+  fi
 }
 
 run_binary() {
@@ -198,7 +249,7 @@ run_binary() {
   elapsed=$((finished - started))
   status=FAIL
   if (( rc == 0 )); then
-    if [[ -z $required_marker ]] || grep -aFq "$required_marker" "$log"; then
+    if [[ -z $required_marker ]] || grep -aFq -- "$required_marker" "$log"; then
       status=PASS
     fi
   fi
@@ -267,6 +318,7 @@ echo "Pinned CPU: $PIN_CPU"
 echo "Short tests: $([[ $RUN_SHORT == 1 ]] && echo "${#SHORT_BINS[@]} enabled" || echo skipped)"
 echo "Dhrystone: $([[ $RUN_DHRYSTONE == 1 ]] && echo enabled || echo skipped)"
 echo "CoreMark: $([[ $RUN_COREMARK == 1 ]] && echo enabled || echo skipped)"
+echo "CoreMark-Pro linear_alg: $([[ $RUN_FPMARK == 1 ]] && echo enabled || echo skipped)"
 echo "Linux + 462.libquantum: $([[ $RUN_LINUX == 1 ]] && echo enabled || echo skipped)"
 
 failures=0
@@ -285,11 +337,16 @@ if (( RUN_COREMARK == 1 )); then
   run_binary coremark "$COREMARK_BIN" "$BENCH_TIMEOUT_SECONDS" \
     "$RUN_DIR/coremark.log" 'Correct operation validated.' || ((failures += 1))
 fi
+if (( RUN_FPMARK == 1 )); then
+  run_binary fp-linear_alg-mid-100x100-sp "$FPMARK_BIN" \
+    "$BENCH_TIMEOUT_SECONDS" "$RUN_DIR/fp-linear_alg-mid-100x100-sp.log" \
+    '-- linear_alg-mid:fails=0' || ((failures += 1))
+fi
 if (( RUN_LINUX == 1 )); then
   run_linux_libquantum || ((failures += 1))
 fi
 
-total=$(( ${#SHORT_BINS[@]} + RUN_DHRYSTONE + RUN_COREMARK + RUN_LINUX ))
+total=$(( ${#SHORT_BINS[@]} + RUN_DHRYSTONE + RUN_COREMARK + RUN_FPMARK + RUN_LINUX ))
 passed=$((total - failures))
 {
   echo "finished=$(date --iso-8601=seconds)"
@@ -300,4 +357,11 @@ passed=$((total - failures))
 
 echo "SUMMARY pass=$passed fail=$failures total=$total"
 echo "RESULTS $RUN_DIR"
+if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+  {
+    echo "## QM1 performance summary"
+    echo
+    cat "$PERF_SUMMARY"
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
 (( failures == 0 ))
