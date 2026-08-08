@@ -20,7 +20,20 @@ jobs:
 
     steps:
       - name: Checkout source and submodules
-        uses: actions/checkout@v4
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Wait before checkout retry
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: sleep 60
+
+      - name: Retry checkout source and submodules
+        if: steps.checkout.outcome == 'failure'
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -44,10 +57,12 @@ jobs:
           make -j16 default
 
       - name: Upload simulator
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
-          path: build/simulator
+          path: |
+            build/simulator
+            script/run_serial_regression.sh
           if-no-files-found: error
           retention-days: 7
 
@@ -58,11 +73,8 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout scripts
-        uses: actions/checkout@v4
-
-      - name: Download simulator
-        uses: actions/download-artifact@v4
+      - name: Download simulator and regression script
+        uses: actions/download-artifact@v5
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -74,17 +86,18 @@ jobs:
           RUN_DHRYSTONE: "0"
           RUN_COREMARK: "0"
           RUN_LINUX: "0"
-          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
+          REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
           SHORT_BIN_DIR: /home/houruyao/qimeng1-serial-regression/source/baremetal/test/build
           RESULT_ROOT: ${{ runner.temp }}/qm1-pr-cpu-results
           PIN_CPU: "0"
         run: |
           chmod +x "$SIMULATOR"
-          ./script/run_serial_regression.sh
+          bash "$REGRESSION_SCRIPT"
 
       - name: Upload CPU-test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: qm1-pr-cpu-tests-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-cpu-results
@@ -98,11 +111,8 @@ jobs:
     timeout-minutes: 130
 
     steps:
-      - name: Checkout scripts
-        uses: actions/checkout@v4
-
-      - name: Download simulator
-        uses: actions/download-artifact@v4
+      - name: Download simulator and regression script
+        uses: actions/download-artifact@v5
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -114,17 +124,18 @@ jobs:
           RUN_DHRYSTONE: "1"
           RUN_COREMARK: "0"
           RUN_LINUX: "0"
-          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
+          REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
           DHRYSTONE_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/dhrystone/build/dhrystone.bin
           RESULT_ROOT: ${{ runner.temp }}/qm1-pr-dhrystone-results
           PIN_CPU: "0"
         run: |
           chmod +x "$SIMULATOR"
-          ./script/run_serial_regression.sh
+          bash "$REGRESSION_SCRIPT"
 
       - name: Upload Dhrystone log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: qm1-pr-dhrystone-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-dhrystone-results
@@ -138,11 +149,8 @@ jobs:
     timeout-minutes: 130
 
     steps:
-      - name: Checkout scripts
-        uses: actions/checkout@v4
-
-      - name: Download simulator
-        uses: actions/download-artifact@v4
+      - name: Download simulator and regression script
+        uses: actions/download-artifact@v5
         with:
           name: qm1-pr-simulator-${{ github.run_id }}
           path: ci-artifacts
@@ -154,17 +162,18 @@ jobs:
           RUN_DHRYSTONE: "0"
           RUN_COREMARK: "1"
           RUN_LINUX: "0"
-          SIMULATOR: ${{ github.workspace }}/ci-artifacts/simulator
+          SIMULATOR: ${{ github.workspace }}/ci-artifacts/build/simulator
+          REGRESSION_SCRIPT: ${{ github.workspace }}/ci-artifacts/script/run_serial_regression.sh
           COREMARK_BIN: /home/houruyao/qimeng1-serial-regression/source/baremetal/coremark/build/coremark.bin
           RESULT_ROOT: ${{ runner.temp }}/qm1-pr-coremark-results
           PIN_CPU: "0"
         run: |
           chmod +x "$SIMULATOR"
-          ./script/run_serial_regression.sh
+          bash "$REGRESSION_SCRIPT"
 
       - name: Upload CoreMark log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: qm1-pr-coremark-${{ github.run_id }}
           path: ${{ runner.temp }}/qm1-pr-coremark-results
