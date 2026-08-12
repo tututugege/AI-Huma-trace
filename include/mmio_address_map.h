@@ -44,15 +44,23 @@ static constexpr bool simulator_addr_in_range(uint32_t addr,
   return value >= start && value < end;
 }
 
-static inline bool simulator_is_mmio_addr(uint32_t addr) {
-  for (const auto &range : kSimulatorMmioRanges) {
-    if (simulator_addr_in_range(addr, range)) {
-      return true;
-    }
-  }
-  return false;
+
+static inline bool simulator_is_cache_addr(uint32_t addr) {
+  return (addr >= SIM_CACHE_ADDR_1_MIN && addr < SIM_CACHE_ADDR_1_MAX) ||
+         (addr >= SIM_CACHE_ADDR_2_MIN && addr < SIM_CACHE_ADDR_2_MAX) ||
+         (addr >= SIM_CACHE_ADDR_3_MIN && addr < SIM_CACHE_ADDR_3_MAX);
 }
 
+
+static inline bool simulator_is_mmio_addr(uint32_t addr) {
+  // for (const auto &range : kSimulatorMmioRanges) {
+  //   if (simulator_addr_in_range(addr, range)) {
+  //     return true;
+  //   }
+  // }
+  // return false;
+  return !simulator_is_cache_addr(addr);
+}
 static inline bool simulator_is_uncached_memory_addr(uint32_t addr) {
   return simulator_addr_in_range(
              addr, {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE}) ||
