@@ -23,18 +23,15 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          persist-credentials: false
+          # The following fetch needs the read-only GITHUB_TOKEN credential.
+          # Only the trusted default branch is checked out and PR code is never run.
+          persist-credentials: true
 
       - name: Fetch PR commits without executing them
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          git \
-            -c credential.helper='!f() { printf "%s\n" "username=x-access-token" "password=$GH_TOKEN"; }; f' \
-            fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
 
       - name: Run Rem review
         shell: bash
