@@ -1,5 +1,11 @@
 #include "include/icache_module.h"
+#include "include/ICacheCompactKernel.h"
+#include "include/ICacheLookupMetaPackKernel.h"
 #include "config.h"
+
+#ifndef CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR
+#define CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR 0
+#endif
 
 using namespace icache_module_n;
 
@@ -136,6 +142,28 @@ inline uint32_t icache_line_base_addr(uint32_t ppn, uint32_t index) {
   return (ppn << 12) | (index << ICACHE_OFFSET_BITS);
 }
 
+inline uint32_t icache_word_addr(uint32_t ppn, uint32_t pc) {
+  return (ppn << 12) | (pc & 0xfffu);
+}
+
+#ifndef CONFIG_ICACHE_MMIO_UNCACHE_LIMIT
+#define CONFIG_ICACHE_MMIO_UNCACHE_LIMIT 0x40000000u
+#endif
+
+inline bool icache_paddr_is_uncache(uint32_t paddr) {
+  return paddr < static_cast<uint32_t>(CONFIG_ICACHE_MMIO_UNCACHE_LIMIT);
+}
+
+inline bool icache_req_is_uncache(const ICache_regs_t &regs) {
+  return icache_paddr_is_uncache(icache_word_addr(regs.ppn_r, regs.req_pc_r));
+}
+
+inline uint32_t icache_req_mem_addr(const ICache_regs_t &regs) {
+  return icache_req_is_uncache(regs)
+             ? icache_word_addr(regs.ppn_r, regs.req_pc_r)
+             : icache_line_base_addr(regs.ppn_r, regs.req_index_r);
+}
+
 unsigned read_packed_uint(const bool *bits, int lsb, int width) {
   unsigned value = 0;
   for (int i = 0; i < width && i < 32; i++) {
@@ -170,11 +198,6 @@ uint32_t read_packed_pc(const bool *bits, int lsb) {
 
 void write_packed_pc(bool *bits, int lsb, uint32_t pc) {
   write_packed_uint(bits, lsb, ICache::kPackedPcWordWidth, pc);
-}
-
-void write_packed_line_addr(bool *bits, int lsb, uint32_t addr) {
-  write_packed_uint(bits, lsb, ICache::kPackedLineAddrWidth,
-                    addr >> ICACHE_V1_OFFSET_BITS);
 }
 
 void read_packed_line(const bool *bits, int lsb, uint32_t *line) {
@@ -504,13 +527,17 @@ void encode_packed_out(bool *po, const ICache &cache) {
   write_packed_line(po, bit, out.rd_data);
   bit += ICache::kPackedLineDataWidth;
   write_packed_bit(po, bit++, out.ifu_page_fault);
+  write_packed_bit(po, bit++, out.ifu_resp_single_word);
   write_packed_bit(po, bit++, out.ppn_ready);
   write_packed_bit(po, bit++, out.mmu_req_valid);
   write_packed_uint(po, bit, ICACHE_V1_TAG_BITS, out.mmu_req_vtag);
   bit += ICACHE_V1_TAG_BITS;
   write_packed_bit(po, bit++, out.mem_req_valid);
-  write_packed_line_addr(po, bit, out.mem_req_addr);
-  bit += ICache::kPackedLineAddrWidth;
+  write_packed_pc(po, bit, out.mem_req_addr);
+  bit += ICache::kPackedPcWordWidth;
+  write_packed_uint(po, bit, 8, out.mem_req_total_size);
+  bit += 8;
+  write_packed_bit(po, bit++, out.mem_req_bypass);
   write_packed_uint(po, bit, 4, out.mem_req_id);
   bit += 4;
   write_packed_bit(po, bit++, out.mem_resp_ready);
@@ -535,14 +562,17 @@ void decode_packed_out(const bool *pi, ICache_out_t &out) {
   read_packed_line(pi, bit, out.rd_data);
   bit += ICache::kPackedLineDataWidth;
   out.ifu_page_fault = read_packed_bit(pi, bit++);
+  out.ifu_resp_single_word = read_packed_bit(pi, bit++);
   out.ppn_ready = read_packed_bit(pi, bit++);
   out.mmu_req_valid = read_packed_bit(pi, bit++);
   out.mmu_req_vtag = read_packed_uint(pi, bit, ICACHE_V1_TAG_BITS);
   bit += ICACHE_V1_TAG_BITS;
   out.mem_req_valid = read_packed_bit(pi, bit++);
-  out.mem_req_addr = read_packed_uint(pi, bit, ICache::kPackedLineAddrWidth)
-                     << ICACHE_V1_OFFSET_BITS;
-  bit += ICache::kPackedLineAddrWidth;
+  out.mem_req_addr = read_packed_pc(pi, bit);
+  bit += ICache::kPackedPcWordWidth;
+  out.mem_req_total_size = read_packed_uint(pi, bit, 8);
+  bit += 8;
+  out.mem_req_bypass = read_packed_bit(pi, bit++);
   out.mem_req_id = read_packed_uint(pi, bit, 4);
   bit += 4;
   out.mem_resp_ready = read_packed_bit(pi, bit++);
@@ -631,6 +661,7 @@ ICache::ICache() {
 }
 
 void ICache::compact_io_generator(const bool *pi, bool *po) {
+#if CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR
   ICache cache;
   clear_packed_bits(po, kCompactPoWidth);
 
@@ -655,6 +686,13 @@ void ICache::compact_io_generator(const bool *pi, bool *po) {
   encode_packed_out(po + bit, cache);
   bit += kPackedOutWidth;
   encode_packed_table_write(po + bit, cache.io.table_write);
+#else
+  static_assert(kCompactPiWidth == ICACHE_COMPACT_KERNEL_PI_WIDTH,
+                "ICache compact PI width must match the canonical kernel");
+  static_assert(kCompactPoWidth == ICACHE_COMPACT_KERNEL_PO_WIDTH,
+                "ICache compact PO width must match the canonical kernel");
+  icache_compact_kernel(pi, po);
+#endif
 }
 
 void ICache::eval_packed(const bool *pi, bool *po) {
@@ -662,10 +700,18 @@ void ICache::eval_packed(const bool *pi, bool *po) {
 }
 
 void ICache::lookup_meta_pack_io_generator(const bool *pi, bool *po) {
+#if CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR
   clear_packed_bits(po, kLookupMetaPackPoWidth);
   const RawLookupMetaPackInput raw = decode_raw_lookup_meta_pack_input(pi);
   const PackedLookupMetaInput meta = pack_lookup_meta_input(raw);
   encode_packed_lookup_meta(po, meta);
+#else
+  static_assert(kLookupMetaPackPiWidth == ICACHE_LOOKUP_META_PACK_PI_WIDTH,
+                "ICache lookup PI width must match the canonical kernel");
+  static_assert(kLookupMetaPackPoWidth == ICACHE_LOOKUP_META_PACK_PO_WIDTH,
+                "ICache lookup PO width must match the canonical kernel");
+  icache_lookup_meta_pack_kernel(pi, po);
+#endif
 }
 
 void ICache::reset() {
@@ -763,8 +809,10 @@ void ICache::comb_core(bool allow_lookup_data_phase) {
   io.out.ifu_req_ready = io.regs.ifu_req_ready_r;
   io.out.ifu_resp_pc = io.regs.req_pc_r;
   io.out.mem_req_id = io.regs.miss_txid_valid_r ? io.regs.miss_txid_r : 0;
-  io.out.mem_req_addr =
-      (io.regs.ppn_r << 12) | (io.regs.req_index_r << offset_bits);
+  io.out.mem_req_addr = icache_req_mem_addr(io.regs);
+  io.out.mem_req_total_size =
+      icache_req_is_uncache(io.regs) ? 3u : ICACHE_LINE_SIZE - 1u;
+  io.out.mem_req_bypass = icache_req_is_uncache(io.regs);
   if (io.regs.lookup_pending_r) {
     io.out.mmu_req_vtag = io.regs.lookup_pc_r >> 12;
   } else if (io.regs.req_valid_r) {
@@ -993,6 +1041,11 @@ void ICache::eval_state_machine() {
   perf.axi_read_cycles = 0;
   io.out.ifu_resp_pc = io.regs.req_pc_r;
   io.out.ifu_page_fault = false;
+  io.out.ifu_resp_single_word = false;
+  io.out.mem_req_addr = icache_req_mem_addr(io.regs);
+  io.out.mem_req_total_size =
+      icache_req_is_uncache(io.regs) ? 3u : ICACHE_LINE_SIZE - 1u;
+  io.out.mem_req_bypass = icache_req_is_uncache(io.regs);
   io.out.mem_req_id = io.regs.miss_txid_valid_r ? io.regs.miss_txid_r : 0;
   state_next = state;
   mem_axi_state_next = mem_axi_state;
@@ -1047,6 +1100,15 @@ void ICache::eval_state_machine() {
 
   auto step_dcache_probe = [&]() {
     DcacheProbeStep step;
+    if (io.regs.req_valid_r && icache_req_is_uncache(io.regs)) {
+      step.done = true;
+      step.hit = false;
+      io.reg_write.dcache_probe_inflight_r = false;
+      io.reg_write.dcache_probe_done_r = true;
+      io.reg_write.dcache_probe_hit_r = false;
+      io.reg_write.dcache_probe_word_r = 0;
+      return step;
+    }
     step.done = io.regs.dcache_probe_done_r;
     step.hit = io.regs.dcache_probe_hit_r;
     for (uint32_t word = 0; word < word_num; ++word) {
@@ -1113,14 +1175,24 @@ void ICache::eval_state_machine() {
           static_cast<uint64_t>(sim_time) - perf_state.axi_read_start_cycle;
     }
     for (uint32_t offset = 0; offset < word_num; ++offset) {
-      mem_resp_data_w[offset] = io.in.mem_resp_data[offset];
+      mem_resp_data_w[offset] = 0;
     }
-    capture_lookup_meta_result(io.regs.ppn_r & 0xFFFFF,
-                               /*compare_valid=*/false);
-    if (lookup_has_invalid_way_w) {
-      replace_idx_next = lookup_first_invalid_way_w;
+    if (icache_req_is_uncache(io.regs)) {
+      const uint32_t word_idx =
+          (io.regs.req_pc_r & (ICACHE_LINE_SIZE - 1u)) / 4u;
+      mem_resp_data_w[word_idx] = io.in.mem_resp_data[0];
+      replace_idx_next = io.regs.replace_idx;
     } else {
-      replace_idx_next = (io.regs.replace_idx + 1) % way_cnt;
+      for (uint32_t offset = 0; offset < word_num; ++offset) {
+        mem_resp_data_w[offset] = io.in.mem_resp_data[offset];
+      }
+      capture_lookup_meta_result(io.regs.ppn_r & 0xFFFFF,
+                                 /*compare_valid=*/false);
+      if (lookup_has_invalid_way_w) {
+        replace_idx_next = lookup_first_invalid_way_w;
+      } else {
+        replace_idx_next = (io.regs.replace_idx + 1) % way_cnt;
+      }
     }
     perf_state_next.miss_penalty_active = false;
     perf_state_next.miss_penalty_start_cycle = 0;
@@ -1130,6 +1202,7 @@ void ICache::eval_state_machine() {
 
   auto finish_refill = [&](const uint32_t *line_words, uint32_t replace_way,
                            const char *debug_tag) {
+    const bool single_word = icache_req_is_uncache(io.regs);
     state_next = IDLE;
     mem_axi_state_next = AXI_IDLE;
     if (io.regs.miss_txid_valid_r) {
@@ -1143,7 +1216,7 @@ void ICache::eval_state_machine() {
     perf_state_next.axi_read_active = false;
     perf_state_next.axi_read_start_cycle = 0;
 
-    if (!io.in.flush) {
+    if (!io.in.flush && !single_word) {
       io.table_write.we = true;
       io.table_write.index = io.regs.req_index_r;
       io.table_write.way = replace_way;
@@ -1156,6 +1229,7 @@ void ICache::eval_state_machine() {
 
     if (!io.in.refetch && !io.in.flush) {
       io.out.ifu_resp_valid = true;
+      io.out.ifu_resp_single_word = single_word;
       for (uint32_t word = 0; word < word_num; ++word) {
         io.out.rd_data[word] = line_words[word];
       }
@@ -1394,8 +1468,10 @@ void ICache::eval_state_machine() {
     }
 
     if (mem_axi_state == AXI_IDLE) {
-      io.out.mem_req_addr =
-          (io.regs.ppn_r << 12) | (io.regs.req_index_r << offset_bits);
+      io.out.mem_req_addr = icache_req_mem_addr(io.regs);
+      io.out.mem_req_total_size =
+          icache_req_is_uncache(io.regs) ? 3u : ICACHE_LINE_SIZE - 1u;
+      io.out.mem_req_bypass = icache_req_is_uncache(io.regs);
       io.out.mem_req_id = io.regs.miss_txid_r;
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.regs.req_pc_r, sim_time)) {

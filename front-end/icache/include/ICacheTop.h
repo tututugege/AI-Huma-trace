@@ -78,7 +78,8 @@ inline constexpr int ICACHE_TOP_TRUE_GLUE_PI_WIDTH =
     1 + // module ifu_resp_valid
     32 + // module response PC
     ICACHE_TOP_TRUE_GLUE_LINE_WORDS * 32 + // module response cache line
-    1;  // module response page fault
+    1 + // module response page fault
+    1;  // module response is a single uncache word
 
 inline constexpr int ICACHE_TOP_TRUE_GLUE_PO_WIDTH =
     4 +  // icache ready/complete for the two frontend lanes
