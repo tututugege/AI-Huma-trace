@@ -211,6 +211,7 @@ struct ICache_out_t {
   wire<32> ifu_resp_pc = 0;    // PC corresponding to ifu_resp
   wire<ICACHE_WORD_BITS> rd_data[ICACHE_WORD_NUM] = {0}; // Data read from cache
   wire<1> ifu_page_fault = false;                 // page fault exception signal
+  wire<1> ifu_resp_single_word = false; // Uncache response contains only req_pc
 
   // Output to MMU (Memory Management Unit)
   wire<1> ppn_ready = false; // ready to accept PPN
@@ -221,6 +222,8 @@ struct ICache_out_t {
   // Output to memory
   wire<1> mem_req_valid = false;    // Memory request signal
   wire<32> mem_req_addr = 0;     // Address for memory access
+  wire<8> mem_req_total_size = ICACHE_LINE_SIZE - 1;
+  wire<1> mem_req_bypass = false;
   wire<4> mem_req_id = 0;        // Memory transaction ID
   wire<1> mem_resp_ready = false;
   // DCache coherent word probe generated on an icache miss.
@@ -317,10 +320,11 @@ public:
       1 + 1 + 1 +                 // miss/ifu_resp_valid/ifu_req_ready
       kPackedPcWordWidth +        // ifu_resp_pc
       kPackedLineDataWidth +      // rd_data
-      1 +                         // ifu_page_fault
+      1 + 1 +                     // ifu_page_fault/single_word
       1 +                         // ppn_ready
       1 + ICACHE_V1_TAG_BITS +    // mmu_req_valid/vtag
-      1 + kPackedLineAddrWidth +  // mem_req_valid/line addr
+      1 + kPackedPcWordWidth +    // mem_req_valid/full byte addr
+      8 + 1 +                     // request bytes-minus-one/bypass
       4 + 1 +                     // mem_req_id/mem_resp_ready
       1 + kPackedPcWordWidth +    // dcache_req_valid/addr
       1 + ICACHE_V1_INDEX_BITS +  // lookup_data_req_valid/index

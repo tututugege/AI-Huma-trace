@@ -71,6 +71,29 @@ struct FrontDeadlockSnapshot {
 
 static FrontDeadlockSnapshot front_deadlock_snapshot;
 
+#ifndef CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT
+#define CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT 1
+#endif
+
+static uint32_t sequential_next_pc(uint32_t fetch_pc,
+                                   const wire1_t *inst_valid) {
+#if CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT
+  uint32_t valid_prefix = 0;
+  while (valid_prefix < FETCH_WIDTH && inst_valid[valid_prefix]) {
+    ++valid_prefix;
+  }
+  uint32_t next_pc = fetch_pc + valid_prefix * 4u;
+#else
+  (void)inst_valid;
+  uint32_t next_pc = fetch_pc + FETCH_WIDTH * 4u;
+#endif
+  const uint32_t line_mask = ~(ICACHE_LINE_SIZE - 1u);
+  if ((next_pc & line_mask) != (fetch_pc & line_mask)) {
+    next_pc &= line_mask;
+  }
+  return next_pc;
+}
+
 static double front_stats_pct(uint64_t num, uint64_t den) {
   if (den == 0) {
     return 0.0;
@@ -1574,12 +1597,9 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                     }
                 }
 
-                uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-                bypass_fifo_out.seq_next_pc = icache_out.fetch_pc + (FETCH_WIDTH * 4);
-                if ((bypass_fifo_out.seq_next_pc & mask) !=
-                    (icache_out.fetch_pc & mask)) {
-                    bypass_fifo_out.seq_next_pc &= mask;
-                }
+                bypass_fifo_out.seq_next_pc =
+                    sequential_next_pc(icache_out.fetch_pc,
+                                       icache_out.inst_valid);
                 saved_fifo_out = bypass_fifo_out;
             }
         }
@@ -1630,11 +1650,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                 }
             }
 
-            uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-            fifo_in.seq_next_pc = icache_out.fetch_pc + (FETCH_WIDTH * 4);
-            if ((fifo_in.seq_next_pc & mask) != (icache_out.fetch_pc & mask)) {
-                fifo_in.seq_next_pc &= mask;
-            }
+            fifo_in.seq_next_pc = sequential_next_pc(
+                icache_out.fetch_pc, icache_out.inst_valid);
 
             instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
                                        &fifo_step_req);
@@ -1672,11 +1689,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                 }
             }
 
-            uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-            fifo_in.seq_next_pc = icache_out.fetch_pc_2 + (FETCH_WIDTH * 4);
-            if ((fifo_in.seq_next_pc & mask) != (icache_out.fetch_pc_2 & mask)) {
-                fifo_in.seq_next_pc &= mask;
-            }
+            fifo_in.seq_next_pc = sequential_next_pc(
+                icache_out.fetch_pc_2, icache_out.inst_valid_2);
 
             instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
                                        &fifo_step_req);
