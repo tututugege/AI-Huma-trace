@@ -155,10 +155,15 @@ cd "$TEST_DIR" || exit 2
 
 for test_name in "${SELECTED_TESTS[@]}"; do
     log_file="$LOG_ROOT/$test_name.log"
+    asm_src=""
+    if [[ -f $TEST_DIR/cpu-tests/$test_name-helper.S ]]; then
+        asm_src="cpu-tests/$test_name-helper.S"
+    fi
     if timeout "$TIMEOUT_SECONDS" make -s -f ../common.mk \
         COMMON_DIR=.. \
         TARGET="$test_name" \
         C_SRCS="cpu-tests/$test_name.c" \
+        ASM_SRCS="$asm_src" \
         >"$log_file" 2>&1; then
         ((passed += 1))
         printf 'PASS  %s\n' "$test_name"

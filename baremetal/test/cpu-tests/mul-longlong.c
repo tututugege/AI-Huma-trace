@@ -1,4 +1,10 @@
 #include "trap.h"
+#include <stdint.h>
+
+extern uint32_t hw_mul(uint32_t lhs, uint32_t rhs);
+extern int32_t hw_mulh(int32_t lhs, int32_t rhs);
+extern int32_t hw_mulhsu(int32_t lhs, uint32_t rhs);
+extern uint32_t hw_mulhu(uint32_t lhs, uint32_t rhs);
 
 long long mul(long long a,long long b) {
 	long long ans = a*b;
@@ -21,6 +27,16 @@ int main() {
 
 	check(i == NR_DATA);
 
+	/* Exercise every RV32M multiply result variant, especially high halves. */
+	check(hw_mul(0xffffffffu, 3u) == 0xfffffffdu);
+	check((uint32_t)hw_mulh(-2, 3) == 0xffffffffu);
+	check((uint32_t)hw_mulh(INT32_MIN, 2) == 0xffffffffu);
+	check((uint32_t)hw_mulh(INT32_MAX, INT32_MAX) == 0x3fffffffu);
+	check((uint32_t)hw_mulhsu(-2, 3u) == 0xffffffffu);
+	check((uint32_t)hw_mulhsu(INT32_MIN, UINT32_MAX) == 0x80000000u);
+	check((uint32_t)hw_mulhsu(INT32_MAX, UINT32_MAX) == 0x7ffffffeu);
+	check(hw_mulhu(UINT32_MAX, UINT32_MAX) == 0xfffffffeu);
+	check(hw_mulhu(0x80000000u, 2u) == 1u);
+
 	return 0;
 }
-

@@ -1,0 +1,116 @@
+name: QM1 Microbench CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/microbench-ci.yml"
+      - "axi-interconnect-kit"
+      - "back-end/**"
+      - "baremetal/**"
+      - "ci/**"
+      - "diff/**"
+      - "front-end/**"
+      - "GenSimpoint"
+      - "include/**"
+      - "libs/**"
+      - "MemSubSystem/**"
+      - "script/run_local_short_tests.sh"
+      - "script/run_vm_microbench_tests.sh"
+      - "main.cpp"
+      - "rv_simu_mmu_v2.cpp"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/microbench-ci.yml"
+      - "axi-interconnect-kit"
+      - "back-end/**"
+      - "baremetal/**"
+      - "ci/**"
+      - "diff/**"
+      - "front-end/**"
+      - "GenSimpoint"
+      - "include/**"
+      - "libs/**"
+      - "MemSubSystem/**"
+      - "script/run_local_short_tests.sh"
+      - "script/run_vm_microbench_tests.sh"
+      - "main.cpp"
+      - "rv_simu_mmu_v2.cpp"
+      - "Makefile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qm1-microbench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  microbench:
+    name: Local CPU and VM microbench
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, qm1-regression]
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout source and submodules
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Wait before checkout retry
+        if: steps.checkout.outcome == 'failure'
+        shell: bash
+        run: sleep 60
+
+      - name: Retry checkout source and submodules
+        if: steps.checkout.outcome == 'failure'
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Apply GCC 13 compatibility patch
+        shell: bash
+        run: ./ci/apply_gcc13_compat.sh
+
+      - name: Wait for standalone regression
+        shell: bash
+        run: |
+          pid_file=/home/houruyao/qimeng1-serial-regression/runner.pid
+          while [[ -f $pid_file ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; do
+            echo "Standalone serial regression is still running; wait 60 seconds"
+            sleep 60
+          done
+
+      - name: Build and run local CPU microbench
+        shell: bash
+        env:
+          JOBS: "16"
+          TIMEOUT_SECONDS: "180"
+        run: |
+          bash script/run_local_short_tests.sh \
+            --log-dir "$RUNNER_TEMP/qm1-cpu-microbench"
+
+      - name: Run privileged VM microbench
+        if: always()
+        shell: bash
+        env:
+          TIMEOUT_SECONDS: "180"
+        run: |
+          bash script/run_vm_microbench_tests.sh \
+            --log-dir "$RUNNER_TEMP/qm1-vm-microbench"
+
+      - name: Upload microbench logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qm1-microbench-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/qm1-cpu-microbench
+            ${{ runner.temp }}/qm1-vm-microbench
+          if-no-files-found: warn
+          retention-days: 14

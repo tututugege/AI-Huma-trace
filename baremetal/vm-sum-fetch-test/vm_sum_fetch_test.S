@@ -108,8 +108,8 @@ pass:
     jal ra, uart_puts
     li t0, END_FLAG_ADDR
     sw zero, 0(t0)
-1:
-    j 1b
+    li a0, 0
+    ebreak
 
 fail:
     la a0, fail_msg
@@ -117,8 +117,8 @@ fail:
     li t0, END_FLAG_ADDR
     li t1, 1
     sw t1, 0(t0)
-1:
-    j 1b
+    li a0, 1
+    ebreak
 
 uart_puts:
     lbu a1, 0(a0)

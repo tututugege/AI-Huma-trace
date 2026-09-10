@@ -21,6 +21,12 @@ sfence_vma_all_asm:
 
     .align 2
 trap_vector:
+    addi sp, sp, -32
+    sw t0, 0(sp)
+    sw t1, 4(sp)
+    sw t2, 8(sp)
+    sw t3, 12(sp)
+    sw t4, 16(sp)
     .word 0x342022f3 # csrr t0, mcause
     .word 0x34302373 # csrr t1, mtval
     .word 0x341023f3 # csrr t2, mepc
@@ -39,6 +45,12 @@ trap_vector:
 
     addi t2, t2, 4
     .word 0x34139073 # csrw mepc, t2
+    lw t0, 0(sp)
+    lw t1, 4(sp)
+    lw t2, 8(sp)
+    lw t3, 12(sp)
+    lw t4, 16(sp)
+    addi sp, sp, 32
     .word 0x30200073 # mret
 
     .align 2

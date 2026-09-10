@@ -1,6 +1,6 @@
-RISCV_ARCH := rv32i
-RISCV_ABI := ilp32
-RISCV_MCMODEL := medlow
+RISCV_ARCH ?= rv32i
+RISCV_ABI ?= ilp32
+RISCV_MCMODEL ?= medlow
 CFLAGS += -O0 
 
 RISCV_PATH := /opt/riscv32/bin/riscv32-unknown-elf-
@@ -22,7 +22,7 @@ BINARY := $(ELF).bin
 MEMORY_BIN := $(COMMON_DIR)/memory
 
 # Sources
-ASM_SRCS += $(COMMON_DIR)/start.S
+override ASM_SRCS += $(COMMON_DIR)/start.S
 override C_SRCS += $(wildcard *.c) $(wildcard $(COMMON_DIR)/lib/*.c)
 
 LINKER_SCRIPT := $(COMMON_DIR)/link.lds

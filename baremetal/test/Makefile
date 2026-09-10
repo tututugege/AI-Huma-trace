@@ -43,7 +43,8 @@ $(ALL): %:
 	@if $(MAKE) -s -f ../common.mk \
 		COMMON_DIR=.. \
 		TARGET=$* \
-		C_SRCS=cpu-tests/$*.c; then \
+		C_SRCS=cpu-tests/$*.c \
+		ASM_SRCS="$(wildcard cpu-tests/$*-helper.S)"; then \
 		printf "[%14s] $(COLOR_GREEN)PASS$(COLOR_NONE)\n" $* >> $(RESULT); \
 	else \
 		printf "[%14s] $(COLOR_RED)***FAIL***$(COLOR_NONE)\n" $* >> $(RESULT); \
