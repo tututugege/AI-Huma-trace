@@ -14,7 +14,8 @@ static inline bool is_killed(const ExePrfIO::ExePrfWbUop &uop,
 inline uint32_t read_operand_with_bypass(
     uint32_t preg, bool src_en, const reg<32> *reg_file,
     const ExePrfIO::ExePrfEntry *inst_r, const ExePrfIO *exe2prf) {
-  if (!src_en) {
+  // P0 is constant zero, including when a producer broadcasts tag zero.
+  if (!src_en || preg == 0) {
     return 0;
   }
 
@@ -106,7 +107,7 @@ void Prf::comb_req_ftq() {
 // 功能：为本拍发射条目读取源操作数，并应用写回级与 EXU 广播旁路。
 // 输入依赖：in.iss2prf->iss_entry[]、reg_file[]、inst_r[]、in.exe2prf->bypass[]。
 // 输出更新：out.prf2exe->iss_entry[]（含 src1_rdata/src2_rdata）。
-// 约束：src_en=0 时读值强制为 0；旁路优先级高于寄存器堆读值。
+// 约束：src_en=0 或源为 P0 时读值强制为 0；其他源的旁路优先于寄存器堆。
 void Prf::comb_read() {
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     out.prf2exe->iss_entry[i].valid = in.iss2prf->iss_entry[i].valid;

@@ -941,7 +941,7 @@ void RealLsu::comb_lsu2exe() {
 
             wb_uop.result = sc_pass ? 0 : 1;
             wb_uop.dest_preg = stq_entry.dest_preg;
-            wb_uop.dest_en = true;
+            wb_uop.dest_en = (stq_entry.dest_preg != 0);
           }
           wb_uop.dbg.is_mmio = stq_entry.is_mmio;
 
@@ -1008,7 +1008,8 @@ void RealLsu::comb_lsu2exe() {
             ldq_entry.page_fault ? ldq_entry.diag_val : ldq_entry.result;
         wb_uop.dest_preg = ldq_entry.dest_preg;
         wb_uop.page_fault_load = ldq_entry.page_fault;
-        wb_uop.dest_en = true;
+        // Loads to x0 still complete, but have no register destination.
+        wb_uop.dest_en = (ldq_entry.dest_preg != 0);
         wb_uop.dbg.is_mmio = ldq_entry.is_mmio;
 
         out.lsu2exe->wb_req[issue_ld].uop =
