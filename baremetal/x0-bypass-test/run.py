@@ -16,7 +16,7 @@ def main():
     build = args.build_dir.resolve()
     logs = Path(tempfile.mkdtemp(prefix='run-', dir=build))
     passed = True
-    for case in ('dependent-x0', 'dependent-x31', 'dependent-zero', 'lr-x0'):
+    for case in ('dependent-x0', 'dependent-x31', 'dependent-zero', 'sc-x0', 'lr-x0'):
         work = logs / case
         work.mkdir()
         log_path = work / 'console.log'

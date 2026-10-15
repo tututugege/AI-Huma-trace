@@ -5,7 +5,7 @@ OBJCOPY ?= llvm-objcopy
 PYTHON ?= python3
 SIMULATOR ?= ../../build/simulator
 BUILD_DIR ?= build
-CASES := dependent-x0 dependent-x31 dependent-zero lr-x0
+CASES := dependent-x0 dependent-x31 dependent-zero sc-x0 lr-x0
 BINS := $(addprefix $(BUILD_DIR)/,$(addsuffix .bin,$(CASES)))
 
 .PHONY: all run
@@ -24,6 +24,9 @@ $(BUILD_DIR)/dependent-x31.o: dependent.S | $(BUILD_DIR)
 $(BUILD_DIR)/dependent-zero.o: dependent.S | $(BUILD_DIR)
 	$(CLANG) --target=riscv32-unknown-elf -march=rv32i -mabi=ilp32 -DLOAD_OFFSET=1 -c $< -o $@
 
+$(BUILD_DIR)/sc-x0.o: sc-x0.S | $(BUILD_DIR)
+	$(CLANG) --target=riscv32-unknown-elf -march=rv32ia -mabi=ilp32 -c $< -o $@
+
 $(BUILD_DIR)/lr-x0.o: lr-x0.S | $(BUILD_DIR)
 	$(CLANG) --target=riscv32-unknown-elf -march=rv32ia -mabi=ilp32 -c $< -o $@
 
@@ -35,3 +38,22 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
 
 run: all
 	$(PYTHON) run.py --binary $(SIMULATOR) --build-dir $(BUILD_DIR)
+
+# Direct host-side tests of the real LSU implementation; no RISC-V tools needed.
+ROOT := ../..
+HOST_INCLUDES := $(addprefix -I$(ROOT)/,include libs/include back-end/include \
+  back-end/Exu/include back-end/Lsu/include back-end/tools/include \
+  MemSubSystem/include diff/include GenSimpoint/include/api front-end \
+  axi-interconnect-kit/include axi-interconnect-kit/axi_interconnect/include \
+  axi-interconnect-kit/sim_ddr/include axi-interconnect-kit/mmio/include)
+ifeq ($(shell uname -s),Darwin)
+HOST_GC := -Wl,-dead_strip
+else
+HOST_GC := -Wl,--gc-sections
+endif
+.PHONY: host-test
+host-test: | $(BUILD_DIR)
+	$(CXX) -std=c++20 -O2 -ffunction-sections -fdata-sections $(HOST_INCLUDES) \
+	  stlf-unit.cpp $(ROOT)/back-end/Lsu/RealLsu.cpp \
+	  $(ROOT)/back-end/Lsu/RealLsuPerf.cpp $(HOST_GC) -o $(BUILD_DIR)/stlf-unit
+	./$(BUILD_DIR)/stlf-unit

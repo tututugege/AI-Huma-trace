@@ -10,6 +10,7 @@ checked at commit even when later instructions overwrite the same register.
 | `dependent-x0` | Nonzero load to x0 must not contaminate either source operand; original failing ADD is at `0x8000004c`. |
 | `dependent-x31` | Control: redirect the discarded load to x31, retaining the arithmetic. |
 | `dependent-zero` | Control: both loads read the adjacent zero byte. |
+| `sc-x0` | Successful SC-to-x0 still stores; failed SC-to-x0 does not store or contaminate x0 consumers. |
 | `lr-x0` | LR-to-x0 still establishes a reservation, allowing a subsequent SC to store successfully. |
 
 Build with LLVM Clang, LLD and llvm-objcopy, then run an already-built simulator:
@@ -32,6 +33,18 @@ The runner saves logs under `build/run-*`, requires a clean EBREAK with code 0,
 and returns nonzero for mismatches, failed checks or timeouts. It does not
 rebuild the simulator or overwrite `baremetal/memory`.
 
+Run direct host-side tests of `RealLsu::comb_stlf()` with the native C++ compiler:
+
+```sh
+make -C baremetal/x0-bypass-test host-test
+```
+
+These explicitly cover pending SC retry, successful/failed resolution on retry,
+skipping a failed SC to reach an older pending store, falling back to cache when
+only failed stores remain, and ordinary youngest-store forwarding priority.
+No RISC-V compiler is needed for this target. Initialize the repository's
+submodules first, as for building the simulator.
+
 To check a simulator with the original bug, after building the images:
 
 ```sh
@@ -41,12 +54,26 @@ python3 run.py --binary /absolute/path/to/old/simulator --expect-bug
 
 The `--expect-bug` flag changes only the expected result of `dependent-x0`;
 all other cases still require success. Different microarchitecture configurations can
-change the overlap and need not reproduce the same failure. These tests do not
-cover load-x0 page faults, MMIO side effects or RTL.
+change the overlap and need not reproduce the same failure. The SC case is a
+semantic regression, not a claim of deterministic SC bypass failure on old
+versions. These tests do not cover load-x0 page faults, MMIO side effects or RTL.
 
 ## Observed results
 
-Using native macOS ARM64 builds of default-profile commit `65dbff4`:
-`dependent-x0` reproduces the ADD mismatch before the P0 fix; all four cases
-pass after the P0 fix. The x31 and zero-value controls and LR-to-x0 case also
-pass before the fix.
+On default-profile commit `65dbff4`, using native macOS ARM64 builds:
+
+| Case | Before P0 fix | P0 fix only | P0 and SC forwarding fixes |
+| --- | --- | --- | --- |
+| `dependent-x0` | Expected ADD mismatch at `0x8000004c` | PASS | PASS |
+| `dependent-x31` | PASS | PASS | PASS |
+| `dependent-zero` | PASS | PASS | PASS |
+| `lr-x0` | PASS | PASS | PASS |
+| `sc-x0` | FAIL | FAIL | PASS |
+
+`sc-x0` exposed a separate issue: the load at `0x80000040` read
+`0x77` after a failed SC, while the reference expects the earlier `0x55`.
+Diagnostic logging confirmed forwarding from an SC with `sc_pass=0` and
+`suppress_write=1`; no `0x77` cache write was issued. The fix skips suppressed
+stores while continuing the older-store search, and retries overlapping loads
+until an undecided SC resolves. The host test fails on the old LSU and passes
+on the fixed implementation. No fences are inserted to hide the mismatch.

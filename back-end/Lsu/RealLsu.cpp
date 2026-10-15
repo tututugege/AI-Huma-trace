@@ -564,6 +564,12 @@ void RealLsu::comb_stlf() {
         for (int j = older_store_count - 1; j >= 0; j--) {
           const uint32_t stq_idx = (nxt.stq_head + j) % STQ_SIZE;
           const StqEntry &stq_entry = nxt.stq[stq_idx];
+          // A cancelled store cannot forward. Keep searching older stores:
+          // their data may still be newer than the cache contents.
+          if (stq_entry.suppress_write) {
+            check_stlf_num++;
+            continue;
+          }
           if (stq_entry.store_state == StoreState::Allocated) {
             entry.load_state = LoadState::CheckStlfRetry;
             break;
@@ -576,6 +582,13 @@ void RealLsu::comb_stlf() {
           lsu_perf::count_stlf_check(ctx);
           STLFResult stlf_result = check_stlf(entry.p_addr, entry.func3, stq_entry.paddr, stq_entry.func3);
           if (stlf_result == STLFResult::Overlap) {
+            // SC starts with sc_pass=false and suppress_write=false. Only
+            // forward after success; failure is skipped above. An undecided
+            // (or faulting) SC must hold this load until resolution/flush.
+            if (stq_entry.is_lrsc && !stq_entry.sc_pass) {
+              entry.load_state = LoadState::CheckStlfRetry;
+              break;
+            }
             if (!stq_entry.data_valid) {
               entry.load_state = LoadState::CheckStlfRetry;
               break;
