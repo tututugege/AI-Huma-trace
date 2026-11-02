@@ -354,6 +354,12 @@ void difftest_step(bool check) {
     checkregs();
 }
 
+bool difftest_get_ref_state(RefCpuState *out) {
+  if (ref_cpu_ctx == nullptr) return false;
+  refcpu_get_state(ref_cpu_ctx, out);
+  return true;
+}
+
 bool difftest_ref_sim_end() { return current_step_info().sim_end; }
 
 bool difftest_ref_last_inst_is_wfi() {

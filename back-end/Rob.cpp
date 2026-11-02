@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "Rob.h"
 #include "IO.h"
 
@@ -637,6 +638,12 @@ void Rob::comb_complete() {
 void Rob::comb_branch() {
   // 分支预测失败
   if (in.dec_bcast->mispred && !out.rob_bcast->flush) {
+    if (tbhook::enabled) {
+      tbhook::on_mispredict(
+          (uint64_t)entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)]
+                         [get_rob_line(in.dec_bcast->redirect_rob_idx)]
+                             .uop.dbg.inst_idx);
+    }
     enq_ptr_1 =
         (get_rob_line(in.dec_bcast->redirect_rob_idx) + 1) % (ROB_LINE_NUM);
 
@@ -695,6 +702,11 @@ void Rob::comb_fire() {
         entry_1[i][enq_ptr].uop =
             RobStoredInst::from_dis_rob_inst(in.dis2rob->uop[i]);
         entry_1[i][enq_ptr].uop.cplt_mask = 0;
+        if (tbhook::enabled) {
+          const auto &d = entry_1[i][enq_ptr].uop.dbg;
+          tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction,
+                              make_rob_idx(enq_ptr, i));
+        }
         enq = true;
       }
     }

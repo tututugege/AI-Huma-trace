@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "BackTop.h"
 #include "Csr.h"
 #include "IO.h"
@@ -336,6 +337,9 @@ void BackTop::comb() {
   // 用于调试
   // 修正pc_next 以及difftest对应的pc_next
   out.flush = rob->out.rob_bcast->flush;
+  if (out.flush && tbhook::enabled) {
+    tbhook::on_flush();
+  }
   out.fence_i = rob->out.rob_bcast->fence_i;
   out.itlb_flush = rob->out.rob_bcast->fence;
 
@@ -360,6 +364,10 @@ void BackTop::comb() {
     out.commit_entry[i] =
         rob->out.rob_commit->commit_entry[i].uop.to_inst_entry(
             rob->out.rob_commit->commit_entry[i].valid);
+    if (tbhook::enabled && rob->out.rob_commit->commit_entry[i].valid) {
+      tbhook::on_commit(
+          (uint64_t)rob->out.rob_commit->commit_entry[i].uop.dbg.inst_idx);
+    }
     if (out.commit_entry[i].valid && out.flush) {
       // Flush: override extra_data.pc_next with redirect_pc for ALL
       // instructions so Difftest can read the correct next-PC (trap vector,
