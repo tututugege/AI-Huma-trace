@@ -1,6 +1,5 @@
 #include "trace_hook.h"
 #include "Exu.h"
-#include "FPU.h"
 #include "config.h"
 
 static inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO *db) {
@@ -24,95 +23,36 @@ Exu::~Exu() {
 }
 
 void Exu::init() {
+  // Per-port functional units, in writeback-priority order (MUL first).
+  struct Spec {
+    FuKind kind;
+    uint64_t mask;
+  };
+  static const Spec kSpecs[] = {
+      {FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV},
+      {FuKind::AGU, OP_MASK_LD},  {FuKind::AGU, OP_MASK_STA},
+      {FuKind::SDU, OP_MASK_STD}, {FuKind::BRU, OP_MASK_BR},
+      {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
+      {FuKind::FPU, OP_MASK_FP}};
   int agu_cnt = 0;
   int sdu_cnt = 0;
-
   port_mappings.resize(ISSUE_WIDTH);
 
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    uint64_t mask = GLOBAL_ISSUE_PORT_CONFIG[i].support_mask;
-
-    // 1. MUL (Priority for writeback)
-    if (mask & OP_MASK_MUL) {
-      auto mul = new MulUnit("MUL", i, MUL_MAX_LATENCY);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(mul);
-      port_mappings[i].entries.push_back({mul, fu_idx, OP_MASK_MUL});
-    }
-
-    // 2. DIV
-    if (mask & OP_MASK_DIV) {
-      auto div = new DivUnit("DIV", i, DIV_MAX_LATENCY);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(div);
-      port_mappings[i].entries.push_back({div, fu_idx, OP_MASK_DIV});
-    }
-
-    // 3. AGU (Load)
-    if (mask & OP_MASK_LD) {
-      int lsu_agu_port = agu_cnt++;
-      auto ldu = new AguUnit("AGU_LD", i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(ldu);
-      port_mappings[i].entries.push_back(
-          {ldu, fu_idx, OP_MASK_LD, lsu_agu_port, -1});
-    }
-
-    // 4. AGU (STA)
-    if (mask & OP_MASK_STA) {
-      int lsu_agu_port = agu_cnt++;
-      auto sta = new AguUnit("AGU_STA", i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(sta);
-      port_mappings[i].entries.push_back(
-          {sta, fu_idx, OP_MASK_STA, lsu_agu_port, -1});
-    }
-
-    // 5. SDU (STD)
-    if (mask & OP_MASK_STD) {
-      int lsu_sdu_port = sdu_cnt++;
-      auto sdu = new SduUnit("SDU", i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(sdu);
-      port_mappings[i].entries.push_back(
-          {sdu, fu_idx, OP_MASK_STD, -1, lsu_sdu_port});
-    }
-
-    // 6. BRU
-    if (mask & OP_MASK_BR) {
-      auto bru = new BruUnit("BRU", i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(bru);
-      port_mappings[i].entries.push_back({bru, fu_idx, OP_MASK_BR});
-    }
-
-    // 7. ALU
-    if (mask & OP_MASK_ALU) {
-      std::string alu_name = "ALU";
-      auto alu = new AluUnit(alu_name, i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(alu);
-      port_mappings[i].entries.push_back({alu, fu_idx, OP_MASK_ALU});
-    }
-
-    // 8. CSR
-    if (mask & OP_MASK_CSR) {
-      auto csr = new CsrUnit("CSR", i);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(csr);
-      port_mappings[i].entries.push_back({csr, fu_idx, OP_MASK_CSR});
-    }
-
-    // 9. FP
-    if (mask & OP_MASK_FP) {
-      auto fpu = new FPUSoftfloat("FPU", i, 10);
-      int fu_idx = static_cast<int>(units.size());
-      units.push_back(fpu);
-      FuEntry fpu_entry;
-      fpu_entry.fu = fpu;
-      fpu_entry.fu_idx = fu_idx;
-      fpu_entry.support_mask = OP_MASK_FP;
-      port_mappings[i].entries.push_back(fpu_entry);
+    const uint64_t port_mask = GLOBAL_ISSUE_PORT_CONFIG[i].support_mask;
+    for (const Spec &spec : kSpecs) {
+      if (!(port_mask & spec.mask)) {
+        continue;
+      }
+      auto *fu = new Fu(spec.kind, i);
+      FuEntry entry;
+      entry.fu = fu;
+      entry.fu_idx = static_cast<int>(units.size());
+      entry.support_mask = spec.mask;
+      if (spec.kind == FuKind::AGU) entry.lsu_agu_port = agu_cnt++;
+      if (spec.kind == FuKind::SDU) entry.lsu_sdu_port = sdu_cnt++;
+      units.push_back(fu);
+      port_mappings[i].entries.push_back(entry);
     }
   }
 
@@ -121,7 +61,6 @@ void Exu::init() {
     fu_inst_r_1[i] = {};
     fu_to_port[i] = -1;
   }
-
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     for (auto &entry : port_mappings[i].entries) {
       fu_to_port[entry.fu_idx] = i;

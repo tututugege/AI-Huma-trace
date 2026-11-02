@@ -7,7 +7,7 @@
 #include <vector>
 
 struct FuEntry {
-  AbstractFU *fu;
+  Fu *fu;
   int fu_idx = -1;
   uint64_t support_mask;
   int lsu_agu_port = -1;
@@ -19,11 +19,11 @@ struct PortMapping {
 };
 
 struct Exu2FuIO {
-  AbstractFU::FuInput entry[TOTAL_FU_COUNT];
+  Fu::FuInput entry[TOTAL_FU_COUNT];
 };
 
 struct Fu2ExuIO {
-  AbstractFU::FuOutput entry[TOTAL_FU_COUNT];
+  Fu::FuOutput entry[TOTAL_FU_COUNT];
 };
 
 struct ExuIn {
@@ -77,7 +77,7 @@ public:
 
   // === FU 资源管理 ===
   // 物理 FU 实例
-  std::vector<AbstractFU *> units;
+  std::vector<Fu *> units;
   int fu_to_port[TOTAL_FU_COUNT];
   FuInstSlot fu_inst_r[TOTAL_FU_COUNT];
   FuInstSlot fu_inst_r_1[TOTAL_FU_COUNT];
