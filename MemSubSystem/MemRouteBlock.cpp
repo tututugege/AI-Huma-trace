@@ -35,7 +35,6 @@ void MemRouteBlock::comb_response() {
   if (cur.issued_tags.owner != Owner::NONE && in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].valid && in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].req_id == cur.issued_tags.req_id) {
     out.lsu_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].valid = cur.lsu_replay_valid;
     out.lsu_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].req_id = cur.lsu_replay_req_id;
-    out.lsu_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].data = 0;                      // Data can be set as needed
     out.lsu_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].replay = ReplayType::CONFLICT; // Set replay type as needed
 
     Owner owner = cur.issued_tags.owner;

@@ -29,21 +29,6 @@ namespace {
   }
 }
 
-[[maybe_unused]] static uint32_t extract_data(uint32_t raw_mem_val, uint32_t addr, int func3) {
-  const int bit_offset = (addr & 0x3) * 8;
-  const int width = get_mem_width(func3);
-  const uint32_t mask = mem_mask_for_width(width);
-  uint32_t result = (raw_mem_val >> bit_offset) & mask;
-
-  if ((func3 & 0b100) == 0 && width < 4) {
-    const uint32_t sign_bit = 1u << (width * 8 - 1);
-    if (result & sign_bit) {
-      result |= ~mask;
-    }
-  }
-
-  return result;
-}
 
 [[maybe_unused]] static inline uint8_t get_store_strb(uint32_t addr, uint8_t func3) {
   uint32_t off = addr & 0x3;
@@ -59,20 +44,6 @@ namespace {
   }
 }
 
-[[maybe_unused]] static inline uint32_t align_store_data(uint32_t data, uint32_t addr,
-                                        uint8_t func3) {
-  uint32_t off = addr & 0x3;
-  switch (func3 & 0x3) {
-  case 0:
-    return (data & 0x000000FFu) << (off * 8);
-  case 1:
-    return (data & 0x0000FFFFu) << (off * 8);
-  case 2:
-    return data;
-  default:
-    return 0;
-  }
-}
 
 constexpr uint32_t kLsuReqIdGenBits = 31 - LDQ_IDX_WIDTH;
 constexpr uint32_t kLsuReqIdIdxMask = (1u << LDQ_IDX_WIDTH) - 1;

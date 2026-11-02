@@ -598,8 +598,6 @@ void RealLsu::comb_stlf() {
               entry.load_state = LoadState::CheckStlfRetry;
               break;
             }
-            const uint32_t forward_offset = entry.p_addr - stq_entry.paddr;
-            entry.result = extract_data(stq_entry.data, forward_offset, entry.func3);
             entry.load_state = LoadState::WaitFinish; // STLF命中且数据已准备好，直接进入完成状态
             break;
           } else if (stlf_result == STLFResult::Retry) {
@@ -755,7 +753,6 @@ void RealLsu::comb_dcache2lsu_ldq() {
         LdqEntry &entry = nxt.ldq[ldq_idx];
         if (entry.load_state == LoadState::WaitDcacheResp) {
           if (in.dcache2lsu->resp_ports.load_resps[i].replay == ReplayType::HIT) {
-            entry.result = extract_data(in.dcache2lsu->resp_ports.load_resps[i].data, entry.p_addr, entry.func3);
             entry.load_state = LoadState::ReadyToWb;
             entry.replay_type = ReplayType::HIT;
           } else {
@@ -889,8 +886,6 @@ void RealLsu::comb_lsu2dcache_stq() {
         }
         out.lsu2dcache->req_ports.store_ports[issued_stq].valid = true;
         out.lsu2dcache->req_ports.store_ports[issued_stq].addr = nxt_entry.paddr;
-        out.lsu2dcache->req_ports.store_ports[issued_stq].data =
-            align_store_data(nxt_entry.data, nxt_entry.paddr, nxt_entry.func3);
         out.lsu2dcache->req_ports.store_ports[issued_stq].strb = entry_strb;
         out.lsu2dcache->req_ports.store_ports[issued_stq].req_id = stq_idx;
         const bool is_replay = (nxt_entry.replay_type != ReplayType::HIT);

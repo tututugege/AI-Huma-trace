@@ -426,7 +426,6 @@ void RealDcache::stage2_comb() {
         
          if(in.wb2dcache->bypass_resp[i].valid){
             resp.valid = true;
-            resp.data = in.wb2dcache->bypass_resp[i].data;
             resp.req_id = slot.req_id;
             resp.retry = false;
             resp.replay = ReplayType::HIT;
@@ -434,7 +433,6 @@ void RealDcache::stage2_comb() {
             // ── Cache Hit ────────────────────────────────────────────────────
             resp.valid  = true;
             resp.replay = ReplayType::HIT;
-            resp.data   = line_resp.data[hit_way];
             resp.req_id = slot.req_id;
             resp.retry = false;
             out.lru_updates[i]->valid = true;

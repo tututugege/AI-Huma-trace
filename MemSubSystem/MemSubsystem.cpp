@@ -813,7 +813,6 @@ void MemSubsystem::forward_pending_response_from_fill() {
       continue;
     }
     const AddrFields f = decode(meta.addr);
-    resp.data = fill.data[f.word_off];
     resp.replay = ReplayType::HIT;
     if (ctx != nullptr) {
 
