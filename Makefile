@@ -117,6 +117,12 @@ INCLUDES += -I./isu_ref
 CXXFLAGS += -DISU_SHADOW
 endif
 
+ifdef IDU_SHADOW
+CXXSRC += ./idu_ref/IduRef.cpp ./idu_ref/IduShadow.cpp
+INCLUDES += -I./idu_ref
+CXXFLAGS += -DIDU_SHADOW
+endif
+
 # Object Files
 OBJS := $(CXXSRC:%.cpp=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)

@@ -1,39 +1,28 @@
-#include "Wires.h"
 #include "BeginCheck.h"
-#include "Idu.h"
 #include "Csr.h"
+#include "Idu.h"
 #include "RISCV.h"
+#include "Wires.h"
 #include "config.h"
 #include "ref.h"
 #include "util.h"
 #include <cstdint>
 #include <cstdlib>
 
-// 中间信号
-static wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH]; // 分配的新 Tag
+// Branch tags picked in comb_decode and committed in comb_fire when the instruction actually moves on.
+static wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH];
 
 void Idu::init() {
   for (int i = 0; i < MAX_BR_NUM; i++) {
-    tag_vec[i] = true;
-    tag_vec_1[i] = true;
-    br_mask_cp[i] = 0;
-    br_mask_cp_1[i] = 0;
+    tag_vec[i] = tag_vec_1[i] = true;
+    br_mask_cp[i] = br_mask_cp_1[i] = 0;
   }
-  tag_vec[0] = false;
-  tag_vec_1[0] = false;
-  now_br_mask = 0;
-  now_br_mask_1 = 0;
-  br_latch = {};
-  br_latch_1 = {};
+  tag_vec[0] = tag_vec_1[0] = false;  // tag 0 is "no branch"
+  now_br_mask = now_br_mask_1 = 0;
+  br_latch = br_latch_1 = {};
 }
 
-/*
- * comb_begin
- * 功能: 组合阶段开始时，将时序态镜像到 *_1 工作副本，作为本拍组合逻辑的可写基线。
- * 输入依赖: tag_vec, br_mask_cp, now_br_mask, br_latch。
- * 输出更新: tag_vec_1, br_mask_cp_1, now_br_mask_1, br_latch_1。
- * 约束: 仅做状态复制，不分配/释放分支 Tag，不驱动对外接口信号。
- */
+// The working copies already equal the registered state (seq() copies them back).
 void Idu::comb_begin() {
   BEGIN_EQ(tag_vec_1, tag_vec);
   BEGIN_EQ(br_mask_cp_1, br_mask_cp);
@@ -41,194 +30,123 @@ void Idu::comb_begin() {
   BEGIN_EQ(br_latch_1, br_latch);
 }
 
-/*
- * comb_decode
- * 功能: 译码 &wires->pre_issue 指令并生成 dec2ren uop，同时为分支指令预分配 br_id/br_mask（遇 Tag 不足时截断）。
- * 输入依赖: wires->pre_issue.entries, br_latch.clear_mask, now_br_mask, tag_vec, max_br_per_cycle。
- * 输出更新: wires->dec2ren.valid/uop, alloc_tag（供 comb_fire 在 fire 时提交分配）。
- * 约束: 每拍最多分配 max_br_per_cycle 个分支 Tag, Tag 不足时后续槽位 valid 置 0。
- */
+// Decode the instructions of the pre-decode queue and give every branch a tag/mask. A younger instruction depends on all
+// older unresolved branches (its br_mask); a branch itself does not depend on its own bit. When the free tags run out
+// the group is cut at that branch.
 void Idu::comb_decode() {
-  wire<1> alloc_valid[DECODE_WIDTH];
-  int alloc_num = 0;
-  for (int i = 0; i < MAX_BR_NUM && alloc_num < max_br_per_cycle; i++) {
+  Wires &w = *wires;
+  bool alloc_valid[DECODE_WIDTH];
+  int tags = 0;
+  for (int i = 0; i < MAX_BR_NUM && tags < max_br_per_cycle; i++)
     if (tag_vec[i]) {
-      alloc_tag[alloc_num] = i;
-      alloc_valid[alloc_num] = true;
-      alloc_num++;
+      alloc_tag[tags] = i;
+      alloc_valid[tags++] = true;
     }
-  }
-  for (int i = alloc_num; i < DECODE_WIDTH; i++) {
+  for (int i = tags; i < DECODE_WIDTH; i++) {
     alloc_tag[i] = 0;
     alloc_valid[i] = false;
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    wires->dec2ren.valid[i] = false;
-    wires->dec2ren.uop[i] = {};
+    w.dec2ren.valid[i] = false;
+    w.dec2ren.uop[i] = {};
   }
-
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    const InstructionBufferEntry &entry = wires->pre_issue.entries[i];
-    if (!entry.valid)
-      continue;
-
-    wires->dec2ren.valid[i] = true;
-    auto &decoded = wires->dec2ren.uop[i];
-    decoded = {};
-    decoded.id = entry.uop_id;
-    if (entry.page_fault_inst) {
-      decoded.diag_val = entry.inst;
-      decoded.page_fault_inst = true;
-      decoded->type = encode_inst_type(NOP);
-      decoded->src1_en = false;
-      decoded->src2_en = false;
-      decoded.dest_en = false;
-      decoded->dbg.instruction = entry.inst;
+    const InstructionBufferEntry &e = w.pre_issue.entries[i];
+    if (!e.valid) continue;
+    w.dec2ren.valid[i] = true;
+    Uop &u = w.dec2ren.uop[i];
+    u = {};
+    u.id = e.uop_id;
+    if (e.page_fault_inst) {  // a faulting fetch becomes a NOP that carries the fault
+      u.diag_val = e.inst;
+      u.page_fault_inst = true;
+      u->type = encode_inst_type(NOP);
+      u->src1_en = u->src2_en = false;
+      u.dest_en = false;
+      u->dbg.instruction = e.inst;
     } else {
-      decode(decoded, entry.inst);
+      decode(u, e.inst);
     }
-    decoded->dbg.pc = entry.pc;
-    decoded->ftq_idx = entry.ftq_idx;
-    decoded->ftq_offset = entry.ftq_offset;
-    decoded.ftq_is_last = entry.ftq_is_last;
+    u->dbg.pc = e.pc;
+    u->ftq_idx = e.ftq_idx;
+    u->ftq_offset = e.ftq_offset;
+    u.ftq_is_last = e.ftq_is_last;
   }
 
-  int br_num = 0;
-  // ID 阶段旁路清理：本拍已解析分支的 bit 不应继续传播到新译码指令。
-  // clear_mask 来自上拍锁存的 BRU 解析结果（br_latch）。
-  wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
-  wire<BR_MASK_WIDTH> running_mask = now_br_mask & ~clear;
+  // branches resolved last cycle (br_latch) are already gone from the mask the new instructions see
+  wire<BR_MASK_WIDTH> running = now_br_mask & ~br_latch.clear_mask;
+  int br_num = 0, i = 0;
   bool stall = false;
-  int i = 0;
   for (; i < DECODE_WIDTH; i++) {
-    if (!wires->dec2ren.valid[i]) {
-      wires->dec2ren.uop[i]->br_id = 0;
-      wires->dec2ren.uop[i].br_mask = running_mask;
-      continue;
-    }
-
-    if (is_branch(wires->dec2ren.uop[i]->type)) {
-      if (!alloc_valid[br_num]) {
-        stall = true;
-        break;
-      }
-      wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
-      wires->dec2ren.uop[i]->br_id = new_tag;
-      // 分支自身不依赖自己；self bit 只作用于后续更年轻指令。
-      wires->dec2ren.uop[i].br_mask = running_mask;
-      running_mask |= (wire<BR_MASK_WIDTH>(1) << new_tag);
-      br_num++;
-    } else {
-      wires->dec2ren.uop[i]->br_id = 0;
-      wires->dec2ren.uop[i].br_mask = running_mask;
-    }
+    Uop &u = w.dec2ren.uop[i];
+    u->br_id = 0;
+    u.br_mask = running;
+    if (!w.dec2ren.valid[i] || !is_branch(u->type)) continue;
+    if (!alloc_valid[br_num]) { stall = true; break; }
+    u->br_id = alloc_tag[br_num];
+    running |= wire<BR_MASK_WIDTH>(1) << alloc_tag[br_num];
+    br_num++;
   }
-
-  if (stall) {
+  if (stall)
     for (; i < DECODE_WIDTH; i++) {
-      wires->dec2ren.valid[i] = false;
-      wires->dec2ren.uop[i]->br_id = 0;
-      wires->dec2ren.uop[i].br_mask = 0;
+      w.dec2ren.valid[i] = false;
+      w.dec2ren.uop[i]->br_id = 0;
+      w.dec2ren.uop[i].br_mask = 0;
     }
-  }
 }
 
-/*
- * comb_branch
- * 功能: 将锁存的分支解析结果打包并广播到 dec_bcast（含 mispred 与 clear_mask）。
- * 输入依赖: br_latch.{mispred, br_id, redirect_rob_idx, clear_mask}。
- * 输出更新: wires->dec_bcast.mispred, br_id, redirect_rob_idx, br_mask, clear_mask。
- * 约束: 本函数仅广播，不修改 IDU 本地 Tag/Mask 状态；本地状态更新统一由 comb_fire 处理。
- */
+// Broadcast last cycle's branch resolution (mispredict, tag, clear bits) to everyone; only comb_fire updates local state.
 void Idu::comb_branch() {
-  // comb_branch 仅负责广播分支结果；IDU本地状态更新统一在 comb_fire 处理。
-  wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
-  if (br_latch.mispred) {
-    wires->dec_bcast.mispred = true;
-    wires->dec_bcast.br_id = br_latch.br_id;
-    wires->dec_bcast.redirect_rob_idx = br_latch.redirect_rob_idx;
-    wires->dec_bcast.br_mask = wire<BR_MASK_WIDTH>(1) << br_latch.br_id;
-  } else {
-    wires->dec_bcast.br_mask = 0;
-    wires->dec_bcast.mispred = false;
-    wires->dec_bcast.br_id = 0;
-  }
-
-  // 广播 clear_mask（包含误预测分支的 bit）
-  // 下游模块负责: 先 flush，再对存活条目清除 bit
-  wires->dec_bcast.clear_mask = clear;
+  DecBroadcastIO &b = wires->dec_bcast;
+  b.mispred = br_latch.mispred;
+  b.br_id = br_latch.mispred ? br_latch.br_id : 0;
+  b.br_mask = br_latch.mispred ? wire<BR_MASK_WIDTH>(1) << br_latch.br_id : 0;
+  if (br_latch.mispred) b.redirect_rob_idx = br_latch.redirect_rob_idx;
+  b.clear_mask = br_latch.clear_mask;  // includes the mispredicted branch's own bit; receivers flush first, then clear
 }
 
-/*
- * comb_fire
- * 功能: 在 ready/flush/分支解析条件下推进 IDU 分支状态机（Tag 释放、误预测回收、新分支提交分配）。
- * 输入依赖: wires->rob_bcast.flush, wires->ren2dec.ready, wires->dec2ren.valid/uop, alloc_tag, br_latch, now_br_mask, br_mask_cp。
- * 输出更新: tag_vec_1, now_br_mask_1, br_mask_cp_1, br_latch_1。
- * 约束: flush 最高优先级并直接返回；mispred 路径不进行新分支分配；仅对 fire 且为分支的槽位提交 Tag 占用。
- */
+// Branch tag bookkeeping and the consume handshake with the pre-decode queue.
+// Flush resets everything; resolved branches return their tags; a mispredict frees the tags younger than the branch
+// (and allocates nothing this cycle); otherwise fired branches take their tag and checkpoint the mask.
 void Idu::comb_fire() {
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    wires->idu_consume.fire[i] = false;
-  }
+  Wires &w = *wires;
+  for (int i = 0; i < DECODE_WIDTH; i++) w.idu_consume.fire[i] = false;
 
-  if (!wires->rob_bcast.flush) {
-    br_latch_1 = wires->exu2id;
-  } else {
-    br_latch_1 = {};
-  }
-
-  // 0. flush 最高优先级：清空本地分支状态。
-  if (wires->rob_bcast.flush) {
-    for (int i = 1; i < MAX_BR_NUM; i++) {
-      tag_vec_1[i] = true;
-    }
+  br_latch_1 = w.rob_bcast.flush ? ExuIdIO{} : w.exu2id;
+  if (w.rob_bcast.flush) {
+    for (int i = 1; i < MAX_BR_NUM; i++) tag_vec_1[i] = true;
     tag_vec_1[0] = false;
     now_br_mask_1 = 0;
     return;
   }
 
-  // 1. clear_mask 生效：已解析分支从当前运行集合清除，并直接回收 tag。
-  wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
-  for (int i = 1; i < MAX_BR_NUM; i++) {
+  const wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
+  for (int i = 1; i < MAX_BR_NUM; i++)
     if ((clear >> i) & 1) {
       tag_vec_1[i] = true;
       now_br_mask_1 &= ~(wire<BR_MASK_WIDTH>(1) << i);
     }
-  }
+  if (clear != 0)  // checkpoints must not keep bits of resolved branches (tags get reused)
+    for (int i = 1; i < MAX_BR_NUM; i++) br_mask_cp_1[i] &= ~clear;
 
-  // 2. 清理所有 checkpoint 中对应 clear_mask 的 bit，避免 tag 复用污染。
-  if (clear != 0) {
-    for (int i = 1; i < MAX_BR_NUM; i++) {
-      br_mask_cp_1[i] &= ~clear;
-    }
-  }
-
-  // 3. 误预测：回收更年轻 tag；本拍不再进行新分支分配。
   if (br_latch.mispred) {
-    wire<BR_MASK_WIDTH> tags_to_free =
-        now_br_mask & ~br_mask_cp[br_latch.br_id];
-    now_br_mask_1 &= ~tags_to_free;
-    for (int i = 1; i < MAX_BR_NUM; i++) {
-      if ((tags_to_free >> i) & 1) {
-        tag_vec_1[i] = true;
-      }
-    }
+    const wire<BR_MASK_WIDTH> younger = now_br_mask & ~br_mask_cp[br_latch.br_id];
+    now_br_mask_1 &= ~younger;
+    for (int i = 1; i < MAX_BR_NUM; i++)
+      if ((younger >> i) & 1) tag_vec_1[i] = true;
     return;
   }
 
-  // 4. 正常发射路径：所有成功握手的槽位都要通知 PreIduQueue 出队；
-  // 分支 tag 的推进仅在启用 BPU 时生效。
   int br_num = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    wire<1> fire = wires->dec2ren.valid[i] && wires->ren2dec.ready;
-    wires->idu_consume.fire[i] = fire;
-    if (fire && is_branch(wires->dec2ren.uop[i]->type)) {
-      wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
-      tag_vec_1[new_tag] = false;
-      now_br_mask_1 |= (wire<BR_MASK_WIDTH>(1) << new_tag);
-      br_mask_cp_1[new_tag] = now_br_mask_1;
-      br_num++;
+    const bool fire = w.dec2ren.valid[i] && w.ren2dec.ready;  // every fired slot leaves the pre-decode queue
+    w.idu_consume.fire[i] = fire;
+    if (fire && is_branch(w.dec2ren.uop[i]->type)) {
+      const auto tag = alloc_tag[br_num++];
+      tag_vec_1[tag] = false;
+      now_br_mask_1 |= wire<BR_MASK_WIDTH>(1) << tag;
+      br_mask_cp_1[tag] = now_br_mask_1;
     }
   }
 }
@@ -242,265 +160,143 @@ void Idu::seq() {
   br_latch = br_latch_1;
 }
 
+namespace {
+// CSRs the core implements; accessing any other one executes as a NOP.
+bool is_known_csr(uint32_t c) {
+  switch (c) {
+  case number_mtvec: case number_mepc: case number_mcause: case number_mie: case number_mip: case number_mtval:
+  case number_mscratch: case number_mstatus: case number_mideleg: case number_medeleg: case number_sepc:
+  case number_stvec: case number_scause: case number_sscratch: case number_stval: case number_sstatus:
+  case number_sie: case number_sip: case number_satp: case number_mhartid: case number_misa:
+    return true;
+  default:
+    return false;
+  }
+}
+}  // namespace
+
+// RISC-V decode into a Uop: operand enables, instruction class, immediate, and the top-down-analysis flags.
 void Idu::decode(Uop &uop, uint32_t inst) {
-  // 操作数来源以及type
-  // uint32_t imm;
+  const uint32_t opcode = BITS(inst, 6, 0), f3 = BITS(inst, 14, 12), f7 = BITS(inst, 31, 25);
+  const uint32_t rd = BITS(inst, 11, 7), ra = BITS(inst, 19, 15), rb = BITS(inst, 24, 20), csr = inst >> 20;
+
   uop->dbg.instruction = inst;
-
-  uint32_t opcode = BITS(inst, 6, 0);
-  uint32_t number_funct3_unsigned = BITS(inst, 14, 12);
-  uint32_t number_funct7_unsigned = BITS(inst, 31, 25);
-  uint32_t reg_d_index = BITS(inst, 11, 7);
-  uint32_t reg_a_index = BITS(inst, 19, 15);
-  uint32_t reg_b_index = BITS(inst, 24, 20);
-  uint32_t csr_idx = inst >> 20;
-
-  // 准备立即数
   uop.diag_val = inst;
-  uop->dest_areg = reg_d_index;
-  uop->src1_areg = reg_a_index;
-  uop->src2_areg = reg_b_index;
+  uop->dest_areg = rd;
+  uop->src1_areg = ra;
+  uop->src2_areg = rb;
   uop->src1_is_pc = false;
   uop->src2_is_imm = true;
-  uop->func3 = number_funct3_unsigned;
-  uop->func7 = number_funct7_unsigned;
-  uop->csr_idx = csr_idx;
+  uop->func3 = f3;
+  uop->func7 = f7;
+  uop->csr_idx = csr;
   uop.page_fault_inst = false;
   uop.illegal_inst = false;
   uop->type = encode_inst_type(NOP);
-  uop.tma.is_cache_miss = false;
-  uop.tma.is_ret = false;
-  uop.tma.mem_commit_is_load = false;
-  uop.tma.mem_commit_is_store = false;
+  uop.tma.is_cache_miss = uop.tma.is_ret = uop.tma.mem_commit_is_load = uop.tma.mem_commit_is_store = false;
   static uint64_t global_inst_idx = 0;
   uop->dbg.inst_idx = global_inst_idx++;
 
+  // destination written / source 1 read / source 2 read, and the instruction class
+  auto set = [&](bool dest, bool s1, bool s2, InstType type) {
+    uop.dest_en = dest;
+    uop->src1_en = s1;
+    uop->src2_en = s2;
+    uop->type = encode_inst_type(type);
+  };
+
   switch (opcode) {
-  case number_0_opcode_lui: { // lui
-    uop.dest_en = true;
-    uop->src1_en = true;
+  case number_0_opcode_lui:  // reads x0
+    set(true, true, false, ADD);
     uop->src1_areg = 0;
-    uop->src2_en = false;
-    uop->type = encode_inst_type(ADD);
     uop->func3 = 0;
     uop->imm = immU(inst);
     break;
-  }
-  case number_1_opcode_auipc: { // auipc
-    uop.dest_en = true;
-    uop->src1_en = false;
-    uop->src2_en = false;
+  case number_1_opcode_auipc:
+    set(true, false, false, ADD);
     uop->src1_is_pc = true;
-    uop->type = encode_inst_type(ADD);
     uop->func3 = 0;
     uop->imm = immU(inst);
     break;
-  }
-  case number_2_opcode_jal: { // jal
-    uop.dest_en = true;
-    uop->src1_en = false;
-    uop->src2_en = false;
+  case number_2_opcode_jal:
+    set(true, false, false, JAL);
     uop->src1_is_pc = true;
-    uop->src2_is_imm = true;
     uop->func3 = 0;
-    uop->type = encode_inst_type(JAL);
     uop->imm = immJ(inst);
     break;
-  }
-  case number_3_opcode_jalr: { // jalr
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = false;
+  case number_3_opcode_jalr:
+    set(true, true, false, JALR);
     uop->src1_is_pc = true;
-    uop->src2_is_imm = true;
     uop->func3 = 0;
-    uop->type = encode_inst_type(JALR);
     uop->imm = immI(inst);
-
     break;
-  }
-  case number_4_opcode_beq: { // beq, bne, blt, bge, bltu, bgeu
-    uop.dest_en = false;
-    uop->src1_en = true;
-    uop->src2_en = true;
-    uop->type = encode_inst_type(BR);
+  case number_4_opcode_beq:  // beq, bne, blt, bge, bltu, bgeu
+    set(false, true, true, BR);
     uop->imm = immB(inst);
     break;
-  }
-  case number_5_opcode_lb: { // lb, lh, lw, lbu, lhu
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = false;
-    uop->type = encode_inst_type(LOAD);
+  case number_5_opcode_lb:  // lb, lh, lw, lbu, lhu
+    set(true, true, false, LOAD);
     uop->imm = immI(inst);
     break;
-  }
-  case number_6_opcode_sb: { // sb, sh, sw
-    uop.dest_en = false;
-    uop->src1_en = true;
-    uop->src2_en = true;
-    uop->type = encode_inst_type(STORE);
+  case number_6_opcode_sb:  // sb, sh, sw
+    set(false, true, true, STORE);
     uop->imm = immS(inst);
     break;
-  }
-  case number_7_opcode_addi: { // addi, slti, sltiu, xori, ori, andi, slli,
-    // srli, srai, AND Zbb/Zbs imm extensions (clz, ctz, pcnt, sext, bseti,
-    // bclri, binvi)
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = false;
-    uop->type = encode_inst_type(ADD);
+  case number_7_opcode_addi:  // register-immediate ALU ops, including the Zbb/Zbs immediate forms
+    set(true, true, false, ADD);
     uop->imm = immI(inst);
     break;
-  }
-  case number_8_opcode_add: { // add, sub, sll, slt, sltu, xor, srl, sra, or,
-    // AND Zba/Zbb/Zbc/Zbs extensions (sh1add, clmul, xnor, pack, min, max, etc)
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = true;
+  case number_8_opcode_add:  // register-register ALU ops (Zba/Zbb/Zbc/Zbs too); funct7 == 1 is M: mul/div
+    set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
     uop->src2_is_imm = false;
-    if (number_funct7_unsigned == 1) { // mul div
-      if (number_funct3_unsigned & 0b100) {
-        uop->type = encode_inst_type(DIV);
+    break;
+  case number_9_opcode_fence:  // funct3 001 is fence.i
+    set(false, false, false, f3 == 0b001 ? FENCE_I : FENCE);
+    break;
+  case number_10_opcode_ecall: {  // csrr*, ecall, ebreak, mret, sret, wfi, sfence.vma
+    uop->src2_is_imm = (f3 & 0b100) && ((f3 & 0b001) || (f3 & 0b010));
+    if ((f3 & 0b001) || (f3 & 0b010)) {
+      if (!is_known_csr(csr)) {
+        set(false, false, false, NOP);
+        if (csr == number_time || csr == number_timeh) uop.illegal_inst = true;
       } else {
-        uop->type = encode_inst_type(MUL);
+        set(true, true, !uop->src2_is_imm, CSR);
+        uop->imm = ra;  // zimm for the immediate forms
       }
-    } else {
-      uop->type = encode_inst_type(ADD);
-    }
+    } else if (inst == INST_ECALL) set(false, false, false, ECALL);
+    else if (inst == INST_EBREAK) set(false, false, false, EBREAK);
+    else if (inst == INST_MRET) set(false, false, false, MRET);
+    else if (inst == INST_WFI) set(false, false, false, WFI);
+    else if (inst == INST_SRET) set(false, false, false, SRET);
+    else if (f7 == 0b0001001 && f3 == 0 && rd == 0) set(false, true, true, SFENCE_VMA);
+    else set(false, false, false, NOP);
     break;
   }
-  case number_9_opcode_fence: { // fence, fence.i
-    uop.dest_en = false;
-    uop->src1_en = false;
-    uop->src2_en = false;
-
-    // Check funct3 for FENCE.I (001)
-    if (number_funct3_unsigned == 0b001) {
-      uop->type = encode_inst_type(FENCE_I); // Strict separation
-    } else {
-      uop->type = encode_inst_type(FENCE);
-    }
-    break;
-  }
-  case number_10_opcode_ecall: { // ecall, ebreak, csrrw, csrrs, csrrc,
-                                 // csrrwi, csrrsi, csrrci
-    uop->src2_is_imm =
-        number_funct3_unsigned & 0b100 &&
-        (number_funct3_unsigned & 0b001 || number_funct3_unsigned & 0b010);
-
-    if (number_funct3_unsigned & 0b001 || number_funct3_unsigned & 0b010) {
-      if (csr_idx != number_mtvec && csr_idx != number_mepc &&
-          csr_idx != number_mcause && csr_idx != number_mie &&
-          csr_idx != number_mip && csr_idx != number_mtval &&
-          csr_idx != number_mscratch && csr_idx != number_mstatus &&
-          csr_idx != number_mideleg && csr_idx != number_medeleg &&
-          csr_idx != number_sepc && csr_idx != number_stvec &&
-          csr_idx != number_scause && csr_idx != number_sscratch &&
-          csr_idx != number_stval && csr_idx != number_sstatus &&
-          csr_idx != number_sie && csr_idx != number_sip &&
-          csr_idx != number_satp && csr_idx != number_mhartid &&
-          csr_idx != number_misa) {
-        uop->type = encode_inst_type(NOP);
-        uop.dest_en = false;
-        uop->src1_en = false;
-        uop->src2_en = false;
-
-        if (csr_idx == number_time || csr_idx == number_timeh)
-          uop.illegal_inst = true;
-
-      } else {
-        uop->type = encode_inst_type(CSR);
-        uop.dest_en = true;
-        uop->src1_en = true;
-        uop->src2_en = !uop->src2_is_imm;
-        uop->imm = reg_a_index;
-      }
-    } else {
-      uop.dest_en = false;
-      uop->src1_en = false;
-      uop->src2_en = false;
-
-      if (inst == INST_ECALL) {
-        uop->type = encode_inst_type(ECALL);
-      } else if (inst == INST_EBREAK) {
-        uop->type = encode_inst_type(EBREAK);
-      } else if (inst == INST_MRET) {
-        uop->type = encode_inst_type(MRET);
-      } else if (inst == INST_WFI) {
-        uop->type = encode_inst_type(WFI);
-      } else if (inst == INST_SRET) {
-        uop->type = encode_inst_type(SRET);
-      } else if (number_funct7_unsigned == 0b0001001 &&
-                 number_funct3_unsigned == 0 && reg_d_index == 0) {
-        uop->type = encode_inst_type(SFENCE_VMA);
-        uop->src1_en = true;
-        uop->src2_en = true;
-      } else {
-        uop->type = encode_inst_type(NOP);
-        /*uop[0].illegal_inst = true;*/
-        /*cout << hex << inst << endl;*/
-        /*Assert(0);*/
-      }
-    }
-    break;
-  }
-
-  case number_11_opcode_lrw: {
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = true;
+  case number_11_opcode_lrw:  // atomics; LR has no second source
+    set(true, true, (f7 >> 2) != AmoOp::LR, AMO);
     uop->imm = 0;
-    uop->type = encode_inst_type(AMO);
     uop->is_atomic = true;
-
-    if ((number_funct7_unsigned >> 2) == AmoOp::LR) {
-      uop->src2_en = false;
-    }
-
     break;
-  }
-
   case number_12_opcode_float: {
-    uop.dest_en = true;
-    uop->src1_en = true;
-    uop->src2_en = true;
+    // rs2 doubles as the format selector of FCVT and the other unary ops, which have no second source
+    const bool unary = f7 == 0x60 || f7 == 0x68 || f7 == 0x2C || f7 == 0x70;
+    set(true, true, !unary, FP);
     uop->src2_is_imm = false;
-    // Preserve encoded rs2 (fmt selector) for FCVT/other unary FP ops.
-    uop->imm = reg_b_index;
-    if (number_funct7_unsigned == 0x60 || number_funct7_unsigned == 0x68 ||
-        number_funct7_unsigned == 0x2C || number_funct7_unsigned == 0x70) {
-      uop->src2_en = false;
-    }
-    uop->type = encode_inst_type(FP);
+    uop->imm = rb;
     break;
   }
-
-  default: {
-    uop.dest_en = false;
-    uop->src1_en = false;
-    uop->src2_en = false;
-    uop->type = encode_inst_type(NOP);
+  default:
+    set(false, false, false, NOP);
     uop.illegal_inst = true;
     break;
   }
-  }
 
-  InstType inst_type = decode_inst_type(uop->type);
-  uop.tma.is_ret = (inst_type == JALR && uop->src1_areg == 1 &&
-                    uop->dest_areg == 0 && uop->imm == 0);
-  uop.tma.mem_commit_is_load =
-      (inst_type == LOAD ||
-       (inst_type == AMO && (uop->func7 >> 2) != AmoOp::SC));
-  uop.tma.mem_commit_is_store =
-      (inst_type == STORE ||
-       (inst_type == AMO && (uop->func7 >> 2) != AmoOp::LR));
-
-  if (inst_type == AMO && uop->dest_areg == 0 && (uop->func7 >> 2) != AmoOp::LR &&
-      (uop->func7 >> 2) != AmoOp::SC) {
-    uop->dest_areg = 32;
-  }
-
-  if (uop->dest_areg == 0)
-    uop.dest_en = false;
+  const InstType type = decode_inst_type(uop->type);
+  const uint32_t amo = uop->func7 >> 2;
+  uop.tma.is_ret = type == JALR && uop->src1_areg == 1 && uop->dest_areg == 0 && uop->imm == 0;
+  uop.tma.mem_commit_is_load = type == LOAD || (type == AMO && amo != AmoOp::SC);
+  uop.tma.mem_commit_is_store = type == STORE || (type == AMO && amo != AmoOp::LR);
+  // an AMO that discards its result still writes through a dedicated register (it keeps the load's destination)
+  if (type == AMO && uop->dest_areg == 0 && amo != AmoOp::LR && amo != AmoOp::SC) uop->dest_areg = 32;
+  if (uop->dest_areg == 0) uop.dest_en = false;
 }

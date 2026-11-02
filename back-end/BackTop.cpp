@@ -14,6 +14,11 @@
 #else
 #define ROB(f) rob->f()
 #endif
+#ifdef IDU_SHADOW
+#include "IduShadow.h"
+#else
+#define IDU(f) idu->f()
+#endif
 #ifdef ISU_SHADOW
 #include "IsuShadow.h"
 #else
@@ -155,7 +160,7 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 // Working copies and default outputs of every module.
 void BackTop::comb_begin_all() {
   pre->comb_begin();
-  idu->comb_begin();
+  IDU(comb_begin);
   rename->comb_begin();
   DIS(comb_begin);
   ISU(comb_begin);
@@ -167,9 +172,9 @@ void BackTop::comb_begin_all() {
 
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_stage_decode_and_resources() {
-  idu->comb_branch();
+  IDU(comb_branch);
   pre->comb_accept_front();
-  idu->comb_decode();
+  IDU(comb_decode);
   csr->comb_interrupt();
   rename->comb_alloc();
   prf->comb_complete();
@@ -241,7 +246,7 @@ void BackTop::comb_stage_fire_and_recover() {
   DIS(comb_fire);
   LSU(comb_dis2lsu);
   rename->comb_fire();
-  idu->comb_fire();
+  IDU(comb_fire);
   // Kill flushed LSU work before driving new DCache/MMIO requests.
   LSU(comb_flush);
   LSU(comb_lsu2dcache_ldq);
@@ -390,7 +395,7 @@ void BackTop::seq() {
   pre->seq();
   rename->seq();
   DIS(seq);
-  idu->seq();
+  IDU(seq);
   ISU(seq);
   EXU(seq);
   prf->seq();
