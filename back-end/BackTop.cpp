@@ -14,6 +14,11 @@
 #else
 #define ROB(f) rob->f()
 #endif
+#ifdef ISU_SHADOW
+#include "IsuShadow.h"
+#else
+#define ISU(f) isu->f()
+#endif
 #ifdef EXU_SHADOW
 #include "ExuShadow.h"
 #else
@@ -153,7 +158,7 @@ void BackTop::comb_begin_all() {
   idu->comb_begin();
   rename->comb_begin();
   DIS(comb_begin);
-  isu->comb_begin();
+  ISU(comb_begin);
   prf->comb_begin();
   EXU(comb_begin);
   ROB(comb_begin);
@@ -170,7 +175,7 @@ void BackTop::comb_stage_decode_and_resources() {
   prf->comb_complete();
   prf->comb_awake();
   prf->comb_write();
-  isu->comb_ready();
+  ISU(comb_ready);
   LSU(comb_cal);
   LSU(comb_lsu2dis);
   LSU(comb_lsu2rob);
@@ -206,7 +211,7 @@ void BackTop::comb_stage_execute() {
 // Issue selection, then LSU address translation (the MMU sits between the LSU's request and response phases).
 void BackTop::comb_stage_issue_and_translate() {
   EXU(comb_ready);
-  isu->comb_issue();
+  ISU(comb_issue);
   LSU(comb_exe2lsu);
   LSU(comb_tlb_out);
   comb_lsu_mmu();
@@ -221,8 +226,8 @@ void BackTop::comb_stage_operands_and_dispatch() {
   pre->comb_ftq_lookup_prf();
   prf->comb_read();
 
-  isu->comb_awake();
-  isu->comb_calc_latency_next();
+  ISU(comb_awake);
+  ISU(comb_calc_latency_next);
   csr->comb_exception();
   csr->comb_csr_write();
   DIS(comb_wake);
@@ -243,13 +248,13 @@ void BackTop::comb_stage_fire_and_recover() {
   LSU(comb_lsu2dcache_stq);
   LSU(comb_mmio_out);
   LSU(comb_check);
-  isu->comb_enq();
+  ISU(comb_enq);
   // Rob recovery was split out of comb_fire(); keep the original priority:
   // branch rollback happens before enqueue, and global flush overrides both.
   ROB(comb_branch);
   ROB(comb_fire);
   ROB(comb_flush);
-  isu->comb_flush();
+  ISU(comb_flush);
 
   pre->comb_fire();
   prf->comb_pipeline();
@@ -386,7 +391,7 @@ void BackTop::seq() {
   rename->seq();
   DIS(seq);
   idu->seq();
-  isu->seq();
+  ISU(seq);
   EXU(seq);
   prf->seq();
   ROB(seq);

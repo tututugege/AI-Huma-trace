@@ -31,6 +31,8 @@ constexpr int ISU_FP_WAKE_SLOT_NUM =
     (ISU_FP_WAKE_UNIT_NUM > 0) ? ISU_FP_WAKE_UNIT_NUM : 1;
 
 class Isu {
+public:
+  friend struct IsuDigestAccess;  // lockstep test hook
 private:
   SimContext *ctx;
 
@@ -73,4 +75,11 @@ private:
   void add_iq(const IssueQueueConfig &cfg);
   int get_latency(UopType uop_type, wire<7> func7);
   void apply_wakeup_to_uop(Uop &uop) const;
+  void clear_wake_state();
+  // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
+  template <class F> void for_each_wake_slot_1(F f) {
+    for (auto &stage : mul_wake_pipe_1) for (auto &e : stage) f(e);
+    for (auto &e : div_wake_slots_1) f(e);
+    for (auto &e : fp_wake_slots_1) f(e);
+  }
 };

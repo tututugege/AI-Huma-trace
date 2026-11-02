@@ -57,6 +57,7 @@ struct IssueQueueOut {
 // ==========================================
 class IssueQueue {
 public:
+  friend struct IsuDigestAccess;  // lockstep test hook
   IssueQueueIn in;
   IssueQueueOut out;
 
