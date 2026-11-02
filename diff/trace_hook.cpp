@@ -11,12 +11,16 @@
 #include <memory>
 
 namespace tbhook {
-bool enabled = std::getenv("TB_CHECK") != nullptr;
+bool inject = std::getenv("TB_INJECT") != nullptr;
+bool poison = std::getenv("TB_POISON") != nullptr;
+bool enabled = std::getenv("TB_CHECK") != nullptr || inject;
+uint64_t inject_miss = 0;
 
 namespace {
 RefCpuContext *g_ctx = nullptr;
 std::unique_ptr<tb::Bridge> g_bridge;
 bool g_resync = false;
+uint64_t g_rob_uid[4096];
 
 struct Counters {
   uint64_t dispatch = 0, commit = 0, commit_front_miss = 0, flush = 0, mispredict = 0;
@@ -59,11 +63,16 @@ void ensure() {
   const char *e = std::getenv("TB_IMG_BYTES");
   size_t bytes = e ? strtoull(e, 0, 0) : (1u << 20);
   refcpu_sync_ram_from_dut(g_ctx, pmem_ram_ptr(), bytes);
+  // Boot ROM (word-backed MMIO at 0x0): the core fetches the reset stub from there.
+  for (uint32_t a = 0; a < 0x100000u; a += 4) {
+    const uint32_t w = pmem_read(a);
+    if (w) refcpu_set_io_word(g_ctx, a, w);
+  }
   g_bridge.reset(new tb::Bridge(g_ctx, 0x80000000u, static_cast<uint32_t>(RAM_SIZE)));
+  g_bridge->set_boot_region(0, 0x100000u);
 }
 } // namespace
 
-static uint64_t g_rob_uid[4096];
 void on_dispatch(uint64_t uid, uint32_t pc, uint32_t inst, uint32_t rob_idx) {
   ensure();
   g_rob_uid[rob_idx & 4095] = uid;
@@ -84,6 +93,26 @@ void on_mispredict(uint64_t branch_uid) {
   g_c.mispredict++;
   if (std::getenv("TB_NEG_NO_REWIND")) return;  // negative control: the check must fail
   g_bridge->rewind_after((int64_t)branch_uid);
+}
+
+static uint64_t g_ov[5] = {0}, g_ov_diff[5] = {0};
+void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_idx) {
+  g_ov[kind]++;
+  if (computed != injected) { g_ov_diff[kind]++; if (g_ov_diff[kind] <= 3) { const tb::Fact *ff = g_bridge ? g_bridge->find(g_rob_uid[rob_idx & 4095]) : nullptr; std::fprintf(stderr, "[TB_INJECT] kind=%d computed=0x%x injected=0x%x rob_idx=%u uid=%llu fact pc=0x%x inst=0x%x blocked=%d trapped=%d forced=%d\n", kind, computed, injected, rob_idx, (unsigned long long)g_rob_uid[rob_idx & 4095], ff ? ff->pc : 0, ff ? ff->inst : 0, ff ? (int)ff->blocked : -1, ff ? (int)ff->trapped : -1, ff ? (int)ff->forced_jump : -1); } }
+}
+struct OvPrint { ~OvPrint() { if (!inject) return; std::fprintf(stderr, "[TB_INJECT] overrides (n/differs): br=%llu/%llu jump=%llu/%llu agu=%llu/%llu std=%llu/%llu csr=%llu/%llu miss=%llu\n", (unsigned long long)g_ov[0], (unsigned long long)g_ov_diff[0], (unsigned long long)g_ov[1], (unsigned long long)g_ov_diff[1], (unsigned long long)g_ov[2], (unsigned long long)g_ov_diff[2], (unsigned long long)g_ov[3], (unsigned long long)g_ov_diff[3], (unsigned long long)g_ov[4], (unsigned long long)g_ov_diff[4], (unsigned long long)inject_miss); } } g_ovp;
+const tb::Fact *fact_by_rob(uint32_t rob_idx) {
+  if (!inject || !g_bridge) return nullptr;
+  const tb::Fact *f = g_bridge->find(g_rob_uid[rob_idx & 4095]);
+  if (!f) { inject_miss++; return f; }
+  // Positive control: every Nth branch fact is flipped; the run must then differ from the baseline.
+  static const long n = std::getenv("TB_PERTURB_BR") ? std::atol(std::getenv("TB_PERTURB_BR")) : 0;
+  static const long m = std::getenv("TB_PERTURB_ADDR") ? std::atol(std::getenv("TB_PERTURB_ADDR")) : 0;
+  static long cnt_br = 0, cnt_ad = 0;
+  static tb::Fact tmp;
+  if (n && f->is_br && (++cnt_br % n) == 0) { tmp = *f; tmp.br_taken = !tmp.br_taken; return &tmp; }
+  if (m && (f->is_load || f->is_store) && (++cnt_ad % m) == 0) { tmp = *f; tmp.vaddr ^= 0x1000; return &tmp; }
+  return f;
 }
 
 void on_commit(uint64_t uid) {

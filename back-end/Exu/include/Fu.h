@@ -2,6 +2,7 @@
 #include "AbstractFU.h" // for __builtin_clz
 #include "IO.h"
 #include "config.h"
+#include "trace_hook.h"
 // #include <cassert>
 #include <climits>
 
@@ -228,6 +229,9 @@ protected:
     // 1. 计算虚拟地址 (Common logic)
     // Load 和 Store (STA) 都需要计算地址： Base + Offset
     uint64_t vaddr = inst.src1_rdata + inst.imm;
+    if (tbhook::inject) {
+      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) { tbhook::note_override(2, (uint32_t)vaddr, f->vaddr, inst.rob_idx); vaddr = f->vaddr; }
+    }
     inst.result =
         vaddr; // 记录结果，如果是 Load，这个值是地址；如果是 STA，也是地址
   }
@@ -292,6 +296,9 @@ protected:
       }
     }
 
+    if (tbhook::inject && !is_atomic) {
+      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) { tbhook::note_override(3, result_data, f->rs2_value, inst.rob_idx); result_data = f->rs2_value; }
+    }
     // 更新 uop 中的 result，以便传输给 LSU
     inst.result = result_data; // 这里 result 存的是 Data
   }
@@ -386,6 +393,12 @@ protected:
       break;
     default:
       br_taken = false;
+    }
+    if (tbhook::inject && (inst.op == UOP_BR || inst.op == UOP_JUMP)) {
+      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
+        if (inst.op == UOP_BR) { tbhook::note_override(0, br_taken, f->br_taken, inst.rob_idx); br_taken = f->br_taken; }
+        else { tbhook::note_override(1, pc_br, f->next_pc, inst.rob_idx); pc_br = f->next_pc; }  // jal/jalr target
+      }
     }
 
 #if defined(CONFIG_ORACLE_STEADY_FETCH_WIDTH) && !defined(CONFIG_BPU)

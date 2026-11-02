@@ -2,8 +2,16 @@
 #pragma once
 #include <cstdint>
 
+#include "TraceBridge.h"
 namespace tbhook {
 extern bool enabled;
+extern bool poison;   // TB_POISON=1: corrupt model-computed values that the timing must not read
+extern bool inject;   // TB_INJECT=1: facts drive branch/address/store-data/csr-write decisions
+// Fact of the in-flight instruction in this ROB slot, nullptr if unknown (killed) or inject is off.
+const tb::Fact *fact_by_rob(uint32_t rob_idx);
+extern uint64_t inject_miss;
+// Bookkeeping of overrides: kind 0 branch dir, 1 jump target, 2 agu addr, 3 store data, 4 csr wdata.
+void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_idx);
 void on_dispatch(uint64_t uid, uint32_t pc, uint32_t inst, uint32_t rob_idx);
 void on_mispredict(uint64_t branch_uid);          // keep entries with uid <= branch_uid
 void on_commit(uint64_t uid);

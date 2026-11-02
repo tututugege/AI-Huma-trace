@@ -31,10 +31,13 @@ struct Fact {
   uint8_t rd = 0;
   uint32_t rd_value = 0;
   bool is_br = false, br_taken = false;
+  bool control_valid = false;  // br_taken/next_pc are meaningful (executed, or evaluated from registers)
   bool is_load = false, is_store = false;
   uint32_t vaddr = 0;
   uint8_t size = 0;
-  uint32_t store_data = 0;
+  uint32_t store_data = 0;     // size-masked
+  uint32_t rs2_value = 0;      // full rs2 (what the model carries as store data)
+  uint32_t csr_wdata = 0;      // SYSTEM csrr*: rs1 value or zimm
 };
 
 class Bridge {
@@ -43,6 +46,8 @@ public:
   const Fact &dispatch(uint64_t uid, uint32_t pc, uint32_t inst);
   void rewind_after(int64_t uid);   // keep entries with uid <= given (-1: drop all)
   void commit(uint64_t uid);        // must be the oldest entry
+  // Instructions can also be fetched from the boot ROM region (word-backed MMIO in the core).
+  void set_boot_region(uint32_t base, uint32_t bytes) { boot_base_ = base; boot_bytes_ = bytes; }
   size_t in_flight() const { return chain_.size(); }
   // A value the core cannot know (MMIO/timer read, mip/time CSR read) arrives from the model:
   // rewind everything younger than uid, write the destination register, replay the younger
@@ -62,6 +67,7 @@ private:
   struct Entry;
   RefCpuContext *ctx_;
   uint32_t ram_base_, ram_bytes_;
+  uint32_t boot_base_ = 0, boot_bytes_ = 0;
   std::deque<Entry *> chain_;
   bool in_ram(uint32_t addr, uint32_t size) const;
 };

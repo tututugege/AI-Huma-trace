@@ -32,6 +32,12 @@ namespace {
 inline uint32_t bits(uint32_t v, int hi, int lo) { return (v >> lo) & ((1u << (hi - lo + 1)) - 1); }
 inline int32_t sext(uint32_t v, int n) { return (int32_t)(v << (32 - n)) >> (32 - n); }
 inline uint32_t immI(uint32_t i) { return (uint32_t)sext(bits(i, 31, 20), 12); }
+inline uint32_t immB(uint32_t i) {
+  return (uint32_t)sext((bits(i, 31, 31) << 12) | (bits(i, 7, 7) << 11) | (bits(i, 30, 25) << 5) | (bits(i, 11, 8) << 1), 13);
+}
+inline uint32_t immJ(uint32_t i) {
+  return (uint32_t)sext((bits(i, 31, 31) << 20) | (bits(i, 19, 12) << 12) | (bits(i, 20, 20) << 11) | (bits(i, 30, 21) << 1), 21);
+}
 inline uint32_t immS(uint32_t i) { return (uint32_t)sext((bits(i, 31, 25) << 5) | bits(i, 11, 7), 12); }
 
 // Undo one entry on a state copy (CSR/regs/pc/priv/reservation). Memory is the caller's job.
@@ -49,6 +55,27 @@ void undo_into(const Bridge::Stats *, RefCpuState &st, const uint32_t *trap_csr,
   st.reserve_addr = ra;
 }
 } // namespace
+
+// Control-flow outcome computed from the register file, independent of the core's execution
+// (used when the instruction was not executed: blocked fetch, undone trap).
+static bool eval_control(uint32_t pc, uint32_t inst, const uint32_t *gpr, bool &taken, uint32_t &next) {
+  const uint32_t op = bits(inst, 6, 0), f3 = bits(inst, 14, 12);
+  const uint32_t a = gpr[bits(inst, 19, 15)], b = gpr[bits(inst, 24, 20)];
+  if (op == 0x6f) { taken = true; next = pc + immJ(inst); return true; }
+  if (op == 0x67) { taken = true; next = (a + immI(inst)) & ~1u; return true; }
+  if (op != 0x63) return false;
+  switch (f3) {
+  case 0: taken = a == b; break;
+  case 1: taken = a != b; break;
+  case 4: taken = (int32_t)a < (int32_t)b; break;
+  case 5: taken = (int32_t)a >= (int32_t)b; break;
+  case 6: taken = a < b; break;
+  case 7: taken = a >= b; break;
+  default: taken = false; break;
+  }
+  next = taken ? pc + immB(inst) : pc + 4;
+  return true;
+}
 
 Bridge::Bridge(RefCpuContext *ctx, uint32_t ram_base, uint32_t ram_bytes)
     : ctx_(ctx), ram_base_(ram_base), ram_bytes_(ram_bytes) {}
@@ -90,9 +117,11 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   e->f.is_br = (opcode == 0x63);
   const bool is_amo = (opcode == 0x2f);
   const bool is_lr = is_amo && bits(inst, 31, 27) == 2;
+  e->f.rs2_value = st.gpr[rs2];
   if (opcode == 0x73) {  // SYSTEM: save the whole CSR file
     e->full_csr = true;
     e->csr_full.assign(st.csr, st.csr + 21);
+    e->f.csr_wdata = (funct3 & 4) ? rs1 : st.gpr[rs1];  // csrr*i: zimm in the rs1 field
   }
   // Destination register undo (x0 never changes)
   const bool writes_rd = opcode != 0x63 && opcode != 0x23 && opcode != 0x0f;
@@ -115,7 +144,8 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   }
 
   Blocked blk = Blocked::None;
-  if (!in_ram(pc, 4)) blk = Blocked::PcOutOfRam;
+  const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + 4 <= (uint64_t)boot_base_ + boot_bytes_;
+  if (!in_ram(pc, 4) && !in_boot) blk = Blocked::PcOutOfRam;
   else if (inst == 0x00100073) blk = Blocked::Ebreak;
   else if (e->f.is_load || e->f.is_store) {
     const uint32_t a = e->f.vaddr, sz = e->f.size;
@@ -129,7 +159,9 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     // Not executed. The state stays as before (pc nominal +4); the next dispatch forces
     // a jump if the window continues elsewhere. rd keeps its old value: wrong-path only.
     e->rd = 0;
-    st.pc = pc + 4;
+    bool tk; uint32_t nx;
+    if (eval_control(pc, inst, st.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; st.pc = nx; }
+    else st.pc = pc + 4;
     refcpu_set_state(ctx_, &st);
     e->f.next_pc = st.pc;
     chain_.push_back(e);
@@ -160,6 +192,8 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     undo_into(&stats, after, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before,
               e->priv_before, e->resv_valid_before, e->resv_addr_before, 0, 0);
     after.pc = pc + 4;
+    { bool tk; uint32_t nx;
+      if (eval_control(pc, inst, after.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; after.pc = nx; } }
     refcpu_set_state(ctx_, &after);
     e->rd = 0;
     e->f.next_pc = after.pc;
@@ -168,6 +202,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   }
 
   e->f.next_pc = after.pc;
+  e->f.control_valid = true;  // executed: the core's outcome
   if (e->rd != 0 || (writes_rd && rd != 0)) {
     e->f.rd_valid = true;
     e->f.rd = rd;

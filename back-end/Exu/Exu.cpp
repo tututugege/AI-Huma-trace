@@ -276,6 +276,9 @@ void Exu::comb_to_csr() {
   } else {
     out.exe2csr->wdata = uop.src1_rdata;
   }
+  if (tbhook::inject) {
+    if (const tb::Fact *f = tbhook::fact_by_rob(uop.rob_idx)) { tbhook::note_override(4, out.exe2csr->wdata, f->csr_wdata, uop.rob_idx); out.exe2csr->wdata = f->csr_wdata; }
+  }
 }
 
 /*

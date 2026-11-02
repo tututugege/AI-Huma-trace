@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "RealLsu.h"
 #include "DcacheConfig.h"
 #include "MemUtils.h"
@@ -1019,6 +1020,7 @@ void RealLsu::comb_lsu2exe() {
         wb_uop.diag_val = ldq_entry.v_addr;
         wb_uop.result =
             ldq_entry.page_fault ? ldq_entry.diag_val : ldq_entry.result;
+        if (tbhook::poison && !ldq_entry.page_fault && !ldq_entry.is_mmio) wb_uop.result ^= 0xA5C3A5C3u;
         wb_uop.dest_preg = ldq_entry.dest_preg;
         wb_uop.page_fault_load = ldq_entry.page_fault;
         // Loads to x0 still complete, but have no register destination.

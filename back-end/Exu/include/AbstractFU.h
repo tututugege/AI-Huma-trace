@@ -1,4 +1,5 @@
 #pragma once
+#include "trace_hook.h"
 
 #include "ExuTypes.h"
 #include "config.h"
@@ -56,6 +57,7 @@ public:
     if (in.en) {
       ExuInst inst = in.inst;
       impl_compute(inst);
+      if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL || inst.op == UOP_DIV || inst.op == UOP_FP)) inst.result ^= 0xA5C3A5C3u;
       out.complete = true;
       out.inst = inst;
     }
@@ -145,6 +147,7 @@ public:
     if (in.en && pipeline_1.size() < limit) {
       ExuInst inst = in.inst;
       impl_compute(inst);
+      if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL || inst.op == UOP_DIV || inst.op == UOP_FP)) inst.result ^= 0xA5C3A5C3u;
       PipeEntry entry{};
       entry.uop = inst;
       entry.done_cycle = sim_time + latency - 1;
@@ -221,6 +224,7 @@ public:
     if (in.en && !busy_1) {
       ExuInst inst = in.inst;
       impl_compute(inst);
+      if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL || inst.op == UOP_DIV || inst.op == UOP_FP)) inst.result ^= 0xA5C3A5C3u;
       int dyn_latency = calculate_latency(inst);
       current_inst_1 = inst;
       done_cycle_1 = sim_time + dyn_latency;
