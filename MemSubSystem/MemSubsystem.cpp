@@ -129,7 +129,6 @@ struct AxiLlcTableRuntime {
     lookup_in.repl.bytes = repl_payload.bytes;
     // The data row carries no values (zero-filled).
     lookup_in.data_valid = lookup_in.meta_valid;
-    lookup_in.data.bytes.assign(static_cast<size_t>(config.ways) * config.line_bytes, 0);
   }
 
   void seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out) {
