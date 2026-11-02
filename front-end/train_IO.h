@@ -62,10 +62,7 @@ struct Front2BackCombOut {
 };
 
 
-using BpuPostReadReqCombIn = BPU_TOP::BpuPostReadReqCombIn;
 using BpuPostReadReqCombOut = BPU_TOP::BpuPostReadReqCombOut;
-using BpuSubmoduleBindCombIn = BPU_TOP::BpuSubmoduleBindCombIn;
-using BpuSubmoduleBindCombOut = BPU_TOP::BpuSubmoduleBindCombOut;
 using BpuPredictMainCombIn = BPU_TOP::BpuPredictMainCombIn;
 using BpuPredictMainCombOut = BPU_TOP::BpuPredictMainCombOut;
 

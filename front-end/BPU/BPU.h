@@ -281,23 +281,6 @@ public:
 
 
 
-  struct BpuPostReadReqCombIn {
-    wire1_t refetch;
-    pc_t in_update_base_pc[COMMIT_WIDTH];
-    wire1_t in_upd_valid[COMMIT_WIDTH];
-    br_type_t in_actual_br_type[COMMIT_WIDTH];
-    wire1_t ghr_snapshot[GHR_LENGTH];
-    wire32_t fh_snapshot[FH_N_MAX][TN_MAX];
-    tage_path_hist_t path_snapshot;
-    pc_t pred_base_pc;
-    wire1_t going_to_do_pred;
-    wire1_t set_submodule_input;
-    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
-    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
-    pc_t do_pred_for_this_pc[FETCH_WIDTH];
-    wire1_t going_to_do_upd[BPU_BANK_NUM];
-    ReadData::QueueEntrySnapshot q_data[BPU_BANK_NUM];
-  };
 
   struct BpuPostReadReqCombOut {
     TypePredictor::InputPayload type_in;
@@ -305,16 +288,7 @@ public:
     BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
   };
 
-  struct BpuSubmoduleBindCombIn {
-    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
-    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
-    BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
-    TypePredictor::OutputPayload type_out;
-  };
 
-  struct BpuSubmoduleBindCombOut {
-    BTB_TOP::InputPayload btb_in_with_type[BPU_BANK_NUM];
-  };
 
   struct BpuPredictMainCombIn {
     wire1_t refetch;
@@ -621,36 +595,36 @@ public:
   }
 
 
-  void bpu_post_read_req_comb(const BpuPostReadReqCombIn &in,
+  void bpu_post_read_req_comb(const InputPayload &inp, const ReadData &rd,
                               BpuPostReadReqCombOut &out) const {
     out = BpuPostReadReqCombOut{};
     for (int b = 0; b < BPU_BANK_NUM; b++) {
       for (int k = 0; k < FH_N_MAX; k++) {
         for (int i = 0; i < TN_MAX; i++) {
-          out.tage_in[b].fh_in[k][i] = in.fh_snapshot[k][i];
+          out.tage_in[b].fh_in[k][i] = rd.Spec_FH_snapshot[k][i];
         }
       }
       for (int i = 0; i < GHR_LENGTH; i++) {
-        out.tage_in[b].ghr_in[i] = in.ghr_snapshot[i];
+        out.tage_in[b].ghr_in[i] = rd.Spec_GHR_snapshot[i];
       }
-      out.tage_in[b].path_in = in.path_snapshot;
+      out.tage_in[b].path_in = rd.Spec_PATH_snapshot;
     }
 
 
-    if (in.set_submodule_input) {
-      if (in.going_to_do_pred) {
+    if (rd.set_submodule_input) {
+      if (rd.going_to_do_pred) {
         bool pred_req_sent[BPU_BANK_NUM];
         std::memset(pred_req_sent, 0, sizeof(pred_req_sent));
         for (int i = 0; i < FETCH_WIDTH; i++) {
-          if (!in.do_pred_on_this_pc[i]) {
+          if (!rd.do_pred_on_this_pc[i]) {
             continue;
           }
           out.type_in.pred_valid[i] = true;
-          out.type_in.pred_pc[i] = in.do_pred_for_this_pc[i];
-          const bpu_bank_sel_ext_t bank_sel = in.this_pc_bank_sel[i];
+          out.type_in.pred_pc[i] = rd.do_pred_for_this_pc[i];
+          const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
           if (bank_sel < BPU_BANK_NUM && !pred_req_sent[bank_sel]) {
             BankPcCombOut bank_pc_out{};
-            bank_pc_comb(BankPcCombIn{in.do_pred_for_this_pc[i]}, bank_pc_out);
+            bank_pc_comb(BankPcCombIn{rd.do_pred_for_this_pc[i]}, bank_pc_out);
             out.tage_in[bank_sel].pred_req = true;
             out.tage_in[bank_sel].pc_pred_in = bank_pc_out.bank_pc;
             out.btb_in[bank_sel].pred_req = true;
@@ -662,68 +636,68 @@ public:
       }
 
       for (int i = 0; i < BPU_BANK_NUM; i++) {
-        if (!in.going_to_do_upd[i]) {
+        if (!rd.going_to_do_upd[i]) {
           continue;
         }
         BankPcCombOut bank_pc_out{};
-        bank_pc_comb(BankPcCombIn{in.q_data[i].base_pc}, bank_pc_out);
-        if (in.q_data[i].br_type == BR_DIRECT) {
-          out.tage_in[i].update_en = in.q_data[i].valid_mask;
+        bank_pc_comb(BankPcCombIn{rd.q_data[i].base_pc}, bank_pc_out);
+        if (rd.q_data[i].br_type == BR_DIRECT) {
+          out.tage_in[i].update_en = rd.q_data[i].valid_mask;
           out.tage_in[i].pc_update_in = bank_pc_out.bank_pc;
-          out.tage_in[i].real_dir = in.q_data[i].actual_dir;
-          out.tage_in[i].pred_in = in.q_data[i].pred_dir;
-          out.tage_in[i].alt_pred_in = in.q_data[i].alt_pred;
-          out.tage_in[i].pcpn_in = in.q_data[i].pcpn;
-          out.tage_in[i].altpcpn_in = in.q_data[i].altpcpn;
-          out.tage_in[i].sc_used_in = in.q_data[i].sc_used;
-          out.tage_in[i].sc_pred_in = in.q_data[i].sc_pred;
-          out.tage_in[i].sc_sum_in = in.q_data[i].sc_sum;
+          out.tage_in[i].real_dir = rd.q_data[i].actual_dir;
+          out.tage_in[i].pred_in = rd.q_data[i].pred_dir;
+          out.tage_in[i].alt_pred_in = rd.q_data[i].alt_pred;
+          out.tage_in[i].pcpn_in = rd.q_data[i].pcpn;
+          out.tage_in[i].altpcpn_in = rd.q_data[i].altpcpn;
+          out.tage_in[i].sc_used_in = rd.q_data[i].sc_used;
+          out.tage_in[i].sc_pred_in = rd.q_data[i].sc_pred;
+          out.tage_in[i].sc_sum_in = rd.q_data[i].sc_sum;
           for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            out.tage_in[i].sc_idx_in[t] = in.q_data[i].sc_idx[t];
+            out.tage_in[i].sc_idx_in[t] = rd.q_data[i].sc_idx[t];
           }
-          out.tage_in[i].loop_used_in = in.q_data[i].loop_used;
-          out.tage_in[i].loop_hit_in = in.q_data[i].loop_hit;
-          out.tage_in[i].loop_pred_in = in.q_data[i].loop_pred;
-          out.tage_in[i].loop_idx_in = in.q_data[i].loop_idx;
-          out.tage_in[i].loop_tag_in = in.q_data[i].loop_tag;
+          out.tage_in[i].loop_used_in = rd.q_data[i].loop_used;
+          out.tage_in[i].loop_hit_in = rd.q_data[i].loop_hit;
+          out.tage_in[i].loop_pred_in = rd.q_data[i].loop_pred;
+          out.tage_in[i].loop_idx_in = rd.q_data[i].loop_idx;
+          out.tage_in[i].loop_tag_in = rd.q_data[i].loop_tag;
           for (int k = 0; k < TN_MAX; k++) {
-            out.tage_in[i].tage_tag_flat_in[k] = in.q_data[i].tage_tags[k];
-            out.tage_in[i].tage_idx_flat_in[k] = in.q_data[i].tage_idxs[k];
+            out.tage_in[i].tage_tag_flat_in[k] = rd.q_data[i].tage_tags[k];
+            out.tage_in[i].tage_idx_flat_in[k] = rd.q_data[i].tage_idxs[k];
           }
         }
 
-        out.btb_in[i].upd_valid = in.q_data[i].valid_mask;
+        out.btb_in[i].upd_valid = rd.q_data[i].valid_mask;
         out.btb_in[i].upd_pc = bank_pc_out.bank_pc;
-        out.btb_in[i].upd_actual_addr = in.q_data[i].targets;
-        out.btb_in[i].upd_actual_dir = in.q_data[i].actual_dir;
-        out.btb_in[i].upd_br_type_in = in.q_data[i].br_type;
+        out.btb_in[i].upd_actual_addr = rd.q_data[i].targets;
+        out.btb_in[i].upd_actual_dir = rd.q_data[i].actual_dir;
+        out.btb_in[i].upd_br_type_in = rd.q_data[i].br_type;
       }
     }
 
     for (int i = 0; i < COMMIT_WIDTH; ++i) {
-      out.type_in.upd_valid[i] = in.in_upd_valid[i];
-      out.type_in.upd_pc[i] = in.in_update_base_pc[i];
-      out.type_in.upd_br_type[i] = in.in_actual_br_type[i];
+      out.type_in.upd_valid[i] = inp.in_upd_valid[i];
+      out.type_in.upd_pc[i] = inp.in_update_base_pc[i];
+      out.type_in.upd_br_type[i] = inp.in_actual_br_type[i];
     }
   }
 
-  void bpu_submodule_bind_comb(const BpuSubmoduleBindCombIn &in,
-                               BpuSubmoduleBindCombOut &out) const {
-    const TypePredictor::OutputPayload &type_out = in.type_out;
-    std::memset(&out, 0, sizeof(out));
+  void bpu_submodule_bind_comb(const ReadData &rd,
+                              const BTB_TOP::InputPayload (&btb_in)[BPU_BANK_NUM],
+                              const TypePredictor::OutputPayload &type_out,
+                              BTB_TOP::InputPayload (&btb_in_with_type)[BPU_BANK_NUM]) const {
     for (int i = 0; i < BPU_BANK_NUM; ++i) {
-      out.btb_in_with_type[i] = in.btb_in[i];
+      btb_in_with_type[i] = btb_in[i];
     }
     for (int i = 0; i < FETCH_WIDTH; ++i) {
-      if (!in.do_pred_on_this_pc[i]) {
+      if (!rd.do_pred_on_this_pc[i]) {
         continue;
       }
-      const bpu_bank_sel_ext_t bank_sel = in.this_pc_bank_sel[i];
+      const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
       if (bank_sel >= BPU_BANK_NUM) {
         continue;
       }
-      if (out.btb_in_with_type[bank_sel].pred_req) {
-        out.btb_in_with_type[bank_sel].pred_type_in = type_out.pred_type[i];
+      if (btb_in_with_type[bank_sel].pred_req) {
+        btb_in_with_type[bank_sel].pred_type_in = type_out.pred_type[i];
       }
     }
   }
@@ -1089,15 +1063,7 @@ public:
 
     TAGE_TOP::OutputPayload tage_out[BPU_BANK_NUM];
     BTB_TOP::OutputPayload btb_out[BPU_BANK_NUM];
-    BpuSubmoduleBindCombOut bind_out{};
-    BpuSubmoduleBindCombIn bind_in{};
-    std::memcpy(bind_in.do_pred_on_this_pc, rd.do_pred_on_this_pc,
-                sizeof(bind_in.do_pred_on_this_pc));
-    std::memcpy(bind_in.this_pc_bank_sel, rd.this_pc_bank_sel,
-                sizeof(bind_in.this_pc_bank_sel));
-    std::memcpy(bind_in.btb_in, post_req.btb_in, sizeof(bind_in.btb_in));
-    bind_in.type_out = type_out;
-    bpu_submodule_bind_comb(bind_in, bind_out);
+    bpu_submodule_bind_comb(rd, post_req.btb_in, type_out, req.btb_in);
     {
       for (int i = 0; i < BPU_BANK_NUM; i++) {
         tage_inst[i]->tage_comb_calc(post_req.tage_in[i], rd.tage_rd[i], tage_out[i],
@@ -1106,9 +1072,8 @@ public:
     }
     {
       for (int i = 0; i < BPU_BANK_NUM; i++) {
-        btb_inst[i]->btb_comb_calc(bind_out.btb_in_with_type[i], rd.btb_rd[i],
+        btb_inst[i]->btb_comb_calc(req.btb_in[i], rd.btb_rd[i],
                                    btb_out[i], req.btb_req[i]);
-        req.btb_in[i] = bind_out.btb_in_with_type[i];
       }
     }
     BpuPredictMainCombIn predict_main_in{};
@@ -1339,32 +1304,7 @@ public:
                      OutputPayload &out, UpdateRequest &req) {
     BpuPostReadReqCombOut post_read_req{};
     bpu_data_read(inp, rd);
-    BpuPostReadReqCombIn post_read_in{};
-    post_read_in.refetch = inp.refetch;
-    std::memcpy(post_read_in.in_update_base_pc, inp.in_update_base_pc,
-                sizeof(post_read_in.in_update_base_pc));
-    std::memcpy(post_read_in.in_upd_valid, inp.in_upd_valid,
-                sizeof(post_read_in.in_upd_valid));
-    std::memcpy(post_read_in.in_actual_br_type, inp.in_actual_br_type,
-                sizeof(post_read_in.in_actual_br_type));
-    std::memcpy(post_read_in.ghr_snapshot, rd.Spec_GHR_snapshot,
-                sizeof(post_read_in.ghr_snapshot));
-    std::memcpy(post_read_in.fh_snapshot, rd.Spec_FH_snapshot,
-                sizeof(post_read_in.fh_snapshot));
-    post_read_in.path_snapshot = rd.Spec_PATH_snapshot;
-    post_read_in.pred_base_pc = rd.pred_base_pc;
-    post_read_in.going_to_do_pred = rd.going_to_do_pred;
-    post_read_in.set_submodule_input = rd.set_submodule_input;
-    std::memcpy(post_read_in.do_pred_on_this_pc, rd.do_pred_on_this_pc,
-                sizeof(post_read_in.do_pred_on_this_pc));
-    std::memcpy(post_read_in.this_pc_bank_sel, rd.this_pc_bank_sel,
-                sizeof(post_read_in.this_pc_bank_sel));
-    std::memcpy(post_read_in.do_pred_for_this_pc, rd.do_pred_for_this_pc,
-                sizeof(post_read_in.do_pred_for_this_pc));
-    std::memcpy(post_read_in.going_to_do_upd, rd.going_to_do_upd,
-                sizeof(post_read_in.going_to_do_upd));
-    std::memcpy(post_read_in.q_data, rd.q_data, sizeof(post_read_in.q_data));
-    bpu_post_read_req_comb(post_read_in, post_read_req);
+    bpu_post_read_req_comb(inp, rd, post_read_req);
     bpu_submodule_seq_read(post_read_req, rd);
     bpu_core_comb_calc(inp, rd, post_read_req, out, req);
   }
