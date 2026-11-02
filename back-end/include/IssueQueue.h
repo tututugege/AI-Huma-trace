@@ -82,6 +82,12 @@ private:
   // wake_matrix_*_1 (working) at comb_begin (seq copies back). Writes to the
   // working copy are recorded so seq() copies only what changed.
   bool entry_dirty = false;
+  bool entry_all_dirty = false;
+  std::vector<uint64_t> slot_dirty;
+  void mark_slot(int i) {
+    slot_dirty[i >> 6] |= 1ull << (i & 63);
+    entry_dirty = true;
+  }
   bool matrix_all_dirty = false;
   std::vector<uint8_t> row_dirty;
   std::vector<uint32_t> dirty_rows;
@@ -111,6 +117,7 @@ public:
         ports(cfg.ports) {
     entry.resize(size);
     entry_1.resize(size);
+    slot_dirty.assign((size + 63) / 64, 0);
     count = 0;
     count_1 = 0;
     wake_words_per_row = (size + 63) / 64;
@@ -183,7 +190,7 @@ public:
           if (idx < size && entry_1[idx].valid && entry_1[idx].uop->src1_en &&
               entry_1[idx].uop.src1_busy && entry_1[idx].uop->src1_preg == preg) {
             entry_1[idx].uop.src1_busy = false;
-            entry_dirty = true;
+            mark_slot(idx);
           }
           mask1 &= (mask1 - 1);
         }
@@ -196,7 +203,7 @@ public:
           if (idx < size && entry_1[idx].valid && entry_1[idx].uop->src2_en &&
               entry_1[idx].uop.src2_busy && entry_1[idx].uop->src2_preg == preg) {
             entry_1[idx].uop.src2_busy = false;
-            entry_dirty = true;
+            mark_slot(idx);
           }
           mask2 &= (mask2 - 1);
         }
@@ -249,7 +256,7 @@ private:
     for (int i = 0; i < size; i++) {
       if (!entry_1[i].valid) {
 #ifndef IQ_NEG_CONTROL
-        entry_dirty = true;
+        mark_slot(i);
 #endif
         entry_1[i] = inst;
         entry_1[i].valid = true;
@@ -272,7 +279,7 @@ private:
       if (match_mask) {
         clear_dep_bits_for_slot(entry_1[i], i);
         entry_1[i].valid = false;
-        entry_dirty = true;
+        mark_slot(i);
         count_1--;
       }
     }
@@ -281,10 +288,10 @@ private:
   // Clear resolved branch bits from surviving entries
   void clear_br(wire<BR_MASK_WIDTH> clear_mask) {
     if (clear_mask == 0) return;
-    entry_dirty = true;
     for (int i = 0; i < size; i++) {
       if (entry_1[i].valid) {
         entry_1[i].uop.br_mask &= ~clear_mask;
+        mark_slot(i);
       }
     }
   }
@@ -293,6 +300,7 @@ private:
     for (auto &e : entry_1)
       e.valid = false;
     entry_dirty = true;
+    entry_all_dirty = true;
     matrix_all_dirty = true;
     count_1 = 0;
     
@@ -307,7 +315,7 @@ private:
       if (entry_1[idx].valid) {
         clear_dep_bits_for_slot(entry_1[idx], idx);
         entry_1[idx].valid = false;
-        entry_dirty = true;
+        mark_slot(idx);
         count_1--;
       }
     }
@@ -316,7 +324,18 @@ private:
 public:
   void seq() {
     if (entry_dirty) {
-      entry = entry_1;
+      if (entry_all_dirty) {
+        entry = entry_1;
+        entry_all_dirty = false;
+      } else {
+        for (size_t k = 0; k < slot_dirty.size(); ++k) {
+          for (uint64_t m = slot_dirty[k]; m; m &= m - 1) {
+            const size_t i = k * 64 + __builtin_ctzll(m);
+            entry[i] = entry_1[i];
+          }
+        }
+      }
+      std::fill(slot_dirty.begin(), slot_dirty.end(), 0);
       entry_dirty = false;
     }
     count = count_1;
