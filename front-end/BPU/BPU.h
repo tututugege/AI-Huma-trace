@@ -376,84 +376,9 @@ public:
 
   
   
-  struct BpuHistCombIn {
-    wire1_t refetch;
-    pc_t in_update_base_pc[COMMIT_WIDTH];
-    wire1_t in_upd_valid[COMMIT_WIDTH];
-    wire1_t in_actual_dir[COMMIT_WIDTH];
-    br_type_t in_actual_br_type[COMMIT_WIDTH];
-    wire1_t in_pred_dir[COMMIT_WIDTH];
-    wire1_t going_to_do_pred;
-    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
-    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
-    pc_t do_pred_for_this_pc[FETCH_WIDTH];
-    wire1_t Spec_GHR_snapshot[GHR_LENGTH];
-    wire32_t Spec_FH_snapshot[FH_N_MAX][TN_MAX];
-    wire1_t Arch_GHR_snapshot[GHR_LENGTH];
-    wire32_t Arch_FH_snapshot[FH_N_MAX][TN_MAX];
-    tage_path_hist_t Spec_PATH_snapshot;
-    tage_path_hist_t Arch_PATH_snapshot;
-    target_addr_t Arch_ras_stack_snapshot[RAS_DEPTH];
-    ras_count_t Arch_ras_count_snapshot;
-    target_addr_t Spec_ras_stack_snapshot[RAS_DEPTH];
-    ras_count_t Spec_ras_count_snapshot;
-    TypePredictor::OutputPayload type_out;
-    wire1_t final_pred_dir[FETCH_WIDTH];
-  };
 
-  struct BpuHistCombOut {
-    wire1_t should_update_spec_hist;
-    wire1_t Spec_GHR_next[GHR_LENGTH];
-    wire32_t Spec_FH_next[FH_N_MAX][TN_MAX];
-    wire1_t Arch_GHR_next[GHR_LENGTH];
-    wire32_t Arch_FH_next[FH_N_MAX][TN_MAX];
-    tage_path_hist_t Spec_PATH_next;
-    tage_path_hist_t Arch_PATH_next;
-    target_addr_t Arch_ras_stack_next[RAS_DEPTH];
-    ras_count_t Arch_ras_count_next;
-    target_addr_t Spec_ras_stack_next[RAS_DEPTH];
-    ras_count_t Spec_ras_count_next;
-  };
 
-  struct BpuQueueCombIn {
-    pc_t in_update_base_pc[COMMIT_WIDTH];
-    wire1_t in_upd_valid[COMMIT_WIDTH];
-    wire1_t in_actual_dir[COMMIT_WIDTH];
-    br_type_t in_actual_br_type[COMMIT_WIDTH];
-    target_addr_t in_actual_targets[COMMIT_WIDTH];
-    wire1_t in_pred_dir[COMMIT_WIDTH];
-    wire1_t in_alt_pred[COMMIT_WIDTH];
-    pcpn_t in_pcpn[COMMIT_WIDTH];
-    pcpn_t in_altpcpn[COMMIT_WIDTH];
-    tage_tag_t in_tage_tags[COMMIT_WIDTH][TN_MAX];
-    tage_idx_t in_tage_idxs[COMMIT_WIDTH][TN_MAX];
-    wire1_t in_sc_used[COMMIT_WIDTH];
-    wire1_t in_sc_pred[COMMIT_WIDTH];
-    tage_scl_meta_sum_t in_sc_sum[COMMIT_WIDTH];
-    tage_scl_meta_idx_t in_sc_idx[COMMIT_WIDTH][BPU_SCL_META_NTABLE];
-    wire1_t in_loop_used[COMMIT_WIDTH];
-    wire1_t in_loop_hit[COMMIT_WIDTH];
-    wire1_t in_loop_pred[COMMIT_WIDTH];
-    tage_loop_meta_idx_t in_loop_idx[COMMIT_WIDTH];
-    tage_loop_meta_tag_t in_loop_tag[COMMIT_WIDTH];
-    queue_ptr_t q_wr_ptr_snapshot[BPU_BANK_NUM];
-    queue_ptr_t q_rd_ptr_snapshot[BPU_BANK_NUM];
-    queue_count_t q_count_snapshot[BPU_BANK_NUM];
-    wire1_t going_to_do_upd[BPU_BANK_NUM];
-  };
 
-  struct BpuQueueCombOut {
-    wire1_t q_push_en[BPU_BANK_NUM];
-    wire1_t q_pop_en[BPU_BANK_NUM];
-    queue_ptr_t q_wr_ptr_next[BPU_BANK_NUM];
-    queue_ptr_t q_rd_ptr_next[BPU_BANK_NUM];
-    queue_count_t q_count_next[BPU_BANK_NUM];
-    wire1_t q_entry_we[COMMIT_WIDTH];
-    bpu_bank_sel_t q_entry_bank[COMMIT_WIDTH];
-    queue_ptr_t q_entry_slot[COMMIT_WIDTH];
-    ReadData::QueueEntrySnapshot q_entry_data[COMMIT_WIDTH];
-    wire1_t update_queue_full;
-  };
 
 private:
   // ========================================================================
@@ -837,8 +762,8 @@ public:
 
   void bpu_submodule_bind_comb(const BpuSubmoduleBindCombIn &in,
                                BpuSubmoduleBindCombOut &out) const {
-    std::memset(&out, 0, sizeof(out));
     const TypePredictor::OutputPayload &type_out = in.type_out;
+    std::memset(&out, 0, sizeof(out));
     for (int i = 0; i < BPU_BANK_NUM; ++i) {
       out.btb_in_with_type[i] = in.btb_in[i];
     }
@@ -947,35 +872,35 @@ public:
   }
 
   
-  void bpu_hist_comb(const BpuHistCombIn &in, BpuHistCombOut &out) const {
-    const TypePredictor::OutputPayload &type_out = in.type_out;
-    const wire1_t (&final_pred_dir)[FETCH_WIDTH] = in.final_pred_dir;
-    std::memset(&out, 0, sizeof(out));
-    std::memcpy(out.Spec_GHR_next, in.Spec_GHR_snapshot, sizeof(out.Spec_GHR_next));
-    std::memcpy(out.Arch_GHR_next, in.Arch_GHR_snapshot, sizeof(out.Arch_GHR_next));
-    std::memcpy(out.Spec_FH_next, in.Spec_FH_snapshot, sizeof(out.Spec_FH_next));
-    std::memcpy(out.Arch_FH_next, in.Arch_FH_snapshot, sizeof(out.Arch_FH_next));
-    out.Spec_PATH_next = in.Spec_PATH_snapshot;
-    out.Arch_PATH_next = in.Arch_PATH_snapshot;
-    std::memcpy(out.Arch_ras_stack_next, in.Arch_ras_stack_snapshot,
-                sizeof(out.Arch_ras_stack_next));
-    out.Arch_ras_count_next = in.Arch_ras_count_snapshot;
-    std::memcpy(out.Spec_ras_stack_next, in.Spec_ras_stack_snapshot,
-                sizeof(out.Spec_ras_stack_next));
-    out.Spec_ras_count_next = in.Spec_ras_count_snapshot;
-    out.should_update_spec_hist = in.going_to_do_pred && !in.refetch;
+  void bpu_hist_comb(const InputPayload &inp, const ReadData &rd,
+                     const TypePredictor::OutputPayload &type_out,
+                     UpdateRequest &req) const {
+    const wire1_t (&final_pred_dir)[FETCH_WIDTH] = req.final_pred_dir;
+        std::memcpy(req.Spec_GHR_next, rd.Spec_GHR_snapshot, sizeof(req.Spec_GHR_next));
+    std::memcpy(req.Arch_GHR_next, rd.Arch_GHR_snapshot, sizeof(req.Arch_GHR_next));
+    std::memcpy(req.Spec_FH_next, rd.Spec_FH_snapshot, sizeof(req.Spec_FH_next));
+    std::memcpy(req.Arch_FH_next, rd.Arch_FH_snapshot, sizeof(req.Arch_FH_next));
+    req.Spec_PATH_next = rd.Spec_PATH_snapshot;
+    req.Arch_PATH_next = rd.Arch_PATH_snapshot;
+    std::memcpy(req.Arch_ras_stack_next, rd.Arch_ras_stack_snapshot,
+                sizeof(req.Arch_ras_stack_next));
+    req.Arch_ras_count_next = rd.Arch_ras_count_snapshot;
+    std::memcpy(req.Spec_ras_stack_next, rd.Spec_ras_stack_snapshot,
+                sizeof(req.Spec_ras_stack_next));
+    req.Spec_ras_count_next = rd.Spec_ras_count_snapshot;
+    req.should_update_spec_hist = rd.going_to_do_pred && !inp.refetch;
 
-    if (out.should_update_spec_hist) {
+    if (req.should_update_spec_hist) {
       bool spec_ghr_tmp[GHR_LENGTH];
       uint32_t spec_fh_tmp[FH_N_MAX][TN_MAX];
-      tage_path_hist_t spec_path_tmp = out.Spec_PATH_next;
-      std::memcpy(spec_ghr_tmp, out.Spec_GHR_next, sizeof(spec_ghr_tmp));
-      std::memcpy(spec_fh_tmp, out.Spec_FH_next, sizeof(spec_fh_tmp));
+      tage_path_hist_t spec_path_tmp = req.Spec_PATH_next;
+      std::memcpy(spec_ghr_tmp, req.Spec_GHR_next, sizeof(spec_ghr_tmp));
+      std::memcpy(spec_fh_tmp, req.Spec_FH_next, sizeof(spec_fh_tmp));
       for (int i = 0; i < FETCH_WIDTH; ++i) {
-        if (!in.do_pred_on_this_pc[i]) {
+        if (!rd.do_pred_on_this_pc[i]) {
           continue;
         }
-        const bpu_bank_sel_ext_t bank_sel = in.this_pc_bank_sel[i];
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
         if (bank_sel >= BPU_BANK_NUM) {
           continue;
         }
@@ -985,28 +910,28 @@ public:
           tage_hist_update_inplace(spec_ghr_tmp, spec_fh_tmp, pred_taken,
                                    fh_length, ghr_length);
           spec_path_tmp =
-              tage_path_update_value(spec_path_tmp, in.do_pred_for_this_pc[i], pred_taken);
+              tage_path_update_value(spec_path_tmp, rd.do_pred_for_this_pc[i], pred_taken);
         }
         if (pred_taken) {
           break;
         }
       }
-      std::memcpy(out.Spec_GHR_next, spec_ghr_tmp, sizeof(out.Spec_GHR_next));
-      std::memcpy(out.Spec_FH_next, spec_fh_tmp, sizeof(out.Spec_FH_next));
-      out.Spec_PATH_next = spec_path_tmp;
+      std::memcpy(req.Spec_GHR_next, spec_ghr_tmp, sizeof(req.Spec_GHR_next));
+      std::memcpy(req.Spec_FH_next, spec_fh_tmp, sizeof(req.Spec_FH_next));
+      req.Spec_PATH_next = spec_path_tmp;
 
       target_addr_t spec_ras_stack_tmp[RAS_DEPTH];
-      ras_count_t spec_ras_count_tmp = out.Spec_ras_count_next;
-      std::memcpy(spec_ras_stack_tmp, out.Spec_ras_stack_next, sizeof(spec_ras_stack_tmp));
+      ras_count_t spec_ras_count_tmp = req.Spec_ras_count_next;
+      std::memcpy(spec_ras_stack_tmp, req.Spec_ras_stack_next, sizeof(spec_ras_stack_tmp));
       for (int i = 0; i < FETCH_WIDTH; ++i) {
-        if (!in.do_pred_on_this_pc[i]) {
+        if (!rd.do_pred_on_this_pc[i]) {
           continue;
         }
-        const bpu_bank_sel_ext_t bank_sel = in.this_pc_bank_sel[i];
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
         if (bank_sel >= BPU_BANK_NUM) {
           continue;
         }
-        pc_t pc = in.do_pred_for_this_pc[i];
+        pc_t pc = rd.do_pred_for_this_pc[i];
         br_type_t p_type = type_out.pred_type[i];
         bool pred_taken = final_pred_dir[i];
         if (!pred_taken) {
@@ -1019,123 +944,123 @@ public:
         }
         break;
       }
-      std::memcpy(out.Spec_ras_stack_next, spec_ras_stack_tmp, sizeof(out.Spec_ras_stack_next));
-      out.Spec_ras_count_next = spec_ras_count_tmp;
+      std::memcpy(req.Spec_ras_stack_next, spec_ras_stack_tmp, sizeof(req.Spec_ras_stack_next));
+      req.Spec_ras_count_next = spec_ras_count_tmp;
     }
 
     {
       wire1_t arch_ghr_tmp[GHR_LENGTH];
       wire32_t arch_fh_tmp[FH_N_MAX][TN_MAX];
-      tage_path_hist_t arch_path_tmp = out.Arch_PATH_next;
-      std::memcpy(arch_ghr_tmp, out.Arch_GHR_next, sizeof(arch_ghr_tmp));
-      std::memcpy(arch_fh_tmp, out.Arch_FH_next, sizeof(arch_fh_tmp));
+      tage_path_hist_t arch_path_tmp = req.Arch_PATH_next;
+      std::memcpy(arch_ghr_tmp, req.Arch_GHR_next, sizeof(arch_ghr_tmp));
+      std::memcpy(arch_fh_tmp, req.Arch_FH_next, sizeof(arch_fh_tmp));
       bool arch_need_write = false;
       for (int i = 0; i < COMMIT_WIDTH; ++i) {
-        if (!in.in_upd_valid[i]) {
+        if (!inp.in_upd_valid[i]) {
           continue;
         }
-        bool is_cond_upd = (in.in_actual_br_type[i] == BR_DIRECT);
+        bool is_cond_upd = (inp.in_actual_br_type[i] == BR_DIRECT);
         if (!is_cond_upd) {
           continue;
         }
-        bool real_dir = in.in_actual_dir[i];
+        bool real_dir = inp.in_actual_dir[i];
         tage_hist_update_inplace(arch_ghr_tmp, arch_fh_tmp, real_dir, fh_length,
                                  ghr_length);
         const tage_path_hist_t next_path =
-            tage_path_update_value(arch_path_tmp, in.in_update_base_pc[i], real_dir);
-        if (in.in_pred_dir[i] != real_dir) {
-          std::memcpy(out.Spec_GHR_next, arch_ghr_tmp, sizeof(out.Spec_GHR_next));
-          std::memcpy(out.Spec_FH_next, arch_fh_tmp, sizeof(out.Spec_FH_next));
-          out.Spec_PATH_next = next_path;
+            tage_path_update_value(arch_path_tmp, inp.in_update_base_pc[i], real_dir);
+        if (inp.in_pred_dir[i] != real_dir) {
+          std::memcpy(req.Spec_GHR_next, arch_ghr_tmp, sizeof(req.Spec_GHR_next));
+          std::memcpy(req.Spec_FH_next, arch_fh_tmp, sizeof(req.Spec_FH_next));
+          req.Spec_PATH_next = next_path;
         }
         arch_path_tmp = next_path;
         arch_need_write = true;
       }
       if (arch_need_write) {
-        std::memcpy(out.Arch_GHR_next, arch_ghr_tmp, sizeof(out.Arch_GHR_next));
-        std::memcpy(out.Arch_FH_next, arch_fh_tmp, sizeof(out.Arch_FH_next));
-        out.Arch_PATH_next = arch_path_tmp;
+        std::memcpy(req.Arch_GHR_next, arch_ghr_tmp, sizeof(req.Arch_GHR_next));
+        std::memcpy(req.Arch_FH_next, arch_fh_tmp, sizeof(req.Arch_FH_next));
+        req.Arch_PATH_next = arch_path_tmp;
       }
     }
 
     {
       target_addr_t arch_ras_stack_tmp[RAS_DEPTH];
-      ras_count_t arch_ras_count_tmp = out.Arch_ras_count_next;
-      std::memcpy(arch_ras_stack_tmp, out.Arch_ras_stack_next, sizeof(arch_ras_stack_tmp));
+      ras_count_t arch_ras_count_tmp = req.Arch_ras_count_next;
+      std::memcpy(arch_ras_stack_tmp, req.Arch_ras_stack_next, sizeof(arch_ras_stack_tmp));
       for (int i = 0; i < COMMIT_WIDTH; ++i) {
-        if (!in.in_upd_valid[i]) {
+        if (!inp.in_upd_valid[i]) {
           continue;
         }
-        br_type_t br_type = in.in_actual_br_type[i];
+        br_type_t br_type = inp.in_actual_br_type[i];
         if (br_type == BR_CALL) {
-          ras_push(arch_ras_stack_tmp, arch_ras_count_tmp, in.in_update_base_pc[i] + 4);
+          ras_push(arch_ras_stack_tmp, arch_ras_count_tmp, inp.in_update_base_pc[i] + 4);
         } else if (br_type == BR_RET) {
           ras_pop(arch_ras_count_tmp);
         }
       }
-      std::memcpy(out.Arch_ras_stack_next, arch_ras_stack_tmp,
-                  sizeof(out.Arch_ras_stack_next));
-      out.Arch_ras_count_next = arch_ras_count_tmp;
+      std::memcpy(req.Arch_ras_stack_next, arch_ras_stack_tmp,
+                  sizeof(req.Arch_ras_stack_next));
+      req.Arch_ras_count_next = arch_ras_count_tmp;
     }
   }
 
-  void bpu_queue_comb(const BpuQueueCombIn &in, BpuQueueCombOut &out) const {
-    std::memset(&out, 0, sizeof(out));
-    for (int i = 0; i < BPU_BANK_NUM; ++i) {
-      out.q_wr_ptr_next[i] = in.q_wr_ptr_snapshot[i];
-      out.q_rd_ptr_next[i] = in.q_rd_ptr_snapshot[i];
-      out.q_count_next[i] = in.q_count_snapshot[i];
-      if (in.going_to_do_upd[i] && out.q_count_next[i] > 0) {
-        out.q_pop_en[i] = true;
-        out.q_rd_ptr_next[i] = (out.q_rd_ptr_next[i] + 1) % Q_DEPTH;
-        out.q_count_next[i]--;
+  void bpu_queue_comb(const InputPayload &inp, const ReadData &rd,
+                      UpdateRequest &req, OutputPayload &out_payload) const {
+        for (int i = 0; i < BPU_BANK_NUM; ++i) {
+      req.q_wr_ptr_next[i] = rd.q_wr_ptr_snapshot[i];
+      req.q_rd_ptr_next[i] = rd.q_rd_ptr_snapshot[i];
+      req.q_count_next[i] = rd.q_count_snapshot[i];
+      if (rd.going_to_do_upd[i] && req.q_count_next[i] > 0) {
+        req.q_pop_en[i] = true;
+        req.q_rd_ptr_next[i] = (req.q_rd_ptr_next[i] + 1) % Q_DEPTH;
+        req.q_count_next[i]--;
       }
     }
     bool bank_enqueued[BPU_BANK_NUM] = {};
     for (int i = 0; i < COMMIT_WIDTH; i++) {
-      if (!in.in_upd_valid[i]) {
+      if (!inp.in_upd_valid[i]) {
         continue;
       }
       BankSelCombOut bank_sel_out{};
-      bank_sel_comb(BankSelCombIn{in.in_update_base_pc[i]}, bank_sel_out);
+      bank_sel_comb(BankSelCombIn{inp.in_update_base_pc[i]}, bank_sel_out);
       int bank_sel = bank_sel_out.bank_sel;
-      if (bank_enqueued[bank_sel] || out.q_count_next[bank_sel] >= Q_DEPTH) {
+      if (bank_enqueued[bank_sel] || req.q_count_next[bank_sel] >= Q_DEPTH) {
         continue;
       }
 
       bank_enqueued[bank_sel] = true;
-      out.q_push_en[bank_sel] = true;
-      out.q_entry_we[i] = true;
-      out.q_entry_bank[i] = bank_sel;
-      out.q_entry_slot[i] = out.q_wr_ptr_next[bank_sel];
-      out.q_entry_data[i].base_pc = in.in_update_base_pc[i];
-      out.q_entry_data[i].valid_mask = in.in_upd_valid[i];
-      out.q_entry_data[i].actual_dir = in.in_actual_dir[i];
-      out.q_entry_data[i].pred_dir = in.in_pred_dir[i];
-      out.q_entry_data[i].alt_pred = in.in_alt_pred[i];
-      out.q_entry_data[i].br_type = in.in_actual_br_type[i];
-      out.q_entry_data[i].targets = in.in_actual_targets[i];
-      out.q_entry_data[i].pcpn = in.in_pcpn[i];
-      out.q_entry_data[i].altpcpn = in.in_altpcpn[i];
+      req.q_push_en[bank_sel] = true;
+      req.q_entry_we[i] = true;
+      req.q_entry_bank[i] = bank_sel;
+      req.q_entry_slot[i] = req.q_wr_ptr_next[bank_sel];
+      req.q_entry_data[i].base_pc = inp.in_update_base_pc[i];
+      req.q_entry_data[i].valid_mask = inp.in_upd_valid[i];
+      req.q_entry_data[i].actual_dir = inp.in_actual_dir[i];
+      req.q_entry_data[i].pred_dir = inp.in_pred_dir[i];
+      req.q_entry_data[i].alt_pred = inp.in_alt_pred[i];
+      req.q_entry_data[i].br_type = inp.in_actual_br_type[i];
+      req.q_entry_data[i].targets = inp.in_actual_targets[i];
+      req.q_entry_data[i].pcpn = inp.in_pcpn[i];
+      req.q_entry_data[i].altpcpn = inp.in_altpcpn[i];
       for (int k = 0; k < TN_MAX; k++) {
-        out.q_entry_data[i].tage_tags[k] = in.in_tage_tags[i][k];
-        out.q_entry_data[i].tage_idxs[k] = in.in_tage_idxs[i][k];
+        req.q_entry_data[i].tage_tags[k] = inp.in_tage_tags[i][k];
+        req.q_entry_data[i].tage_idxs[k] = inp.in_tage_idxs[i][k];
       }
-      out.q_entry_data[i].sc_used = in.in_sc_used[i];
-      out.q_entry_data[i].sc_pred = in.in_sc_pred[i];
-      out.q_entry_data[i].sc_sum = in.in_sc_sum[i];
+      req.q_entry_data[i].sc_used = inp.in_sc_used[i];
+      req.q_entry_data[i].sc_pred = inp.in_sc_pred[i];
+      req.q_entry_data[i].sc_sum = inp.in_sc_sum[i];
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        out.q_entry_data[i].sc_idx[t] = in.in_sc_idx[i][t];
+        req.q_entry_data[i].sc_idx[t] = inp.in_sc_idx[i][t];
       }
-      out.q_entry_data[i].loop_used = in.in_loop_used[i];
-      out.q_entry_data[i].loop_hit = in.in_loop_hit[i];
-      out.q_entry_data[i].loop_pred = in.in_loop_pred[i];
-      out.q_entry_data[i].loop_idx = in.in_loop_idx[i];
-      out.q_entry_data[i].loop_tag = in.in_loop_tag[i];
-      out.q_wr_ptr_next[bank_sel] = (out.q_wr_ptr_next[bank_sel] + 1) % Q_DEPTH;
-      out.q_count_next[bank_sel]++;
+      req.q_entry_data[i].loop_used = inp.in_loop_used[i];
+      req.q_entry_data[i].loop_hit = inp.in_loop_hit[i];
+      req.q_entry_data[i].loop_pred = inp.in_loop_pred[i];
+      req.q_entry_data[i].loop_idx = inp.in_loop_idx[i];
+      req.q_entry_data[i].loop_tag = inp.in_loop_tag[i];
+      req.q_wr_ptr_next[bank_sel] = (req.q_wr_ptr_next[bank_sel] + 1) % Q_DEPTH;
+      req.q_count_next[bank_sel]++;
     }
-    out.update_queue_full = false;
+    out_payload.update_queue_full = false;
   }
 
   void bpu_submodule_seq_read(const BpuPostReadReqCombOut &in, ReadData &rd) const {
@@ -1285,105 +1210,9 @@ public:
       }
     }
 
-    BpuHistCombIn hist_in{};
-    hist_in.refetch = inp.refetch;
-    std::memcpy(hist_in.in_update_base_pc, inp.in_update_base_pc,
-                sizeof(hist_in.in_update_base_pc));
-    std::memcpy(hist_in.in_upd_valid, inp.in_upd_valid, sizeof(hist_in.in_upd_valid));
-    std::memcpy(hist_in.in_actual_dir, inp.in_actual_dir, sizeof(hist_in.in_actual_dir));
-    std::memcpy(hist_in.in_actual_br_type, inp.in_actual_br_type,
-                sizeof(hist_in.in_actual_br_type));
-    std::memcpy(hist_in.in_pred_dir, inp.in_pred_dir, sizeof(hist_in.in_pred_dir));
-    hist_in.going_to_do_pred = rd.going_to_do_pred;
-    std::memcpy(hist_in.do_pred_on_this_pc, rd.do_pred_on_this_pc,
-                sizeof(hist_in.do_pred_on_this_pc));
-    std::memcpy(hist_in.this_pc_bank_sel, rd.this_pc_bank_sel,
-                sizeof(hist_in.this_pc_bank_sel));
-    std::memcpy(hist_in.do_pred_for_this_pc, rd.do_pred_for_this_pc,
-                sizeof(hist_in.do_pred_for_this_pc));
-    std::memcpy(hist_in.Spec_GHR_snapshot, rd.Spec_GHR_snapshot,
-                sizeof(hist_in.Spec_GHR_snapshot));
-    std::memcpy(hist_in.Spec_FH_snapshot, rd.Spec_FH_snapshot,
-                sizeof(hist_in.Spec_FH_snapshot));
-    std::memcpy(hist_in.Arch_GHR_snapshot, rd.Arch_GHR_snapshot,
-                sizeof(hist_in.Arch_GHR_snapshot));
-    std::memcpy(hist_in.Arch_FH_snapshot, rd.Arch_FH_snapshot,
-                sizeof(hist_in.Arch_FH_snapshot));
-    hist_in.Spec_PATH_snapshot = rd.Spec_PATH_snapshot;
-    hist_in.Arch_PATH_snapshot = rd.Arch_PATH_snapshot;
-    std::memcpy(hist_in.Arch_ras_stack_snapshot, rd.Arch_ras_stack_snapshot,
-                sizeof(hist_in.Arch_ras_stack_snapshot));
-    hist_in.Arch_ras_count_snapshot = rd.Arch_ras_count_snapshot;
-    std::memcpy(hist_in.Spec_ras_stack_snapshot, rd.Spec_ras_stack_snapshot,
-                sizeof(hist_in.Spec_ras_stack_snapshot));
-    hist_in.Spec_ras_count_snapshot = rd.Spec_ras_count_snapshot;
-    hist_in.type_out = type_out;
-    for (int i = 0; i < FETCH_WIDTH; ++i) {
-      hist_in.final_pred_dir[i] = req.final_pred_dir[i];
-    }
-    BpuHistCombOut hist_out{};
-    bpu_hist_comb(hist_in, hist_out);
-    req.should_update_spec_hist = hist_out.should_update_spec_hist;
-    std::memcpy(req.Spec_GHR_next, hist_out.Spec_GHR_next, sizeof(req.Spec_GHR_next));
-    std::memcpy(req.Spec_FH_next, hist_out.Spec_FH_next, sizeof(req.Spec_FH_next));
-    std::memcpy(req.Arch_GHR_next, hist_out.Arch_GHR_next, sizeof(req.Arch_GHR_next));
-    std::memcpy(req.Arch_FH_next, hist_out.Arch_FH_next, sizeof(req.Arch_FH_next));
-    req.Spec_PATH_next = hist_out.Spec_PATH_next;
-    req.Arch_PATH_next = hist_out.Arch_PATH_next;
-    std::memcpy(req.Arch_ras_stack_next, hist_out.Arch_ras_stack_next,
-                sizeof(req.Arch_ras_stack_next));
-    req.Arch_ras_count_next = hist_out.Arch_ras_count_next;
-    std::memcpy(req.Spec_ras_stack_next, hist_out.Spec_ras_stack_next,
-                sizeof(req.Spec_ras_stack_next));
-    req.Spec_ras_count_next = hist_out.Spec_ras_count_next;
+    bpu_hist_comb(inp, rd, type_out, req);
 
-    BpuQueueCombIn queue_in{};
-    std::memcpy(queue_in.in_update_base_pc, inp.in_update_base_pc,
-                sizeof(queue_in.in_update_base_pc));
-    std::memcpy(queue_in.in_upd_valid, inp.in_upd_valid, sizeof(queue_in.in_upd_valid));
-    std::memcpy(queue_in.in_actual_dir, inp.in_actual_dir, sizeof(queue_in.in_actual_dir));
-    std::memcpy(queue_in.in_actual_br_type, inp.in_actual_br_type,
-                sizeof(queue_in.in_actual_br_type));
-    std::memcpy(queue_in.in_actual_targets, inp.in_actual_targets,
-                sizeof(queue_in.in_actual_targets));
-    std::memcpy(queue_in.in_pred_dir, inp.in_pred_dir, sizeof(queue_in.in_pred_dir));
-    std::memcpy(queue_in.in_alt_pred, inp.in_alt_pred, sizeof(queue_in.in_alt_pred));
-    std::memcpy(queue_in.in_pcpn, inp.in_pcpn, sizeof(queue_in.in_pcpn));
-    std::memcpy(queue_in.in_altpcpn, inp.in_altpcpn, sizeof(queue_in.in_altpcpn));
-    std::memcpy(queue_in.in_tage_tags, inp.in_tage_tags, sizeof(queue_in.in_tage_tags));
-    std::memcpy(queue_in.in_tage_idxs, inp.in_tage_idxs, sizeof(queue_in.in_tage_idxs));
-    std::memcpy(queue_in.in_sc_used, inp.in_sc_used, sizeof(queue_in.in_sc_used));
-    std::memcpy(queue_in.in_sc_pred, inp.in_sc_pred, sizeof(queue_in.in_sc_pred));
-    std::memcpy(queue_in.in_sc_sum, inp.in_sc_sum, sizeof(queue_in.in_sc_sum));
-    std::memcpy(queue_in.in_sc_idx, inp.in_sc_idx, sizeof(queue_in.in_sc_idx));
-    std::memcpy(queue_in.in_loop_used, inp.in_loop_used, sizeof(queue_in.in_loop_used));
-    std::memcpy(queue_in.in_loop_hit, inp.in_loop_hit, sizeof(queue_in.in_loop_hit));
-    std::memcpy(queue_in.in_loop_pred, inp.in_loop_pred, sizeof(queue_in.in_loop_pred));
-    std::memcpy(queue_in.in_loop_idx, inp.in_loop_idx, sizeof(queue_in.in_loop_idx));
-    std::memcpy(queue_in.in_loop_tag, inp.in_loop_tag, sizeof(queue_in.in_loop_tag));
-    std::memcpy(queue_in.q_wr_ptr_snapshot, rd.q_wr_ptr_snapshot,
-                sizeof(queue_in.q_wr_ptr_snapshot));
-    std::memcpy(queue_in.q_rd_ptr_snapshot, rd.q_rd_ptr_snapshot,
-                sizeof(queue_in.q_rd_ptr_snapshot));
-    std::memcpy(queue_in.q_count_snapshot, rd.q_count_snapshot,
-                sizeof(queue_in.q_count_snapshot));
-    std::memcpy(queue_in.going_to_do_upd, rd.going_to_do_upd,
-                sizeof(queue_in.going_to_do_upd));
-    BpuQueueCombOut queue_out{};
-    bpu_queue_comb(queue_in, queue_out);
-    for (int i = 0; i < BPU_BANK_NUM; ++i) {
-      req.q_push_en[i] = queue_out.q_push_en[i];
-      req.q_pop_en[i] = queue_out.q_pop_en[i];
-      req.q_wr_ptr_next[i] = queue_out.q_wr_ptr_next[i];
-      req.q_rd_ptr_next[i] = queue_out.q_rd_ptr_next[i];
-      req.q_count_next[i] = queue_out.q_count_next[i];
-    }
-    for (int i = 0; i < COMMIT_WIDTH; ++i) {
-      req.q_entry_we[i] = queue_out.q_entry_we[i];
-      req.q_entry_bank[i] = queue_out.q_entry_bank[i];
-      req.q_entry_slot[i] = queue_out.q_entry_slot[i];
-      req.q_entry_data[i] = queue_out.q_entry_data[i];
-    }
+    bpu_queue_comb(inp, rd, req, out);
 
     if (inp.refetch) {
       req.pc_reg_next = inp.refetch_address;
@@ -1399,7 +1228,6 @@ public:
       req.pc_can_send_to_icache_next = true;
     }
 
-    out.update_queue_full = queue_out.update_queue_full;
 
     assert(out.out_pred_base_pc == out.fetch_address);
     req.out_regs = out;

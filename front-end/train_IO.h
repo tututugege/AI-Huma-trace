@@ -70,10 +70,6 @@ using BpuSubmoduleBindCombIn = BPU_TOP::BpuSubmoduleBindCombIn;
 using BpuSubmoduleBindCombOut = BPU_TOP::BpuSubmoduleBindCombOut;
 using BpuPredictMainCombIn = BPU_TOP::BpuPredictMainCombIn;
 using BpuPredictMainCombOut = BPU_TOP::BpuPredictMainCombOut;
-using BpuHistCombIn = BPU_TOP::BpuHistCombIn;
-using BpuHistCombOut = BPU_TOP::BpuHistCombOut;
-using BpuQueueCombIn = BPU_TOP::BpuQueueCombIn;
-using BpuQueueCombOut = BPU_TOP::BpuQueueCombOut;
 
 using TypePredCombIn = TypePredictor::TypePredCombIn;
 using TypePredCombOut = TypePredictor::TypePredCombOut;
