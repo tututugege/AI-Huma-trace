@@ -9,18 +9,6 @@ static inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO *db) {
   return (uop.br_mask & db->br_mask) != 0;
 }
 
-static inline bool is_br_killed(const MicroOp &uop, const DecBroadcastIO *db) {
-  if (!db->mispred)
-    return false;
-  return (uop.br_mask & db->br_mask) != 0;
-}
-
-static inline bool cmp_inst_age(const ExuInst &inst1, const ExuInst &inst2) {
-  if (inst1.rob_flag == inst2.rob_flag) {
-    return inst1.rob_idx > inst2.rob_idx;
-  }
-  return inst1.rob_idx < inst2.rob_idx;
-}
 
 
 

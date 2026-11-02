@@ -29,60 +29,7 @@ struct UopPacket {
 
 class Dispatch {
 private:
-  struct DispatchInst : public RenDisIO::RenDisInst {
-    wire<1> mispred;
-    wire<1> br_taken;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-    wire<1> rob_flag;
-    wire<1> flush_pipe;
-
-    DispatchInst()
-        : mispred(0), br_taken(0), rob_idx(0), stq_idx(0), stq_flag(0),
-          ldq_idx(0), rob_flag(0), flush_pipe(0) {}
-
-    static DispatchInst from_ren_dis_inst(const RenDisIO::RenDisInst &src) {
-      DispatchInst dst;
-      static_cast<RenDisIO::RenDisInst &>(dst) = src;
-      return dst;
-    }
-
-    DisRobIO::DisRobInst to_dis_rob_inst() const {
-      DisRobIO::DisRobInst dst;
-      dst.diag_val = diag_val;
-      dst.dest_areg = dest_areg;
-      dst.src1_areg = src1_areg;
-      dst.dest_preg = dest_preg;
-      dst.old_dest_preg = old_dest_preg;
-      dst.ftq_idx = ftq_idx;
-      dst.ftq_offset = ftq_offset;
-      dst.ftq_is_last = ftq_is_last;
-      dst.mispred = mispred;
-      dst.br_taken = br_taken;
-      dst.dest_en = dest_en;
-      dst.is_atomic = is_atomic;
-      dst.func3 = func3;
-      dst.func7 = func7;
-      dst.imm = imm;
-      dst.br_mask = br_mask;
-      dst.rob_idx = rob_idx;
-      dst.stq_idx = stq_idx;
-      dst.stq_flag = stq_flag;
-      dst.ldq_idx = ldq_idx;
-      dst.expect_mask = expect_mask;
-      dst.cplt_mask = cplt_mask;
-      dst.rob_flag = rob_flag;
-      dst.page_fault_inst = page_fault_inst;
-      dst.illegal_inst = illegal_inst;
-      dst.type = type;
-      dst.tma = tma;
-      dst.dbg = dbg;
-      dst.flush_pipe = flush_pipe;
-      return dst;
-    }
-  };
+  using DispatchInst = Uop;
 
   DisIssIO::DisIssUop make_dis_iss_uop(const DispatchInst &inst) const;
   bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;

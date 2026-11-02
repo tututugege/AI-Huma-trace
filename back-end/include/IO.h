@@ -10,41 +10,7 @@
 #include <sys/types.h>
 
 struct DecRenIO {
-  struct DecRenInst {
-    wire<32> diag_val;
-    wire<AREG_IDX_WIDTH> dest_areg;
-    wire<AREG_IDX_WIDTH> src1_areg;
-    wire<AREG_IDX_WIDTH> src2_areg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> ftq_is_last;
-
-    wire<INST_TYPE_WIDTH> type;
-    wire<1> dest_en;
-    wire<1> src1_en;
-    wire<1> src2_en;
-    wire<1> is_atomic;
-    wire<1> src1_is_pc;
-    wire<1> src2_is_imm;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_TAG_WIDTH> br_id;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<CSR_IDX_WIDTH> csr_idx;
-
-    wire<ROB_CPLT_MASK_WIDTH> expect_mask;
-    wire<ROB_CPLT_MASK_WIDTH> cplt_mask;
-
-    wire<1> page_fault_inst;
-    wire<1> illegal_inst;
-
-    TmaMeta tma;
-    DebugMeta dbg;
-
-    DecRenInst() { std::memset(this, 0, sizeof(DecRenInst)); }
-  };
+  using DecRenInst = Uop;
 
   DecRenInst uop[DECODE_WIDTH];
   wire<1> valid[DECODE_WIDTH];
@@ -55,28 +21,6 @@ struct DecRenIO {
       v = {};
   }
 };
-
-inline bool is_store(const DecRenIO::DecRenInst &uop) {
-  return decode_inst_type(uop.type) == STORE ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::LR);
-}
-
-inline bool is_load(const DecRenIO::DecRenInst &uop) {
-  return decode_inst_type(uop.type) == LOAD ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::SC);
-}
-
-inline bool is_exception(const DecRenIO::DecRenInst &uop) {
-  return uop.page_fault_inst || uop.illegal_inst ||
-         decode_inst_type(uop.type) == ECALL;
-}
-
-inline bool is_flush_inst(const DecRenIO::DecRenInst &uop) {
-  InstType type = decode_inst_type(uop.type);
-  return type == CSR || type == ECALL || type == MRET || type == SRET ||
-         type == SFENCE_VMA || type == FENCE_I || is_exception(uop) ||
-         type == EBREAK;
-}
 
 struct RenDecIO {
 
@@ -307,67 +251,7 @@ struct PreIssueIO {
 using PreIduIssueIO = PreIssueIO;
 
 struct RobCommitIO {
-  struct RobCommitInst {
-    wire<32> diag_val;
-    wire<AREG_IDX_WIDTH> dest_areg;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> old_dest_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> ftq_is_last;
-
-    wire<1> mispred;
-    wire<1> br_taken;
-
-    wire<1> dest_en;
-    wire<7> func7;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<1> rob_flag;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-
-    wire<1> page_fault_inst;
-    wire<1> page_fault_load;
-    wire<1> page_fault_store;
-    wire<1> illegal_inst;
-
-    wire<INST_TYPE_WIDTH> type;
-    TmaMeta tma;
-    DebugMeta dbg;
-    wire<1> flush_pipe;
-
-    RobCommitInst() { std::memset(this, 0, sizeof(RobCommitInst)); }
-
-    InstEntry to_inst_entry(wire<1> valid) const {
-      InstEntry dst;
-      dst.valid = valid;
-      dst.uop.diag_val = diag_val;
-      dst.uop.dest_areg = dest_areg;
-      dst.uop.dest_preg = dest_preg;
-      dst.uop.old_dest_preg = old_dest_preg;
-      dst.uop.ftq_idx = ftq_idx;
-      dst.uop.ftq_offset = ftq_offset;
-      dst.uop.ftq_is_last = ftq_is_last;
-      dst.uop.mispred = mispred;
-      dst.uop.br_taken = br_taken;
-      dst.uop.dest_en = dest_en;
-      dst.uop.func7 = func7;
-      dst.uop.rob_idx = rob_idx;
-      dst.uop.rob_flag = rob_flag;
-      dst.uop.stq_idx = stq_idx;
-      dst.uop.stq_flag = stq_flag;
-      dst.uop.page_fault_inst = page_fault_inst;
-      dst.uop.page_fault_load = page_fault_load;
-      dst.uop.page_fault_store = page_fault_store;
-      dst.uop.illegal_inst = illegal_inst;
-      dst.uop.type = decode_inst_type(type);
-      dst.uop.tma = tma;
-      dst.uop.dbg = dbg;
-      dst.uop.flush_pipe = flush_pipe;
-      return dst;
-    }
-  };
+  using RobCommitInst = Uop;
 
   struct RobCommitEntry {
     wire<1> valid;
@@ -381,29 +265,6 @@ struct RobCommitIO {
       v = {};
   }
 };
-
-inline bool is_store(const RobCommitIO::RobCommitInst &uop) {
-  return decode_inst_type(uop.type) == STORE ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::LR);
-}
-
-inline bool is_load(const RobCommitIO::RobCommitInst &uop) {
-  return decode_inst_type(uop.type) == LOAD ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::SC);
-}
-
-inline bool is_exception(const RobCommitIO::RobCommitInst &uop) {
-  return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store ||
-         uop.illegal_inst || decode_inst_type(uop.type) == ECALL;
-}
-
-inline bool is_flush_inst(const RobCommitIO::RobCommitInst &uop) {
-  InstType type = decode_inst_type(uop.type);
-  return type == CSR || type == ECALL || type == MRET || type == SRET ||
-         type == SFENCE_VMA || type == FENCE_I || is_exception(uop) ||
-         type == EBREAK ||
-         uop.flush_pipe;
-}
 
 struct RobDisIO {
   struct TmaMeta {
@@ -431,45 +292,7 @@ struct RobDisIO {
 };
 
 struct DisRobIO {
-  struct DisRobInst {
-    wire<32> diag_val;
-    wire<AREG_IDX_WIDTH> dest_areg;
-    wire<AREG_IDX_WIDTH> src1_areg;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> old_dest_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> ftq_is_last;
-
-    wire<1> mispred;
-    wire<1> br_taken;
-
-    wire<INST_TYPE_WIDTH> type;
-    wire<1> dest_en;
-    wire<1> is_atomic;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-
-    wire<ROB_CPLT_MASK_WIDTH> expect_mask;
-    wire<ROB_CPLT_MASK_WIDTH> cplt_mask;
-    wire<1> rob_flag;
-
-    wire<1> page_fault_inst;
-    wire<1> illegal_inst;
-    wire<1> flush_pipe;
-
-    TmaMeta tma;
-    DebugMeta dbg;
-
-    DisRobInst() { std::memset(this, 0, sizeof(DisRobInst)); }
-  };
+  using DisRobInst = Uop;
 
   DisRobInst uop[DECODE_WIDTH];
   wire<1> valid[DECODE_WIDTH];
@@ -485,102 +308,8 @@ struct DisRobIO {
   }
 };
 
-inline bool is_store(const DisRobIO::DisRobInst &uop) {
-  return decode_inst_type(uop.type) == STORE ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::LR);
-}
-
-inline bool is_load(const DisRobIO::DisRobInst &uop) {
-  return decode_inst_type(uop.type) == LOAD ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::SC);
-}
-
-inline bool is_exception(const DisRobIO::DisRobInst &uop) {
-  return uop.page_fault_inst || uop.illegal_inst ||
-         decode_inst_type(uop.type) == ECALL;
-}
-
-inline bool is_flush_inst(const DisRobIO::DisRobInst &uop) {
-  InstType type = decode_inst_type(uop.type);
-  return type == CSR || type == ECALL || type == MRET || type == SRET ||
-         type == SFENCE_VMA || type == FENCE_I || is_exception(uop) ||
-         type == EBREAK ||
-         uop.flush_pipe;
-}
-
 struct RenDisIO {
-  struct RenDisInst {
-    wire<32> diag_val;
-    wire<AREG_IDX_WIDTH> dest_areg;
-    wire<AREG_IDX_WIDTH> src1_areg;
-    wire<AREG_IDX_WIDTH> src2_areg;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> src1_preg;
-    wire<PRF_IDX_WIDTH> src2_preg;
-    wire<PRF_IDX_WIDTH> old_dest_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> ftq_is_last;
-
-    wire<INST_TYPE_WIDTH> type;
-    wire<1> dest_en;
-    wire<1> src1_en;
-    wire<1> src2_en;
-    wire<1> is_atomic;
-    wire<1> src1_busy;
-    wire<1> src2_busy;
-    wire<1> src1_is_pc;
-    wire<1> src2_is_imm;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_TAG_WIDTH> br_id;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<CSR_IDX_WIDTH> csr_idx;
-
-    wire<ROB_CPLT_MASK_WIDTH> expect_mask;
-    wire<ROB_CPLT_MASK_WIDTH> cplt_mask;
-
-    wire<1> page_fault_inst;
-    wire<1> illegal_inst;
-
-    TmaMeta tma;
-    DebugMeta dbg;
-
-    RenDisInst() { std::memset(this, 0, sizeof(RenDisInst)); }
-
-    static RenDisInst from_dec_ren_inst(const DecRenIO::DecRenInst &src) {
-      RenDisInst dst;
-      dst.diag_val = src.diag_val;
-      dst.dest_areg = src.dest_areg;
-      dst.src1_areg = src.src1_areg;
-      dst.src2_areg = src.src2_areg;
-      dst.ftq_idx = src.ftq_idx;
-      dst.ftq_offset = src.ftq_offset;
-      dst.ftq_is_last = src.ftq_is_last;
-      dst.dest_en = src.dest_en;
-      dst.src1_en = src.src1_en;
-      dst.src2_en = src.src2_en;
-      dst.is_atomic = src.is_atomic;
-      dst.src1_is_pc = src.src1_is_pc;
-      dst.src2_is_imm = src.src2_is_imm;
-      dst.func3 = src.func3;
-      dst.func7 = src.func7;
-      dst.imm = src.imm;
-      dst.br_id = src.br_id;
-      dst.br_mask = src.br_mask;
-      dst.csr_idx = src.csr_idx;
-      dst.expect_mask = src.expect_mask;
-      dst.cplt_mask = src.cplt_mask;
-      dst.page_fault_inst = src.page_fault_inst;
-      dst.illegal_inst = src.illegal_inst;
-      dst.type = src.type;
-      dst.tma = src.tma;
-      dst.dbg = src.dbg;
-      return dst;
-    }
-  };
+  using RenDisInst = Uop;
 
   RenDisInst uop[DECODE_WIDTH];
   wire<1> valid[DECODE_WIDTH];
@@ -592,28 +321,6 @@ struct RenDisIO {
       v = {};
   }
 };
-
-inline bool is_store(const RenDisIO::RenDisInst &uop) {
-  return decode_inst_type(uop.type) == STORE ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::LR);
-}
-
-inline bool is_load(const RenDisIO::RenDisInst &uop) {
-  return decode_inst_type(uop.type) == LOAD ||
-         (decode_inst_type(uop.type) == AMO && (uop.func7 >> 2) != AmoOp::SC);
-}
-
-inline bool is_exception(const RenDisIO::RenDisInst &uop) {
-  return uop.page_fault_inst || uop.illegal_inst ||
-         decode_inst_type(uop.type) == ECALL;
-}
-
-inline bool is_flush_inst(const RenDisIO::RenDisInst &uop) {
-  InstType type = decode_inst_type(uop.type);
-  return type == CSR || type == ECALL || type == MRET || type == SRET ||
-         type == SFENCE_VMA || type == FENCE_I || is_exception(uop) ||
-         type == EBREAK;
-}
 
 struct DisRenIO {
 
@@ -633,40 +340,7 @@ struct PrfAwakeIO {
 };
 
 struct DisIssIO {
-  struct DisIssUop {
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> src1_preg;
-    wire<PRF_IDX_WIDTH> src2_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> is_atomic;
-
-    wire<1> dest_en;
-    wire<1> src1_en;
-    wire<1> src2_en;
-    wire<1> src1_busy;
-    wire<1> src2_busy;
-    wire<1> src1_is_pc;
-    wire<1> src2_is_imm;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_TAG_WIDTH> br_id;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<CSR_IDX_WIDTH> csr_idx;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-
-    wire<1> rob_flag;
-
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-
-    DisIssUop() { std::memset(this, 0, sizeof(DisIssUop)); }
-  };
+  using DisIssUop = Uop;
 
   struct DisIssReq {
     wire<1> valid;
@@ -748,37 +422,7 @@ struct RobBroadcastIO {
 };
 
 struct IssPrfIO {
-  struct IssPrfUop {
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> src1_preg;
-    wire<PRF_IDX_WIDTH> src2_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> is_atomic;
-    wire<1> dest_en;
-    wire<1> src1_en;
-    wire<1> src2_en;
-    wire<1> src1_is_pc;
-    wire<1> src2_is_imm;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_TAG_WIDTH> br_id;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<CSR_IDX_WIDTH> csr_idx;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-
-    wire<1> rob_flag;
-
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-
-    IssPrfUop() { std::memset(this, 0, sizeof(IssPrfUop)); }
-  };
+  using IssPrfUop = Uop;
 
   struct IssPrfEntry {
     wire<1> valid;
@@ -794,70 +438,7 @@ struct IssPrfIO {
 };
 
 struct PrfExeIO {
-  struct PrfExeUop {
-    wire<32> pc;
-    wire<1> ftq_resp_valid;
-    wire<1> ftq_pred_taken;
-    wire<32> ftq_next_pc;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<PRF_IDX_WIDTH> src1_preg;
-    wire<PRF_IDX_WIDTH> src2_preg;
-
-    wire<FTQ_IDX_WIDTH> ftq_idx;
-    wire<FTQ_OFFSET_WIDTH> ftq_offset;
-    wire<1> is_atomic;
-    wire<1> dest_en;
-    wire<1> src1_en;
-    wire<1> src2_en;
-    wire<1> src1_is_pc;
-    wire<1> src2_is_imm;
-    wire<3> func3;
-    wire<7> func7;
-    wire<32> imm;
-    wire<BR_TAG_WIDTH> br_id;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<CSR_IDX_WIDTH> csr_idx;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-
-    wire<1> rob_flag;
-
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-
-    PrfExeUop() { std::memset(this, 0, sizeof(PrfExeUop)); }
-
-    static PrfExeUop from_iss_prf_uop(const IssPrfIO::IssPrfUop &src) {
-      PrfExeUop dst;
-      dst.dest_preg = src.dest_preg;
-      dst.src1_preg = src.src1_preg;
-      dst.src2_preg = src.src2_preg;
-      dst.ftq_idx = src.ftq_idx;
-      dst.ftq_offset = src.ftq_offset;
-      dst.is_atomic = src.is_atomic;
-      dst.dest_en = src.dest_en;
-      dst.src1_en = src.src1_en;
-      dst.src2_en = src.src2_en;
-      dst.src1_is_pc = src.src1_is_pc;
-      dst.src2_is_imm = src.src2_is_imm;
-      dst.func3 = src.func3;
-      dst.func7 = src.func7;
-      dst.imm = src.imm;
-      dst.br_id = src.br_id;
-      dst.br_mask = src.br_mask;
-      dst.csr_idx = src.csr_idx;
-      dst.rob_idx = src.rob_idx;
-      dst.stq_idx = src.stq_idx;
-      dst.stq_flag = src.stq_flag;
-      dst.ldq_idx = src.ldq_idx;
-      dst.rob_flag = src.rob_flag;
-      dst.op = src.op;
-      dst.dbg = src.dbg;
-      return dst;
-    }
-  };
+  using PrfExeUop = Uop;
 
   struct PrfExeEntry {
     wire<1> valid;
@@ -873,25 +454,7 @@ struct PrfExeIO {
 };
 
 struct ExePrfIO {
-  struct ExePrfWbUop {
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<32> result;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<1> dest_en;
-    wire<UOP_TYPE_WIDTH> op;
-
-    ExePrfWbUop() { std::memset(this, 0, sizeof(ExePrfWbUop)); }
-
-    static ExePrfWbUop from_micro_op(const MicroOp &src) {
-      ExePrfWbUop dst;
-      dst.dest_preg = src.dest_preg;
-      dst.result = src.result;
-      dst.br_mask = src.br_mask;
-      dst.dest_en = src.dest_en;
-      dst.op = encode_uop_type(src.op);
-      return dst;
-    }
-  };
+  using ExePrfWbUop = Uop;
 
   struct ExePrfEntry {
     wire<1> valid;
@@ -921,37 +484,7 @@ struct ExeIssIO {
 };
 
 struct ExuRobIO {
-  struct ExuRobUop {
-    wire<32> diag_val;
-    wire<32> result;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<1> mispred;
-    wire<1> br_taken;
-    wire<1> page_fault_inst;
-    wire<1> page_fault_load;
-    wire<1> page_fault_store;
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-    wire<1> flush_pipe;
-
-    ExuRobUop() { std::memset(this, 0, sizeof(ExuRobUop)); }
-
-    static ExuRobUop from_micro_op(const MicroOp &src) {
-      ExuRobUop dst;
-      dst.diag_val = src.diag_val;
-      dst.result = src.result;
-      dst.rob_idx = src.rob_idx;
-      dst.mispred = src.mispred;
-      dst.br_taken = src.br_taken;
-      dst.page_fault_inst = src.page_fault_inst;
-      dst.page_fault_load = src.page_fault_load;
-      dst.page_fault_store = src.page_fault_store;
-      dst.op = encode_uop_type(src.op);
-      dst.dbg = src.dbg;
-      dst.flush_pipe = src.flush_pipe;
-      return dst;
-    }
-  };
+  using ExuRobUop = Uop;
 
   struct ExuRobEntry {
     wire<1> valid;
@@ -1422,53 +955,7 @@ struct LsuRobIO {
 };
 
 struct LsuExeIO {
-  struct LsuExeRespUop {
-    wire<32> diag_val;
-    wire<32> result;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<1> dest_en;
-    wire<1> page_fault_load;
-    wire<1> page_fault_store;
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-    wire<1> flush_pipe;
-
-    LsuExeRespUop() { std::memset(this, 0, sizeof(LsuExeRespUop)); }
-
-    static LsuExeRespUop from_micro_op(const MicroOp &src) {
-      LsuExeRespUop dst;
-      dst.diag_val = src.diag_val;
-      dst.result = src.result;
-      dst.dest_preg = src.dest_preg;
-      dst.br_mask = src.br_mask;
-      dst.rob_idx = src.rob_idx;
-      dst.dest_en = src.dest_en;
-      dst.page_fault_load = src.page_fault_load;
-      dst.page_fault_store = src.page_fault_store;
-      dst.op = encode_uop_type(src.op);
-      dst.dbg = src.dbg;
-      dst.flush_pipe = src.flush_pipe;
-      return dst;
-    }
-
-    MicroOp to_micro_op() const {
-      MicroOp dst;
-      dst.diag_val = diag_val;
-      dst.result = result;
-      dst.dest_preg = dest_preg;
-      dst.br_mask = br_mask;
-      dst.rob_idx = rob_idx;
-      dst.dest_en = dest_en;
-      dst.page_fault_load = page_fault_load;
-      dst.page_fault_store = page_fault_store;
-      dst.op = decode_uop_type(op);
-      dst.dbg = dbg;
-      dst.flush_pipe = flush_pipe;
-      return dst;
-    }
-  };
+  using LsuExeRespUop = Uop;
 
   struct LsuExeRespEntry {
     wire<1> valid;
@@ -1528,43 +1015,7 @@ struct DisLsuIO {
 };
 
 struct ExeLsuIO {
-  struct ExeLsuReqUop {
-    wire<32> result;
-    wire<PRF_IDX_WIDTH> dest_preg;
-    wire<3> func3;
-    wire<7> func7;
-    wire<1> is_atomic;
-    wire<BR_MASK_WIDTH> br_mask;
-    wire<ROB_IDX_WIDTH> rob_idx;
-    wire<STQ_IDX_WIDTH> stq_idx;
-    wire<1> stq_flag;
-    wire<LDQ_IDX_WIDTH> ldq_idx;
-    wire<1> rob_flag;
-    wire<1> dest_en;
-    wire<UOP_TYPE_WIDTH> op;
-    DebugMeta dbg;
-
-    ExeLsuReqUop() { std::memset(this, 0, sizeof(ExeLsuReqUop)); }
-
-    MicroOp to_micro_op() const {
-      MicroOp dst;
-      dst.result = result;
-      dst.dest_preg = dest_preg;
-      dst.func3 = func3;
-      dst.func7 = func7;
-      dst.is_atomic = is_atomic;
-      dst.br_mask = br_mask;
-      dst.rob_idx = rob_idx;
-      dst.stq_idx = stq_idx;
-      dst.stq_flag = stq_flag;
-      dst.ldq_idx = ldq_idx;
-      dst.rob_flag = rob_flag;
-      dst.dest_en = dest_en;
-      dst.op = decode_uop_type(op);
-      dst.dbg = dbg;
-      return dst;
-    }
-  };
+  using ExeLsuReqUop = Uop;
 
   struct ExeLsuReqEntry {
     wire<1> valid;

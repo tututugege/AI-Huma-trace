@@ -340,7 +340,8 @@ void Rob::comb_commit() {
   for (int i = 0; i < ROB_BANK_NUM; i++) {
     out.rob_commit->commit_entry[i].uop =
         entry[i][deq_ptr].uop.to_commit_inst();
-    out.commit_extra[i] = entry[i][deq_ptr].uop.to_commit_extra();
+    out.commit_extra[i].src1_areg = entry[i][deq_ptr].uop.src1_areg;
+    out.commit_extra[i].imm = entry[i][deq_ptr].uop.imm;
   }
 
   // 一组提交
