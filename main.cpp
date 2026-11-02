@@ -356,9 +356,6 @@ int main(int argc, char *argv[]) {
     axi_kit_ddr_functional_writes = false;  // memory is updated at ROB commit from the facts
     config.disable_difftest = true;  // the model no longer computes architectural values
   }
-  if (config.disable_difftest) {
-    cpu.ctx.enable_difftest = false;
-  }
 
   // --- D. 模拟器启动逻辑 ---
   if (config.mode == SimConfig::RUN) {

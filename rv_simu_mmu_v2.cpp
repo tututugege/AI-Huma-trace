@@ -146,24 +146,8 @@ void restore_axi_internal_tick_boundary_state_except_dcache(
   }
 }
 
-template <typename InterconnectT>
-auto comb_axi_inputs_for_internal_tick_impl(InterconnectT &interconnect, int)
-    -> decltype(interconnect.comb_inputs_internal_tick(), void()) {
-  interconnect.comb_inputs_internal_tick();
-}
 
-template <typename InterconnectT>
-void comb_axi_inputs_for_internal_tick_impl(InterconnectT &interconnect, long) {
-  AxiInternalTickBoundaryState boundary_state{};
-  capture_axi_internal_tick_boundary_state(interconnect, boundary_state);
-  interconnect.comb_inputs();
-  restore_axi_internal_tick_boundary_state(interconnect, boundary_state);
-}
 
-template <typename InterconnectT>
-void comb_axi_inputs_for_internal_tick(InterconnectT &interconnect) {
-  comb_axi_inputs_for_internal_tick_impl(interconnect, 0);
-}
 
 void connect_axi_slave_outputs(sim_ddr::SimDDR_IO_t &master_io,
                                const sim_ddr::SimDDR_IO_t &slave_io) {
@@ -213,125 +197,6 @@ axi_interconnect::AXI_LLCConfig make_default_llc_config() {
   return llc_cfg;
 }
 
-void print_soc_config_banner() {
-  constexpr int kBpuEnabled = 1;
-  const char *bpu_mode = "real-bpu";
-
-  const char *compiled_icache_path = "shared-top-level-axi";
-
-  const char *llc_mode = "enabled";
-  const char *llc_summary = "shared fabric uses LLC";
-
-  const char *runtime_icache_path =
-      "shared-top-level-axi";
-
-  std::printf("[CONFIG][SOC] bpu=%d(%s) icache_axi=%u compiled_icache=%s\n",
-              kBpuEnabled, bpu_mode,
-              static_cast<unsigned>(CONFIG_ICACHE_USE_AXI_MEM_PORT),
-              compiled_icache_path);
-  std::printf(
-      "[CONFIG][AXI] ddr_read_latency=%ucy ddr_write_resp_latency=%ucy "
-      "ddr_beat=%uB wq=%u wag=%ucy wfifo=%u wdrain=%ucy whi=%u wlo=%u "
-      "r2w=%ucy w2r=%ucy "
-      "upstream_payload=%uB upstream_read_resp=%uB "
-      "out=%u per_master=%u ddr_out=%u\n",
-      static_cast<unsigned>(sim_ddr::SIM_DDR_LATENCY),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_RESP_LATENCY),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_BEAT_BYTES),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_QUEUE_DEPTH),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_ACCEPT_GAP),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DATA_FIFO_DEPTH),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_GAP),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_LOW_WATERMARK),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_READ_TO_WRITE_TURNAROUND),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_TO_READ_TURNAROUND),
-      static_cast<unsigned>(axi_interconnect::AXI_UPSTREAM_PAYLOAD_BYTES),
-      static_cast<unsigned>(axi_interconnect::MAX_READ_TRANSACTION_BYTES),
-      static_cast<unsigned>(axi_interconnect::MAX_OUTSTANDING),
-      static_cast<unsigned>(axi_interconnect::MAX_READ_OUTSTANDING_PER_MASTER),
-      static_cast<unsigned>(sim_ddr::SIM_DDR_MAX_OUTSTANDING));
-  std::printf("[CONFIG][AXI] subsystem_freq_div=%u dcache_fast_domain=%u\n",
-              static_cast<unsigned>(CONFIG_AXI_SUBSYSTEM_FREQ_DIV),
-              static_cast<unsigned>(CONFIG_DCACHE_FAST_DOMAIN));
-  std::printf(
-      "[CONFIG][LLC] enable=%u(%s) capacity=%lluMB ways=%u mshr=%u "
-      "lookup_latency=%ucy dcache_read_miss=%s\n",
-      static_cast<unsigned>(CONFIG_AXI_LLC_ENABLE), llc_mode,
-      static_cast<unsigned long long>(CONFIG_AXI_LLC_SIZE_BYTES >> 20),
-      static_cast<unsigned>(CONFIG_AXI_LLC_WAYS),
-      static_cast<unsigned>(CONFIG_AXI_LLC_MSHR_NUM),
-      static_cast<unsigned>(CONFIG_AXI_LLC_LOOKUP_LATENCY),
-      CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC != 0 ? "noallocate"
-                                                   : "allocate");
-  std::printf(
-      "[TOPOLOGY] dcache/ptw/peripheral=top-level-shared-axi "
-      "memsubsystem_internal_axi_runtime=disabled llc_summary=%s\n",
-      llc_summary);
-  std::printf("[TOPOLOGY] icache_runtime=%s\n", runtime_icache_path);
-
-  constexpr uint64_t icache_capacity_bytes =
-      static_cast<uint64_t>(ICACHE_SET_NUM) * ICACHE_WAY_NUM * ICACHE_LINE_SIZE;
-  constexpr uint64_t dcache_capacity_bytes =
-      static_cast<uint64_t>(DCACHE_SETS_NUM) * DCACHE_WAYS_NUM * DCACHE_LINE_SIZE;
-  constexpr uint64_t llc_capacity_bytes = CONFIG_AXI_LLC_SIZE_BYTES;
-  const char *schedule_policy =
-      ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::IQ_SLOT_PRIORITY
-          ? "IQ_SLOT_PRIORITY"
-          : "ROB_OLDEST_FIRST";
-
-  std::printf(
-      "[CFG][WIDTH] frontend_fetch=%d backend_fetch_if=%d decode=%d "
-      "issue_ports=%d commit=%d "
-      "max_dispatch(iq/ldq/stq)=%d/%d/%d\n",
-      FETCH_WIDTH, BACKEND_FETCH_WIDTH, DECODE_WIDTH, ISSUE_WIDTH, COMMIT_WIDTH,
-      MAX_IQ_DISPATCH_WIDTH, MAX_LDQ_DISPATCH_WIDTH, MAX_STQ_DISPATCH_WIDTH);
-  std::printf(
-      "[CFG][CACHE] L1I=%lluKB(%d sets x %d ways x %dB) "
-      "L1D=%lluKB(%d sets x %d ways x %dB)\n",
-      static_cast<unsigned long long>(icache_capacity_bytes / 1024),
-      ICACHE_SET_NUM, ICACHE_WAY_NUM, ICACHE_LINE_SIZE,
-      static_cast<unsigned long long>(dcache_capacity_bytes / 1024), DCACHE_SETS_NUM,
-      DCACHE_WAYS_NUM, DCACHE_LINE_SIZE);
-  std::printf(
-      "[CFG][MEM] hierarchy=L1I/L1D + AXI%s%s LLC=%lluMB(%u ways,mshr=%u,lookup=%ucy)\n",
-      (CONFIG_ICACHE_USE_AXI_MEM_PORT ? "-icache" : ""),
-      (CONFIG_AXI_LLC_ENABLE ? "+LLC" : ""),
-      static_cast<unsigned long long>(llc_capacity_bytes >> 20),
-      static_cast<unsigned>(CONFIG_AXI_LLC_WAYS),
-      static_cast<unsigned>(CONFIG_AXI_LLC_MSHR_NUM),
-      static_cast<unsigned>(CONFIG_AXI_LLC_LOOKUP_LATENCY));
-  std::printf(
-      "[CFG][BACKEND] rob=%d(rob_bank=%d) prf=%d arf=%d ftq=%d instbuf=%d "
-      "ldq=%d stq=%d schedule=%s\n",
-      ROB_NUM, ROB_BANK_NUM, PRF_NUM, ARF_NUM, FTQ_SIZE, IDU_INST_BUFFER_SIZE,
-      LDQ_SIZE, STQ_SIZE, schedule_policy);
-  std::printf(
-      "[CFG][FU] total=%d alu=%d bru=%d ldu=%d sta=%d sdu=%d wakeup_ports=%d\n",
-      TOTAL_FU_COUNT, ALU_NUM, BRU_NUM, LSU_LDU_COUNT, LSU_STA_COUNT,
-      LSU_SDU_COUNT, MAX_WAKEUP_PORTS);
-  for (int i = 0; i < IQ_NUM; i++) {
-    const auto &iq = GLOBAL_IQ_CONFIG[i];
-    const char *iq_name = "IQ_UNKNOWN";
-    if (iq.id == IQ_INT)
-      iq_name = "IQ_INT";
-    else if (iq.id == IQ_LD)
-      iq_name = "IQ_LD";
-    else if (iq.id == IQ_STA)
-      iq_name = "IQ_STA";
-    else if (iq.id == IQ_STD)
-      iq_name = "IQ_STD";
-    else if (iq.id == IQ_BR)
-      iq_name = "IQ_BR";
-    std::printf(
-        "[CFG][IQ] %s size=%d dispatch=%d issue_ports=[%d..%d] port_num=%d\n",
-        iq_name, iq.size, iq.dispatch_width, iq.port_start_idx,
-        iq.port_start_idx + iq.port_num - 1, iq.port_num);
-  }
-  std::printf("[LSU LOAD/STORE WINDOWS] load_windows=%d lsu_ldu_count=%d LDQ_SIZE=%d store_windows=%d lsu_sta_count=%d STQ_SIZE=%d\n",
-               LSU_LOAD_WINDOW_WIDTH,LSU_LDU_COUNT,LDQ_SIZE,LSU_STORE_WINDOW_WIDTH,LSU_STA_COUNT,STQ_SIZE);
-
-}
 
 void bridge_axi_to_mem_subsystem(SimCpu &cpu) {
   const auto &rport =
@@ -757,47 +622,6 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   BackTop *back = &this->back;
   Assert(commit_slot >= 0 && commit_slot < COMMIT_WIDTH &&
          "SimCpu::commit_sync: invalid commit slot");
-  const auto &ftq_info = back->ftq_commit_info.resp[commit_slot];
-  if ((*inst)->type == JALR) {
-    if (inst->tma.is_ret) {
-
-    } else {
-
-    }
-  } else if ((*inst)->type == BR) {
-
-  }
-
-  if (inst->mispred) {
-    if ((*inst)->type == JALR) {
-      if (inst->tma.is_ret) {
-
-        const bool pred_taken = ftq_info.pred_taken;
-        if (!pred_taken) {
-
-        } else {
-
-        }
-      } else {
-
-        const bool pred_taken = ftq_info.pred_taken;
-        if (!pred_taken) {
-
-        } else {
-
-        }
-      }
-    } else if ((*inst)->type == BR) {
-      const bool pred_taken = ftq_info.pred_taken;
-      if (pred_taken != inst->br_taken) {
-
-      } else {
-
-      }
-
-    }
-  }
-
   if (inst->tma.mem_commit_is_store && !inst->page_fault_store) {
     StqEntry e = back->lsu->get_stq_entry(inst->stq_idx, inst->stq_flag);
     const bool store_suppressed = static_cast<bool>(e.suppress_write) &&
@@ -808,110 +632,13 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
       uint32_t dma_paddr = 0;
       size_t dma_size = 0;
       while (mem_subsystem.consume_dma_write(dma_paddr, dma_size)) {
-        if (ctx.enable_difftest) {
-          difftest_sync_ram_from_dut(dma_paddr, dma_size);
-        }
       }
     }
   }
 }
 
-void SimCpu::difftest_capture_registers() {
-  BackTop *back = &this->back;
-  for (int i = 0; i < ARF_NUM; i++) {
-    dut_cpu.gpr[i] = 0;  // no register file (P3)
-  }
-  for (int i = 0; i < CSR_NUM; i++) {
-    dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];
-  }
-}
 
-void SimCpu::difftest_prepare(InstEntry *inst_entry) {
-  Assert(inst_entry != nullptr &&
-         "SimCpu::difftest_prepare: inst_entry is null");
-  BackTop *back = &this->back;
-  InstInfo *inst = &inst_entry->uop;
 
-  difftest_capture_registers();
-
-  if (inst->tma.mem_commit_is_store && !inst->page_fault_store) {
-    StqEntry e = back->lsu->get_stq_entry(inst->stq_idx, inst->stq_flag);
-    const bool store_suppressed = static_cast<bool>(e.suppress_write) &&
-                                  e.rob_idx == inst->rob_idx &&
-                                  e.rob_flag == inst->rob_flag;
-    if (store_suppressed) {
-      dut_cpu.store = false;
-    } else {
-      if (!(e.paddr_valid && e.data_valid)) {
-        Assert(0 &&
-               "Difftest store commit has incomplete STQ address/data.");
-      } else {
-        dut_cpu.store = true;
-        dut_cpu.store_addr = e.paddr;
-        if (e.func3 == 0b00)
-          dut_cpu.store_data = e.data & 0xFF;
-        else if (e.func3 == 0b01)
-          dut_cpu.store_data = e.data & 0xFFFF;
-        else
-          dut_cpu.store_data = e.data;
-
-        dut_cpu.store_data = dut_cpu.store_data
-                             << (dut_cpu.store_addr & 0b11) * 8;
-      }
-    }
-  } else {
-    dut_cpu.store = false;
-  }
-
-  if (static_cast<bool>(
-          back->csr_interrupt_inject_io.external_irq_pending_valid)) {
-    if (static_cast<bool>(back->csr_interrupt_inject_io.external_irq_pending)) {
-      dut_cpu.csr[csr_mip] |= MIP_MEIP;
-    } else {
-      dut_cpu.csr[csr_mip] &= ~MIP_MEIP;
-    }
-  }
-  if (static_cast<bool>(back->csr_interrupt_inject_io
-                            .supervisor_external_irq_pending_valid)) {
-    if (static_cast<bool>(back->csr_interrupt_inject_io
-                              .supervisor_external_irq_pending)) {
-      dut_cpu.csr[csr_mip] |= MIP_SEIP;
-    } else {
-      dut_cpu.csr[csr_mip] &= ~MIP_SEIP;
-    }
-  }
-  dut_cpu.csr[csr_sip] = dut_cpu.csr[csr_mip] & 0x00000333u;
-
-  if (back->rob->out.rob_bcast->mret || back->rob->out.rob_bcast->sret) {
-    dut_cpu.pc = back->csr->out.csr2front->epc;
-  } else if (back->rob->out.rob_bcast->exception) {
-    dut_cpu.pc = back->csr->out.csr2front->trap_pc;
-  } else if (is_branch((*inst)->type) || (*inst)->type == JAL) {
-    dut_cpu.pc = inst_entry->uop.diag_val;
-  } else {
-    dut_cpu.pc = (*inst)->dbg.pc + 4;
-  }
-  dut_cpu.instruction = (*inst)->dbg.instruction;
-  dut_cpu.page_fault_inst = inst->page_fault_inst;
-  dut_cpu.page_fault_load = inst->page_fault_load;
-  dut_cpu.page_fault_store = inst->page_fault_store;
-  dut_cpu.inst_idx = (*inst)->dbg.inst_idx;
-  dut_cpu.commit_pc = (*inst)->dbg.pc;
-
-}
-
-void SimCpu::difftest_prepare_interrupt() {
-  BackTop *back = &this->back;
-  difftest_capture_registers();
-
-  dut_cpu.pc = back->csr->out.csr2front->trap_pc;
-  dut_cpu.store = false;
-  dut_cpu.instruction = 0;
-  dut_cpu.page_fault_inst = false;
-  dut_cpu.page_fault_load = false;
-  dut_cpu.page_fault_store = false;
-  dut_cpu.commit_pc = back->rob->out.rob_bcast->pc;
-}
 
 void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
   Assert(cpu != nullptr && "SimContext::run_commit_inst: cpu is null");
@@ -922,54 +649,15 @@ void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
   cpu->commit_sync(&inst_entry->uop, commit_slot);
 }
 
-void SimContext::run_difftest_inst(InstEntry *inst_entry) {
-  Assert(cpu != nullptr && "SimContext::run_difftest_inst: cpu is null");
-  Assert(inst_entry != nullptr &&
-         "SimContext::run_difftest_inst: inst_entry is null");
-  Assert(inst_entry->valid &&
-         "SimContext::run_difftest_inst: inst_entry is not valid");
-  if (!enable_difftest) {
-    return;
-  }
-  cpu->difftest_prepare(inst_entry);
-  const uint8_t privilege =
-      static_cast<uint8_t>(cpu->back.csr->privilege_1);
-  difftest_set_dut_privilege(privilege);
-  const InstInfo &inst = inst_entry->uop;
-  if (inst.is_mmio) {
-    difftest_sync_from_dut(privilege);
-    return;
-  }
-  const uint32_t raw_inst = inst->dbg.instruction;
-  const uint32_t opcode = raw_inst & 0x7fu;
-  const uint32_t funct3 = (raw_inst >> 12) & 0x7u;
-  const uint32_t rd = (raw_inst >> 7) & 0x1fu;
-  const uint32_t csr_addr = raw_inst >> 20;
-  if (opcode == 0x73u && funct3 != 0 && rd != 0 &&
-      (csr_addr == number_mip || csr_addr == number_sip)) {
-    difftest_ref_set_next_csr_read(csr_addr, dut_cpu.gpr[rd]);
-  }
-  difftest_step(true);
-}
 
-void SimContext::run_difftest_interrupt() {
-  Assert(cpu != nullptr && "SimContext::run_difftest_interrupt: cpu is null");
+void SimContext::run_interrupt_hook() {
+  Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
   if (tbhook::enabled) {
     const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
     const uint32_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
                                           : cpu->back.csr->CSR_RegFile_1[csr_scause];
     tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
   }
-  if (!enable_difftest) {
-    return;
-  }
-  cpu->difftest_prepare_interrupt();
-  const uint8_t target_privilege =
-      static_cast<uint8_t>(cpu->back.csr->privilege_1);
-  const uint32_t cause = target_privilege == RISCV_MODE_M
-                             ? dut_cpu.csr[csr_mcause]
-                             : dut_cpu.csr[csr_scause];
-  difftest_take_interrupt(cause, target_privilege, dut_cpu.csr[csr_mip]);
 }
 
 // 复位逻辑
@@ -1011,7 +699,6 @@ void SimCpu::init() {
   // icache model, so it simply leaves the port disconnected instead of falling
   // back to MemSubsystem's legacy private AXI runtime.
   mem_subsystem.set_internal_axi_runtime_active(false);
-  print_soc_config_banner();
   front.icache_mem_read_port =
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
 

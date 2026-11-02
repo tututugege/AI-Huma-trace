@@ -320,12 +320,11 @@ void Ren::comb_fire() {
       }
       if (!interrupt_nop) { 
         ctx->run_commit_inst(&commit_entry, i);
-        ctx->run_difftest_inst(&commit_entry);
       }
     }
   }
   if (in.rob_bcast->interrupt) {
-    ctx->run_difftest_interrupt();
+    ctx->run_interrupt_hook();
   }
 
   // 在 comb_fire 直接决定下一拍 freelist/RAT 状态。
