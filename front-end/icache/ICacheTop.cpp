@@ -20,11 +20,7 @@
 #define ICACHE_TOP_TRUE_GLUE_KERNEL_FETCH_WIDTH FETCH_WIDTH
 #define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_WORDS (ICACHE_LINE_SIZE / 4)
 #define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_SIZE ICACHE_LINE_SIZE
-#include "include/ICacheTopTrueGlueKernel.h"
 
-#ifndef CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR
-#define CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR 0
-#endif
 
 #if __has_include("AXI_Interconnect_IO.h")
 #include "AXI_Interconnect_IO.h"
@@ -135,105 +131,13 @@ struct TrueGlueOutput {
   uint32_t fetch_pc_2 = 0;
 };
 
-void encode_true_glue_input(const TrueGlueInput &in, bool *pi) {
-  BitWriter w(pi);
-  w.bit(in.reset);
-  w.bit(in.hold_for_recovery);
-  w.bit(in.reg_ifu_req_ready);
-  w.bit(in.reg_lookup_pending);
-  w.bit(in.reg_req_valid);
-  w.bit(in.reg_miss_txid_valid);
-  w.uint(in.reg_state, 3);
-  w.uint(in.reg_mem_axi_state, 1);
-  w.bit(in.module_ifu_req_ready);
-  w.bit(in.module_ifu_resp_valid);
-  w.uint(in.module_ifu_resp_pc, 32);
-  for (int i = 0; i < ICACHE_TOP_TRUE_GLUE_LINE_WORDS; ++i) {
-    w.uint(in.module_rd_data[i], 32);
-  }
-  w.bit(in.module_ifu_page_fault);
-  w.bit(in.module_ifu_resp_single_word);
-}
 
-TrueGlueInput decode_true_glue_input(const bool *pi) {
-  BitReader r(pi);
-  TrueGlueInput in;
-  in.reset = r.bit();
-  in.hold_for_recovery = r.bit();
-  in.reg_ifu_req_ready = r.bit();
-  in.reg_lookup_pending = r.bit();
-  in.reg_req_valid = r.bit();
-  in.reg_miss_txid_valid = r.bit();
-  in.reg_state = r.uint(3);
-  in.reg_mem_axi_state = r.uint(1);
-  in.module_ifu_req_ready = r.bit();
-  in.module_ifu_resp_valid = r.bit();
-  in.module_ifu_resp_pc = r.uint(32);
-  for (int i = 0; i < ICACHE_TOP_TRUE_GLUE_LINE_WORDS; ++i) {
-    in.module_rd_data[i] = r.uint(32);
-  }
-  in.module_ifu_page_fault = r.bit();
-  in.module_ifu_resp_single_word = r.bit();
-  return in;
-}
 
-void encode_true_glue_output(const TrueGlueOutput &out, bool *po) {
-  BitWriter w(po);
-  w.bit(out.icache_read_ready);
-  w.bit(out.icache_read_complete);
-  w.bit(out.icache_read_ready_2);
-  w.bit(out.icache_read_complete_2);
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.uint(out.fetch_group[i], 32);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.bit(out.page_fault_inst[i]);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.bit(out.inst_valid[i]);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.uint(out.fetch_group_2[i], 32);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.bit(out.page_fault_inst_2[i]);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    w.bit(out.inst_valid_2[i]);
-  }
-  w.uint(out.fetch_pc, 32);
-  w.uint(out.fetch_pc_2, 32);
-}
 
-TrueGlueOutput decode_true_glue_output(const bool *po) {
-  BitReader r(po);
-  TrueGlueOutput out;
-  out.icache_read_ready = r.bit();
-  out.icache_read_complete = r.bit();
-  out.icache_read_ready_2 = r.bit();
-  out.icache_read_complete_2 = r.bit();
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.fetch_group[i] = r.uint(32);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.page_fault_inst[i] = r.bit();
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.inst_valid[i] = r.bit();
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.fetch_group_2[i] = r.uint(32);
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.page_fault_inst_2[i] = r.bit();
-  }
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    out.inst_valid_2[i] = r.bit();
-  }
-  out.fetch_pc = r.uint(32);
-  out.fetch_pc_2 = r.uint(32);
-  return out;
-}
+
+
+
+
 
 TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
   TrueGlueOutput out;
@@ -287,29 +191,9 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
   return out;
 }
 
-TrueGlueOutput run_true_glue_io_generator(const TrueGlueInput &in) {
-  bool pi[ICACHE_TOP_TRUE_GLUE_PI_WIDTH] = {};
-  bool po[ICACHE_TOP_TRUE_GLUE_PO_WIDTH] = {};
-  encode_true_glue_input(in, pi);
-  icache_top_true_glue_io_generator(pi, po);
-  return decode_true_glue_output(po);
-}
 
-void icache_top_true_glue_io_generator(const bool *pi, bool *po) {
-#if CONFIG_QM3_ICACHE_USE_NATIVE_GENERATOR
-  const TrueGlueInput in = decode_true_glue_input(pi);
-  const TrueGlueOutput out = eval_true_glue(in);
-  encode_true_glue_output(out, po);
-#else
-  static_assert(ICACHE_TOP_TRUE_GLUE_PI_WIDTH ==
-                    ICACHE_TOP_TRUE_GLUE_KERNEL_PI_WIDTH,
-                "ICache true-glue PI width must match the canonical kernel");
-  static_assert(ICACHE_TOP_TRUE_GLUE_PO_WIDTH ==
-                    ICACHE_TOP_TRUE_GLUE_KERNEL_PO_WIDTH,
-                "ICache true-glue PO width must match the canonical kernel");
-  icache_top_true_glue_kernel(pi, po);
-#endif
-}
+
+
 
 } // namespace icache_top_n
 
@@ -917,7 +801,7 @@ public:
       const auto glue_in =
           make_true_glue_input(icache_hw, /*hold_for_recovery=*/false,
                                /*reset=*/true);
-      const auto glue_out = icache_top_n::run_true_glue_io_generator(glue_in);
+      const auto glue_out = icache_top_n::eval_true_glue(glue_in);
       apply_true_glue_output(out, glue_out);
       return;
     }
@@ -988,7 +872,7 @@ public:
         icache_hw.io.out.dcache_req_addr);
 
     const auto glue_in = make_true_glue_input(icache_hw, hold_for_recovery);
-    const auto glue_out = icache_top_n::run_true_glue_io_generator(glue_in);
+    const auto glue_out = icache_top_n::eval_true_glue(glue_in);
     apply_true_glue_output(out, glue_out);
     update_true_perf_outputs(out, req_valid, icache_hw, itlb_translate_invoked,
                              itlb_translate_ret, mmu_resp.retry_reason);
@@ -1065,7 +949,7 @@ private:
   bool comb_visible_ready(bool hold_for_recovery, bool reset) const {
     const auto glue_in =
         make_true_glue_input(icache_hw, hold_for_recovery, reset);
-    const auto glue_out = icache_top_n::run_true_glue_io_generator(glue_in);
+    const auto glue_out = icache_top_n::eval_true_glue(glue_in);
     return glue_out.icache_read_ready;
   }
 
