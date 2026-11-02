@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Csr.h"
 #include "DebugPtwTrace.h"
 #include "config.h"
@@ -54,14 +55,12 @@ void Csr::init() {
 }
 
 void Csr::comb_begin() {
-  for (int i = 0; i < CSR_NUM; i++) {
-    CSR_RegFile_1[i] = CSR_RegFile[i];
-  }
-  privilege_1 = privilege;
-  csr_idx_1 = csr_idx;
-  csr_wdata_1 = csr_wdata;
-  csr_wcmd_1 = csr_wcmd;
-  csr_we_1 = csr_we;
+  BEGIN_EQ(CSR_RegFile_1, CSR_RegFile);
+  BEGIN_EQ(privilege_1, privilege);
+  BEGIN_EQ(csr_idx_1, csr_idx);
+  BEGIN_EQ(csr_wdata_1, csr_wdata);
+  BEGIN_EQ(csr_wcmd_1, csr_wcmd);
+  BEGIN_EQ(csr_we_1, csr_we);
 }
 
 void Csr::comb_csr_status() {

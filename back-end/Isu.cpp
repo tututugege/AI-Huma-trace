@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Isu.h"
 #include "config.h"
 #include <cstdint>
@@ -95,17 +96,9 @@ void Isu::comb_begin() {
   for (auto &q : iqs) {
     q.comb_begin();
   }
-  for (int d = 0; d < ISU_MUL_WAKE_DEPTH; d++) {
-    for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) {
-      mul_wake_pipe_1[d][s] = mul_wake_pipe[d][s];
-    }
-  }
-  for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++) {
-    div_wake_slots_1[i] = div_wake_slots[i];
-  }
-  for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++) {
-    fp_wake_slots_1[i] = fp_wake_slots[i];
-  }
+  BEGIN_EQ(mul_wake_pipe_1, mul_wake_pipe);
+  BEGIN_EQ(div_wake_slots_1, div_wake_slots);
+  BEGIN_EQ(fp_wake_slots_1, fp_wake_slots);
 }
 
 

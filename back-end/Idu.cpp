@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Idu.h"
 #include "Csr.h"
 #include "RISCV.h"
@@ -33,12 +34,10 @@ void Idu::init() {
  * 约束: 仅做状态复制，不分配/释放分支 Tag，不驱动对外接口信号。
  */
 void Idu::comb_begin() {
-  for (int i = 0; i < MAX_BR_NUM; i++) {
-    tag_vec_1[i] = tag_vec[i];
-    br_mask_cp_1[i] = br_mask_cp[i];
-  }
-  now_br_mask_1 = now_br_mask;
-  br_latch_1 = br_latch;
+  BEGIN_EQ(tag_vec_1, tag_vec);
+  BEGIN_EQ(br_mask_cp_1, br_mask_cp);
+  BEGIN_EQ(now_br_mask_1, now_br_mask);
+  BEGIN_EQ(br_latch_1, br_latch);
 }
 
 /*

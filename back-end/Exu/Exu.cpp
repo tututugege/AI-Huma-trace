@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "trace_hook.h"
 #include "Exu.h"
 #include "config.h"
@@ -76,9 +77,7 @@ void Exu::init() {
  * 约束: 不执行发射/写回/冲刷，仅建立本拍组合逻辑初值。
  */
 void Exu::comb_begin() {
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    fu_inst_r_1[i] = fu_inst_r[i];
-  }
+  BEGIN_EQ(fu_inst_r_1, fu_inst_r);
 
   // 每拍默认清零：统一在组合开始阶段完成，避免分散在各 comb_xxx。
 

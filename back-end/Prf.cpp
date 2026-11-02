@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Prf.h"
 #include "IO.h"
 #include "config.h"
@@ -41,9 +42,7 @@ void Prf::init() {
 // 输出更新：reg_file_1[]、inst_r_1[]。
 // 约束：仅状态镜像，不进行读/写/旁路决策。
 void Prf::comb_begin() {
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
-    inst_r_1[i] = inst_r[i];
-  }
+  BEGIN_EQ(inst_r_1, inst_r);
 }
 
 // 功能：根据当前发出的指令，向 FTQ 提取 PC 读请求。

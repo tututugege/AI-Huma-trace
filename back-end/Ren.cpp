@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Ren.h"
 #include "config.h"
 #include <cstdlib>
@@ -78,18 +79,16 @@ void Ren::init() {
  * 约束: 仅做状态镜像，不进行分配/回收决策，不驱动握手输出。
  */
 void Ren::comb_begin() {
-  memcpy(inst_r_1, inst_r, DECODE_WIDTH * sizeof(DecRenIO::DecRenInst));
-  memcpy(inst_valid_1, inst_valid, DECODE_WIDTH * sizeof(reg<1>));
-  memcpy(spec_RAT_1, spec_RAT, (ARF_NUM + 1) * sizeof(reg<PRF_IDX_WIDTH>));
-  memcpy(arch_RAT_1, arch_RAT, (ARF_NUM + 1) * sizeof(reg<PRF_IDX_WIDTH>));
-  memcpy(RAT_checkpoint_1, RAT_checkpoint,
-         MAX_BR_NUM * (ARF_NUM + 1) * sizeof(reg<PRF_IDX_WIDTH>));
-  memcpy(free_list_1, free_list, PRF_NUM * sizeof(reg<PRF_IDX_WIDTH>));
-  free_head_1 = free_head;
-  free_head_commit_1 = free_head_commit;
-  free_tail_1 = free_tail;
-  memcpy(alloc_checkpoint_head_1, alloc_checkpoint_head,
-         MAX_BR_NUM * sizeof(reg<PRF_IDX_WIDTH>));
+  BEGIN_EQ(inst_r_1, inst_r);
+  BEGIN_EQ(inst_valid_1, inst_valid);
+  BEGIN_EQ(spec_RAT_1, spec_RAT);
+  BEGIN_EQ(arch_RAT_1, arch_RAT);
+  BEGIN_EQ(RAT_checkpoint_1, RAT_checkpoint);
+  BEGIN_EQ(free_list_1, free_list);
+  BEGIN_EQ(free_head_1, free_head);
+  BEGIN_EQ(free_head_commit_1, free_head_commit);
+  BEGIN_EQ(free_tail_1, free_tail);
+  BEGIN_EQ(alloc_checkpoint_head_1, alloc_checkpoint_head);
 }
 
 /*

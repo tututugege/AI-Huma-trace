@@ -1,3 +1,4 @@
+#include "BeginCheck.h"
 #include "Dispatch.h"
 #include "config.h"
 #include "util.h"
@@ -56,11 +57,9 @@ void Dispatch::init() {
  * 约束: 仅做镜像，不做资源分配/发射决策。
  */
 void Dispatch::comb_begin() {
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    inst_r_1[i] = inst_r[i];
-    inst_valid_1[i] = inst_valid[i];
-  }
-  std::memcpy(busy_table_1, busy_table, sizeof(busy_table_1));
+  BEGIN_EQ(inst_r_1, inst_r);
+  BEGIN_EQ(inst_valid_1, inst_valid);
+  BEGIN_EQ(busy_table_1, busy_table);
 }
 
 /*
