@@ -1,3 +1,4 @@
+#include "PhysMemory.h"
 #include "MemRouteBlock.h"
 #if !BSD_CONFIG
 #include "types.h"
@@ -50,11 +51,13 @@ void MemRouteBlock::comb_response() {
       if (owner == Owner::ICACHE) {
         out.icache_resp->resp_valid = true;
         out.icache_resp->resp_miss = false;
-        out.icache_resp->resp_data = in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].data;
+        // Instruction data is functional memory (the L1D stores no values in the trace-driven build).
+        out.icache_resp->resp_data = pmem_read(cur.issued_tags.req_addr);
       } else {
         out.ptw_events->valid = true;
         out.ptw_events->owner = owner;
-        out.ptw_events->data = in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].data;
+        // Page table entries are functional memory too.
+        out.ptw_events->data = pmem_read(cur.issued_tags.req_addr);
         out.ptw_events->replay = 0;
         out.ptw_events->req_addr = cur.issued_tags.req_addr;
         out.ptw_events->req_id = cur.issued_tags.req_id;

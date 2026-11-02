@@ -627,7 +627,17 @@ int main(int argc, char *argv[]) {
 
   // 主循环
   if (cpu.ctx.exit_reason == ExitReason::NONE) {
+    // Regression guard: SIM_MAX_CYCLES stops a run that does not terminate (exit code 3) instead of
+    // waiting for an external timeout.
+    const long long cycle_limit = std::getenv("SIM_MAX_CYCLES")
+                                      ? std::atoll(std::getenv("SIM_MAX_CYCLES"))
+                                      : (long long)MAX_SIM_TIME;
     for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
+      if (sim_time >= cycle_limit) {
+        std::cout << "[sim] SIM_MAX_CYCLES=" << cycle_limit << " reached without termination" << std::endl;
+        pmem_release();
+        return 3;
+      }
       if (sim_time % 10000000 == 0) {
         cout << dec << sim_time << endl;
       }

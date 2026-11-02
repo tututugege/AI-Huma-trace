@@ -42,7 +42,6 @@ using MmioImpl = mmio::MMIO_Bus_AXI4;
 namespace {
 
 struct AxiLlcTableRuntime {
-  DynamicGenericTable<SramTablePolicy> data;
   DynamicGenericTable<SramTablePolicy> meta;
   DynamicGenericTable<SramTablePolicy> valid;
   DynamicGenericTable<SramTablePolicy> repl;
@@ -113,8 +112,8 @@ struct AxiLlcTableRuntime {
       return;
     }
     const uint32_t sets = cfg.set_count();
-    data.configure(make_table_config(sets, cfg.ways * cfg.line_bytes,
-                                     cfg.lookup_latency));
+    // No line-data storage (P3): the data of a valid way is the functional memory (pmem) at the
+    // way's address, which the commit-time store path keeps current.
     meta.configure(make_table_config(
         sets, cfg.ways * axi_interconnect::AXI_LLC_META_ENTRY_BYTES,
         cfg.lookup_latency));
@@ -123,7 +122,6 @@ struct AxiLlcTableRuntime {
         cfg.lookup_latency));
     repl.configure(make_table_config(sets, axi_interconnect::AXI_LLC_REPL_BYTES,
                                      cfg.lookup_latency));
-    data.reset();
     meta.reset();
     valid.reset();
     repl.reset();
@@ -138,22 +136,38 @@ struct AxiLlcTableRuntime {
       return;
     }
 
-    DynamicTablePayload data_payload;
     DynamicTablePayload meta_payload;
     DynamicTablePayload valid_payload;
     DynamicTablePayload repl_payload;
-    lookup_in.data_valid =
-        data.debug_read_row(lookup_pending_index, data_payload);
     lookup_in.meta_valid =
         meta.debug_read_row(lookup_pending_index, meta_payload);
     lookup_in.valid_valid =
         valid.debug_read_row(lookup_pending_index, valid_payload);
     lookup_in.repl_valid =
         repl.debug_read_row(lookup_pending_index, repl_payload);
-    lookup_in.data.bytes = data_payload.bytes;
     lookup_in.meta.bytes = meta_payload.bytes;
     lookup_in.valid.bytes = valid_payload.bytes;
     lookup_in.repl.bytes = repl_payload.bytes;
+    // Synthesize the data row of the set from functional memory.
+    lookup_in.data_valid = lookup_in.meta_valid;
+    const uint32_t sets = config.set_count();
+    const uint32_t lb = config.line_bytes;
+    lookup_in.data.bytes.assign(static_cast<size_t>(config.ways) * lb, 0);
+    for (uint32_t w = 0; w < config.ways; ++w) {
+      if (w >= valid_payload.bytes.size() || valid_payload.bytes[w] == 0) {
+        continue;
+      }
+      const auto me = axi_interconnect::AXI_LLC::decode_meta(lookup_in.meta, w);
+      const uint32_t line_addr = (me.tag * sets + lookup_pending_index) * lb;
+      uint8_t *dst = lookup_in.data.bytes.data() + static_cast<size_t>(w) * lb;
+      for (uint32_t i = 0; i < lb; i += 4) {
+        const uint32_t word = pmem_read(line_addr + i);
+        dst[i] = static_cast<uint8_t>(word);
+        dst[i + 1] = static_cast<uint8_t>(word >> 8);
+        dst[i + 2] = static_cast<uint8_t>(word >> 16);
+        dst[i + 3] = static_cast<uint8_t>(word >> 24);
+      }
+    }
   }
 
   void seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out) {
@@ -161,7 +175,6 @@ struct AxiLlcTableRuntime {
       return;
     }
     if (table_out.invalidate_all) {
-      data.reset();
       meta.reset();
       valid.reset();
       repl.reset();
@@ -172,9 +185,6 @@ struct AxiLlcTableRuntime {
       lookup_queued_index = 0;
       return;
     }
-    const auto data_write =
-        make_write_req(table_out.data, config.ways * config.line_bytes,
-                       config.line_bytes);
     const auto meta_write = make_write_req(
         table_out.meta,
         config.ways * axi_interconnect::AXI_LLC_META_ENTRY_BYTES,
@@ -184,7 +194,6 @@ struct AxiLlcTableRuntime {
     const auto repl_write =
         make_write_req(table_out.repl, axi_interconnect::AXI_LLC_REPL_BYTES, 0);
 
-    data.seq({}, data_write);
     meta.seq({}, meta_write);
     valid.seq({}, valid_write);
     repl.seq({}, repl_write);

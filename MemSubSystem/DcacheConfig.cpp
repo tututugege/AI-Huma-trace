@@ -1,3 +1,4 @@
+#include "PhysMemory.h"
 #include "DcacheConfig.h"
 #include <cstdint>
 #include <cstdio>
@@ -5,7 +6,7 @@
 #include <cstring>
 
 uint32_t tag_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
-uint32_t data_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM][DCACHE_WORD_NUM] = {};
+// No L1D line-data storage (P3): load data is a fact of the trace; tags/valid/dirty/PLRU are kept.
 bool valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 bool dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 bool plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS] = {};
@@ -81,7 +82,6 @@ inline void plru_touch_way(uint32_t set_idx, uint32_t way) {
 void init_dcache()
 {
     std::memset(tag_array, 0, sizeof(tag_array));
-    std::memset(data_array, 0, sizeof(data_array));
     std::memset(valid_array, 0, sizeof(valid_array));
     std::memset(dirty_array, 0, sizeof(dirty_array));
     std::memset(plru_tree_state, 0, sizeof(plru_tree_state));
@@ -157,10 +157,7 @@ void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, const uint3
     dirty_array[set_idx][target_way] = false;
     tag_array[set_idx][target_way] = tag;
     plru_tree_touch(set_idx, target_way);
-    for (int w = 0; w < DCACHE_WORD_NUM; w++)
-    {
-        data_array[set_idx][target_way][w] = data[w];
-    }
+    (void)data;
 }
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2){
@@ -181,7 +178,7 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memcpy(resp[i].tag, tag_array[req.set_idx], sizeof(tag_array[req.set_idx]));
         memcpy(resp[i].dirty, dirty_array[req.set_idx], sizeof(dirty_array[req.set_idx]));
         for (int w = 0; w < DCACHE_WAYS_NUM; w++) {
-            resp[i].data[w] = data_array[req.set_idx][w][req.word_off];
+            resp[i].data[w] = 0;
         }
     }
 
@@ -190,7 +187,17 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memcpy(fillin.valid_snap,valid_array[fillout.set_idx], sizeof(valid_array[fillout.set_idx]));
         memcpy(fillin.tag_snap,tag_array[fillout.set_idx], sizeof(tag_array[fillout.set_idx]));
         memcpy(fillin.dirty_snap,dirty_array[fillout.set_idx], sizeof(dirty_array[fillout.set_idx]));
-        memcpy(fillin.data_snap,data_array[fillout.set_idx], sizeof(data_array[fillout.set_idx]));
+        // The victim line that may be written back carries the functional memory content (pmem):
+        // stores are already reflected there (updated at ROB commit), so every data path below the
+        // core transports correct data although the L1D itself stores none.
+        for (int w = 0; w < DCACHE_WAYS_NUM; w++) {
+            for (int off = 0; off < DCACHE_WORD_NUM; off++) {
+                fillin.data_snap[w][off] =
+                    valid_array[fillout.set_idx][w]
+                        ? pmem_read(get_addr(fillout.set_idx, tag_array[fillout.set_idx][w], off))
+                        : 0;
+            }
+        }
         memcpy(fillin.plru_tree_state,plru_tree_state[fillout.set_idx], sizeof(plru_tree_state[fillout.set_idx]));
     }
     else{
@@ -203,7 +210,6 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
         const LruUpdate &lru_update = lru_updates[i];
         if(pw.valid){
             // check_data_bank_access(pw.set_idx, "write", "pending_write");
-            apply_strobe(data_array[pw.set_idx][pw.way_idx][pw.word_off], pw.data, pw.strb);
             dirty_array[pw.set_idx][pw.way_idx] = true;
         }
 
