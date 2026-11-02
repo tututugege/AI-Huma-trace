@@ -635,21 +635,3 @@ void RealDcache::seq() {
     s1s2_cur = s1s2_nxt;
     bank_retry_cur = bank_retry_nxt;
 }
-void RealDcache::dump_debug_state(FILE *out) const {
-    fprintf(out, "RealDcache State:\n");
-    fprintf(out, "  Stage1 Load Slots:\n");
-    for (int i = 0; i < LSU_LDU_COUNT; i++) {
-        const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[i];
-        fprintf(out, "    Slot %d: Valid: %d, Addr: 0x%08x, Req ID: %u\n", i, slot.valid, slot.addr, slot.req_id);
-    }
-    fprintf(out, "  Stage1 Store Slots:\n");
-    for (int i = 0; i < LSU_STA_COUNT; i++) {
-        const S1S2Reg::StoreSlot &slot = s1s2_cur.stores[i];
-        fprintf(out, "    Slot %d: Valid: %d, Addr: 0x%08x, Data: 0x%08x, Strb: 0x%02x, Req ID: %u\n", i, slot.valid, slot.addr, slot.data, slot.strb, slot.req_id);
-    }
-    fprintf(out, "  Stage1 Fill Write: Valid: %d, SetIdx: %u, Tag: 0x%08x, WayIdx: %u, Data: [", s1s2_cur.fill_write.valid, s1s2_cur.fill_write.set_idx, s1s2_cur.fill_write.tag, s1s2_cur.fill_write.way_idx);
-    for (int w = 0; w < DCACHE_WORD_NUM; w++)    {
-        fprintf(out, "0x%08x%s", s1s2_cur.fill_write.data[w], w == DCACHE_WORD_NUM - 1 ? "" : ", ");
-    }
-    fprintf(out, "]\n");
-}

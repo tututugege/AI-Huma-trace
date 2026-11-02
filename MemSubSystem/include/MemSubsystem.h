@@ -81,7 +81,6 @@ public:
   bool consume_dma_write(uint32_t &paddr, size_t &size);
   void load_sdcard_image(const std::string &path);
   void sync_mmio_devices_from_backing();
-  void dump_debug_state(FILE *out) const;
   axi_interconnect::ReadMasterPort_t *icache_read_port();
   void set_internal_axi_runtime_active(bool active);
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }

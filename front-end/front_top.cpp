@@ -102,66 +102,6 @@ static bool front_focus_any_out_pc(const front_top_out &out) {
 
 
 
-void front_dump_debug_state() {
-  std::printf(
-      "[DEADLOCK][FRONT] sim_time=%u fetch_addr_fifo{full=%d empty=%d} "
-      "inst_fifo{full=%d empty=%d} ptab{full=%d empty=%d} front2back{full=%d "
-      "empty=%d}\n",
-      front_sim_time, static_cast<int>(fetch_addr_fifo_full_latch),
-      static_cast<int>(fetch_addr_fifo_empty_latch),
-      static_cast<int>(fifo_full_latch), static_cast<int>(fifo_empty_latch),
-      static_cast<int>(ptab_full_latch), static_cast<int>(ptab_empty_latch),
-      static_cast<int>(front2back_fifo_full_latch),
-      static_cast<int>(front2back_fifo_empty_latch));
-  if (!front_deadlock_snapshot.valid) {
-    std::printf("[DEADLOCK][FRONT] no deadlock snapshot captured yet\n");
-    return;
-  }
-
-  const auto &s = front_deadlock_snapshot;
-  std::printf(
-      "[DEADLOCK][FRONT][SNAP] reset=%d refetch=%d ic_ready={%d,%d} "
-      "read_en={fa0=%d fa1=%d fifo=%d ptab=%d f2b=%d} fifo_valid=%d "
-      "predict_next=0x%08x\n",
-      static_cast<int>(s.global_reset), static_cast<int>(s.global_refetch),
-      static_cast<int>(s.icache_ready), static_cast<int>(s.icache_ready_2),
-      static_cast<int>(s.fetch_addr_read_enable_slot0),
-      static_cast<int>(s.fetch_addr_read_enable_slot1),
-      static_cast<int>(s.inst_fifo_read_enable),
-      static_cast<int>(s.ptab_read_enable),
-      static_cast<int>(s.front2back_read_enable),
-      static_cast<int>(s.out.FIFO_valid), s.out.predict_next_fetch_address);
-  std::printf(
-      "[DEADLOCK][FRONT][ICACHE] fetch_pc={0x%08x,0x%08x} req_fire=%d "
-      "req_blocked=%d resp_fire=%d miss=%d miss_busy=%d outstanding=%d "
-      "itlb{hit=%d miss=%d fault=%d retry=%d other_walk=%d req_blocked=%d "
-      "wait_walk=%d local_walker=%d}\n",
-      s.icache.fetch_pc, s.icache.fetch_pc_2,
-      static_cast<int>(s.icache.perf_req_fire),
-      static_cast<int>(s.icache.perf_req_blocked),
-      static_cast<int>(s.icache.perf_resp_fire),
-      static_cast<int>(s.icache.perf_miss_event),
-      static_cast<int>(s.icache.perf_miss_busy),
-      static_cast<int>(s.icache.perf_outstanding_req),
-      static_cast<int>(s.icache.perf_itlb_hit),
-      static_cast<int>(s.icache.perf_itlb_miss),
-      static_cast<int>(s.icache.perf_itlb_fault),
-      static_cast<int>(s.icache.perf_itlb_retry),
-      static_cast<int>(s.icache.perf_itlb_retry_other_walk),
-      static_cast<int>(s.icache.perf_itlb_retry_walk_req_blocked),
-      static_cast<int>(s.icache.perf_itlb_retry_wait_walk_resp),
-      static_cast<int>(s.icache.perf_itlb_retry_local_walker_busy));
-  icache_dump_debug_state();
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    std::printf(
-        "[DEADLOCK][FRONT][OUT %d] valid=%d pc=0x%08x inst=0x%08x pf=%d "
-        "fifo_pc=0x%08x fifo_inst=0x%08x fifo_valid=%d\n",
-        i, static_cast<int>(s.out.inst_valid[i]), s.out.pc[i],
-        s.out.instructions[i], static_cast<int>(s.out.page_fault_inst[i]),
-        s.fifo.pc[i], s.fifo.instructions[i],
-        static_cast<int>(s.fifo.inst_valid[i]));
-  }
-}
 
 
 static BPU_TOP bpu_instance;

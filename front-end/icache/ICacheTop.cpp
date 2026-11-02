@@ -915,10 +915,3 @@ ICacheTop *get_icache_instance() {
   return instance.get();
 }
 
-void icache_dump_debug_state() {
-  if (auto *instance = get_icache_instance(); instance != nullptr) {
-    instance->dump_debug_state();
-  } else {
-    std::printf("[DEADLOCK][FRONT][ICACHE_HW] no icache instance\n");
-  }
-}

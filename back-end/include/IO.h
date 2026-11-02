@@ -471,8 +471,6 @@ struct StqEntry {
   wire<1> is_lrsc = false;
   wire<1> sc_pass = false; // For SC: whether the store-conditional succeeded
   wire<PRF_IDX_WIDTH> dest_preg = 0; // SC returns 0/1 through STA writeback
-  uint64_t perf_mem_start_cycle = 0;
-  wire<1> perf_mem_started = false;
 
   StoreState store_state = StoreState::Empty;
 

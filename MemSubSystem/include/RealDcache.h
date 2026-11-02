@@ -63,7 +63,6 @@ public:
         }
     }
 
-    void dump_debug_state(FILE *out) const;
     bool idle_quiescent() const {
         if (s1s2_cur.fill_write.valid) return false;
         for (const auto &l : s1s2_cur.loads) if (l.valid) return false;

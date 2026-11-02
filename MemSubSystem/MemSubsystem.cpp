@@ -712,16 +712,6 @@ static bool replay_waits_for_mshr_fill(ReplayType replay) {
   return replay == ReplayType::MSHR_HIT || replay == ReplayType::MSHR_FULL;
 }
 
-void MemSubsystem::dump_debug_state(FILE *out) const {
-  if (out == nullptr) {
-    return;
-  }
-  ptw_block.dump_debug_state(out);
-  mem_route_block.dump_debug_state(out);
-  mshr_.dump_debug_state(out);
-  wb_.dump_debug_state(out);
-  dcache_.dump_debug_state(out);
-}
 
 void MemSubsystem::dcache_domain_comb_outputs() {
   // Consume same-cycle AXI feedback before publishing DCache-facing state.

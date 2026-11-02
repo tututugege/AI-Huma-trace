@@ -266,12 +266,3 @@ void MSHR::seq(bool sample_perf)
     cur = nxt;
 }
 
-void MSHR::dump_debug_state(FILE *out) const {
-    fprintf(out, "MSHR State:\n");
-    fprintf(out, "  MSHR Count: %u\n", cur.mshr_count);
-    fprintf(out, "  AXI Resp Hold Valid: %d, ID: %u\n", cur.axi_resp_hold_valid, cur.axi_resp_hold_id);
-    for (uint32_t i = 0; i < DCACHE_MSHR_ENTRIES; i++) {
-        const MSHREntry &e = cur.mshr_entries[i];
-        fprintf(out, "  Entry %u: Valid: %d, Issued: %d, Addr: 0x%08x\n", i, e.valid, e.issued, e.addr);
-    }
-}

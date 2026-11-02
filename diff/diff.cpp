@@ -1,6 +1,5 @@
 #include "diff.h"
 #include "Csr.h"
-#include "DiffMemTrace.h"
 #include "PhysMemory.h"
 #include "RISCV.h"
 #include "config.h"

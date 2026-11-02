@@ -48,7 +48,6 @@ public:
   void force_back2front_refetch(uint32_t pc);
   void step_bpu();
   void step_oracle();
-  void dump_debug_state() const;
 
 private:
   std::unique_ptr<FrontReadData> read_data_;

@@ -136,9 +136,3 @@ void MemRouteBlock::seq() {
   // Update the current state to the next state at the end of the cycle.
   cur = nxt;
 }
-void MemRouteBlock::dump_debug_state(FILE *out) const {
-  fprintf(out, "MemRouteBlock State:\n");
-  fprintf(out, "  Issued Tag - Owner: %d, Addr: 0x%08x, ID: %u\n", static_cast<int>(cur.issued_tags.owner), cur.issued_tags.req_addr, cur.issued_tags.req_id);
-  fprintf(out, "  PTW Wait - DTLB: %d, ITLB: %d, WALK: %d\n", cur.ptw_wait.dtlb, cur.ptw_wait.itlb, cur.ptw_wait.walk);
-  fprintf(out, "  LSU Replay - Valid: %d, Req ID: %u\n", cur.lsu_replay_valid, cur.lsu_replay_req_id);
-}

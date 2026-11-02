@@ -3,7 +3,6 @@
 #include "DcacheConfig.h"
 #include "MemUtils.h"
 #include "PhysMemory.h"
-#include "RealLsuPerf.h"
 #include "SimCpu.h"
 #include "TlbMmu.h"
 #include "config.h"
@@ -108,6 +107,16 @@ wire<STQ_IDX_WIDTH> RealLsu::enqueue_wait_mmu_stq(wire<STQ_IDX_WIDTH> stq_idx) {
   nxt.wait_mmu_stq_count++;
   return wait_mmu_idx;
 }
+static uint64_t load_miss_mask(const LsuState &state) {
+  uint64_t miss_mask = 0;
+  for (int i = 0; i < LDQ_SIZE; i++) {
+    if (state.ldq[i].cache_miss == true && state.ldq[i].load_state != LoadState::Empty) {
+      miss_mask |= (1ULL << state.ldq[i].rob_idx);
+    }
+  }
+  return miss_mask;
+}
+
 void RealLsu::dequeue_wait_mmu_stq() {
   nxt.wait_mmu_stq[nxt.wait_mmu_stq_head].valid = false;
   nxt.wait_mmu_stq_head = (nxt.wait_mmu_stq_head + 1) % STQ_SIZE;
@@ -210,7 +219,7 @@ void RealLsu::comb_lsu2rob() {
   *out.lsu2rob = {};
 
   out.lsu2rob->committed_store_pending = cur.stq_commit_count != 0;
-  uint64_t miss_mask = lsu_perf::load_miss_mask(cur);
+  uint64_t miss_mask = load_miss_mask(cur);
   out.lsu2rob->tma.miss_mask = miss_mask;
 }
 
@@ -304,8 +313,6 @@ void RealLsu::comb_mmio_in() {
         if (entry.load_state == LoadState::WaitMmioResp) {
           entry.result = in.peripheral_resp->mmio_rdata;
           entry.load_state = LoadState::ReadyToWb;
-          lsu_perf::finish_mem_inst(ctx, entry);
-
           enqueue_finish(cur.uncached_unit.idx);
         }
         nxt.uncached_unit.valid = false; // MMIO响应完成后清除uncached unit的valid信号
@@ -314,7 +321,6 @@ void RealLsu::comb_mmio_in() {
       auto &entry = nxt.stq[cur.uncached_unit.idx];
       if (entry.store_state == StoreState::WaitMmioResp) {
         entry.store_state = StoreState::Done; // MMIO store在收到响应后就可以认为完成了
-        lsu_perf::finish_mem_inst(ctx, entry);
       }
       nxt.uncached_unit.valid = false; // MMIO响应完成后清除uncached unit的valid信号
     }
@@ -482,7 +488,6 @@ void RealLsu::comb_tlb_in_stq() {
         } else {
           stq_entry.store_state = StoreState::Ready; // TLB Miss的store在完成队列中等待完成
         }
-        lsu_perf::finish_mem_inst(ctx, stq_entry);
         enqueue_mmu_done_stq(entry.stq_idx); // 将完成TLB的store条目加入到MMU Done队列中，等待后续逻辑处理完成后的状态更新
         entry.valid = false; // 从等待TLB的队列中移除，进入完成队列等待完成
       } else if (stq_entry.store_state == StoreState::WaitData) {
@@ -549,7 +554,6 @@ void RealLsu::comb_stlf() {
             lsu_mmio_is_oldest_unfinished(in.rob_bcast, entry.rob_idx) &&
             !nxt.uncached_unit.valid) {
           entry.load_state = LoadState::WaitMmioResp;
-          lsu_perf::start_mem_inst(ctx, entry);
           nxt.uncached_unit.valid = true;
           nxt.uncached_unit.is_load = true;
           nxt.uncached_unit.addr = entry.p_addr;
@@ -662,10 +666,8 @@ void RealLsu::comb_stlf() {
 void RealLsu::comb_lsu2dcache_ldq() {
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
     out.lsu2dcache->req_ports.load_ports[i].valid = false;
-    lsu_perf::clear_replay(out.lsu2dcache->req_ports.load_ports[i]);
+    out.lsu2dcache->req_ports.load_ports[i].replay = false;
   }
-
-  lsu_perf::retry_load_resp_timeouts(ctx, cur, nxt);
 
   uint32_t issued = 0;
   uint32_t scan_windows = nxt.wait_dcache_ldq_count > LSU_LOAD_WINDOW_WIDTH
@@ -701,19 +703,14 @@ void RealLsu::comb_lsu2dcache_ldq() {
     out.lsu2dcache->req_ports.load_ports[issued].addr = nxt_ldq_entry.p_addr;
 
     const uint32_t gen = normalize_lsu_req_gen(cur.req_gen + issued);
-    const bool is_replay = lsu_perf::is_load_replay(nxt_ldq_entry);
+    const bool is_replay = (nxt_ldq_entry.replay_type != ReplayType::HIT);
 
     out.lsu2dcache->req_ports.load_ports[issued].req_id =
         make_lsu_load_req_id(wait_idx, gen);
-    lsu_perf::set_replay(out.lsu2dcache->req_ports.load_ports[issued],
-                         is_replay);
+    out.lsu2dcache->req_ports.load_ports[issued].replay = is_replay;
 
     nxt.wait_dcache_ldq[wait_idx].req_gen = gen;
-    lsu_perf::mark_wait_start(ctx, nxt.wait_dcache_ldq[wait_idx]);
-
     nxt_ldq_entry.load_state = LoadState::WaitDcacheResp;
-    lsu_perf::start_mem_inst_if_needed(ctx, nxt_ldq_entry);
-
     issued++;
   }
 
@@ -760,13 +757,13 @@ void RealLsu::comb_dcache2lsu_ldq() {
           if (in.dcache2lsu->resp_ports.load_resps[i].replay == ReplayType::HIT) {
             entry.result = extract_data(in.dcache2lsu->resp_ports.load_resps[i].data, entry.p_addr, entry.func3);
             entry.load_state = LoadState::ReadyToWb;
-            lsu_perf::mark_load_hit(entry);
-            lsu_perf::finish_mem_inst(ctx, entry);
+            entry.replay_type = ReplayType::HIT;
           } else {
             const ReplayType replay =
                 in.dcache2lsu->resp_ports.load_resps[i].replay;
             nxt.ldq[ldq_idx].load_state = LoadState::ReadyToIssue;
-            lsu_perf::mark_load_replay(entry, replay);
+            entry.replay_type = replay;
+            entry.cache_miss = true;
             nxt.wait_dcache_ldq[entry_idx].replay_wait_cycles =
                 replay_delay_cycles(replay);
           }
@@ -814,15 +811,14 @@ void RealLsu::comb_dcache2lsu_stq() {
         if (in.dcache2lsu->resp_ports.store_resps[i].replay == ReplayType::HIT) {
           entry.store_state = StoreState::Done; // store完成，可以提交了
 
-          lsu_perf::mark_store_hit(entry);
+          entry.replay_type = ReplayType::HIT;
           entry.replay_wait_cycles = 0;
-          lsu_perf::finish_mem_inst(ctx, entry);
         } else {
           const ReplayType replay =
               in.dcache2lsu->resp_ports.store_resps[i].replay;
           entry.store_state = StoreState::Committed; // store重放，进入重放状态等待dcache fill
 
-          lsu_perf::mark_store_replay(entry, replay);
+          entry.replay_type = replay;
           entry.replay_wait_cycles = replay_delay_cycles(replay);
         }
       }
@@ -834,7 +830,7 @@ void RealLsu::comb_dcache2lsu_stq() {
 void RealLsu::comb_lsu2dcache_stq() {
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     out.lsu2dcache->req_ports.store_ports[i].valid = false; // 默认不发出store请求，后续根据STQ条目状态决定是否发出请求
-    lsu_perf::clear_replay(out.lsu2dcache->req_ports.store_ports[i]);
+    out.lsu2dcache->req_ports.store_ports[i].replay = false;
   }
 
   uint32_t commit_count = std::min<uint32_t>(nxt.stq_commit_count, LSU_STORE_WINDOW_WIDTH);
@@ -881,8 +877,6 @@ void RealLsu::comb_lsu2dcache_stq() {
           nxt.uncached_unit.func3 = nxt_entry.func3;
           nxt.uncached_unit.idx = stq_idx;                  // 将准备好发出请求的store的STQ索引传递给uncached unit，方便后续处理响应时找到对应的STQ条目
           nxt_entry.store_state = StoreState::WaitMmioResp; // MMIO store发出后进入等待MMIO响应状态
-          lsu_perf::start_mem_inst(ctx, nxt_entry);
-
         } else {
 
         }
@@ -899,12 +893,10 @@ void RealLsu::comb_lsu2dcache_stq() {
             align_store_data(nxt_entry.data, nxt_entry.paddr, nxt_entry.func3);
         out.lsu2dcache->req_ports.store_ports[issued_stq].strb = entry_strb;
         out.lsu2dcache->req_ports.store_ports[issued_stq].req_id = stq_idx;
-        const bool is_replay = lsu_perf::is_store_replay(nxt_entry);
-        lsu_perf::set_replay(
-            out.lsu2dcache->req_ports.store_ports[issued_stq], is_replay);
+        const bool is_replay = (nxt_entry.replay_type != ReplayType::HIT);
+        out.lsu2dcache->req_ports.store_ports[issued_stq].replay = is_replay;
 
         nxt_entry.store_state = StoreState::WaitDcacheResp; // 发出store请求后，进入等待dcache响应状态
-        lsu_perf::start_mem_inst_if_needed(ctx, cur_entry, nxt_entry);
         issued_stq++;
       }
     } else {
@@ -1242,166 +1234,6 @@ void RealLsu::seq() {
   cur = nxt;
 }
 
-void RealLsu::dump_debug_state(FILE *out) const {
-  if (out == nullptr) {
-    out = stderr;
-  }
-
-  std::fprintf(out, "RealLsu State:\n");
-  std::fprintf(out,
-               "  LDQ: wait_mmu_head=%u wait_mmu_count=%u "
-               "stlf_head=%u stlf_count=%u "
-               "wait_dcache_head=%u wait_dcache_count=%u\n",
-               static_cast<unsigned>(cur.wait_mmu_ldq_head),
-               static_cast<unsigned>(cur.wait_mmu_ldq_count),
-               static_cast<unsigned>(cur.stlf_queue_head),
-               static_cast<unsigned>(cur.stlf_queue_count),
-               static_cast<unsigned>(cur.wait_dcache_ldq_head),
-               static_cast<unsigned>(cur.wait_dcache_ldq_count));
-  std::fprintf(out,
-               "  STQ: head=%u commit=%u head_flag=%u count=%u "
-               "commit_count=%u "
-               "wait_mmu_head=%u wait_mmu_count=%u mmu_done_head=%u "
-               "mmu_done_count=%u\n",
-               static_cast<unsigned>(cur.stq_head),
-               static_cast<unsigned>(cur.stq_commit),
-               static_cast<unsigned>(cur.stq_head_flag),
-               static_cast<unsigned>(cur.stq_count),
-               static_cast<unsigned>(cur.stq_commit_count),
-               static_cast<unsigned>(cur.wait_mmu_stq_head),
-               static_cast<unsigned>(cur.wait_mmu_stq_count),
-               static_cast<unsigned>(cur.mmu_done_stq_head),
-               static_cast<unsigned>(cur.mmu_done_stq_count));
-  std::fprintf(out,
-               "  Finish: head=%u count=%u\n",
-               static_cast<unsigned>(cur.finish_head),
-               static_cast<unsigned>(cur.finish_count));
-  std::fprintf(out,
-               "  Uncached: valid=%u is_load=%u addr=0x%08x idx=%u\n",
-               static_cast<unsigned>(cur.uncached_unit.valid),
-               static_cast<unsigned>(cur.uncached_unit.is_load),
-               static_cast<unsigned>(cur.uncached_unit.addr),
-               static_cast<unsigned>(cur.uncached_unit.idx));
-  std::fprintf(out,
-               "  LRSC: reserve_valid=%u reserve_addr=0x%08x\n",
-               static_cast<unsigned>(cur.lrsc_unit.reserve_valid),
-               static_cast<unsigned>(cur.lrsc_unit.reserve_addr));
-
-  std::fprintf(out, "  LDQ active count=%u\n",
-               static_cast<unsigned>(ldq_count));
-  const uint32_t ldq_dump_count = ldq_count < 16 ? ldq_count : 16;
-  std::fprintf(out, "  LDQ active entries (first %u):\n",
-               static_cast<unsigned>(ldq_dump_count));
-  uint32_t dumped_ldq_count = 0;
-  for (uint32_t idx = 0; idx < LDQ_SIZE && dumped_ldq_count < ldq_dump_count;
-       idx++) {
-    const auto &entry = cur.ldq[idx];
-    if (entry.load_state == LoadState::Empty) {
-      continue;
-    }
-    std::fprintf(out,
-                 "    [%u] state=%u rob=%u/%u vaddr=%u:0x%08x "
-                 "paddr=%u:0x%08x stq_snapshot=%u/%u mmio=%u  "
-                 "page_fault=%u lrsc=%u state=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.load_state),
-                 static_cast<unsigned>(entry.rob_idx),
-                 static_cast<unsigned>(entry.rob_flag),
-                 static_cast<unsigned>(entry.v_addr_valid),
-                 static_cast<unsigned>(entry.v_addr),
-                 static_cast<unsigned>(entry.p_addr_valid),
-                 static_cast<unsigned>(entry.p_addr),
-                 static_cast<unsigned>(entry.stq_snapshot.idx),
-                 static_cast<unsigned>(entry.stq_snapshot.flag),
-                 static_cast<unsigned>(entry.is_mmio),
-                 static_cast<unsigned>(entry.page_fault),
-                 static_cast<unsigned>(entry.is_lrsc),
-                 static_cast<unsigned>(entry.load_state));
-    dumped_ldq_count++;
-  }
-
-  const uint32_t stlf_dump_count =
-      cur.stlf_queue_count < 8 ? cur.stlf_queue_count : 8;
-  std::fprintf(out, "  STLF queue entries (first %u):\n",
-               static_cast<unsigned>(stlf_dump_count));
-  for (uint32_t i = 0; i < stlf_dump_count; i++) {
-    const uint32_t idx = (cur.stlf_queue_head + i) % LDQ_SIZE;
-    const auto &entry = cur.stlf_queue[idx];
-    std::fprintf(out, "    [%u] valid=%u ldq_idx=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.valid),
-                 static_cast<unsigned>(entry.ldq_idx));
-  }
-
-  const uint32_t stq_dump_count = cur.stq_count < 8 ? cur.stq_count : 8;
-  std::fprintf(out, "  STQ active entries (first %u):\n",
-               static_cast<unsigned>(stq_dump_count));
-  for (uint32_t i = 0; i < stq_dump_count; i++) {
-    const uint32_t idx = (cur.stq_head + i) % STQ_SIZE;
-    const auto &entry = cur.stq[idx];
-    std::fprintf(out,
-                 "    [%u] state=%u rob=%u/%u data=%u:0x%08x "
-                 "vaddr=%u:0x%08x paddr=%u:0x%08x mmio=%u "
-                 "page_fault=%u lrsc=%u sc_pass=%u state=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.store_state),
-                 static_cast<unsigned>(entry.rob_idx),
-                 static_cast<unsigned>(entry.rob_flag),
-                 static_cast<unsigned>(entry.data_valid),
-                 static_cast<unsigned>(entry.data),
-                 static_cast<unsigned>(entry.vaddr_valid),
-                 static_cast<unsigned>(entry.vaddr),
-                 static_cast<unsigned>(entry.paddr_valid),
-                 static_cast<unsigned>(entry.paddr),
-                 static_cast<unsigned>(entry.is_mmio),
-                 static_cast<unsigned>(entry.page_fault),
-                 static_cast<unsigned>(entry.is_lrsc),
-                 static_cast<unsigned>(entry.sc_pass),
-                 static_cast<unsigned>(entry.store_state));
-  }
-  uint32_t dumped_mmu_done_count =
-      nxt.mmu_done_stq_count < 8 ? nxt.mmu_done_stq_count : 8;
-  std::fprintf(out, "  MMU done STQ entries (first %u):\n",
-               static_cast<unsigned>(dumped_mmu_done_count));
-  for (uint32_t i = 0; i < dumped_mmu_done_count; i++) {
-    const uint32_t idx = (nxt.mmu_done_stq_head + i) % STQ_SIZE;
-    const auto &entry = nxt.mmu_done_stq[idx];
-    std::fprintf(out,
-                 "  MMU Done STQ [%u] valid=%u stq_idx=%u state=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.valid),
-                 static_cast<unsigned>(entry.stq_idx),
-                 static_cast<unsigned>(nxt.stq[entry.stq_idx].store_state));
-  }
-  uint32_t dumped_wait_mmu_stq_count =
-      nxt.wait_mmu_stq_count < 8 ? nxt.wait_mmu_stq_count : 8;
-  std::fprintf(out, "  Wait MMU STQ entries (first %u):\n",
-               static_cast<unsigned>(dumped_wait_mmu_stq_count));
-  for (uint32_t i = 0; i < dumped_wait_mmu_stq_count; i++) {
-    const uint32_t idx = (nxt.wait_mmu_stq_head + i) % STQ_SIZE;
-    const auto &entry = nxt.wait_mmu_stq[idx];
-    std::fprintf(out,
-                 "  Wait MMU STQ [%u] valid=%u stq_idx=%u state=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.valid),
-                 static_cast<unsigned>(entry.stq_idx),
-                 static_cast<unsigned>(nxt.stq[entry.stq_idx].store_state));
-  }
-  uint32_t dumped_wait_mmu_ldq_count =
-      nxt.wait_mmu_ldq_count < 8 ? nxt.wait_mmu_ldq_count : 8;
-  std::fprintf(out, "  Wait MMU LDQ entries (first %u):\n",
-               static_cast<unsigned>(dumped_wait_mmu_ldq_count));
-  for (uint32_t i = 0; i < dumped_wait_mmu_ldq_count; i++) {
-    const uint32_t idx = (nxt.wait_mmu_ldq_head + i) % LDQ_SIZE;
-    const auto &entry = nxt.wait_mmu_ldq[idx];
-    std::fprintf(out,
-                 "  Wait MMU LDQ [%u] valid=%u ldq_idx=%u state=%u\n",
-                 static_cast<unsigned>(idx),
-                 static_cast<unsigned>(entry.valid),
-                 static_cast<unsigned>(entry.ldq_idx),
-                 static_cast<unsigned>(nxt.ldq[entry.ldq_idx].load_state));
-  }
-}
 
 void RealLsu::handle_store_data(const MicroOp &inst) {
   if (inst.stq_idx >= STQ_SIZE) {

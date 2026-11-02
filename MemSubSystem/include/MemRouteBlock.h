@@ -97,7 +97,6 @@ public:
   void seq();
   void bind_context(SimContext *c) { ctx = c; }
 
-  void dump_debug_state(FILE *out) const;
 
 private:
   SimContext *ctx = nullptr;

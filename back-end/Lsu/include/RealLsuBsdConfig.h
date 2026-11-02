@@ -6,14 +6,6 @@
 #include <cstdint>
 #include <cstdio>
 
-#define LSU_MEM_PERF_FIELDS                                                   \
-  uint64_t perf_mem_start_cycle;                                              \
-  wire<1> perf_mem_started
-
-#define LSU_LDQ_CACHE_PERF_FIELDS wire<1> cache_miss
-
-#define LSU_WAIT_DCACHE_LDQ_PERF_FIELDS uint64_t wait_start_cycle
-
 #define LSU_NON_BSD_ASSERT(cond) Assert(cond)
 
 inline void lsu_report_load_req_gen_mismatch(

@@ -203,22 +203,9 @@ public:
   void flush();
   void seq();
   void cancel_pending_walk();
-  void dump_debug(FILE *out) const;
   void set_ptw_mem_port(PtwMemPort *port);
   void set_ptw_walk_port(PtwWalkPort *port);
   RetryReason last_retry_reason() const { return last_retry_reason_; }
-  struct DebugState {
-    bool walk_active = false;
-    bool walk_req_sent = false;
-    uint32_t walk_v_addr = 0;
-    uint32_t walk_type = 0;
-    uint32_t walk_satp = 0;
-    int walk_eff_priv = 0;
-    bool walk_mxr = false;
-    bool walk_sum = false;
-    RetryReason last_retry_reason = RetryReason::NONE;
-  };
-  DebugState debug_state() const;
 
   static LookupOutput lookup_table_comb(const LookupInput &in,
                                         const TlbEntry *entries,
@@ -227,22 +214,6 @@ public:
   static TopOutput top_comb(const TopInput &in, int entries);
 
 private:
-  struct TraceEntry {
-    bool valid = false;
-    uint64_t cycle = 0;
-    TraceSource source = TraceSource::NONE;
-    Result result = Result::OK;
-    RetryReason retry = RetryReason::NONE;
-    uint32_t v_addr = 0;
-    uint32_t p_addr = 0;
-    uint32_t satp = 0;
-    uint16_t asid = 0;
-    uint8_t type = 0;
-    uint8_t level = 0xff;
-    uint8_t perm = 0;
-    bool walk_active = false;
-    bool walk_req_sent = false;
-  };
 
   SimContext *ctx;
   Kind kind_;
@@ -265,15 +236,9 @@ private:
   // look combinationally writable.
   PendingRefill refill_comb_{};
   bool flush_pending_ = false;
-  std::array<TraceEntry, 16> trace_hist_{};
-  size_t trace_hist_head_ = 0;
 
   const WalkRegs &visible_walk_regs() const;
   WalkRegs &ensure_walk_comb();
-  static bool trace_watch_vaddr(uint32_t v_addr);
-  void record_trace(TraceSource source, Result result, uint32_t v_addr,
-                    uint32_t p_addr, uint32_t satp, uint16_t asid,
-                    uint32_t type, uint8_t level, uint8_t perm);
   void clear_tlb_entries();
   static TranslateContext build_translate_context(uint32_t type,
                                                   CsrStatusIO *status);

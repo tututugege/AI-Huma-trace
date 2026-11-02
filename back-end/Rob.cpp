@@ -264,12 +264,6 @@ void Rob::comb_commit() {
     if (!rob_is_store(uop) || rob_is_complete(uop)) {
       return;
     }
-    // Disabled: dump_all() here fires on every incomplete-store commit,
-    // flooding the terminal.  The deadlock path (stall_cycle > 10000)
-    // already calls dump_all().
-    // deadlock_debug::dump_all();
-    // std::fflush(stdout);
-    // std::fflush(stderr);
   };
 
   if (!in.dec_bcast->mispred) {
@@ -525,12 +519,6 @@ void Rob::comb_commit() {
       }
     }
 
-    if (ctx != nullptr && ctx->cpu != nullptr) {
-      std::fprintf(stderr, "[ROB DEADLOCK] dumping LSU/MMU state\n");
-      ctx->cpu->back.lsu->dump_debug_state(stderr);
-      std::fprintf(stderr, "[ROB DEADLOCK] dumping MemSubsystem state\n");
-      ctx->cpu->mem_subsystem.dump_debug_state(stderr);
-    }
     Assert(0 && "ROB Deadlock detected (stall_cycle > 50000)");
     exit(1);
   }

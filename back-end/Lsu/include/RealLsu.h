@@ -88,12 +88,11 @@ struct LdqEntry {
   wire<32> diag_val; // 用于记录发生异常时的相关信息（如访问的虚拟地址），供后续异常处理使用
   wire<1> page_fault;
   wire<1> is_lrsc;
-  LSU_MEM_PERF_FIELDS;
 
   StoreTag stq_snapshot;
 
 
-  LSU_LDQ_CACHE_PERF_FIELDS; // 仅用于性能统计，非必需
+  wire<1> cache_miss;
 };
 
 struct UncachedUnit {
@@ -137,7 +136,6 @@ struct WaitDcacheLDQEntry{
   wire<31-LDQ_IDX_WIDTH> req_gen;
   wire<LDQ_IDX_WIDTH> ldq_idx;
   wire<LSU_REPLAY_WAIT_CYCLES_WIDTH> replay_wait_cycles;
-  LSU_WAIT_DCACHE_LDQ_PERF_FIELDS;
 };
 struct MMUDoneEntry{
   wire<1> valid;
@@ -241,7 +239,6 @@ public:
   bool alloc_stq_entry(mask_t br_mask,uint32_t rob_idx, uint32_t rob_flag,uint32_t func3, bool slot_flag);
   bool alloc_ldq_entry( mask_t br_mask,uint32_t rob_idx, uint32_t rob_flag,uint32_t ldq_idx);
 
-  void dump_debug_state(FILE *out)const;
   StqEntry get_stq_entry(int idx,bool flag);
 
   wire<STQ_IDX_WIDTH> enqueue_wait_mmu_stq(wire<STQ_IDX_WIDTH> stq_idx);

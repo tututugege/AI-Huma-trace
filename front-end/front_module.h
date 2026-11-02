@@ -86,7 +86,6 @@ void icache_seq_read(struct icache_in *in, struct icache_out *out);
 void icache_peek_ready(struct icache_in *in, struct icache_out *out);
 void icache_comb_calc(struct icache_in *in, struct icache_out *out);
 void icache_seq_write();
-void icache_dump_debug_state();
 void icache_set_context(SimContext *ctx);
 void front_set_context(SimContext *ctx);
 void icache_set_ptw_mem_port(PtwMemPort *port);
@@ -119,7 +118,6 @@ void front_comb_calc(const struct front_top_in &in, const FrontReadData &rd,
 void front_top_seq_write(const struct front_top_in &in,
                          const FrontUpdateRequest &req, bool reset);
 void front_top(struct front_top_in *in, struct front_top_out *out);
-void front_dump_debug_state();
 
 void front2back_FIFO_seq_read(struct front2back_FIFO_in *in,
                               struct front2back_FIFO_read_data *rd);

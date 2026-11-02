@@ -189,17 +189,3 @@ void WriteBuffer::comb_inputs_dcache() {
 void WriteBuffer::seq() {
     cur = nxt;
 }
-void WriteBuffer::dump_debug_state(FILE *out) const {
-    fprintf(out, "WriteBuffer State:\n");
-    fprintf(out, "  Count: %u\n", cur.count);
-    fprintf(out, "  Head: %u\n", cur.head);
-    fprintf(out, "  Send: %d\n", cur.send);
-    for (uint32_t i = 0; i < DCACHE_WB_ENTRIES; i++) {
-        const WriteBufferEntry &e = cur.write_buffer[i];
-        fprintf(out, "  Entry %u: Addr: 0x%08x, Data:", i, e.addr);
-        for (int w = 0; w < DCACHE_WORD_NUM; w++) {
-            fprintf(out, " 0x%08x", e.data[w]);
-        }
-        fprintf(out, "\n");
-    }
-}

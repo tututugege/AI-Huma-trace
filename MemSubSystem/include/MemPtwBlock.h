@@ -152,32 +152,6 @@ public:
 
   const CombOut &comb_outputs() const { return comb_; }
 
-  void dump_debug_state(FILE *out) const {
-    if (out == nullptr) {
-      return;
-    }
-    std::fprintf(out,
-                 "[MEM DEBUG][PTW] walk_active=%d state=%u owner=%u "
-                 "req_id_valid=%d req_id=%zu ",
-                 static_cast<int>(cur_.walk_active),
-                 static_cast<unsigned>(cur_.walk_state),
-                 static_cast<unsigned>(cur_.walk_owner),
-                 static_cast<int>(cur_.walk_req_id_valid), cur_.walk_req_id);
-    for (size_t i = 0; i < kClientCount; i++) {
-      const auto &walk = cur_.walk_clients[i];
-      const auto &mem = cur_.mem_clients[i];
-      std::fprintf(out,
-                   i == 0
-                       ? "dtlb(req_p=%d req_i=%d resp=%d mem_p=%d mem_i=%d) "
-                       : "itlb(req_p=%d req_i=%d resp=%d mem_p=%d mem_i=%d)",
-                   static_cast<int>(walk.req_pending),
-                   static_cast<int>(walk.req_inflight),
-                   static_cast<int>(walk.resp_valid),
-                   static_cast<int>(mem.req_pending),
-                   static_cast<int>(mem.req_inflight));
-    }
-    std::fprintf(out, "\n");
-  }
 
 private:
   struct PtwClientState {
