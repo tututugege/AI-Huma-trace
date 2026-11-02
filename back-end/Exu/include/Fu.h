@@ -99,8 +99,8 @@ public:
 protected:
   void impl_compute(ExuInst &inst) override {
     // Direction and target are facts of the trace (the compare on register values is gone).
-    uint32_t inst_pc = inst.pc;
-    uint32_t pc_br = inst_pc + inst.imm;
+    uint32_t inst_pc = inst->pc;
+    uint32_t pc_br = inst_pc + inst->imm;
     bool br_taken = false;
     if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
       if (inst.op == UOP_BR) {
@@ -120,11 +120,11 @@ protected:
     inst.mispred = false;
 #else
     // FTQ lookup
-    bool pred_taken = inst.ftq_pred_taken;
+    bool pred_taken = inst->ftq_pred_taken;
     uint32_t pred_target = 0;
 
     if (pred_taken) {
-      pred_target = inst.ftq_next_pc;
+      pred_target = inst->ftq_next_pc;
     } else {
       pred_target = inst_pc + 4;
     }

@@ -11,6 +11,7 @@ struct InstructionBufferEntry {
   wire<FTQ_IDX_WIDTH> ftq_idx;
   wire<FTQ_OFFSET_WIDTH> ftq_offset;
   wire<1> ftq_is_last;
+  uint16_t uop_id;   // pool entry of the instruction (allocated once, when it enters the buffer)
 
   InstructionBufferEntry() {
     valid = 0;
@@ -20,6 +21,7 @@ struct InstructionBufferEntry {
     ftq_idx = 0;
     ftq_offset = 0;
     ftq_is_last = 0;
+    uop_id = 0;
   }
 };
 

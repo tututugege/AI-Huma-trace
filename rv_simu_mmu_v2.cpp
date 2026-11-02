@@ -741,18 +741,18 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   Assert(commit_slot >= 0 && commit_slot < COMMIT_WIDTH &&
          "SimCpu::commit_sync: invalid commit slot");
   const auto &ftq_info = back->ftq_commit_info.resp[commit_slot];
-  if (inst->type == JALR) {
+  if ((*inst)->type == JALR) {
     if (inst->tma.is_ret) {
       this->ctx.perf.ret_br_num++;
     } else {
       this->ctx.perf.jalr_br_num++;
     }
-  } else if (inst->type == BR) {
+  } else if ((*inst)->type == BR) {
     this->ctx.perf.cond_br_num++;
   }
 
   if (inst->mispred) {
-    if (inst->type == JALR) {
+    if ((*inst)->type == JALR) {
       if (inst->tma.is_ret) {
         this->ctx.perf.ret_mispred_num++;
         const bool pred_taken = ftq_info.pred_taken;
@@ -770,7 +770,7 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
           this->ctx.perf.jalr_addr_mispred++;
         }
       }
-    } else if (inst->type == BR) {
+    } else if ((*inst)->type == BR) {
       const bool pred_taken = ftq_info.pred_taken;
       if (pred_taken != inst->br_taken) {
         this->ctx.perf.cond_dir_mispred++;
@@ -871,17 +871,17 @@ void SimCpu::difftest_prepare(InstEntry *inst_entry) {
     dut_cpu.pc = back->csr->out.csr2front->epc;
   } else if (back->rob->out.rob_bcast->exception) {
     dut_cpu.pc = back->csr->out.csr2front->trap_pc;
-  } else if (is_branch(inst->type) || inst->type == JAL) {
+  } else if (is_branch((*inst)->type) || (*inst)->type == JAL) {
     dut_cpu.pc = inst_entry->uop.diag_val;
   } else {
-    dut_cpu.pc = inst->dbg.pc + 4;
+    dut_cpu.pc = (*inst)->dbg.pc + 4;
   }
-  dut_cpu.instruction = inst->dbg.instruction;
+  dut_cpu.instruction = (*inst)->dbg.instruction;
   dut_cpu.page_fault_inst = inst->page_fault_inst;
   dut_cpu.page_fault_load = inst->page_fault_load;
   dut_cpu.page_fault_store = inst->page_fault_store;
-  dut_cpu.inst_idx = inst->dbg.inst_idx;
-  dut_cpu.commit_pc = inst->dbg.pc;
+  dut_cpu.inst_idx = (*inst)->dbg.inst_idx;
+  dut_cpu.commit_pc = (*inst)->dbg.pc;
 
 }
 
@@ -921,11 +921,11 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
       static_cast<uint8_t>(cpu->back.csr->privilege_1);
   difftest_set_dut_privilege(privilege);
   const InstInfo &inst = inst_entry->uop;
-  if (inst.dbg.is_mmio) {
+  if (inst.is_mmio) {
     difftest_sync_from_dut(privilege);
     return;
   }
-  const uint32_t raw_inst = inst.dbg.instruction;
+  const uint32_t raw_inst = inst->dbg.instruction;
   const uint32_t opcode = raw_inst & 0x7fu;
   const uint32_t funct3 = (raw_inst >> 12) & 0x7u;
   const uint32_t rd = (raw_inst >> 7) & 0x1fu;
@@ -1395,22 +1395,22 @@ void SimCpu::back2front_comb() {
       front.back2front_1.predict_dir[i] = ftq_info.pred_taken;
       front.back2front_1.predict_base_pc[i] = ftq_info.pc;
       front.back2front_1.actual_dir[i] =
-          (inst->type == JAL || inst->type == JALR) ? true : inst->br_taken;
+          ((*inst)->type == JAL || (*inst)->type == JALR) ? true : inst->br_taken;
       front.back2front_1.actual_target[i] =
-          (is_branch(inst->type) || inst->type == JAL || inst->type == JALR)
+          (is_branch((*inst)->type) || (*inst)->type == JAL || (*inst)->type == JALR)
               ? back.out.commit_entry[i].uop.diag_val
               : ftq_info.pc + 4;
       int br_type = BR_NONCTL;
-      if (is_branch(inst->type)) {
+      if (is_branch((*inst)->type)) {
         br_type = BR_DIRECT;
       }
-      if (inst->type == JAL) {
+      if ((*inst)->type == JAL) {
         br_type = BR_JAL;
       }
-      if (inst->type == JAL && inst->dest_en && inst->dest_areg == 1) {
+      if ((*inst)->type == JAL && inst->dest_en && (*inst)->dest_areg == 1) {
         br_type = BR_CALL;
-      } else if (inst->type == JALR) {
-        if (commit_extra.src1_areg == 1 && inst->dest_areg == 0 &&
+      } else if ((*inst)->type == JALR) {
+        if (commit_extra.src1_areg == 1 && (*inst)->dest_areg == 0 &&
             commit_extra.imm == 0)
           br_type = BR_RET;
         else

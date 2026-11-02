@@ -38,7 +38,7 @@ protected:
     if (inst.op != UOP_FP) {
       return LAT_FADD;
     }
-    switch (inst.func7 >> 2) {
+    switch (inst->func7 >> 2) {
     case FMUL:
       return LAT_FMUL;
     case FDIV:
@@ -47,10 +47,10 @@ protected:
     case FSUB:
       return LAT_FADD;
     default:
-      if (inst.func7 == FCVT_W_S || inst.func7 == FCVT_S_W) {
+      if (inst->func7 == FCVT_W_S || inst->func7 == FCVT_S_W) {
         return LAT_FCVT;
       }
-      if (inst.func7 == FSQRT) {
+      if (inst->func7 == FSQRT) {
         return LAT_FDIV;
       }
       return LAT_FADD;

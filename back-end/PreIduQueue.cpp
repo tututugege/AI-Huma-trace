@@ -204,6 +204,7 @@ void PreIduQueue::comb_accept_front() {
     e.ftq_idx = ftq_alloc_idx;
     e.ftq_offset = i;
     e.ftq_is_last = (i == last_fire_idx);
+    e.uop_id = uop_alloc();
   }
 
   if (ctx != nullptr && push_count > 0) {
@@ -312,8 +313,8 @@ void PreIduQueue::comb_commit_info() {
       continue;
     }
 
-    const uint32_t ftq_idx = commit.uop.ftq_idx;
-    const uint32_t ftq_offset = commit.uop.ftq_offset;
+    const uint32_t ftq_idx = commit.uop->ftq_idx;
+    const uint32_t ftq_offset = commit.uop->ftq_offset;
     if (ftq_idx < FTQ_SIZE && ftq_valid[ftq_idx]) {
       resp.pc = ftq_lookup_entries[ftq_idx].slot_pc[ftq_offset];
       resp.pred_taken = ftq_lookup_entries[ftq_idx].pred_taken_mask[ftq_offset];

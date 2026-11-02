@@ -127,12 +127,12 @@ inline UopType decode_uop_type(wire<UOP_TYPE_WIDTH> bits) {
 }
 
 inline bool is_store(InstInfo uop) {
-  return uop.type == STORE ||
-         (uop.type == AMO && (uop.func7 >> 2) != AmoOp::LR);
+  return uop->type == STORE ||
+         (uop->type == AMO && (uop->func7 >> 2) != AmoOp::LR);
 }
 
 inline bool is_load(InstInfo uop) {
-  return uop.type == LOAD || (uop.type == AMO && (uop.func7 >> 2) != AmoOp::SC);
+  return uop->type == LOAD || (uop->type == AMO && (uop->func7 >> 2) != AmoOp::SC);
 }
 
 inline bool is_amo_sc_inst(InstType type,uint32_t func7) {
@@ -142,10 +142,10 @@ inline bool is_amo_lr_inst(InstType type,uint32_t func7) {
   return type == AMO && ((func7 >> 2) == AmoOp::LR);
 }
 static inline bool is_amo_sc_uop(const MicroOp &uop) {
-  return uop.is_atomic && ((uop.func7 >> 2) == AmoOp::SC);
+  return uop->is_atomic && ((uop->func7 >> 2) == AmoOp::SC);
 }
 static inline bool is_amo_lr_uop(const MicroOp &uop) {
-  return uop.is_atomic && ((uop.func7 >> 2) == AmoOp::LR);
+  return uop->is_atomic && ((uop->func7 >> 2) == AmoOp::LR);
 }
 
 
@@ -201,12 +201,12 @@ inline bool is_page_fault(InstInfo uop) {
 
 inline bool is_exception(InstInfo uop) {
   return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store ||
-         uop.illegal_inst || uop.type == ECALL;
+         uop.illegal_inst || uop->type == ECALL;
 }
 
 inline bool is_flush_inst(InstInfo uop) {
-  return uop.type == CSR || uop.type == ECALL || uop.type == MRET ||
-         uop.type == SRET || uop.type == SFENCE_VMA || uop.type == FENCE_I ||
-         is_exception(uop) || uop.type == EBREAK || uop.flush_pipe;
+  return uop->type == CSR || uop->type == ECALL || uop->type == MRET ||
+         uop->type == SRET || uop->type == SFENCE_VMA || uop->type == FENCE_I ||
+         is_exception(uop) || uop->type == EBREAK || uop.flush_pipe;
 }
 

@@ -180,8 +180,8 @@ public:
         while (mask1) {
           int bit = __builtin_ctzll(mask1);
           int idx = (w << 6) + bit;
-          if (idx < size && entry_1[idx].valid && entry_1[idx].uop.src1_en &&
-              entry_1[idx].uop.src1_busy && entry_1[idx].uop.src1_preg == preg) {
+          if (idx < size && entry_1[idx].valid && entry_1[idx].uop->src1_en &&
+              entry_1[idx].uop.src1_busy && entry_1[idx].uop->src1_preg == preg) {
             entry_1[idx].uop.src1_busy = false;
             entry_dirty = true;
           }
@@ -193,8 +193,8 @@ public:
         while (mask2) {
           int bit = __builtin_ctzll(mask2);
           int idx = (w << 6) + bit;
-          if (idx < size && entry_1[idx].valid && entry_1[idx].uop.src2_en &&
-              entry_1[idx].uop.src2_busy && entry_1[idx].uop.src2_preg == preg) {
+          if (idx < size && entry_1[idx].valid && entry_1[idx].uop->src2_en &&
+              entry_1[idx].uop.src2_busy && entry_1[idx].uop->src2_preg == preg) {
             entry_1[idx].uop.src2_busy = false;
             entry_dirty = true;
           }
@@ -423,15 +423,15 @@ private:
     int word = slot_word(idx);
     uint64_t bit = slot_bit(idx);
 
-    if (ent.uop.src1_en && ent.uop.src1_busy) {
-      uint32_t preg = ent.uop.src1_preg;
+    if (ent.uop->src1_en && ent.uop.src1_busy) {
+      uint32_t preg = ent.uop->src1_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] |= bit;
         mark_row(preg);
       }
     }
-    if (ent.uop.src2_en && ent.uop.src2_busy) {
-      uint32_t preg = ent.uop.src2_preg;
+    if (ent.uop->src2_en && ent.uop.src2_busy) {
+      uint32_t preg = ent.uop->src2_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] |= bit;
         mark_row(preg);
@@ -444,15 +444,15 @@ private:
     uint64_t bit = slot_bit(idx);
     uint64_t clear_mask = ~bit;
 
-    if (ent.uop.src1_en) {
-      uint32_t preg = ent.uop.src1_preg;
+    if (ent.uop->src1_en) {
+      uint32_t preg = ent.uop->src1_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] &= clear_mask;
         mark_row(preg);
       }
     }
-    if (ent.uop.src2_en) {
-      uint32_t preg = ent.uop.src2_preg;
+    if (ent.uop->src2_en) {
+      uint32_t preg = ent.uop->src2_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] &= clear_mask;
         mark_row(preg);
@@ -463,7 +463,7 @@ private:
   bool is_ready(const IqStoredEntry &ent) {
     const auto &op = ent.uop;
     bool ops_ok =
-        (!op.src1_en || !op.src1_busy) && (!op.src2_en || !op.src2_busy);
+        (!op->src1_en || !op.src1_busy) && (!op->src2_en || !op.src2_busy);
     return ops_ok ;
   }
 };

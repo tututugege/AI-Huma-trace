@@ -17,10 +17,10 @@ bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
 }
 
 void Dispatch::apply_wakeup_to_uop(RenDisIO::RenDisInst &uop) const {
-  if (uop.src1_en && is_preg_woken(uop.src1_preg)) {
+  if (uop->src1_en && is_preg_woken(uop->src1_preg)) {
     uop.src1_busy = false;
   }
-  if (uop.src2_en && is_preg_woken(uop.src2_preg)) {
+  if (uop->src2_en && is_preg_woken(uop->src2_preg)) {
     uop.src2_busy = false;
   }
 }
@@ -159,22 +159,22 @@ void Dispatch::comb_wake() {
     }
 
     auto &uop = inst_alloc[i];
-    uop.src1_busy = uop.src1_en ? busy_table[uop.src1_preg] : false;
-    uop.src2_busy = uop.src2_en ? busy_table[uop.src2_preg] : false;
+    uop.src1_busy = uop->src1_en ? busy_table[uop->src1_preg] : false;
+    uop.src2_busy = uop->src2_en ? busy_table[uop->src2_preg] : false;
     apply_wakeup_to_uop(uop);
 
     for (int j = 0; j < i; j++) {
       if (!out.dis2rob->valid[j] || !inst_alloc[j].dest_en) {
         continue;
       }
-      if (inst_alloc[j].dest_areg == 0) {
+      if (inst_alloc[j]->dest_areg == 0) {
         continue;
       }
 
-      if (uop.src1_en && uop.src1_preg == inst_alloc[j].dest_preg) {
+      if (uop->src1_en && uop->src1_preg == inst_alloc[j].dest_preg) {
         uop.src1_busy = true;
       }
-      if (uop.src2_en && uop.src2_preg == inst_alloc[j].dest_preg) {
+      if (uop->src2_en && uop->src2_preg == inst_alloc[j].dest_preg) {
         uop.src2_busy = true;
       }
     }
@@ -218,8 +218,8 @@ void Dispatch::comb_dispatch() {
     for (int k = 0; k < cnt; k++) {
       expect_mask |= rob_cplt_mask_from_iq(temp_uops[k].iq_id);
     }
-    if (decode_inst_type(inst_alloc[i].type) == AMO &&
-        ((inst_alloc[i].func7 >> 2) == AmoOp::SC)) {
+    if (decode_inst_type(inst_alloc[i]->type) == AMO &&
+        ((inst_alloc[i]->func7 >> 2) == AmoOp::SC)) {
       // SC returns architectural 0/1 through load-like wb path and still has
       // STD completion.
       expect_mask = ROB_CPLT_G0 | ROB_CPLT_G2;
@@ -383,7 +383,7 @@ void Dispatch::comb_fire() {
   // === 步骤 1: 计算 Fire 信号 (确认分派) ===
   for (int i = 0; i < DECODE_WIDTH; i++) {
     bool older_block = pre_stall;
-    InstType inst_type = inst_valid[i] ? decode_inst_type(inst_r[i].type) : NOP;
+    InstType inst_type = inst_valid[i] ? decode_inst_type(inst_r[i]->type) : NOP;
     bool is_atomic_inst = inst_valid[i] && inst_type == AMO;
     bool is_wfi_inst = inst_valid[i] && inst_type == WFI;
     bool csr_blocked = false;
@@ -394,7 +394,7 @@ void Dispatch::comb_fire() {
                       !pre_stall && !global_flush;
 
     // 特殊检查：CSR
-    if (is_CSR(inst_r[i].type)) {
+    if (is_CSR(inst_r[i]->type)) {
       if (!in.rob2dis->empty || pre_fire) {
         basic_fire = false;
         csr_blocked = true;
@@ -490,7 +490,7 @@ void Dispatch::comb_fire() {
       out.dis2lsu->rob_idx[k] = out.dis2rob->uop[inst_idx].rob_idx;
       out.dis2lsu->rob_flag[k] = out.dis2rob->uop[inst_idx].rob_flag;
       out.dis2lsu->stq_flag[k] = out.dis2rob->uop[inst_idx].stq_flag;
-      out.dis2lsu->func3[k] = out.dis2rob->uop[inst_idx].func3;
+      out.dis2lsu->func3[k] = out.dis2rob->uop[inst_idx]->func3;
     }
   }
 
@@ -764,75 +764,77 @@ void Dispatch::seq() {
   std::memcpy(busy_table, busy_table_1, sizeof(busy_table));
 }
 
-DisIssIO::DisIssUop Dispatch::make_dis_iss_uop(const DispatchInst &inst) const {
+DisIssIO::DisIssUop Dispatch::make_dis_iss_uop(const DispatchInst &inst, int k) const {
   DisIssIO::DisIssUop uop;
+  uop.id = static_cast<uint16_t>(inst.id + 1 + k);  // each uop owns its static fields (STA/STD, JAL/JALR splits differ)
+  uop_pool[uop.id] = uop_pool[inst.id];
   uop.dest_preg = inst.dest_preg;
-  uop.src1_preg = inst.src1_preg;
-  uop.src2_preg = inst.src2_preg;
-  uop.ftq_idx = inst.ftq_idx;
-  uop.ftq_offset = inst.ftq_offset;
-  uop.is_atomic = inst.is_atomic;
+  uop->src1_preg = inst->src1_preg;
+  uop->src2_preg = inst->src2_preg;
+  uop->ftq_idx = inst->ftq_idx;
+  uop->ftq_offset = inst->ftq_offset;
+  uop->is_atomic = inst->is_atomic;
   uop.dest_en = inst.dest_en;
-  uop.src1_en = inst.src1_en;
-  uop.src2_en = inst.src2_en;
+  uop->src1_en = inst->src1_en;
+  uop->src2_en = inst->src2_en;
   uop.src1_busy = inst.src1_busy;
   uop.src2_busy = inst.src2_busy;
-  uop.src1_is_pc = inst.src1_is_pc;
-  uop.src2_is_imm = inst.src2_is_imm;
-  uop.func3 = inst.func3;
-  uop.func7 = inst.func7;
-  uop.imm = inst.imm;
-  uop.br_id = inst.br_id;
+  uop->src1_is_pc = inst->src1_is_pc;
+  uop->src2_is_imm = inst->src2_is_imm;
+  uop->func3 = inst->func3;
+  uop->func7 = inst->func7;
+  uop->imm = inst->imm;
+  uop->br_id = inst->br_id;
   uop.br_mask = inst.br_mask;
-  uop.csr_idx = inst.csr_idx;
+  uop->csr_idx = inst->csr_idx;
   uop.rob_idx = inst.rob_idx;
   uop.stq_idx = inst.stq_idx;
   uop.stq_flag = inst.stq_flag;
   uop.ldq_idx = inst.ldq_idx;
   uop.rob_flag = inst.rob_flag;
-  uop.dbg = inst.dbg;
+  uop->dbg = inst->dbg;
   return uop;
 }
 
 int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
   int count = 0;
-  InstType type = decode_inst_type(inst.type);
+  InstType type = decode_inst_type(inst->type);
 
   switch (type) {
   case ADD:
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_ADD;
     count = 1;
     break;
   case MUL:
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_MUL;
     count = 1;
     break;
   case DIV:
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_DIV;
     count = 1;
     break;
   case FP:
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_FP;
     count = 1;
     break;
   case BR:
     out_uops[0].iq_id = IQ_BR;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_BR;
     count = 1;
     break;
 
   case LOAD:
     out_uops[0].iq_id = IQ_LD;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_LOAD;
     count = 1;
     break;
@@ -840,31 +842,31 @@ int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
   case STORE:
     // 拆分为 STA + STD
     out_uops[0].iq_id = IQ_STA;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_STA;
-    out_uops[0].uop.src2_en = false; // STA 只用 src1 (Base)
+    out_uops[0].uop->src2_en = false; // STA 只用 src1 (Base)
 
     out_uops[1].iq_id = IQ_STD;
-    out_uops[1].uop = make_dis_iss_uop(inst);
+    out_uops[1].uop = make_dis_iss_uop(inst, 1);
     out_uops[1].uop.op = UOP_STD;
-    out_uops[1].uop.src1_en = false; // STD 数据源修正
-    out_uops[1].uop.src2_en = true;  // STD 只用 src2 (Data)
+    out_uops[1].uop->src1_en = false; // STD 数据源修正
+    out_uops[1].uop->src2_en = true;  // STD 只用 src2 (Data)
     count = 2;
     break;
 
   case JALR:
     // JALR -> ADD (PC+4) + JUMP
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_ADD;
-    out_uops[0].uop.imm = 4;
-    out_uops[0].uop.src1_en = false; // PC+4 不需要 src1
-    out_uops[0].uop.src2_en = false; // PC+4 不需要 src2
+    out_uops[0].uop->imm = 4;
+    out_uops[0].uop->src1_en = false; // PC+4 不需要 src1
+    out_uops[0].uop->src2_en = false; // PC+4 不需要 src2
 
     out_uops[1].iq_id = IQ_BR;
-    out_uops[1].uop = make_dis_iss_uop(inst);
+    out_uops[1].uop = make_dis_iss_uop(inst, 1);
     out_uops[1].uop.op = UOP_JUMP;
-    out_uops[1].uop.src1_en = true; // JALR 需要 src1 (Base)
+    out_uops[1].uop->src1_en = true; // JALR 需要 src1 (Base)
     out_uops[1].uop.dest_en = false;
     count = 2;
     break;
@@ -872,61 +874,61 @@ int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
   case JAL:
     // JAL -> ADD (PC+4) + JUMP
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     out_uops[0].uop.op = UOP_ADD;
-    out_uops[0].uop.imm = 4;
-    out_uops[0].uop.src1_en = false; // PC+4 不需要 src1
-    out_uops[0].uop.src2_en = false; // PC+4 不需要 src2
+    out_uops[0].uop->imm = 4;
+    out_uops[0].uop->src1_en = false; // PC+4 不需要 src1
+    out_uops[0].uop->src2_en = false; // PC+4 不需要 src2
 
     out_uops[1].iq_id = IQ_BR;
-    out_uops[1].uop = make_dis_iss_uop(inst);
+    out_uops[1].uop = make_dis_iss_uop(inst, 1);
     out_uops[1].uop.op = UOP_JUMP;
     out_uops[1].uop.dest_en = false; // 跳转不写寄存器
     count = 2;
     break;
 
   case AMO:
-    if ((inst.func7 >> 2) == AmoOp::LR) {
+    if ((inst->func7 >> 2) == AmoOp::LR) {
       out_uops[0].iq_id = IQ_LD;
-      out_uops[0].uop = make_dis_iss_uop(inst);
+      out_uops[0].uop = make_dis_iss_uop(inst, 0);
       out_uops[0].uop.op = UOP_LOAD;
-      out_uops[0].uop.src2_en = false;
+      out_uops[0].uop->src2_en = false;
       count = 1;
-    } else if ((inst.func7 >> 2) == AmoOp::SC) {
+    } else if ((inst->func7 >> 2) == AmoOp::SC) {
       // SC -> STA + STD
       // SC 的 0/1 返回值由 LSU 在地址阶段决定后，经 LSU load-like wb
       // 路径返回；这里不再保留 INT 占位 uop。
       out_uops[0].iq_id = IQ_STA;
-      out_uops[0].uop = make_dis_iss_uop(inst);
+      out_uops[0].uop = make_dis_iss_uop(inst, 0);
       out_uops[0].uop.op = UOP_STA;
-      out_uops[0].uop.src2_en = false;
+      out_uops[0].uop->src2_en = false;
       out_uops[0].uop.dest_en =
           true; // Reuse LSU STA wb port to write SC result (0/1)
 
       out_uops[1].iq_id = IQ_STD;
-      out_uops[1].uop = make_dis_iss_uop(inst);
+      out_uops[1].uop = make_dis_iss_uop(inst, 1);
       out_uops[1].uop.op = UOP_STD;
-      out_uops[1].uop.is_atomic = true;
-      out_uops[1].uop.src1_en = false;
+      out_uops[1].uop->is_atomic = true;
+      out_uops[1].uop->src1_en = false;
       out_uops[1].uop.dest_en = false;
       count = 2;
     } else {
       // AMO RMW -> LOAD + STA + STD
       out_uops[0].iq_id = IQ_LD;
-      out_uops[0].uop = make_dis_iss_uop(inst);
+      out_uops[0].uop = make_dis_iss_uop(inst, 0);
       out_uops[0].uop.op = UOP_LOAD;
-      out_uops[0].uop.src2_en = false;
+      out_uops[0].uop->src2_en = false;
 
       out_uops[1].iq_id = IQ_STA;
-      out_uops[1].uop = make_dis_iss_uop(inst);
+      out_uops[1].uop = make_dis_iss_uop(inst, 1);
       out_uops[1].uop.op = UOP_STA;
-      out_uops[1].uop.src2_en = false;
+      out_uops[1].uop->src2_en = false;
       out_uops[1].uop.dest_en = false; // Fix: STA 不写回寄存器
 
       out_uops[2].iq_id = IQ_STD;
-      out_uops[2].uop = make_dis_iss_uop(inst);
+      out_uops[2].uop = make_dis_iss_uop(inst, 2);
       out_uops[2].uop.op = UOP_STD;
-      out_uops[2].uop.is_atomic = true;
+      out_uops[2].uop->is_atomic = true;
       // 假设 SDU 负责计算，需要原 dest_preg 作为操作数 (数据源)
       // 注意: 这里 src1_preg 被设为 dest_preg，用于读取内存旧值进行原子运算?
       // 不，Load 结果写到了 dest_preg。STD 需要用到这个 dest_preg (Load Result)
@@ -935,8 +937,8 @@ int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
       // out_uops[2].uop.src1_preg = src_uop.dest_preg; 这意味着 STD 依赖于 Load
       // 的结果 (dest_preg)。 如果 Load 正确写回了 dest_preg，那么 STD
       // 读取它是对的。
-      out_uops[2].uop.src1_preg = inst.dest_preg;
-      if ((inst.func7 >> 2) == AmoOp::SWAP) {
+      out_uops[2].uop->src1_preg = inst.dest_preg;
+      if ((inst->func7 >> 2) == AmoOp::SWAP) {
         out_uops[2].uop.src1_busy =
             false; // Swap doesn't need Load result (Old Val) for Store
       } else {
@@ -950,7 +952,7 @@ int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
   // 改编自：NOP, CSR, 等
   default: // NOP, CSR, 等
     out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst);
+    out_uops[0].uop = make_dis_iss_uop(inst, 0);
     // 特殊指令走整数队列 (IQ_INT)
     switch (type) {
     case NOP:

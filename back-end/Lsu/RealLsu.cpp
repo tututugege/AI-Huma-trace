@@ -957,7 +957,7 @@ void RealLsu::comb_lsu2exe() {
             wb_uop.dest_preg = stq_entry.dest_preg;
             wb_uop.dest_en = (stq_entry.dest_preg != 0);
           }
-          wb_uop.dbg.is_mmio = stq_entry.is_mmio;
+          wb_uop.is_mmio = stq_entry.is_mmio;
 
           out.lsu2exe->wb_req[issue_ld].valid = true;
           out.lsu2exe->wb_req[issue_ld].uop =
@@ -981,7 +981,7 @@ void RealLsu::comb_lsu2exe() {
           wb_uop.result = stq_entry.vaddr;
           wb_uop.page_fault_store = stq_entry.page_fault;
           wb_uop.dest_en = false;
-          wb_uop.dbg.is_mmio = stq_entry.is_mmio;
+          wb_uop.is_mmio = stq_entry.is_mmio;
 
           out.lsu2exe->sta_wb_req[issue_st].uop =
               LsuExeIO::LsuExeRespUop::from_micro_op(wb_uop);
@@ -1025,7 +1025,7 @@ void RealLsu::comb_lsu2exe() {
         wb_uop.page_fault_load = ldq_entry.page_fault;
         // Loads to x0 still complete, but have no register destination.
         wb_uop.dest_en = (ldq_entry.dest_preg != 0);
-        wb_uop.dbg.is_mmio = ldq_entry.is_mmio;
+        wb_uop.is_mmio = ldq_entry.is_mmio;
 
         out.lsu2exe->wb_req[issue_ld].uop =
             LsuExeIO::LsuExeRespUop::from_micro_op(wb_uop);
@@ -1438,12 +1438,12 @@ void RealLsu::handle_store_addr(const MicroOp &inst) {
   entry.paddr_valid = false;
   entry.paddr = 0;
 
-  entry.func3 = inst.func3;
+  entry.func3 = inst->func3;
   entry.dest_preg = inst.dest_preg;
   entry.store_state = StoreState::WaitTlb;
   enqueue_wait_mmu_stq(inst.stq_idx);
 
-  entry.is_lrsc = inst.is_atomic && ((inst.func7 >> 2) == AmoOp::SC);
+  entry.is_lrsc = inst->is_atomic && ((inst->func7 >> 2) == AmoOp::SC);
 }
 
 void RealLsu::handle_load_req(const MicroOp &inst) {
@@ -1465,7 +1465,7 @@ void RealLsu::handle_load_req(const MicroOp &inst) {
   entry.p_addr_valid = false;
   entry.p_addr = 0;
 
-  entry.func3 = inst.func3;
+  entry.func3 = inst->func3;
   entry.load_state = LoadState::WaitTlb;
 
   entry.stq_snapshot.idx = inst.stq_idx;

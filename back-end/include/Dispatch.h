@@ -31,7 +31,7 @@ class Dispatch {
 private:
   using DispatchInst = Uop;
 
-  DisIssIO::DisIssUop make_dis_iss_uop(const DispatchInst &inst) const;
+  DisIssIO::DisIssUop make_dis_iss_uop(const DispatchInst &inst, int k) const;
   bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;
   void apply_wakeup_to_uop(RenDisIO::RenDisInst &uop) const;
   int decompose_inst(const DispatchInst &original_inst, UopPacket *out_uops);

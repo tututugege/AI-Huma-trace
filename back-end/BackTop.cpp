@@ -341,7 +341,7 @@ void BackTop::comb() {
     int64_t committing = -1;
     for (int i = 0; i < COMMIT_WIDTH; i++) {
       if (rob->out.rob_commit->commit_entry[i].valid) {
-        committing = (int64_t)rob->out.rob_commit->commit_entry[i].uop.dbg.inst_idx;
+        committing = (int64_t)rob->out.rob_commit->commit_entry[i].uop->dbg.inst_idx;
         break;
       }
     }
@@ -374,7 +374,7 @@ void BackTop::comb() {
     if (tbhook::enabled && rob->out.rob_commit->commit_entry[i].valid &&
         !rob->out.rob_bcast->interrupt) {
       tbhook::on_commit(
-          (uint64_t)rob->out.rob_commit->commit_entry[i].uop.dbg.inst_idx);
+          (uint64_t)rob->out.rob_commit->commit_entry[i].uop->dbg.inst_idx);
     }
     if (out.commit_entry[i].valid && out.flush) {
       // Flush: override extra_data.pc_next with redirect_pc for ALL

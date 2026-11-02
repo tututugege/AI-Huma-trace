@@ -17,10 +17,10 @@ void Isu::apply_wakeup_to_uop(IqStoredUop &uop) const {
       continue;
     }
     uint32_t preg = out.iss_awake->wake[k].preg;
-    if (uop.src1_en && uop.src1_preg == preg) {
+    if (uop->src1_en && uop->src1_preg == preg) {
       uop.src1_busy = false;
     }
-    if (uop.src2_en && uop.src2_preg == preg) {
+    if (uop->src2_en && uop->src2_preg == preg) {
       uop.src2_busy = false;
     }
   }
@@ -302,12 +302,12 @@ void Isu::comb_calc_latency_next() {
 
   // 新发射条目写入对应延迟结构。
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &inst = out.iss2prf->iss_entry[i];
+    const auto &inst = out.iss2prf->iss_entry[i]; 
     if (!(inst.valid && inst.uop.dest_en)) {
       continue;
     }
     UopType op = decode_uop_type(inst.uop.op);
-    int lat = get_latency(op, inst.uop.func7);
+    int lat = get_latency(op, inst.uop->func7);
     if (lat <= 1) {
       continue;
     }
@@ -407,7 +407,7 @@ void Isu::comb_awake() {
     const auto &entry = out.iss2prf->iss_entry[i];
     if (entry.valid && entry.uop.dest_en) {
       UopType op = decode_uop_type(entry.uop.op);
-      int lat = get_latency(op, entry.uop.func7);
+      int lat = get_latency(op, entry.uop->func7);
       if (lat <= 1 && op != UOP_LOAD && op != UOP_STA) {
         int ch = fast_ch_map[i];
         if (ch != -1) {

@@ -14,7 +14,7 @@ static inline bool is_killed(const ExePrfIO::ExePrfWbUop &uop,
 static inline int get_prf_ftq_slot(int p_idx, const IssPrfIO::IssPrfUop &uop,
                                    uint64_t req_bit) {
   if (p_idx >= IQ_ALU_PORT_BASE && p_idx < IQ_ALU_PORT_BASE + ALU_NUM &&
-      (req_bit & OP_MASK_ALU) && uop.src1_is_pc) {
+      (req_bit & OP_MASK_ALU) && uop->src1_is_pc) {
     return p_idx - IQ_ALU_PORT_BASE;
   }
   if (p_idx >= IQ_BR_PORT_BASE && p_idx < IQ_BR_PORT_BASE + BRU_NUM &&
@@ -60,8 +60,8 @@ void Prf::comb_req_ftq() {
     int ftq_slot = get_prf_ftq_slot(p_idx, uop, req_bit);
     if (ftq_slot >= 0) {
       out.ftq_prf_pc_req->req[ftq_slot].valid = true;
-      out.ftq_prf_pc_req->req[ftq_slot].ftq_idx = uop.ftq_idx;
-      out.ftq_prf_pc_req->req[ftq_slot].ftq_offset = uop.ftq_offset;
+      out.ftq_prf_pc_req->req[ftq_slot].ftq_idx = uop->ftq_idx;
+      out.ftq_prf_pc_req->req[ftq_slot].ftq_offset = uop->ftq_offset;
     }
   }
 }
@@ -83,15 +83,15 @@ void Prf::comb_read() {
     uint64_t req_bit = (1ULL << in.iss2prf->iss_entry[i].uop.op);
     int ftq_slot = get_prf_ftq_slot(i, in.iss2prf->iss_entry[i].uop, req_bit);
     if (ftq_slot >= 0 && in.ftq_prf_pc_resp->resp[ftq_slot].valid) {
-      entry.uop.pc = in.ftq_prf_pc_resp->resp[ftq_slot].pc;
-      entry.uop.ftq_resp_valid = true;
-      entry.uop.ftq_pred_taken = in.ftq_prf_pc_resp->resp[ftq_slot].pred_taken;
-      entry.uop.ftq_next_pc = in.ftq_prf_pc_resp->resp[ftq_slot].next_pc;
+      entry.uop->pc = in.ftq_prf_pc_resp->resp[ftq_slot].pc;
+      entry.uop->ftq_resp_valid = true;
+      entry.uop->ftq_pred_taken = in.ftq_prf_pc_resp->resp[ftq_slot].pred_taken;
+      entry.uop->ftq_next_pc = in.ftq_prf_pc_resp->resp[ftq_slot].next_pc;
     } else {
-      entry.uop.pc = 0;
-      entry.uop.ftq_resp_valid = false;
-      entry.uop.ftq_pred_taken = false;
-      entry.uop.ftq_next_pc = 0;
+      entry.uop->pc = 0;
+      entry.uop->ftq_resp_valid = false;
+      entry.uop->ftq_pred_taken = false;
+      entry.uop->ftq_next_pc = 0;
     }
   }
 }

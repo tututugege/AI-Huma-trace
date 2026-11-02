@@ -80,40 +80,58 @@ struct TmaMeta {
   bool mem_commit_is_store;
 };
 
-// One instruction record for every pipeline stage (decode, rename, dispatch, issue, execute, ROB, commit).
-// The per-stage structs of the RTL-style model were subsets of this; they are aliases of it now and the
-// old converters are identity copies. op/type are kept as enums everywhere (no encode/decode).
 struct InstEntry;
-struct Uop {
-  wire<32> diag_val; // Hardware: Shared field for instruction or pc_next
-  wire<32> result;
-  wire<32> pc;       // ftq-resolved pc of the instruction at execute
-  wire<32> imm;
-
-  wire<AREG_IDX_WIDTH> dest_areg, src1_areg, src2_areg;
-  wire<PRF_IDX_WIDTH> dest_preg, src1_preg, src2_preg; // log2(PRF_NUM)
-  wire<PRF_IDX_WIDTH> old_dest_preg;
-
+// One instruction record for every pipeline stage (decode, rename, dispatch, issue, execute, ROB, commit).
+// The pipeline registers hold a Uop = id + the few fields that change after creation. Everything written when a
+// uop is created (decode, rename, dispatch) lives in a pool (UopS), indexed by the id: `u.imm`, `u.pc`...
+// Dynamic fields stay in the entry (`u.br_mask`, `u.result`, ...), so the comb/seq double buffering keeps its
+// meaning: a field that changes while the uop is in flight is never shared between the two copies.
+struct UopS {
+  wire<AREG_IDX_WIDTH> dest_areg;
+  wire<AREG_IDX_WIDTH> src1_areg;
+  wire<AREG_IDX_WIDTH> src2_areg;
   wire<FTQ_IDX_WIDTH> ftq_idx;
   wire<FTQ_OFFSET_WIDTH> ftq_offset;
-  wire<1> ftq_is_last;
-  wire<1> ftq_entry_valid;
-  wire<1> ftq_resp_valid;
-  wire<1> ftq_pred_taken;
-  wire<32> ftq_next_pc;
-
-  wire<1> mispred;
-  wire<1> br_taken;
-
-  wire<1> dest_en, src1_en, src2_en;
-  wire<1> src1_busy, src2_busy;
+  wire<BR_TAG_WIDTH> br_id;
+  wire<CSR_IDX_WIDTH> csr_idx;
+  InstType type;
+  wire<32> imm;
+  wire<PRF_IDX_WIDTH> src1_preg;
+  wire<PRF_IDX_WIDTH> src2_preg;
+  wire<1> src1_en;
+  wire<1> src2_en;
   wire<1> src1_is_pc;
   wire<1> src2_is_imm;
   wire<3> func3;
   wire<7> func7;
-  wire<BR_TAG_WIDTH> br_id;
+  wire<1> is_atomic;
+  wire<PRF_IDX_WIDTH> old_dest_preg;
+  wire<32> pc;
+  wire<32> ftq_next_pc;
+  wire<1> ftq_entry_valid;
+  wire<1> ftq_resp_valid;
+  wire<1> ftq_pred_taken;
+  DebugMeta dbg;
+};
+
+constexpr int UOP_POOL_SIZE = 65535;     // ring; far more than ROB + queues + front-end buffers + wrong-path waves in flight
+constexpr int UOP_BLOCK = 4;             // an instruction owns [id] (decode/ROB) and [id+1..id+3] (its up to three dispatched uops, AMOs)
+extern UopS uop_pool[UOP_POOL_SIZE];
+uint16_t uop_alloc();                // fresh zeroed block of UOP_BLOCK pool entries (ring; entry 0 is the shared null entry)
+
+struct Uop {
+  uint16_t id;
+
+  wire<32> diag_val; // Hardware: Shared field for instruction or pc_next
+  wire<32> result;
+  wire<PRF_IDX_WIDTH> dest_preg;
+  wire<1> dest_en;
+
+  wire<1> mispred;
+  wire<1> br_taken;
+  wire<1> src1_busy, src2_busy;
   wire<BR_MASK_WIDTH> br_mask;
-  wire<CSR_IDX_WIDTH> csr_idx;
+
   wire<ROB_IDX_WIDTH> rob_idx;
   wire<STQ_IDX_WIDTH> stq_idx;
   wire<1> stq_flag;
@@ -127,15 +145,17 @@ struct Uop {
   wire<1> page_fault_load;
   wire<1> page_fault_store;
   wire<1> illegal_inst;
-  wire<1> is_atomic;
   wire<1> flush_pipe;
+  wire<1> ftq_is_last;  // set on the mispredicting branch inside the ROB
+  wire<1> is_mmio;      // set when the LSU executes an MMIO access
 
-  InstType type;
   UopType op;
   TmaMeta tma;
-  DebugMeta dbg;
+
 
   Uop() { std::memset(this, 0, sizeof(Uop)); }
+
+  UopS *operator->() const { return &uop_pool[id]; }
 
   // Converters of the old per-stage structs: identity.
   static Uop from_ren_dis_inst(const Uop &s) { return s; }

@@ -160,9 +160,9 @@ void Ren::comb_rename() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
     out.ren2dis->uop[i] = RenDisIO::RenDisInst::from_dec_ren_inst(inst_r[i]);
     out.ren2dis->uop[i].dest_preg = alloc_reg[i];
-    old_dest_preg_normal[i] = spec_RAT[inst_r[i].dest_areg];
-    src1_preg_normal[i] = spec_RAT[inst_r[i].src1_areg];
-    src2_preg_normal[i] = spec_RAT[inst_r[i].src2_areg];
+    old_dest_preg_normal[i] = spec_RAT[inst_r[i]->dest_areg];
+    src1_preg_normal[i] = spec_RAT[inst_r[i]->src1_areg];
+    src2_preg_normal[i] = spec_RAT[inst_r[i]->src2_areg];
   }
 
   // 针对RAT的raw bypass
@@ -180,20 +180,20 @@ void Ren::comb_rename() {
         continue;
 
       // Do not bypass from x0 writes (architectural x0 is always 0)
-      if (inst_r[j].dest_areg == 0)
+      if (inst_r[j]->dest_areg == 0)
         continue;
 
-      if (inst_r[i].src1_areg == inst_r[j].dest_areg) {
+      if (inst_r[i]->src1_areg == inst_r[j]->dest_areg) {
         src1_bypass_hit[i] = true;
         src1_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
       }
 
-      if (inst_r[i].src2_areg == inst_r[j].dest_areg) {
+      if (inst_r[i]->src2_areg == inst_r[j]->dest_areg) {
         src2_bypass_hit[i] = true;
         src2_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
       }
 
-      if (inst_r[i].dest_areg == inst_r[j].dest_areg) {
+      if (inst_r[i]->dest_areg == inst_r[j]->dest_areg) {
         old_dest_bypass_hit[i] = true;
         old_dest_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
       }
@@ -202,22 +202,27 @@ void Ren::comb_rename() {
 
   // 重命名 (Rename)
   for (int i = 0; i < DECODE_WIDTH; i++) {
+    // Static fields live in the uop pool: an invalid slot still holds the handle of an instruction that has long
+    // left the stage, so it must not be written (it used to be a throw-away copy).
+    if (!inst_valid[i]) {
+      continue;
+    }
     if (src1_bypass_hit[i]) {
-      out.ren2dis->uop[i].src1_preg = src1_preg_bypass[i];
+      out.ren2dis->uop[i]->src1_preg = src1_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i].src1_preg = src1_preg_normal[i];
+      out.ren2dis->uop[i]->src1_preg = src1_preg_normal[i];
     }
 
     if (src2_bypass_hit[i]) {
-      out.ren2dis->uop[i].src2_preg = src2_preg_bypass[i];
+      out.ren2dis->uop[i]->src2_preg = src2_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i].src2_preg = src2_preg_normal[i];
+      out.ren2dis->uop[i]->src2_preg = src2_preg_normal[i];
     }
 
     if (old_dest_bypass_hit[i]) {
-      out.ren2dis->uop[i].old_dest_preg = old_dest_preg_bypass[i];
+      out.ren2dis->uop[i]->old_dest_preg = old_dest_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i].old_dest_preg = old_dest_preg_normal[i];
+      out.ren2dis->uop[i]->old_dest_preg = old_dest_preg_normal[i];
     }
   }
 }
@@ -239,13 +244,13 @@ void Ren::comb_fire() {
       int dest_preg = out.ren2dis->uop[i].dest_preg;
       Assert(free_head_1 != free_tail_1 &&
              "Ren: allocate when free list is empty");
-      spec_RAT_1[inst_r[i].dest_areg] = dest_preg;
+      spec_RAT_1[inst_r[i]->dest_areg] = dest_preg;
       LOOP_INC(free_head_1, PRF_NUM);
     }
 
     // 保存检查点 (Checkpoint)
-    if (fire[i] && is_branch(inst_r[i].type)) {
-      const auto br_id = inst_r[i].br_id;
+    if (fire[i] && is_branch(inst_r[i]->type)) {
+      const auto br_id = inst_r[i]->br_id;
       Assert(br_id < MAX_BR_NUM && "Ren: branch id out of range");
       for (int j = 0; j < ARF_NUM + 1; j++) {
         // 注意这里存在隐藏的旁路 (Bypass)
@@ -307,18 +312,18 @@ void Ren::comb_fire() {
         if (!is_exception(*inst) && !in.rob_bcast->interrupt) {
           Assert(free_head_commit_1 != free_head_1 &&
                  "Ren: commit reclaim when no pending spec allocation");
-          free_list_1[free_tail_1] = inst->old_dest_preg;
+          free_list_1[free_tail_1] = (*inst)->old_dest_preg;
           LOOP_INC(free_tail_1, PRF_NUM);
           LOOP_INC(free_head_commit_1, PRF_NUM);
         }
       }
 
       BE_LOG("ROB commit PC=0x%08x Inst=0x%08x idx=%ld",
-             inst->dbg.pc, inst->dbg.instruction, inst->dbg.inst_idx);
+             (*inst)->dbg.pc, (*inst)->dbg.instruction, (*inst)->dbg.inst_idx);
       if (inst->dest_en && !is_exception(*inst) && !in.rob_bcast->interrupt) {
-        arch_RAT_1[inst->dest_areg] = inst->dest_preg;
+        arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
       }
-      if (!interrupt_nop) {
+      if (!interrupt_nop) { 
         ctx->run_commit_inst(&commit_entry, i);
 #ifdef CONFIG_DIFFTEST
         ctx->run_difftest_inst(&commit_entry);

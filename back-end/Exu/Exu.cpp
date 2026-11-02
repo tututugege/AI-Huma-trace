@@ -250,15 +250,15 @@ void Exu::comb_to_csr() {
   }
   const ExuInst &uop = *csr_uop;
 
-  bool is_csrrw_family = (uop.func3 == 0b001) || (uop.func3 == 0b101);
-  bool src_is_zero = (uop.imm == 0);
+  bool is_csrrw_family = (uop->func3 == 0b001) || (uop->func3 == 0b101);
+  bool src_is_zero = (uop->imm == 0);
   bool rd_is_zero = (uop.dest_preg == 0);
 
   out.exe2csr->we = is_csrrw_family || !src_is_zero;
   out.exe2csr->re = !is_csrrw_family || !rd_is_zero;
 
-  out.exe2csr->idx = uop.csr_idx;
-  out.exe2csr->wcmd = uop.func3 & 0b11;
+  out.exe2csr->idx = uop->csr_idx;
+  out.exe2csr->wcmd = uop->func3 & 0b11;
   // The write data is a fact of the trace (rs1 value or zimm).
   out.exe2csr->wdata = 0;
   if (const tb::Fact *f = tbhook::fact_by_rob(uop.rob_idx)) {
@@ -558,7 +558,7 @@ void Exu::comb_fu2exu_collect() {
   for (int i = 0; i < BRU_NUM; i++) {
     if (br_res[i].valid) {
       // 所有已解析的 branch 贡献 clear_mask
-      clear_mask |= (wire<BR_MASK_WIDTH>(1) << br_res[i].uop.br_id);
+      clear_mask |= (wire<BR_MASK_WIDTH>(1) << br_res[i].uop->br_id);
 
       if (br_res[i].uop.mispred) {
         if (!mispred) {
@@ -577,7 +577,7 @@ void Exu::comb_fu2exu_collect() {
       const auto &u = out.exu2rob->entry[p].uop;
       tbhook::ExecObs o;
       o.rob_idx = u.rob_idx;
-      o.uid_dbg = (uint64_t)u.dbg.inst_idx;
+      o.uid_dbg = (uint64_t)u->dbg.inst_idx;
       o.op = (int)decode_uop_type(u.op);
       o.result = u.result;
       o.diag_val = u.diag_val;
@@ -594,8 +594,8 @@ void Exu::comb_fu2exu_collect() {
   if (mispred) {
     out.exu2id->redirect_pc = mispred_uop->diag_val;
     out.exu2id->redirect_rob_idx = mispred_uop->rob_idx;
-    out.exu2id->br_id = mispred_uop->br_id;
-    out.exu2id->ftq_idx = mispred_uop->ftq_idx;
+    out.exu2id->br_id = (*mispred_uop)->br_id;
+    out.exu2id->ftq_idx = (*mispred_uop)->ftq_idx;
   } else {
     out.exu2id->redirect_pc = 0;
     out.exu2id->redirect_rob_idx = 0;

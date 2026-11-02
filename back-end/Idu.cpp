@@ -65,6 +65,7 @@ void Idu::comb_decode() {
     out.dec2ren->valid[i] = true;
     auto &decoded = out.dec2ren->uop[i];
     decoded = {};
+    decoded.id = entry.uop_id;
     if (entry.page_fault_inst) {
       decoded.diag_val = entry.inst;
       decoded.page_fault_inst = true;
@@ -112,20 +113,21 @@ void Idu::comb_decode() {
     out.dec2ren->valid[i] = true;
     auto &decoded = out.dec2ren->uop[i];
     decoded = {};
+    decoded.id = entry.uop_id;
     if (entry.page_fault_inst) {
       decoded.diag_val = entry.inst;
       decoded.page_fault_inst = true;
-      decoded.type = encode_inst_type(NOP);
-      decoded.src1_en = false;
-      decoded.src2_en = false;
+      decoded->type = encode_inst_type(NOP);
+      decoded->src1_en = false;
+      decoded->src2_en = false;
       decoded.dest_en = false;
-      decoded.dbg.instruction = entry.inst;
+      decoded->dbg.instruction = entry.inst;
     } else {
       decode(decoded, entry.inst);
     }
-    decoded.dbg.pc = entry.pc;
-    decoded.ftq_idx = entry.ftq_idx;
-    decoded.ftq_offset = entry.ftq_offset;
+    decoded->dbg.pc = entry.pc;
+    decoded->ftq_idx = entry.ftq_idx;
+    decoded->ftq_offset = entry.ftq_offset;
     decoded.ftq_is_last = entry.ftq_is_last;
   }
 
@@ -138,12 +140,12 @@ void Idu::comb_decode() {
   int i = 0;
   for (; i < DECODE_WIDTH; i++) {
     if (!out.dec2ren->valid[i]) {
-      out.dec2ren->uop[i].br_id = 0;
+      out.dec2ren->uop[i]->br_id = 0;
       out.dec2ren->uop[i].br_mask = running_mask;
       continue;
     }
 
-    if (is_branch(out.dec2ren->uop[i].type)) {
+    if (is_branch(out.dec2ren->uop[i]->type)) {
       if (!alloc_valid[br_num]) {
 #ifdef CONFIG_PERF_COUNTER
         ctx->perf.idu_tag_stall++;
@@ -153,13 +155,13 @@ void Idu::comb_decode() {
         break;
       }
       wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
-      out.dec2ren->uop[i].br_id = new_tag;
+      out.dec2ren->uop[i]->br_id = new_tag;
       // 分支自身不依赖自己；self bit 只作用于后续更年轻指令。
       out.dec2ren->uop[i].br_mask = running_mask;
       running_mask |= (wire<BR_MASK_WIDTH>(1) << new_tag);
       br_num++;
     } else {
-      out.dec2ren->uop[i].br_id = 0;
+      out.dec2ren->uop[i]->br_id = 0;
       out.dec2ren->uop[i].br_mask = running_mask;
     }
   }
@@ -167,7 +169,7 @@ void Idu::comb_decode() {
   if (stall) {
     for (; i < DECODE_WIDTH; i++) {
       out.dec2ren->valid[i] = false;
-      out.dec2ren->uop[i].br_id = 0;
+      out.dec2ren->uop[i]->br_id = 0;
       out.dec2ren->uop[i].br_mask = 0;
     }
   }
@@ -266,7 +268,7 @@ void Idu::comb_fire() {
     wire<1> fire = out.dec2ren->valid[i] && in.ren2dec->ready;
     out.idu_consume->fire[i] = fire;
 #ifdef CONFIG_BPU
-    if (fire && is_branch(out.dec2ren->uop[i].type)) {
+    if (fire && is_branch(out.dec2ren->uop[i]->type)) {
       wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
       tag_vec_1[new_tag] = false;
       now_br_mask_1 |= (wire<BR_MASK_WIDTH>(1) << new_tag);
@@ -289,7 +291,7 @@ void Idu::seq() {
 void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
   // 操作数来源以及type
   // uint32_t imm;
-  uop.dbg.instruction = inst;
+  uop->dbg.instruction = inst;
 
   uint32_t opcode = BITS(inst, 6, 0);
   uint32_t number_funct3_unsigned = BITS(inst, 14, 12);
@@ -301,135 +303,135 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
 
   // 准备立即数
   uop.diag_val = inst;
-  uop.dest_areg = reg_d_index;
-  uop.src1_areg = reg_a_index;
-  uop.src2_areg = reg_b_index;
-  uop.src1_is_pc = false;
-  uop.src2_is_imm = true;
-  uop.func3 = number_funct3_unsigned;
-  uop.func7 = number_funct7_unsigned;
-  uop.csr_idx = csr_idx;
+  uop->dest_areg = reg_d_index;
+  uop->src1_areg = reg_a_index;
+  uop->src2_areg = reg_b_index;
+  uop->src1_is_pc = false;
+  uop->src2_is_imm = true;
+  uop->func3 = number_funct3_unsigned;
+  uop->func7 = number_funct7_unsigned;
+  uop->csr_idx = csr_idx;
   uop.page_fault_inst = false;
   uop.illegal_inst = false;
-  uop.type = encode_inst_type(NOP);
+  uop->type = encode_inst_type(NOP);
   uop.tma.is_cache_miss = false;
   uop.tma.is_ret = false;
   uop.tma.mem_commit_is_load = false;
   uop.tma.mem_commit_is_store = false;
   static uint64_t global_inst_idx = 0;
-  uop.dbg.inst_idx = global_inst_idx++;
+  uop->dbg.inst_idx = global_inst_idx++;
 
   switch (opcode) {
   case number_0_opcode_lui: { // lui
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src1_areg = 0;
-    uop.src2_en = false;
-    uop.type = encode_inst_type(ADD);
-    uop.func3 = 0;
-    uop.imm = immU(inst);
+    uop->src1_en = true;
+    uop->src1_areg = 0;
+    uop->src2_en = false;
+    uop->type = encode_inst_type(ADD);
+    uop->func3 = 0;
+    uop->imm = immU(inst);
     break;
   }
   case number_1_opcode_auipc: { // auipc
     uop.dest_en = true;
-    uop.src1_en = false;
-    uop.src2_en = false;
-    uop.src1_is_pc = true;
-    uop.type = encode_inst_type(ADD);
-    uop.func3 = 0;
-    uop.imm = immU(inst);
+    uop->src1_en = false;
+    uop->src2_en = false;
+    uop->src1_is_pc = true;
+    uop->type = encode_inst_type(ADD);
+    uop->func3 = 0;
+    uop->imm = immU(inst);
     break;
   }
   case number_2_opcode_jal: { // jal
     uop.dest_en = true;
-    uop.src1_en = false;
-    uop.src2_en = false;
-    uop.src1_is_pc = true;
-    uop.src2_is_imm = true;
-    uop.func3 = 0;
-    uop.type = encode_inst_type(JAL);
-    uop.imm = immJ(inst);
+    uop->src1_en = false;
+    uop->src2_en = false;
+    uop->src1_is_pc = true;
+    uop->src2_is_imm = true;
+    uop->func3 = 0;
+    uop->type = encode_inst_type(JAL);
+    uop->imm = immJ(inst);
     break;
   }
   case number_3_opcode_jalr: { // jalr
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = false;
-    uop.src1_is_pc = true;
-    uop.src2_is_imm = true;
-    uop.func3 = 0;
-    uop.type = encode_inst_type(JALR);
-    uop.imm = immI(inst);
+    uop->src1_en = true;
+    uop->src2_en = false;
+    uop->src1_is_pc = true;
+    uop->src2_is_imm = true;
+    uop->func3 = 0;
+    uop->type = encode_inst_type(JALR);
+    uop->imm = immI(inst);
 
     break;
   }
   case number_4_opcode_beq: { // beq, bne, blt, bge, bltu, bgeu
     uop.dest_en = false;
-    uop.src1_en = true;
-    uop.src2_en = true;
-    uop.type = encode_inst_type(BR);
-    uop.imm = immB(inst);
+    uop->src1_en = true;
+    uop->src2_en = true;
+    uop->type = encode_inst_type(BR);
+    uop->imm = immB(inst);
     break;
   }
   case number_5_opcode_lb: { // lb, lh, lw, lbu, lhu
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = false;
-    uop.type = encode_inst_type(LOAD);
-    uop.imm = immI(inst);
+    uop->src1_en = true;
+    uop->src2_en = false;
+    uop->type = encode_inst_type(LOAD);
+    uop->imm = immI(inst);
     break;
   }
   case number_6_opcode_sb: { // sb, sh, sw
     uop.dest_en = false;
-    uop.src1_en = true;
-    uop.src2_en = true;
-    uop.type = encode_inst_type(STORE);
-    uop.imm = immS(inst);
+    uop->src1_en = true;
+    uop->src2_en = true;
+    uop->type = encode_inst_type(STORE);
+    uop->imm = immS(inst);
     break;
   }
   case number_7_opcode_addi: { // addi, slti, sltiu, xori, ori, andi, slli,
     // srli, srai, AND Zbb/Zbs imm extensions (clz, ctz, pcnt, sext, bseti,
     // bclri, binvi)
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = false;
-    uop.type = encode_inst_type(ADD);
-    uop.imm = immI(inst);
+    uop->src1_en = true;
+    uop->src2_en = false;
+    uop->type = encode_inst_type(ADD);
+    uop->imm = immI(inst);
     break;
   }
   case number_8_opcode_add: { // add, sub, sll, slt, sltu, xor, srl, sra, or,
     // AND Zba/Zbb/Zbc/Zbs extensions (sh1add, clmul, xnor, pack, min, max, etc)
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = true;
-    uop.src2_is_imm = false;
+    uop->src1_en = true;
+    uop->src2_en = true;
+    uop->src2_is_imm = false;
     if (number_funct7_unsigned == 1) { // mul div
       if (number_funct3_unsigned & 0b100) {
-        uop.type = encode_inst_type(DIV);
+        uop->type = encode_inst_type(DIV);
       } else {
-        uop.type = encode_inst_type(MUL);
+        uop->type = encode_inst_type(MUL);
       }
     } else {
-      uop.type = encode_inst_type(ADD);
+      uop->type = encode_inst_type(ADD);
     }
     break;
   }
   case number_9_opcode_fence: { // fence, fence.i
     uop.dest_en = false;
-    uop.src1_en = false;
-    uop.src2_en = false;
+    uop->src1_en = false;
+    uop->src2_en = false;
 
     // Check funct3 for FENCE.I (001)
     if (number_funct3_unsigned == 0b001) {
-      uop.type = encode_inst_type(FENCE_I); // Strict separation
+      uop->type = encode_inst_type(FENCE_I); // Strict separation
     } else {
-      uop.type = encode_inst_type(FENCE);
+      uop->type = encode_inst_type(FENCE);
     }
     break;
   }
   case number_10_opcode_ecall: { // ecall, ebreak, csrrw, csrrs, csrrc,
                                  // csrrwi, csrrsi, csrrci
-    uop.src2_is_imm =
+    uop->src2_is_imm =
         number_funct3_unsigned & 0b100 &&
         (number_funct3_unsigned & 0b001 || number_funct3_unsigned & 0b010);
 
@@ -445,43 +447,43 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
           csr_idx != number_sie && csr_idx != number_sip &&
           csr_idx != number_satp && csr_idx != number_mhartid &&
           csr_idx != number_misa) {
-        uop.type = encode_inst_type(NOP);
+        uop->type = encode_inst_type(NOP);
         uop.dest_en = false;
-        uop.src1_en = false;
-        uop.src2_en = false;
+        uop->src1_en = false;
+        uop->src2_en = false;
 
         if (csr_idx == number_time || csr_idx == number_timeh)
           uop.illegal_inst = true;
 
       } else {
-        uop.type = encode_inst_type(CSR);
+        uop->type = encode_inst_type(CSR);
         uop.dest_en = true;
-        uop.src1_en = true;
-        uop.src2_en = !uop.src2_is_imm;
-        uop.imm = reg_a_index;
+        uop->src1_en = true;
+        uop->src2_en = !uop->src2_is_imm;
+        uop->imm = reg_a_index;
       }
     } else {
       uop.dest_en = false;
-      uop.src1_en = false;
-      uop.src2_en = false;
+      uop->src1_en = false;
+      uop->src2_en = false;
 
       if (inst == INST_ECALL) {
-        uop.type = encode_inst_type(ECALL);
+        uop->type = encode_inst_type(ECALL);
       } else if (inst == INST_EBREAK) {
-        uop.type = encode_inst_type(EBREAK);
+        uop->type = encode_inst_type(EBREAK);
       } else if (inst == INST_MRET) {
-        uop.type = encode_inst_type(MRET);
+        uop->type = encode_inst_type(MRET);
       } else if (inst == INST_WFI) {
-        uop.type = encode_inst_type(WFI);
+        uop->type = encode_inst_type(WFI);
       } else if (inst == INST_SRET) {
-        uop.type = encode_inst_type(SRET);
+        uop->type = encode_inst_type(SRET);
       } else if (number_funct7_unsigned == 0b0001001 &&
                  number_funct3_unsigned == 0 && reg_d_index == 0) {
-        uop.type = encode_inst_type(SFENCE_VMA);
-        uop.src1_en = true;
-        uop.src2_en = true;
+        uop->type = encode_inst_type(SFENCE_VMA);
+        uop->src1_en = true;
+        uop->src2_en = true;
       } else {
-        uop.type = encode_inst_type(NOP);
+        uop->type = encode_inst_type(NOP);
         /*uop[0].illegal_inst = true;*/
         /*cout << hex << inst << endl;*/
         /*Assert(0);*/
@@ -492,14 +494,14 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
 
   case number_11_opcode_lrw: {
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = true;
-    uop.imm = 0;
-    uop.type = encode_inst_type(AMO);
-    uop.is_atomic = true;
+    uop->src1_en = true;
+    uop->src2_en = true;
+    uop->imm = 0;
+    uop->type = encode_inst_type(AMO);
+    uop->is_atomic = true;
 
     if ((number_funct7_unsigned >> 2) == AmoOp::LR) {
-      uop.src2_en = false;
+      uop->src2_en = false;
     }
 
     break;
@@ -507,44 +509,44 @@ void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
 
   case number_12_opcode_float: {
     uop.dest_en = true;
-    uop.src1_en = true;
-    uop.src2_en = true;
-    uop.src2_is_imm = false;
+    uop->src1_en = true;
+    uop->src2_en = true;
+    uop->src2_is_imm = false;
     // Preserve encoded rs2 (fmt selector) for FCVT/other unary FP ops.
-    uop.imm = reg_b_index;
+    uop->imm = reg_b_index;
     if (number_funct7_unsigned == 0x60 || number_funct7_unsigned == 0x68 ||
         number_funct7_unsigned == 0x2C || number_funct7_unsigned == 0x70) {
-      uop.src2_en = false;
+      uop->src2_en = false;
     }
-    uop.type = encode_inst_type(FP);
+    uop->type = encode_inst_type(FP);
     break;
   }
 
   default: {
     uop.dest_en = false;
-    uop.src1_en = false;
-    uop.src2_en = false;
-    uop.type = encode_inst_type(NOP);
+    uop->src1_en = false;
+    uop->src2_en = false;
+    uop->type = encode_inst_type(NOP);
     uop.illegal_inst = true;
     break;
   }
   }
 
-  InstType inst_type = decode_inst_type(uop.type);
-  uop.tma.is_ret = (inst_type == JALR && uop.src1_areg == 1 &&
-                    uop.dest_areg == 0 && uop.imm == 0);
+  InstType inst_type = decode_inst_type(uop->type);
+  uop.tma.is_ret = (inst_type == JALR && uop->src1_areg == 1 &&
+                    uop->dest_areg == 0 && uop->imm == 0);
   uop.tma.mem_commit_is_load =
       (inst_type == LOAD ||
-       (inst_type == AMO && (uop.func7 >> 2) != AmoOp::SC));
+       (inst_type == AMO && (uop->func7 >> 2) != AmoOp::SC));
   uop.tma.mem_commit_is_store =
       (inst_type == STORE ||
-       (inst_type == AMO && (uop.func7 >> 2) != AmoOp::LR));
+       (inst_type == AMO && (uop->func7 >> 2) != AmoOp::LR));
 
-  if (inst_type == AMO && uop.dest_areg == 0 && (uop.func7 >> 2) != AmoOp::LR &&
-      (uop.func7 >> 2) != AmoOp::SC) {
-    uop.dest_areg = 32;
+  if (inst_type == AMO && uop->dest_areg == 0 && (uop->func7 >> 2) != AmoOp::LR &&
+      (uop->func7 >> 2) != AmoOp::SC) {
+    uop->dest_areg = 32;
   }
 
-  if (uop.dest_areg == 0)
+  if (uop->dest_areg == 0)
     uop.dest_en = false;
 }
