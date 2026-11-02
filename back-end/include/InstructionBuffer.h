@@ -38,10 +38,15 @@ public:
   void pop_front(int n);
   void push_back(const InstructionBufferEntry &entry);
   void clear();
+  // Copy committed state from the working copy; only slots touched since the
+  // last sync are copied (a clear touches all).
+  void sync_from(InstructionBuffer &working);
 
 private:
   InstructionBufferEntry entries[IDU_INST_BUFFER_SIZE];
   int head_r = 0;
   int tail_r = 0;
   int count_r = 0;
+  uint64_t touched[(IDU_INST_BUFFER_SIZE + 63) / 64] = {};
+  bool all_touched = false;
 };

@@ -174,6 +174,7 @@ void PreIduQueue::comb_accept_front() {
   ftq_lookup_entries_1[ftq_alloc_idx] = ftq_lookup_entry;
   ftq_train_meta_fifo_1[ftq_alloc_idx] = ftq_train_meta_entry;
   ftq_valid_1[ftq_alloc_idx] = true;
+  ftq_alloc_mask |= 1ull << ftq_alloc_idx;
   ftq_dirty = true;
 
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
@@ -346,15 +347,20 @@ void PreIduQueue::comb_commit_info() {
 
 void PreIduQueue::seq() {
   if (ibuf_dirty) {
-    ibuf = ibuf_1;
+    ibuf.sync_from(ibuf_1);
     ibuf_dirty = false;
   }
   ftq_head = ftq_head_1;
   ftq_tail = ftq_tail_1;
   ftq_count = ftq_count_1;
   if (ftq_dirty) {
-    std::memcpy(ftq_lookup_entries, ftq_lookup_entries_1, sizeof(ftq_lookup_entries));
-    std::memcpy(ftq_train_meta_fifo, ftq_train_meta_fifo_1, sizeof(ftq_train_meta_fifo));
+    // Entry payloads only change at the allocated slot; valid bits are tiny.
+    for (uint64_t m = ftq_alloc_mask; m; m &= m - 1) {
+      const int i = __builtin_ctzll(m);
+      ftq_lookup_entries[i] = ftq_lookup_entries_1[i];
+      ftq_train_meta_fifo[i] = ftq_train_meta_fifo_1[i];
+    }
+    ftq_alloc_mask = 0;
     std::memcpy(ftq_valid, ftq_valid_1, sizeof(ftq_valid));
     ftq_dirty = false;
   }

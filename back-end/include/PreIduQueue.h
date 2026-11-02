@@ -25,6 +25,8 @@ struct PreIduQueueOut {
   FtqCommitInfoIO *ftq_commit_info = nullptr;
 };
 
+static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
+
 class PreIduQueue {
 public:
   explicit PreIduQueue(SimContext *ctx = nullptr) : ctx(ctx) {}
@@ -53,6 +55,7 @@ private:
   // committed (x) == working (x_1) at comb_begin; seq copies only dirty parts.
   bool ibuf_dirty = false;
   bool ftq_dirty = false;
+  uint64_t ftq_alloc_mask = 0; // slots allocated this cycle (FTQ_SIZE <= 64)
 
   FTQEntry ftq_lookup_entries[FTQ_SIZE];
   FTQEntry ftq_lookup_entries_1[FTQ_SIZE];
