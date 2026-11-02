@@ -147,13 +147,21 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   }
 
   Blocked blk = Blocked::None;
+  // Virtual -> physical for the checks below (identity when translation is off). A page fault
+  // is not "blocked": the core executes the access and raises the exception itself.
+  uint32_t pc_pa = pc;
+  const bool pc_xlate_ok = refcpu_translate_data(ctx_, pc, 0, &pc_pa);
+  uint32_t data_pa = e->f.vaddr;
+  bool data_xlate_ok = true;
+  if (e->f.is_load || e->f.is_store)
+    data_xlate_ok = refcpu_translate_data(ctx_, e->f.vaddr, e->f.is_store ? 2 : 1, &data_pa);
   const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + 4 <= (uint64_t)boot_base_ + boot_bytes_;
-  if (!in_ram(pc, 4) && !in_boot) blk = Blocked::PcOutOfRam;
+  if (pc_xlate_ok && !in_ram(pc_pa, 4) && !in_boot) blk = Blocked::PcOutOfRam;
   else if (inst == 0x00100073) blk = Blocked::Ebreak;
   else if (e->f.is_load || e->f.is_store) {
     const uint32_t a = e->f.vaddr, sz = e->f.size;
     if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3))) blk = Blocked::MemMisalign;
-    else if (!in_ram(a, sz)) blk = Blocked::MemOutOfRam;
+    else if (data_xlate_ok && !in_ram(data_pa, sz)) blk = Blocked::MemOutOfRam;
   }
   e->f.blocked = blk;
 
@@ -171,8 +179,8 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     return e->f;
   }
 
-  if (e->f.is_store) {
-    const uint32_t wa = e->f.vaddr & ~3u;
+  if (e->f.is_store && data_xlate_ok) {
+    const uint32_t wa = data_pa & ~3u;
     e->has_undo = true;
     e->undo_addr = wa;
     e->undo_old = refcpu_load_word(ctx_, wa);
