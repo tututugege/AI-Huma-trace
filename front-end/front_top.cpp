@@ -172,115 +172,9 @@ BPU_TOP *g_bpu_top = &bpu_instance;
 // 辅助函数
 // ============================================================================
 
-static void front_bpu_input_comb(const FrontBpuInputCombIn &input,
-                                 FrontBpuInputCombOut &output);
 
-static void front_global_control_comb(const FrontGlobalControlCombIn &input,
-                                      FrontGlobalControlCombOut &output) {
-    std::memset(&output, 0, sizeof(output));
-    output.global_reset = input.reset;
-    output.global_refetch =
-        input.backend_refetch || input.predecode_refetch_snapshot;
-    output.refetch_address = input.backend_refetch
-                                 ? input.backend_refetch_address
-                                 : input.predecode_refetch_address_snapshot;
-}
 
-static void front_read_enable_comb(const FrontReadEnableCombIn &input,
-                                   FrontReadEnableCombOut &output) {
-    const wire1_t global_reset = input.global_reset;
-    const wire1_t global_refetch = input.global_refetch;
-    const wire1_t icache_ready = input.icache_ready;
-    std::memset(&output, 0, sizeof(output));
-    output.fetch_addr_fifo_read_enable_slot0 =
-        icache_ready && !input.fetch_addr_fifo_empty_latch_snapshot && !global_reset &&
-        !global_refetch;
-    output.predecode_can_run_old =
-        !input.fifo_empty_latch_snapshot && !input.ptab_empty_latch_snapshot &&
-        !input.front2back_fifo_full_latch_snapshot && !global_reset &&
-        !global_refetch;
-    output.inst_fifo_read_enable = output.predecode_can_run_old;
-    output.ptab_read_enable = output.predecode_can_run_old;
-    output.front2back_read_enable = input.backend_fifo_read_enable;
-}
 
-static void front_read_stage_input_comb(const FrontReadStageInputCombIn &input,
-                                        FrontReadStageInputCombOut &output) {
-    const wire1_t global_reset = input.global_reset;
-    const wire1_t global_refetch = input.global_refetch;
-    const wire1_t fetch_addr_fifo_read_enable_slot0 =
-        input.fetch_addr_fifo_read_enable_slot0;
-    const wire1_t inst_fifo_read_enable = input.inst_fifo_read_enable;
-    const wire1_t ptab_read_enable = input.ptab_read_enable;
-    const wire1_t front2back_read_enable = input.front2back_read_enable;
-    std::memset(&output, 0, sizeof(output));
-    output.fetch_addr_fifo_reset = global_reset;
-    output.fetch_addr_fifo_refetch = global_refetch;
-    output.fetch_addr_fifo_read_enable = fetch_addr_fifo_read_enable_slot0;
-
-    output.fifo_reset = global_reset;
-    output.fifo_refetch = global_refetch;
-    output.fifo_read_enable = inst_fifo_read_enable;
-
-    output.ptab_reset = global_reset;
-    output.ptab_refetch = global_refetch;
-    output.ptab_read_enable = ptab_read_enable;
-
-    output.front2back_fifo_reset = global_reset;
-    output.front2back_fifo_refetch = input.backend_refetch;
-    output.front2back_fifo_read_enable = front2back_read_enable;
-}
-
-static void front_bpu_control_comb(const FrontBpuControlCombIn &input,
-                                   FrontBpuControlCombOut &output) {
-    const wire1_t global_reset = input.global_reset;
-    const wire1_t global_refetch = input.global_refetch;
-    const fetch_addr_t refetch_address = input.refetch_address;
-    std::memset(&output, 0, sizeof(output));
-    output.bpu_stall =
-        input.fetch_addr_fifo_full_latch_snapshot || input.ptab_full_latch_snapshot;
-    output.bpu_can_run = !output.bpu_stall || global_reset || global_refetch;
-    output.bpu_icache_ready = !input.fetch_addr_fifo_full_latch_snapshot;
-    FrontBpuInputCombOut bpu_input_out{};
-    front_bpu_input_comb(
-        FrontBpuInputCombIn{input.bpu_in_seed, global_refetch, refetch_address,
-                            output.bpu_icache_ready},
-        bpu_input_out);
-    output.bpu_in = bpu_input_out.bpu_in;
-    if (!output.bpu_can_run) {
-        output.bpu_in.icache_read_ready = false;
-    }
-
-    output.bpu_input.refetch = output.bpu_in.refetch;
-    output.bpu_input.refetch_address = output.bpu_in.refetch_address;
-    output.bpu_input.icache_read_ready = output.bpu_in.icache_read_ready;
-    for (int i = 0; i < COMMIT_WIDTH; i++) {
-        output.bpu_input.in_update_base_pc[i] = output.bpu_in.predict_base_pc[i];
-        output.bpu_input.in_upd_valid[i] = output.bpu_in.back2front_valid[i];
-        output.bpu_input.in_actual_dir[i] = output.bpu_in.actual_dir[i];
-        output.bpu_input.in_actual_br_type[i] = output.bpu_in.actual_br_type[i];
-        output.bpu_input.in_actual_targets[i] = output.bpu_in.actual_target[i];
-        output.bpu_input.in_pred_dir[i] = output.bpu_in.predict_dir[i];
-        output.bpu_input.in_alt_pred[i] = output.bpu_in.alt_pred[i];
-        output.bpu_input.in_pcpn[i] = output.bpu_in.pcpn[i];
-        output.bpu_input.in_altpcpn[i] = output.bpu_in.altpcpn[i];
-        for (int j = 0; j < 4; j++) {
-            output.bpu_input.in_tage_tags[i][j] = output.bpu_in.tage_tag[i][j];
-            output.bpu_input.in_tage_idxs[i][j] = output.bpu_in.tage_idx[i][j];
-        }
-        output.bpu_input.in_sc_used[i] = output.bpu_in.sc_used[i];
-        output.bpu_input.in_sc_pred[i] = output.bpu_in.sc_pred[i];
-        output.bpu_input.in_sc_sum[i] = output.bpu_in.sc_sum[i];
-        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            output.bpu_input.in_sc_idx[i][t] = output.bpu_in.sc_idx[i][t];
-        }
-        output.bpu_input.in_loop_used[i] = output.bpu_in.loop_used[i];
-        output.bpu_input.in_loop_hit[i] = output.bpu_in.loop_hit[i];
-        output.bpu_input.in_loop_pred[i] = output.bpu_in.loop_pred[i];
-        output.bpu_input.in_loop_idx[i] = output.bpu_in.loop_idx[i];
-        output.bpu_input.in_loop_tag[i] = output.bpu_in.loop_tag[i];
-    }
-}
 
 static void front_ptab_write_comb(const FrontPtabWriteCombIn &input,
                                   FrontPtabWriteCombOut &output) {
@@ -464,14 +358,6 @@ static void front_output_comb(const FrontOutputCombIn &input,
 }
 
 // 准备 BPU 输入
-static void front_bpu_input_comb(const FrontBpuInputCombIn &input,
-                                 FrontBpuInputCombOut &output) {
-    std::memset(&output, 0, sizeof(output));
-    output.bpu_in = input.bpu_seed;
-    output.bpu_in.refetch = input.do_refetch;
-    output.bpu_in.refetch_address = input.refetch_addr;
-    output.bpu_in.icache_read_ready = input.icache_ready;
-}
 
 static void accumulate_fetch_addr_req(FetchAddrCombOut &acc,
                                       const FetchAddrCombOut &step) {
@@ -573,7 +459,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     // ========================================================================
     // 阶段 0: 初始化所有模块的输入输出结构
     // ========================================================================
-    struct BPU_in bpu_in;
     struct fetch_address_FIFO_in fetch_addr_fifo_in;
     struct fetch_address_FIFO_out fetch_addr_fifo_out;
     fetch_address_FIFO_read_data fetch_addr_fifo_rd = rd.fetch_addr_fifo_rd_snapshot;
@@ -601,7 +486,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     Front2BackCombOut front2back_fifo_req{};
     Front2BackCombOut front2back_fifo_step_req{};
     
-    memset(&bpu_in, 0, sizeof(bpu_in));
     memset(&fetch_addr_fifo_in, 0, sizeof(fetch_addr_fifo_in));
     memset(&fetch_addr_fifo_out, 0, sizeof(fetch_addr_fifo_out));
     memset(&icache_in, 0, sizeof(icache_in));
@@ -630,18 +514,10 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         // ========================================================================
         // 阶段 1: 计算全局 flush/refetch 信号
         // ========================================================================
-        FrontGlobalControlCombOut global_ctrl_out{};
-        FrontGlobalControlCombIn global_ctrl_in{};
-        global_ctrl_in.reset = in->reset;
-        global_ctrl_in.backend_refetch = in->refetch;
-        global_ctrl_in.backend_refetch_address = in->refetch_address;
-        global_ctrl_in.predecode_refetch_snapshot = rd.predecode_refetch_snapshot;
-        global_ctrl_in.predecode_refetch_address_snapshot =
-            rd.predecode_refetch_address_snapshot;
-        front_global_control_comb(global_ctrl_in, global_ctrl_out);
-        global_reset = global_ctrl_out.global_reset;
-        global_refetch = global_ctrl_out.global_refetch;
-        refetch_address = global_ctrl_out.refetch_address;
+        global_reset = in->reset;
+        global_refetch = in->refetch || rd.predecode_refetch_snapshot;
+        refetch_address = in->refetch ? in->refetch_address
+                                      : rd.predecode_refetch_address_snapshot;
         
         // ========================================================================
         // 阶段 2: 确定各 FIFO 的读使能（在实际读取前先决策）
@@ -659,68 +535,39 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         icache_ready = icache_out.icache_read_ready;
         icache_ready_2 = icache_out.icache_read_ready_2;
 
-        FrontReadEnableCombOut read_enable_out{};
-        FrontReadEnableCombIn read_enable_in{};
-        read_enable_in.backend_fifo_read_enable = in->FIFO_read_enable;
-        read_enable_in.fetch_addr_fifo_empty_latch_snapshot =
-            rd.fetch_addr_fifo_empty_latch_snapshot;
-        read_enable_in.fifo_empty_latch_snapshot = rd.fifo_empty_latch_snapshot;
-        read_enable_in.ptab_empty_latch_snapshot = rd.ptab_empty_latch_snapshot;
-        read_enable_in.front2back_fifo_full_latch_snapshot =
-            rd.front2back_fifo_full_latch_snapshot;
-        read_enable_in.global_reset = global_reset;
-        read_enable_in.global_refetch = global_refetch;
-        read_enable_in.icache_ready = icache_ready;
-        read_enable_in.icache_ready_2 = icache_ready_2;
-        front_read_enable_comb(read_enable_in, read_enable_out);
         fetch_addr_fifo_read_enable_slot0 =
-            read_enable_out.fetch_addr_fifo_read_enable_slot0;
-        fetch_addr_fifo_read_enable_slot1_candidate =
-            read_enable_out.fetch_addr_fifo_read_enable_slot1_candidate;
-        assert(!fetch_addr_fifo_read_enable_slot1_candidate);
-        
+            icache_ready && !rd.fetch_addr_fifo_empty_latch_snapshot && !global_reset &&
+            !global_refetch;
         // instruction_FIFO 和 PTAB 读使能：predecode checker 可以工作
-        bool predecode_can_run_old = read_enable_out.predecode_can_run_old;
-        (void)predecode_can_run_old;
-        inst_fifo_read_enable = read_enable_out.inst_fifo_read_enable;
-        ptab_read_enable = read_enable_out.ptab_read_enable;
-        
+        inst_fifo_read_enable =
+            !rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
+            !rd.front2back_fifo_full_latch_snapshot && !global_reset && !global_refetch;
+        ptab_read_enable = inst_fifo_read_enable;
         // front2back_FIFO 读使能：后端请求读取
-        front2back_read_enable = read_enable_out.front2back_read_enable;
+        front2back_read_enable = in->FIFO_read_enable;
         
         // ========================================================================
         // 阶段 3: 执行所有 FIFO 的读操作（获取输出数据）
         // ========================================================================
-        FrontReadStageInputCombOut read_stage_input_out{};
-        FrontReadStageInputCombIn read_stage_input_in{};
-        read_stage_input_in.backend_refetch = in->refetch;
-        read_stage_input_in.global_reset = global_reset;
-        read_stage_input_in.global_refetch = global_refetch;
-        read_stage_input_in.fetch_addr_fifo_read_enable_slot0 =
-            fetch_addr_fifo_read_enable_slot0;
-        read_stage_input_in.inst_fifo_read_enable = inst_fifo_read_enable;
-        read_stage_input_in.ptab_read_enable = ptab_read_enable;
-        read_stage_input_in.front2back_read_enable = front2back_read_enable;
-        front_read_stage_input_comb(read_stage_input_in, read_stage_input_out);
-        fetch_addr_fifo_in.reset = read_stage_input_out.fetch_addr_fifo_reset;
-        fetch_addr_fifo_in.refetch = read_stage_input_out.fetch_addr_fifo_refetch;
-        fetch_addr_fifo_in.read_enable = read_stage_input_out.fetch_addr_fifo_read_enable;
+        fetch_addr_fifo_in.reset = global_reset;
+        fetch_addr_fifo_in.refetch = global_refetch;
+        fetch_addr_fifo_in.read_enable = fetch_addr_fifo_read_enable_slot0;
         fetch_addr_fifo_in.write_enable = false;
         fetch_addr_fifo_in.fetch_address = 0;
 
-        fifo_in.reset = read_stage_input_out.fifo_reset;
-        fifo_in.refetch = read_stage_input_out.fifo_refetch;
-        fifo_in.read_enable = read_stage_input_out.fifo_read_enable;
+        fifo_in.reset = global_reset;
+        fifo_in.refetch = global_refetch;
+        fifo_in.read_enable = inst_fifo_read_enable;
         fifo_in.write_enable = false;
 
-        ptab_in.reset = read_stage_input_out.ptab_reset;
-        ptab_in.refetch = read_stage_input_out.ptab_refetch;
-        ptab_in.read_enable = read_stage_input_out.ptab_read_enable;
+        ptab_in.reset = global_reset;
+        ptab_in.refetch = global_refetch;
+        ptab_in.read_enable = ptab_read_enable;
         ptab_in.write_enable = false;
 
-        front2back_fifo_in.reset = read_stage_input_out.front2back_fifo_reset;
-        front2back_fifo_in.refetch = read_stage_input_out.front2back_fifo_refetch;
-        front2back_fifo_in.read_enable = read_stage_input_out.front2back_fifo_read_enable;
+        front2back_fifo_in.reset = global_reset;
+        front2back_fifo_in.refetch = in->refetch;
+        front2back_fifo_in.read_enable = front2back_read_enable;
         front2back_fifo_in.write_enable = false;
 
         fetch_address_FIFO_comb_calc(&fetch_addr_fifo_in, &fetch_addr_fifo_rd,
@@ -781,53 +628,41 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         // ========================================================================
         // 阶段 4: BPU 控制逻辑
         // ========================================================================
-        FrontBpuControlCombOut bpu_ctrl_out{};
-        FrontBpuControlCombIn bpu_ctrl_in{};
-        BPU_in bpu_in_seed{};
-        std::memset(&bpu_in_seed, 0, sizeof(bpu_in_seed));
-        bpu_in_seed.reset = in->reset;
+        bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || rd.ptab_full_latch_snapshot;
+        bpu_can_run = !bpu_stall || global_reset || global_refetch;
+        BPU_TOP::InputPayload bpu_input{};
+        bpu_input.refetch = global_refetch;
+        bpu_input.refetch_address = refetch_address;
+        bpu_input.icache_read_ready = bpu_can_run && !rd.fetch_addr_fifo_full_latch_snapshot;
         for (int i = 0; i < COMMIT_WIDTH; i++) {
-            bpu_in_seed.back2front_valid[i] = in->back2front_valid[i];
-            bpu_in_seed.predict_base_pc[i] = in->predict_base_pc[i];
-            bpu_in_seed.actual_dir[i] = in->actual_dir[i];
-            bpu_in_seed.actual_br_type[i] = in->actual_br_type[i];
-            bpu_in_seed.actual_target[i] = in->actual_target[i];
-            bpu_in_seed.predict_dir[i] = in->predict_dir[i];
-            bpu_in_seed.alt_pred[i] = in->alt_pred[i];
-            bpu_in_seed.altpcpn[i] = in->altpcpn[i];
-            bpu_in_seed.pcpn[i] = in->pcpn[i];
+            bpu_input.in_update_base_pc[i] = in->predict_base_pc[i];
+            bpu_input.in_upd_valid[i] = in->back2front_valid[i];
+            bpu_input.in_actual_dir[i] = in->actual_dir[i];
+            bpu_input.in_actual_br_type[i] = in->actual_br_type[i];
+            bpu_input.in_actual_targets[i] = in->actual_target[i];
+            bpu_input.in_pred_dir[i] = in->predict_dir[i];
+            bpu_input.in_alt_pred[i] = in->alt_pred[i];
+            bpu_input.in_pcpn[i] = in->pcpn[i];
+            bpu_input.in_altpcpn[i] = in->altpcpn[i];
             for (int j = 0; j < 4; j++) {
-                bpu_in_seed.tage_idx[i][j] = in->tage_idx[i][j];
-                bpu_in_seed.tage_tag[i][j] = in->tage_tag[i][j];
+                bpu_input.in_tage_tags[i][j] = in->tage_tag[i][j];
+                bpu_input.in_tage_idxs[i][j] = in->tage_idx[i][j];
             }
-            bpu_in_seed.sc_used[i] = in->sc_used[i];
-            bpu_in_seed.sc_pred[i] = in->sc_pred[i];
-            bpu_in_seed.sc_sum[i] = in->sc_sum[i];
+            bpu_input.in_sc_used[i] = in->sc_used[i];
+            bpu_input.in_sc_pred[i] = in->sc_pred[i];
+            bpu_input.in_sc_sum[i] = in->sc_sum[i];
             for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-                bpu_in_seed.sc_idx[i][t] = in->sc_idx[i][t];
+                bpu_input.in_sc_idx[i][t] = in->sc_idx[i][t];
             }
-            bpu_in_seed.loop_used[i] = in->loop_used[i];
-            bpu_in_seed.loop_hit[i] = in->loop_hit[i];
-            bpu_in_seed.loop_pred[i] = in->loop_pred[i];
-            bpu_in_seed.loop_idx[i] = in->loop_idx[i];
-            bpu_in_seed.loop_tag[i] = in->loop_tag[i];
+            bpu_input.in_loop_used[i] = in->loop_used[i];
+            bpu_input.in_loop_hit[i] = in->loop_hit[i];
+            bpu_input.in_loop_pred[i] = in->loop_pred[i];
+            bpu_input.in_loop_idx[i] = in->loop_idx[i];
+            bpu_input.in_loop_tag[i] = in->loop_tag[i];
         }
-        bpu_ctrl_in.bpu_in_seed = bpu_in_seed;
-        bpu_ctrl_in.fetch_addr_fifo_full_latch_snapshot =
-            rd.fetch_addr_fifo_full_latch_snapshot;
-        bpu_ctrl_in.ptab_full_latch_snapshot = rd.ptab_full_latch_snapshot;
-        bpu_ctrl_in.global_reset = global_reset;
-        bpu_ctrl_in.global_refetch = global_refetch;
-        bpu_ctrl_in.refetch_address = refetch_address;
-        front_bpu_control_comb(bpu_ctrl_in, bpu_ctrl_out);
-        bpu_stall = bpu_ctrl_out.bpu_stall;
-        bpu_can_run = bpu_ctrl_out.bpu_can_run;
-        
-        bpu_in = bpu_ctrl_out.bpu_in;
         bpu_seq_txn_req.valid = false;
-        bpu_seq_txn_req.reset = bpu_in.reset;
-        BPU_TOP::InputPayload bpu_input = bpu_ctrl_out.bpu_input;
-        if (bpu_in.reset) {
+        bpu_seq_txn_req.reset = in->reset;
+        if (in->reset) {
             bpu_seq_txn_req.valid = true;
             bpu_seq_txn_req.inp = bpu_input;
             bpu_seq_txn_req.req = BPU_TOP::UpdateRequest{};

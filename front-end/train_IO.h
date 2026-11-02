@@ -128,93 +128,15 @@ struct FrontUpdateRequest {
   Front2BackCombOut front2back_fifo_req{};
 };
 
-struct FrontBpuInputCombIn {
-  BPU_in bpu_seed;
-  wire1_t do_refetch;
-  fetch_addr_t refetch_addr;
-  wire1_t icache_ready;
-};
 
-struct FrontBpuInputCombOut {
-  BPU_in bpu_in;
-};
 
-struct FrontGlobalControlCombIn {
-  wire1_t reset;
-  wire1_t backend_refetch;
-  fetch_addr_t backend_refetch_address;
-  wire1_t predecode_refetch_snapshot;
-  fetch_addr_t predecode_refetch_address_snapshot;
-};
 
-struct FrontGlobalControlCombOut {
-  wire1_t global_reset;
-  wire1_t global_refetch;
-  fetch_addr_t refetch_address;
-};
 
-struct FrontReadEnableCombIn {
-  wire1_t backend_fifo_read_enable;
-  wire1_t fetch_addr_fifo_empty_latch_snapshot;
-  wire1_t fifo_empty_latch_snapshot;
-  wire1_t ptab_empty_latch_snapshot;
-  wire1_t front2back_fifo_full_latch_snapshot;
-  wire1_t global_reset;
-  wire1_t global_refetch;
-  wire1_t icache_ready;
-  wire1_t icache_ready_2;
-};
 
-struct FrontReadEnableCombOut {
-  wire1_t fetch_addr_fifo_read_enable_slot0;
-  wire1_t fetch_addr_fifo_read_enable_slot1_candidate;
-  wire1_t predecode_can_run_old;
-  wire1_t inst_fifo_read_enable;
-  wire1_t ptab_read_enable;
-  wire1_t front2back_read_enable;
-};
 
-struct FrontReadStageInputCombIn {
-  wire1_t backend_refetch;
-  wire1_t global_reset;
-  wire1_t global_refetch;
-  wire1_t fetch_addr_fifo_read_enable_slot0;
-  wire1_t inst_fifo_read_enable;
-  wire1_t ptab_read_enable;
-  wire1_t front2back_read_enable;
-};
 
-struct FrontReadStageInputCombOut {
-  wire1_t fetch_addr_fifo_reset;
-  wire1_t fetch_addr_fifo_refetch;
-  wire1_t fetch_addr_fifo_read_enable;
-  wire1_t fifo_reset;
-  wire1_t fifo_refetch;
-  wire1_t fifo_read_enable;
-  wire1_t ptab_reset;
-  wire1_t ptab_refetch;
-  wire1_t ptab_read_enable;
-  wire1_t front2back_fifo_reset;
-  wire1_t front2back_fifo_refetch;
-  wire1_t front2back_fifo_read_enable;
-};
 
-struct FrontBpuControlCombIn {
-  BPU_in bpu_in_seed;
-  wire1_t fetch_addr_fifo_full_latch_snapshot;
-  wire1_t ptab_full_latch_snapshot;
-  wire1_t global_reset;
-  wire1_t global_refetch;
-  fetch_addr_t refetch_address;
-};
 
-struct FrontBpuControlCombOut {
-  wire1_t bpu_stall;
-  wire1_t bpu_can_run;
-  wire1_t bpu_icache_ready;
-  BPU_in bpu_in;
-  BPU_TOP::InputPayload bpu_input;
-};
 
 
 
