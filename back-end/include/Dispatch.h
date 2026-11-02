@@ -24,19 +24,18 @@ struct DisIn {
 
 struct UopPacket {
   int iq_id;               // 目标 IQ
-  DisIssIO::DisIssUop uop; // Dispatch 内部直接使用发往 Issue 的线网格式
+  Uop uop; // Dispatch 内部直接使用发往 Issue 的线网格式
 };
 
 class Dispatch {
 private:
-  using DispatchInst = Uop;
 
-  DisIssIO::DisIssUop make_dis_iss_uop(const DispatchInst &inst, int k) const;
+  Uop make_dis_iss_uop(const Uop &inst, int k) const;
   bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;
-  void apply_wakeup_to_uop(RenDisIO::RenDisInst &uop) const;
-  int decompose_inst(const DispatchInst &original_inst, UopPacket *out_uops);
+  void apply_wakeup_to_uop(Uop &uop) const;
+  int decompose_inst(const Uop &original_inst, UopPacket *out_uops);
 
-  DispatchInst inst_alloc[DECODE_WIDTH];
+  Uop inst_alloc[DECODE_WIDTH];
 
   // 记录每条指令 Dispatch 是否成功 (comb_dispatch -> comb_fire)
   bool dispatch_success_flags[DECODE_WIDTH];
@@ -67,8 +66,8 @@ public:
   void comb_fire();
   void comb_pipeline();
   void seq();
-  RenDisIO::RenDisInst inst_r[DECODE_WIDTH];
-  RenDisIO::RenDisInst inst_r_1[DECODE_WIDTH];
+  Uop inst_r[DECODE_WIDTH];
+  Uop inst_r_1[DECODE_WIDTH];
   reg<1> inst_valid[DECODE_WIDTH];
   wire<1> inst_valid_1[DECODE_WIDTH];
   reg<1> busy_table[PRF_NUM];

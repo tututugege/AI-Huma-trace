@@ -157,21 +157,6 @@ struct Uop {
 
   UopS *operator->() const { return &uop_pool[id]; }
 
-  // Converters of the old per-stage structs: identity.
-  static Uop from_ren_dis_inst(const Uop &s) { return s; }
-  static Uop from_dec_ren_inst(const Uop &s) { return s; }
-  static Uop from_dis_iss_uop(const Uop &s) { return s; }
-  static Uop from_iss_prf_uop(const Uop &s) { return s; }
-  static Uop from_prf_exe_uop(const Uop &s) { return s; }
-  static Uop from_dis_rob_inst(const Uop &s) { return s; }
-  static Uop from_micro_op(const Uop &s) { return s; }
-  const Uop &to_dis_rob_inst() const { return *this; }
-  const Uop &to_iss_prf_uop() const { return *this; }
-  const Uop &to_exe_prf_wb_uop() const { return *this; }
-  const Uop &to_exu_rob_uop() const { return *this; }
-  const Uop &to_exe_lsu_req_uop() const { return *this; }
-  const Uop &to_commit_inst() const { return *this; }
-  const Uop &to_micro_op() const { return *this; }
   InstEntry to_inst_entry(wire<1> valid) const;
 };
 using InstInfo = Uop;

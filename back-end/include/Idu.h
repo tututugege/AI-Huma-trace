@@ -27,7 +27,7 @@ public:
   int max_br_per_cycle;
   IduIn in;
   IduOut out;
-  void decode(DecRenIO::DecRenInst &uop, uint32_t inst);
+  void decode(Uop &uop, uint32_t inst);
 
   void init();
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）

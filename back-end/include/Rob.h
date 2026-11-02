@@ -28,11 +28,9 @@ struct RobIn {
   wire<1> *front_stall;
 };
 
-using RobStoredInst = Uop;
-
 struct RobStoredEntry {
   wire<1> valid;
-  RobStoredInst uop;
+  Uop uop;
 };
 
 class Rob {

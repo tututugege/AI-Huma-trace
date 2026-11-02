@@ -23,28 +23,28 @@ inline uint32_t rob_load_alignment_mask(uint32_t func3) {
   }
 }
 
-inline bool rob_is_store(const RobStoredInst &uop) {
+inline bool rob_is_store(const Uop &uop) {
   return uop.tma.mem_commit_is_store;
 }
 
-inline bool rob_is_load(const RobStoredInst &uop) {
+inline bool rob_is_load(const Uop &uop) {
   return uop.tma.mem_commit_is_load;
 }
 
-inline bool rob_is_page_fault(const RobStoredInst &uop) {
+inline bool rob_is_page_fault(const Uop &uop) {
   return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store;
 }
 
-inline bool rob_is_exception(const RobStoredInst &uop) {
+inline bool rob_is_exception(const Uop &uop) {
   InstType type = decode_inst_type(uop->type);
   return rob_is_page_fault(uop) || uop.illegal_inst || type == ECALL;
 }
 
-inline bool rob_is_wfi(const RobStoredInst &uop) {
+inline bool rob_is_wfi(const Uop &uop) {
   return decode_inst_type(uop->type) == WFI;
 }
 
-inline bool rob_is_flush_inst(const RobStoredInst &uop) {
+inline bool rob_is_flush_inst(const Uop &uop) {
   InstType type = decode_inst_type(uop->type);
   return type == CSR || type == ECALL || type == MRET || type == SRET ||
          type == SFENCE_VMA || type == FENCE_I || rob_is_exception(uop) ||
@@ -52,12 +52,12 @@ inline bool rob_is_flush_inst(const RobStoredInst &uop) {
          uop.flush_pipe;
 }
 
-inline bool rob_is_fence_inst(const RobStoredInst &uop) {
+inline bool rob_is_fence_inst(const Uop &uop) {
   InstType type = decode_inst_type(uop->type);
   return type == FENCE || type == FENCE_I || type == SFENCE_VMA;
 }
 
-inline bool rob_is_complete(const RobStoredInst &uop) {
+inline bool rob_is_complete(const Uop &uop) {
   return uop.cplt_mask == uop.expect_mask;
 }
 
@@ -257,7 +257,7 @@ void Rob::comb_commit() {
   wire<clog2(ROB_BANK_NUM)> single_idx = 0;
   bool progress_single_commit = false;
   bool interrupt_fire = false;
-  auto log_incomplete_store_commit = [&](const RobStoredInst &uop,
+  auto log_incomplete_store_commit = [&](const Uop &uop,
                                          const char *path, int slot) {
     if (!rob_is_store(uop) || rob_is_complete(uop)) {
       return;
@@ -331,7 +331,7 @@ void Rob::comb_commit() {
 
   for (int i = 0; i < ROB_BANK_NUM; i++) {
     out.rob_commit->commit_entry[i].uop =
-        entry[i][deq_ptr].uop.to_commit_inst();
+        entry[i][deq_ptr].uop;
     out.commit_extra[i].src1_areg = entry[i][deq_ptr].uop->src1_areg;
     out.commit_extra[i].imm = entry[i][deq_ptr].uop->imm;
   }
@@ -700,7 +700,7 @@ void Rob::comb_fire() {
         entry_1[i][enq_ptr].valid = true;
         touch(i, enq_ptr);
         entry_1[i][enq_ptr].uop =
-            RobStoredInst::from_dis_rob_inst(in.dis2rob->uop[i]);
+            (in.dis2rob->uop[i]);
         entry_1[i][enq_ptr].uop.cplt_mask = 0;
         if (tbhook::enabled) {
           const auto &d = entry_1[i][enq_ptr].uop->dbg;

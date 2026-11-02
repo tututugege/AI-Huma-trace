@@ -10,9 +10,8 @@
 #include <sys/types.h>
 
 struct DecRenIO {
-  using DecRenInst = Uop;
 
-  DecRenInst uop[DECODE_WIDTH] = {};
+  Uop uop[DECODE_WIDTH] = {};
   wire<1> valid[DECODE_WIDTH] = {};
 };
 
@@ -132,11 +131,10 @@ struct PreIssueIO {
 using PreIduIssueIO = PreIssueIO;
 
 struct RobCommitIO {
-  using RobCommitInst = Uop;
 
   struct RobCommitEntry {
     wire<1> valid = {};
-    RobCommitInst uop = {};
+    Uop uop = {};
   };
 
   RobCommitEntry commit_entry[COMMIT_WIDTH] = {};
@@ -157,17 +155,15 @@ struct RobDisIO {
 };
 
 struct DisRobIO {
-  using DisRobInst = Uop;
 
-  DisRobInst uop[DECODE_WIDTH] = {};
+  Uop uop[DECODE_WIDTH] = {};
   wire<1> valid[DECODE_WIDTH] = {};
   wire<1> dis_fire[DECODE_WIDTH] = {};
 };
 
 struct RenDisIO {
-  using RenDisInst = Uop;
 
-  RenDisInst uop[DECODE_WIDTH] = {};
+  Uop uop[DECODE_WIDTH] = {};
   wire<1> valid[DECODE_WIDTH] = {};
 };
 
@@ -182,11 +178,10 @@ struct PrfAwakeIO {
 };
 
 struct DisIssIO {
-  using DisIssUop = Uop;
 
   struct DisIssReq {
     wire<1> valid = {};
-    DisIssUop uop = {};
+    Uop uop = {};
   };
 
   DisIssReq req[IQ_NUM][MAX_IQ_DISPATCH_WIDTH] = {};
@@ -232,33 +227,30 @@ struct RobBroadcastIO {
 };
 
 struct IssPrfIO {
-  using IssPrfUop = Uop;
 
   struct IssPrfEntry {
     wire<1> valid = {};
-    IssPrfUop uop = {};
+    Uop uop = {};
   };
 
   IssPrfEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
 struct PrfExeIO {
-  using PrfExeUop = Uop;
 
   struct PrfExeEntry {
     wire<1> valid = {};
-    PrfExeUop uop = {};
+    Uop uop = {};
   };
 
   PrfExeEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
 struct ExePrfIO {
-  using ExePrfWbUop = Uop;
 
   struct ExePrfEntry {
     wire<1> valid = {};
-    ExePrfWbUop uop = {};
+    Uop uop = {};
   };
 
   ExePrfEntry entry[ISSUE_WIDTH] = {};
@@ -271,11 +263,10 @@ struct ExeIssIO {
 };
 
 struct ExuRobIO {
-  using ExuRobUop = Uop;
 
   struct ExuRobEntry {
     wire<1> valid = {};
-    ExuRobUop uop = {};
+    Uop uop = {};
   };
 
   ExuRobEntry entry[ISSUE_WIDTH] = {};
@@ -629,11 +620,10 @@ struct LsuRobIO {
 };
 
 struct LsuExeIO {
-  using LsuExeRespUop = Uop;
 
   struct LsuExeRespEntry {
     wire<1> valid = {};
-    LsuExeRespUop uop = {};
+    Uop uop = {};
   };
 
   LsuExeRespEntry wb_req[LSU_LOAD_WB_WIDTH] = {};
@@ -682,11 +672,10 @@ struct DisLsuIO {
 };
 
 struct ExeLsuIO {
-  using ExeLsuReqUop = Uop;
 
   struct ExeLsuReqEntry {
     wire<1> valid = {};
-    ExeLsuReqUop uop = {};
+    Uop uop = {};
   };
 
   ExeLsuReqEntry agu_req[LSU_AGU_COUNT] = {};

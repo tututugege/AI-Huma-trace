@@ -6,13 +6,13 @@
 #include <cstring>
 
 namespace {
-static inline bool is_killed(const ExePrfIO::ExePrfWbUop &uop,
+static inline bool is_killed(const Uop &uop,
                              const DecBroadcastIO *db) {
   if (!db->mispred) return false;
   return (uop.br_mask & db->br_mask) != 0;
 }
 
-static inline int get_prf_ftq_slot(int p_idx, const IssPrfIO::IssPrfUop &uop,
+static inline int get_prf_ftq_slot(int p_idx, const Uop &uop,
                                    uint64_t req_bit) {
   if (p_idx >= IQ_ALU_PORT_BASE && p_idx < IQ_ALU_PORT_BASE + ALU_NUM &&
       (req_bit & OP_MASK_ALU) && uop->src1_is_pc) {
@@ -25,7 +25,7 @@ static inline int get_prf_ftq_slot(int p_idx, const IssPrfIO::IssPrfUop &uop,
   return -1;
 }
 
-static inline bool is_load_wb(const ExePrfIO::ExePrfWbUop &uop) {
+static inline bool is_load_wb(const Uop &uop) {
   return decode_uop_type(uop.op) == UOP_LOAD;
 }
 } // namespace
@@ -76,7 +76,7 @@ void Prf::comb_read() {
       continue;
 
     auto &entry = out.prf2exe->iss_entry[i];
-    entry.uop = PrfExeIO::PrfExeUop::from_iss_prf_uop(in.iss2prf->iss_entry[i].uop);
+    entry.uop = (in.iss2prf->iss_entry[i].uop);
     
     // Set PC and FTQ fields from FTQ response
     uint64_t req_bit = (1ULL << in.iss2prf->iss_entry[i].uop.op);

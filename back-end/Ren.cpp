@@ -152,7 +152,7 @@ void Ren::comb_rename() {
 
   // 无waw raw的输出 读spec_RAT
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.ren2dis->uop[i] = RenDisIO::RenDisInst::from_dec_ren_inst(inst_r[i]);
+    out.ren2dis->uop[i] = (inst_r[i]);
     out.ren2dis->uop[i].dest_preg = alloc_reg[i];
     old_dest_preg_normal[i] = spec_RAT[inst_r[i]->dest_areg];
     src1_preg_normal[i] = spec_RAT[inst_r[i]->src1_areg];
@@ -382,7 +382,7 @@ void Ren ::comb_pipeline() {
 
 void Ren ::seq() {
 
-  memcpy(inst_r, inst_r_1, DECODE_WIDTH * sizeof(DecRenIO::DecRenInst));
+  memcpy(inst_r, inst_r_1, DECODE_WIDTH * sizeof(Uop));
   memcpy(inst_valid, inst_valid_1, DECODE_WIDTH * sizeof(reg<1>));
   memcpy(spec_RAT, spec_RAT_1, (ARF_NUM + 1) * sizeof(reg<PRF_IDX_WIDTH>));
   memcpy(arch_RAT, arch_RAT_1, (ARF_NUM + 1) * sizeof(reg<PRF_IDX_WIDTH>));

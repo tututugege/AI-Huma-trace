@@ -87,5 +87,5 @@ public:
 private:
   void add_iq(const IssueQueueConfig &cfg);
   int get_latency(UopType uop_type, wire<7> func7);
-  void apply_wakeup_to_uop(IqStoredUop &uop) const;
+  void apply_wakeup_to_uop(Uop &uop) const;
 };

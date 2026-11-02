@@ -17,7 +17,7 @@ bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
   return false;
 }
 
-void Dispatch::apply_wakeup_to_uop(RenDisIO::RenDisInst &uop) const {
+void Dispatch::apply_wakeup_to_uop(Uop &uop) const {
   if (uop->src1_en && is_preg_woken(uop->src1_preg)) {
     uop.src1_busy = false;
   }
@@ -87,7 +87,7 @@ void Dispatch::comb_alloc() {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    inst_alloc[i] = DispatchInst::from_ren_dis_inst(inst_r[i]);
+    inst_alloc[i] = (inst_r[i]);
     // 入队口强制清理：本拍已解析分支对应 bit 不应继续进入后端缓冲结构。
     inst_alloc[i].br_mask &= ~clear_mask;
     out.dis2rob->valid[i] = inst_valid[i];
@@ -139,7 +139,7 @@ void Dispatch::comb_alloc() {
       }
     }
 
-    out.dis2rob->uop[i] = inst_alloc[i].to_dis_rob_inst();
+    out.dis2rob->uop[i] = inst_alloc[i];
   }
 }
 
@@ -481,8 +481,8 @@ void Dispatch::seq() {
   std::memcpy(busy_table, busy_table_1, sizeof(busy_table));
 }
 
-DisIssIO::DisIssUop Dispatch::make_dis_iss_uop(const DispatchInst &inst, int k) const {
-  DisIssIO::DisIssUop uop;
+Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
+  Uop uop;
   uop.id = static_cast<uint16_t>(inst.id + 1 + k);  // each uop owns its static fields (STA/STD, JAL/JALR splits differ)
   uop_pool[uop.id] = uop_pool[inst.id];
   uop.dest_preg = inst.dest_preg;
@@ -513,7 +513,7 @@ DisIssIO::DisIssUop Dispatch::make_dis_iss_uop(const DispatchInst &inst, int k) 
   return uop;
 }
 
-int Dispatch::decompose_inst(const DispatchInst &inst, UopPacket *out_uops) {
+int Dispatch::decompose_inst(const Uop &inst, UopPacket *out_uops) {
   int count = 0;
   InstType type = decode_inst_type(inst->type);
 

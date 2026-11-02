@@ -241,7 +241,7 @@ void Idu::seq() {
   br_latch = br_latch_1;
 }
 
-void Idu::decode(DecRenIO::DecRenInst &uop, uint32_t inst) {
+void Idu::decode(Uop &uop, uint32_t inst) {
   // 操作数来源以及type
   // uint32_t imm;
   uop->dbg.instruction = inst;

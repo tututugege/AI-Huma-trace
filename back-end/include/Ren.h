@@ -34,7 +34,7 @@ public:
   void seq();
 
   // register
-  DecRenIO::DecRenInst inst_r[DECODE_WIDTH];
+  Uop inst_r[DECODE_WIDTH];
   reg<1> inst_valid[DECODE_WIDTH];
   reg<PRF_IDX_WIDTH> arch_RAT[ARF_NUM + 1];
   reg<PRF_IDX_WIDTH> spec_RAT[ARF_NUM + 1];
@@ -45,7 +45,7 @@ public:
   reg<PRF_IDX_WIDTH> free_tail;
   reg<PRF_IDX_WIDTH> alloc_checkpoint_head[MAX_BR_NUM];
 
-  DecRenIO::DecRenInst inst_r_1[DECODE_WIDTH];
+  Uop inst_r_1[DECODE_WIDTH];
   wire<1> inst_valid_1[DECODE_WIDTH];
   wire<PRF_IDX_WIDTH> arch_RAT_1[ARF_NUM + 1];
   wire<PRF_IDX_WIDTH> spec_RAT_1[ARF_NUM + 1];

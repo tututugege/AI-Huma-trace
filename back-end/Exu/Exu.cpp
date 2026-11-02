@@ -237,7 +237,7 @@ void Exu::comb_pipeline() {
     if (!in.prf2exe->iss_entry[p_idx].valid) {
       continue;
     }
-    ExuInst uop = ExuInst::from_prf_exe_uop(in.prf2exe->iss_entry[p_idx].uop);
+    ExuInst uop = (in.prf2exe->iss_entry[p_idx].uop);
     if (is_br_killed(uop, in.dec_bcast)) {
       continue;
     }
@@ -347,7 +347,7 @@ void Exu::comb_fu2exu_collect() {
     if (in.fu2exu->entry[i].complete) {
       // ✅ 无论是否能写回，先广播出去给 Bypass 用！
       out.exe2prf->bypass[fu_global_idx].uop =
-          in.fu2exu->entry[i].inst.to_exe_prf_wb_uop();
+          in.fu2exu->entry[i].inst;
       out.exe2prf->bypass[fu_global_idx].valid = true;
     }
 
@@ -392,7 +392,7 @@ void Exu::comb_fu2exu_collect() {
     // 注意：LOAD/STA 的完成通报由 LSU 回调阶段处理
     if (!flushed && u.op != UOP_LOAD && u.op != UOP_STA) {
       out.exu2rob->entry[p_idx].valid = true;
-      out.exu2rob->entry[p_idx].uop = u.to_exu_rob_uop();
+      out.exu2rob->entry[p_idx].uop = u;
     }
 
     // B. 立即外发 LSU 请求
@@ -401,12 +401,12 @@ void Exu::comb_fu2exu_collect() {
         int lsu_idx = winner_entry->lsu_agu_port;
         Assert(lsu_idx >= 0 && lsu_idx < LSU_AGU_COUNT);
         out.exe2lsu->agu_req[lsu_idx].valid = true;
-        out.exe2lsu->agu_req[lsu_idx].uop = u.to_exe_lsu_req_uop();
+        out.exe2lsu->agu_req[lsu_idx].uop = u;
       } else if (u.op == UOP_STD) {
         int lsu_idx = winner_entry->lsu_sdu_port;
         Assert(lsu_idx >= 0 && lsu_idx < LSU_SDU_COUNT);
         out.exe2lsu->sdu_req[lsu_idx].valid = true;
-        out.exe2lsu->sdu_req[lsu_idx].uop = u.to_exe_lsu_req_uop();
+        out.exe2lsu->sdu_req[lsu_idx].uop = u;
       }
     }
 
@@ -450,7 +450,7 @@ void Exu::comb_fu2exu_collect() {
     if (int_res[i].valid) {
       int p_idx = IQ_ALU_PORT_BASE + i;
       out.exe2prf->entry[p_idx].valid = true;
-      out.exe2prf->entry[p_idx].uop = int_res[i].uop.to_exe_prf_wb_uop();
+      out.exe2prf->entry[p_idx].uop = int_res[i].uop;
     }
   }
 
@@ -459,14 +459,14 @@ void Exu::comb_fu2exu_collect() {
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
     if (in.lsu2exe->wb_req[i].valid) {
       int p_idx = IQ_LD_PORT_BASE + i;
-      MicroOp u = in.lsu2exe->wb_req[i].uop.to_micro_op();
+      MicroOp u = in.lsu2exe->wb_req[i].uop;
       bool flushed = in.rob_bcast->flush || is_br_killed(u, in.dec_bcast);
       Assert(!out.exe2prf->entry[p_idx].valid);
       out.exe2prf->entry[p_idx].valid = true;
-      out.exe2prf->entry[p_idx].uop = ExePrfIO::ExePrfWbUop::from_micro_op(u);
+      out.exe2prf->entry[p_idx].uop = (u);
       if (!flushed) {
         out.exu2rob->entry[p_idx].valid = true;
-        out.exu2rob->entry[p_idx].uop = ExuRobIO::ExuRobUop::from_micro_op(u);
+        out.exu2rob->entry[p_idx].uop = (u);
       }
     }
   }
@@ -474,14 +474,14 @@ void Exu::comb_fu2exu_collect() {
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     if (in.lsu2exe->sta_wb_req[i].valid) {
       int p_idx = IQ_STA_PORT_BASE + i;
-      MicroOp u = in.lsu2exe->sta_wb_req[i].uop.to_micro_op();
+      MicroOp u = in.lsu2exe->sta_wb_req[i].uop;
       bool flushed = in.rob_bcast->flush || is_br_killed(u, in.dec_bcast);
       Assert(!out.exe2prf->entry[p_idx].valid);
       out.exe2prf->entry[p_idx].valid = true;
-      out.exe2prf->entry[p_idx].uop = ExePrfIO::ExePrfWbUop::from_micro_op(u);
+      out.exe2prf->entry[p_idx].uop = (u);
       if (!flushed) {
         out.exu2rob->entry[p_idx].valid = true;
-        out.exu2rob->entry[p_idx].uop = ExuRobIO::ExuRobUop::from_micro_op(u);
+        out.exu2rob->entry[p_idx].uop = (u);
       }
     }
   }

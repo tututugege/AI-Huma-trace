@@ -30,11 +30,9 @@ struct IssueQueueConfig {
   std::vector<PortBinding> ports; // 存储端口配置
 };
 
-using IqStoredUop = Uop;
-
 struct IqStoredEntry {
   wire<1> valid;
-  IqStoredUop uop;
+  Uop uop;
 };
 
 struct IssueQueueIn {

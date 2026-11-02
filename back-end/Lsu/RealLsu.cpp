@@ -137,11 +137,11 @@ void RealLsu::comb_dis2lsu() {
 void RealLsu::comb_exe2lsu() {
   const ExeLsuIO &x = *in.exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++)
-    if (x.sdu_req[i].valid) handle_store_data(x.sdu_req[i].uop.to_micro_op());
+    if (x.sdu_req[i].valid) handle_store_data(x.sdu_req[i].uop);
   for (int i = 0; i < LSU_AGU_COUNT; i++)
-    if (x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA) handle_store_addr(x.agu_req[i].uop.to_micro_op());
+    if (x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA) handle_store_addr(x.agu_req[i].uop);
   for (int i = 0; i < LSU_AGU_COUNT; i++)
-    if (x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_LOAD) handle_load_req(x.agu_req[i].uop.to_micro_op());
+    if (x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_LOAD) handle_load_req(x.agu_req[i].uop);
 }
 
 void RealLsu::handle_store_data(const MicroOp &inst) {
@@ -619,13 +619,13 @@ void RealLsu::comb_lsu2exe() {
         wb.dest_en = s.dest_preg != 0;
       }
       out.lsu2exe->wb_req[issue_ld].valid = true;
-      out.lsu2exe->wb_req[issue_ld++].uop = LsuExeIO::LsuExeRespUop::from_micro_op(wb);
+      out.lsu2exe->wb_req[issue_ld++].uop = (wb);
     } else {
       if (issue_st >= LSU_STA_COUNT) continue;
       wb.op = UOP_STA;
       wb.result = s.vaddr;
       out.lsu2exe->sta_wb_req[issue_st].valid = true;
-      out.lsu2exe->sta_wb_req[issue_st++].uop = LsuExeIO::LsuExeRespUop::from_micro_op(wb);
+      out.lsu2exe->sta_wb_req[issue_st++].uop = (wb);
     }
     s.store_state = StoreState::WaitCommit;
     d.valid = false;
@@ -652,7 +652,7 @@ void RealLsu::comb_lsu2exe() {
     wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
     wb.is_mmio = l.is_mmio;
     out.lsu2exe->wb_req[issue_ld].valid = true;
-    out.lsu2exe->wb_req[issue_ld++].uop = LsuExeIO::LsuExeRespUop::from_micro_op(wb);
+    out.lsu2exe->wb_req[issue_ld++].uop = (wb);
 
     l.load_state = LoadState::Empty;
     f.valid = false;

@@ -12,7 +12,7 @@ void Isu::add_iq(const IssueQueueConfig &cfg) {
   configs.push_back(cfg);
 }
 
-void Isu::apply_wakeup_to_uop(IqStoredUop &uop) const {
+void Isu::apply_wakeup_to_uop(Uop &uop) const {
   for (int k = 0; k < MAX_WAKEUP_PORTS; k++) {
     if (!out.iss_awake->wake[k].valid) {
       continue;
@@ -162,7 +162,7 @@ void Isu::comb_enq() {
     for (int w = 0; w < max_w; w++) {
       // 使用新接口结构 req[i][w]
       if (in.dis2iss->req[i][w].valid) {
-        IqStoredUop uop = IqStoredUop::from_dis_iss_uop(in.dis2iss->req[i][w].uop);
+        Uop uop = (in.dis2iss->req[i][w].uop);
         // 本拍入队前叠加唤醒总线，避免把“可读源”误标成 busy。
         apply_wakeup_to_uop(uop);
 
@@ -206,7 +206,7 @@ void Isu::comb_issue() {
       }
       Assert(!out.iss2prf->iss_entry[phys_port].valid);
       out.iss2prf->iss_entry[phys_port].valid = true;
-      out.iss2prf->iss_entry[phys_port].uop = grant.uop.to_iss_prf_uop();
+      out.iss2prf->iss_entry[phys_port].uop = grant.uop;
     }
   }
 }
@@ -264,7 +264,7 @@ void Isu::comb_calc_latency_next() {
     }
   }
 
-  auto alloc_iter_slot = [](auto &slots, const IssPrfIO::IssPrfUop &uop,
+  auto alloc_iter_slot = [](auto &slots, const Uop &uop,
                             int countdown) -> bool {
     for (auto &slot : slots) {
       if (!slot.valid) {
@@ -278,7 +278,7 @@ void Isu::comb_calc_latency_next() {
     return false;
   };
 
-  auto alloc_mul_stage0 = [&](const IssPrfIO::IssPrfUop &uop) -> bool {
+  auto alloc_mul_stage0 = [&](const Uop &uop) -> bool {
     if (MUL_MAX_LATENCY <= 1) {
       return false;
     }
