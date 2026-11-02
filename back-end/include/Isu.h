@@ -4,20 +4,6 @@
 #include "IO.h"
 #include <cstdint>
 
-struct IsuOut {
-  IssPrfIO *iss2prf;
-  IssDisIO *iss2dis;
-  IssAwakeIO *iss_awake;
-};
-
-struct IsuIn {
-  DisIssIO *dis2iss;
-  PrfAwakeIO *prf_awake;
-  ExeIssIO *exe2iss;
-  RobBroadcastIO *rob_bcast;
-  DecBroadcastIO *dec_bcast;
-};
-
 // MUL 固定延迟唤醒条目（移位寄存器）
 struct MulWakeEntry {
   wire<1> valid = 0;
@@ -65,8 +51,7 @@ private:
 
 public:
   uint32_t port_attributes[ISSUE_WIDTH];
-  IsuIn in;
-  IsuOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   Isu(SimContext *ctx);
   void init();
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）

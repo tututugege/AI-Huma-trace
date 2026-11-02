@@ -11,27 +11,6 @@ constexpr int LDQ_STQ_IDX_WIDTH = clog2(LDQ_SIZE + STQ_SIZE);
 constexpr int MAX_IDX_WIDTH = clog2(std::max(LDQ_SIZE, STQ_SIZE));
 class SimContext;
 
-typedef struct {
-  RobCommitIO *rob_commit;
-  RobBroadcastIO *rob_bcast;
-  DecBroadcastIO *dec_bcast;
-  CsrStatusIO *csr_status;
-  DisLsuIO *dis2lsu;
-  ExeLsuIO *exe2lsu;
-  PeripheralRespIO *peripheral_resp;
-  DcacheLsuIO *dcache2lsu;
-  MMULsuIO *mmu2lsu;
-} LsuIn;
-
-typedef struct {
-  LsuDisIO *lsu2dis;
-  LsuRobIO *lsu2rob;
-  LsuExeIO *lsu2exe;
-  PeripheralReqIO *peripheral_req;
-  LsuDcacheIO *lsu2dcache;
-  LsuMMUIO *lsu2mmu;
-} LsuOut;
-
 // Numeric values are kept stable (lockstep digest compares them).
 enum class LoadState : uint8_t {
   Empty = 0,
@@ -152,13 +131,12 @@ enum class STLFResult : wire<2> { Disjoint = 0, Overlap = 1, Retry = 2 };
 
 class RealLsu {
 public:
-  RealLsu() : cur{}, nxt{}, in{}, out{}, ctx(nullptr) {}
-  explicit RealLsu(SimContext *ctx) : cur{}, nxt{}, in{}, out{}, ctx(ctx) {}
+  RealLsu() : cur{}, nxt{}, ctx(nullptr) {}
+  explicit RealLsu(SimContext *ctx) : cur{}, nxt{}, ctx(ctx) {}
 
   LsuState cur;
   LsuState nxt;
-  LsuIn in{};
-  LsuOut out{};
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   SimContext *ctx = nullptr;
 
   void init() { cur = {}; nxt = {}; }

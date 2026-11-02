@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "trace_hook.h"
 #include "Rob.h"
 #include "IO.h"
@@ -93,17 +94,17 @@ void Rob::comb_begin() {
 }
 
 // 功能：生成 ROB 对 Dispatch/CSR 的就绪与停顿信息，并标注队头阻塞类型。
-// 输入依赖：entry[][deq_ptr]、is_empty()/is_full()、in.lsu2rob->tma.miss_mask。
-// 输出更新：out.rob2dis->{stall,tma,empty,ready}、out.rob2csr->{commit,interrupt_resp}。
+// 输入依赖：entry[][deq_ptr]、is_empty()/is_full()、wires->lsu2rob.tma.miss_mask。
+// 输出更新：wires->rob2dis.{stall,tma,empty,ready}、wires->rob2csr.{commit,interrupt_resp}。
 // 约束：队头遇到 flush 类指令时强制 stall；阻塞归因按最老未完成指令判定。
 void Rob::comb_ready() {
-  out.rob2dis->stall = false;
-  out.rob2csr->commit = false;
-  out.rob2csr->interrupt_resp = false;
+  wires->rob2dis.stall = false;
+  wires->rob2csr.commit = false;
+  wires->rob2csr.interrupt_resp = false;
 
   for (int i = 0; i < ROB_BANK_NUM; i++) {
     if (entry[i][deq_ptr].valid && rob_is_flush_inst(entry[i][deq_ptr].uop)) {
-      out.rob2dis->stall = true;
+      wires->rob2dis.stall = true;
       break;
     }
   }
@@ -129,7 +130,7 @@ void Rob::comb_ready() {
           stall_is_mem = true;
           uint32_t rob_idx = i + (deq_ptr * ROB_BANK_NUM);
           stall_is_miss = (rob_idx < ROB_NUM)
-                              ? in.lsu2rob->tma.miss_mask.test(rob_idx)
+                              ? wires->lsu2rob.tma.miss_mask.test(rob_idx)
                               : false;
         } else {
           stall_is_mem = false;
@@ -142,20 +143,20 @@ void Rob::comb_ready() {
     }
   }
 
-  out.rob2dis->tma.head_not_ready = found_stall;
-  out.rob2dis->tma.head_is_memory = (found_stall && stall_is_mem);
-  out.rob2dis->tma.head_is_miss = (found_stall && stall_is_miss);
+  wires->rob2dis.tma.head_not_ready = found_stall;
+  wires->rob2dis.tma.head_is_memory = (found_stall && stall_is_mem);
+  wires->rob2dis.tma.head_is_miss = (found_stall && stall_is_miss);
 
-  out.rob2dis->empty = is_empty();
-  out.rob2dis->ready = !is_full();
+  wires->rob2dis.empty = is_empty();
+  wires->rob2dis.ready = !is_full();
 }
 
 // 功能：向 FTQ 请求 ROB 队头最老有效指令的 PC。
 // 输入依赖：is_empty()、entry[][deq_ptr].valid 及其 ftq_idx/ftq_offset。
-// 输出更新：out.ftq_pc_req->req[0]。
+// 输出更新：wires->ftq_rob_pc_req.req[0]。
 // 约束：ROB 为空时不发请求；每拍最多发出 1 条 ROB 侧 PC 请求。
 void Rob::comb_ftq_pc_req() {
-  out.ftq_pc_req->req[0] = {};
+  wires->ftq_rob_pc_req.req[0] = {};
 
   if (is_empty()) {
     return;
@@ -163,58 +164,58 @@ void Rob::comb_ftq_pc_req() {
 
   for (int i = 0; i < ROB_BANK_NUM; i++) {
     if (entry[i][deq_ptr].valid) {
-      out.ftq_pc_req->req[0].valid = true;
-      out.ftq_pc_req->req[0].ftq_idx = entry[i][deq_ptr].uop->ftq_idx;
-      out.ftq_pc_req->req[0].ftq_offset = entry[i][deq_ptr].uop->ftq_offset;
+      wires->ftq_rob_pc_req.req[0].valid = true;
+      wires->ftq_rob_pc_req.req[0].ftq_idx = entry[i][deq_ptr].uop->ftq_idx;
+      wires->ftq_rob_pc_req.req[0].ftq_offset = entry[i][deq_ptr].uop->ftq_offset;
       break;
     }
   }
 }
 
 // 功能：执行 ROB 提交仲裁（组提交/单提交）、flush/异常/中断广播与提交输出生成。
-// 输入依赖：entry[][deq_ptr]、in.dec_bcast、in.csr2rob、in.ftq_pc_resp、in.lsu2rob。
-// 输出更新：out.rob_commit、out.rob_bcast、out.rob2csr、out.rob2dis->enq_idx/rob_flag，及 entry_1/deq_ptr_1/deq_flag_1。
+// 输入依赖：entry[][deq_ptr]、&wires->dec_bcast、&wires->csr2rob、&wires->ftq_rob_pc_resp、&wires->lsu2rob。
+// 输出更新：&wires->rob_commit、&wires->rob_bcast、&wires->rob2csr、wires->rob2dis.enq_idx/rob_flag，及 entry_1/deq_ptr_1/deq_flag_1。
 // 约束：flush/异常/中断必须在精确提交点触发；特殊指令与中断走单提交路径。
 void Rob::comb_commit() {
-  out.rob_bcast->flush = out.rob_bcast->exception = out.rob_bcast->mret =
-      out.rob_bcast->sret = out.rob_bcast->ecall = out.rob_bcast->fence =
-          out.rob_bcast->fence_i = false;
+  wires->rob_bcast.flush = wires->rob_bcast.exception = wires->rob_bcast.mret =
+      wires->rob_bcast.sret = wires->rob_bcast.ecall = wires->rob_bcast.fence =
+          wires->rob_bcast.fence_i = false;
 
   // interrupt_resp must only be raised at a real precise commit point in this
   // cycle, not in comb_ready().
-  out.rob2csr->interrupt_resp = false;
-  out.rob_bcast->interrupt = false;
+  wires->rob2csr.interrupt_resp = false;
+  wires->rob_bcast.interrupt = false;
 
-  out.rob_bcast->page_fault_inst = out.rob_bcast->page_fault_load =
-      out.rob_bcast->page_fault_store = out.rob_bcast->illegal_inst = false;
+  wires->rob_bcast.page_fault_inst = wires->rob_bcast.page_fault_load =
+      wires->rob_bcast.page_fault_store = wires->rob_bcast.illegal_inst = false;
 
   // 广播队头行的第一个 valid 项，以及该行里第一个未完成项。
   // LSU 使用后者决定 MMIO 访存何时可以发射，避免与 ROB 的整行提交
   // 策略形成循环等待。
-  out.rob_bcast->head_valid = false;
-  out.rob_bcast->head_rob_idx = 0;
-  out.rob_bcast->head_incomplete_valid = false;
-  out.rob_bcast->head_incomplete_rob_idx = 0;
+  wires->rob_bcast.head_valid = false;
+  wires->rob_bcast.head_rob_idx = 0;
+  wires->rob_bcast.head_incomplete_valid = false;
+  wires->rob_bcast.head_incomplete_rob_idx = 0;
   if (!is_empty()) {
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       if (entry[i][deq_ptr].valid) {
-        out.rob_bcast->head_valid = true;
-        out.rob_bcast->head_rob_idx = make_rob_idx(deq_ptr, i);
+        wires->rob_bcast.head_valid = true;
+        wires->rob_bcast.head_rob_idx = make_rob_idx(deq_ptr, i);
         break;
       }
     }
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       if (entry[i][deq_ptr].valid &&
           !rob_is_complete(entry[i][deq_ptr].uop)) {
-        out.rob_bcast->head_incomplete_valid = true;
-        out.rob_bcast->head_incomplete_rob_idx = make_rob_idx(deq_ptr, i);
+        wires->rob_bcast.head_incomplete_valid = true;
+        wires->rob_bcast.head_incomplete_rob_idx = make_rob_idx(deq_ptr, i);
         break;
       }
     }
   }
   const bool front_stall =
-      (in.front_stall != nullptr) && static_cast<bool>(*in.front_stall);
-  wire<1> commit = (!is_empty() && !in.dec_bcast->mispred);
+      (&wires->in.front_stall != nullptr) && static_cast<bool>(wires->in.front_stall);
+  wire<1> commit = (!is_empty() && !wires->dec_bcast.mispred);
 
   // 组提交约束：同一拍只允许提交队头所在 fetch block（同 ftq_idx）的指令，
   // 防止 ROB retire 跨取指块导致 FTQ/前端需要多出队联动。
@@ -264,8 +265,8 @@ void Rob::comb_commit() {
     }
   };
 
-  if (!in.dec_bcast->mispred) {
-    const bool interrupt_pending = in.csr2rob->interrupt_req;
+  if (!wires->dec_bcast.mispred) {
+    const bool interrupt_pending = wires->csr2rob.interrupt_req;
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       if ((entry[i][deq_ptr].valid &&
            (rob_is_flush_inst(entry[i][deq_ptr].uop) ||
@@ -288,7 +289,7 @@ void Rob::comb_commit() {
           single_commit = false;
         }
         if (!interrupt_pending && rob_is_fence_inst(head_uop) &&
-            in.lsu2rob != nullptr && in.lsu2rob->committed_store_pending) {
+            &wires->lsu2rob != nullptr && wires->lsu2rob.committed_store_pending) {
           // fence/fence.i/sfence.vma 统一提交门控：当提交侧 STQ 仍非空时，
           // 必须阻塞到可见队列清空后再提交。
           single_commit = false;
@@ -326,11 +327,11 @@ void Rob::comb_commit() {
       }
     }
   }
-  out.rob2csr->interrupt_resp = interrupt_fire;
-  out.rob_bcast->interrupt = interrupt_fire;
+  wires->rob2csr.interrupt_resp = interrupt_fire;
+  wires->rob_bcast.interrupt = interrupt_fire;
 
   for (int i = 0; i < ROB_BANK_NUM; i++) {
-    out.rob_commit->commit_entry[i].uop =
+    wires->rob_commit.commit_entry[i].uop =
         entry[i][deq_ptr].uop;
     out.commit_extra[i].src1_areg = entry[i][deq_ptr].uop->src1_areg;
     out.commit_extra[i].imm = entry[i][deq_ptr].uop->imm;
@@ -351,9 +352,9 @@ void Rob::comb_commit() {
                  "DUT: Load address misaligned at commit!");
         }
       }
-      out.rob_commit->commit_entry[i].valid =
+      wires->rob_commit.commit_entry[i].valid =
           entry[i][deq_ptr].valid && group_commit_mask[i];
-      if (out.rob_commit->commit_entry[i].valid) {
+      if (wires->rob_commit.commit_entry[i].valid) {
         log_incomplete_store_commit(entry[i][deq_ptr].uop, "group", i);
         entry_1[i][deq_ptr].valid = false;
         touch(i, deq_ptr);
@@ -380,9 +381,9 @@ void Rob::comb_commit() {
     stall_cycle = 0;
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       if (i == single_idx)
-        out.rob_commit->commit_entry[i].valid = true;
+        wires->rob_commit.commit_entry[i].valid = true;
       else
-        out.rob_commit->commit_entry[i].valid = false;
+        wires->rob_commit.commit_entry[i].valid = false;
     }
 
     if (entry[single_idx][deq_ptr].valid) {
@@ -424,51 +425,51 @@ void Rob::comb_commit() {
     const auto &uop = entry[single_idx][deq_ptr].uop;
     const bool single_is_flush = rob_is_flush_inst(uop);
     const bool single_is_wfi = rob_is_wfi(uop);
-    if (single_is_flush || out.rob2csr->interrupt_resp || single_is_wfi) {
+    if (single_is_flush || wires->rob2csr.interrupt_resp || single_is_wfi) {
       uint32_t single_pc = 0;
-      if (single_is_flush || out.rob2csr->interrupt_resp) {
-        Assert(in.ftq_pc_resp->resp[0].valid);
-        single_pc = in.ftq_pc_resp->resp[0].pc;
-        out.rob_bcast->flush = true;
-        out.rob_bcast->exception =
-            rob_is_exception(uop) || out.rob2csr->interrupt_resp;
-        out.rob_bcast->pc = single_pc;
+      if (single_is_flush || wires->rob2csr.interrupt_resp) {
+        Assert(wires->ftq_rob_pc_resp.resp[0].valid);
+        single_pc = wires->ftq_rob_pc_resp.resp[0].pc;
+        wires->rob_bcast.flush = true;
+        wires->rob_bcast.exception =
+            rob_is_exception(uop) || wires->rob2csr.interrupt_resp;
+        wires->rob_bcast.pc = single_pc;
       }
 
-      if (out.rob2csr->interrupt_resp) {
+      if (wires->rob2csr.interrupt_resp) {
         // interrupt拥有最高优先级
       } else if (decode_inst_type(uop->type) == ECALL) {
-        out.rob_bcast->ecall = true;
-        out.rob_bcast->pc = single_pc;
+        wires->rob_bcast.ecall = true;
+        wires->rob_bcast.pc = single_pc;
       } else if (decode_inst_type(uop->type) == MRET) {
-        out.rob_bcast->mret = true;
+        wires->rob_bcast.mret = true;
       } else if (decode_inst_type(uop->type) == SRET) {
-        out.rob_bcast->sret = true;
+        wires->rob_bcast.sret = true;
       } else if (uop.page_fault_store) {
-        out.rob_bcast->page_fault_store = true;
-        out.rob_bcast->trap_val = uop.diag_val;
+        wires->rob_bcast.page_fault_store = true;
+        wires->rob_bcast.trap_val = uop.diag_val;
       } else if (uop.page_fault_load) {
-        out.rob_bcast->page_fault_load = true;
-        out.rob_bcast->trap_val = uop.diag_val;
+        wires->rob_bcast.page_fault_load = true;
+        wires->rob_bcast.trap_val = uop.diag_val;
       } else if (uop.page_fault_inst) {
-        out.rob_bcast->page_fault_inst = true;
-        out.rob_bcast->trap_val = single_pc;
+        wires->rob_bcast.page_fault_inst = true;
+        wires->rob_bcast.trap_val = single_pc;
       } else if (uop.illegal_inst) {
-        out.rob_bcast->illegal_inst = true;
-        out.rob_bcast->trap_val = uop.diag_val;
+        wires->rob_bcast.illegal_inst = true;
+        wires->rob_bcast.trap_val = uop.diag_val;
       } else if (decode_inst_type(uop->type) == EBREAK) {
         ctx->exit_reason = ExitReason::EBREAK;
       } else if (single_is_wfi) {
         // Bring-up semantics: retire WFI without exiting the simulator.
       } else if (decode_inst_type(uop->type) == CSR) {
-        out.rob2csr->commit = true;
+        wires->rob2csr.commit = true;
       } else if (decode_inst_type(uop->type) == SFENCE_VMA) {
-        out.rob_bcast->fence = true;
+        wires->rob_bcast.fence = true;
       } else if (decode_inst_type(uop->type) == FENCE_I) {
-        out.rob_bcast->fence_i = true;
+        wires->rob_bcast.fence_i = true;
       } else if (uop.flush_pipe) {
         // MMIO-triggered flush, no extra CSR/MMU actions needed here
-        out.rob_bcast->pc = single_pc;
+        wires->rob_bcast.pc = single_pc;
       } else {
         if (decode_inst_type(uop->type) != CSR) {
           Assert(0 && "Error: Who is Rem? This pointer is forgotten.");
@@ -477,12 +478,12 @@ void Rob::comb_commit() {
     }
   } else {
     for (int i = 0; i < ROB_BANK_NUM; i++) {
-      out.rob_commit->commit_entry[i].valid = false;
+      wires->rob_commit.commit_entry[i].valid = false;
     }
   }
 
-  out.rob2dis->enq_idx = enq_ptr;
-  out.rob2dis->rob_flag = enq_flag;
+  wires->rob2dis.enq_idx = enq_ptr;
+  wires->rob2dis.rob_flag = enq_flag;
 
   stall_cycle++;
   if (stall_cycle > 50000) {
@@ -525,14 +526,14 @@ void Rob::comb_commit() {
 }
 
 // 功能：接收执行完成回传并更新 ROB 条目的完成位与异常/分支附加信息。
-// 输入依赖：in.exu2rob->entry[]（含 rob_idx、result、diag_val、fault/mispred/flush_pipe 等）。
+// 输入依赖：wires->exu2rob.entry[]（含 rob_idx、result、diag_val、fault/mispred/flush_pipe 等）。
 // 输出更新：entry_1[bank][line].uop.{cplt_mask,diag_val,page_fault_*,mispred,br_taken,flush_pipe,dbg}。
 // 约束：完成位不可重复置位、不可越界到 expect_mask 之外；多 uop 同指令回传时 flush_pipe 取 OR。
 void Rob::comb_complete() {
   //  执行完毕的标记 (Early Completion Phase 2)
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    if (in.exu2rob->entry[i].valid) {
-      const auto &wb = in.exu2rob->entry[i].uop;
+    if (wires->exu2rob.entry[i].valid) {
+      const auto &wb = wires->exu2rob.entry[i].uop;
       bool wb_has_page_fault =
           wb.page_fault_inst || wb.page_fault_load || wb.page_fault_store;
       int bank_idx = get_rob_bank(wb.rob_idx);
@@ -628,20 +629,20 @@ void Rob::comb_complete() {
 }
 
 // 功能：处理分支误预测恢复，回退 ROB tail 并失效错误路径条目。
-// 输入依赖：in.dec_bcast->{mispred,redirect_rob_idx}、out.rob_bcast->flush、当前 enq_ptr/enq_flag。
+// 输入依赖：wires->dec_bcast.{mispred,redirect_rob_idx}、wires->rob_bcast.flush、当前 enq_ptr/enq_flag。
 // 输出更新：enq_ptr_1/enq_flag_1、entry_1[][]（重定向点之后条目 invalid）、redirect 指令 ftq_is_last。
 // 约束：仅在 mispred 且本拍无全局 flush 时生效；需覆盖跨行回滚，避免僵尸提交。
 void Rob::comb_branch() {
   // 分支预测失败
-  if (in.dec_bcast->mispred && !out.rob_bcast->flush) {
+  if (wires->dec_bcast.mispred && !wires->rob_bcast.flush) {
     if (tbhook::enabled) {
       tbhook::on_mispredict(
-          (uint64_t)entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)]
-                         [get_rob_line(in.dec_bcast->redirect_rob_idx)]
+          (uint64_t)entry[get_rob_bank(wires->dec_bcast.redirect_rob_idx)]
+                         [get_rob_line(wires->dec_bcast.redirect_rob_idx)]
                              .uop->dbg.inst_idx);
     }
     enq_ptr_1 =
-        (get_rob_line(in.dec_bcast->redirect_rob_idx) + 1) % (ROB_LINE_NUM);
+        (get_rob_line(wires->dec_bcast.redirect_rob_idx) + 1) % (ROB_LINE_NUM);
 
     if (enq_ptr_1 > enq_ptr) {
       enq_flag_1 = !enq_flag;
@@ -651,16 +652,16 @@ void Rob::comb_branch() {
     // Since everything after it in the same FTQ block is flushed, it
     // effectively becomes the 'last' instruction that will ever commit for this
     // FTQ entry.
-    int redirect_bank = get_rob_bank(in.dec_bcast->redirect_rob_idx);
-    int redirect_line = get_rob_line(in.dec_bcast->redirect_rob_idx);
+    int redirect_bank = get_rob_bank(wires->dec_bcast.redirect_rob_idx);
+    int redirect_line = get_rob_line(wires->dec_bcast.redirect_rob_idx);
     entry_1[redirect_bank][redirect_line].uop.ftq_is_last = true;
     touch(redirect_bank, redirect_line);
 
     // 修正：明确使从重定向点到旧 Tail 的所有条目失效
     // 这可以处理多行回溯并防止“僵尸提交”
-    int ptr = get_rob_line(in.dec_bcast->redirect_rob_idx); // 行索引
+    int ptr = get_rob_line(wires->dec_bcast.redirect_rob_idx); // 行索引
     int start_bank =
-        get_rob_bank(in.dec_bcast->redirect_rob_idx) + 1; // 行内 BANK 索引
+        get_rob_bank(wires->dec_bcast.redirect_rob_idx) + 1; // 行内 BANK 索引
 
     // 1. 清除第一行（重定向行）的剩余条目
     for (int i = start_bank; i < ROB_BANK_NUM; i++) {
@@ -688,19 +689,19 @@ void Rob::comb_branch() {
 }
 
 // 功能：接收 Dispatch 发射并向 ROB 入队新条目。
-// 输入依赖：out.rob2dis->ready、in.dis2rob->dis_fire[]、in.dis2rob->uop[]、enq_ptr/enq_flag。
+// 输入依赖：wires->rob2dis.ready、wires->dis2rob.dis_fire[]、wires->dis2rob.uop[]、enq_ptr/enq_flag。
 // 输出更新：entry_1[][enq_ptr]、enq_ptr_1/enq_flag_1。
 // 约束：仅在 ROB ready 时接收入队；有任意槽位入队即推进 tail 一行。
 void Rob::comb_fire() {
   // 入队
   wire<1> enq = false;
-  if (out.rob2dis->ready) {
+  if (wires->rob2dis.ready) {
     for (int i = 0; i < DECODE_WIDTH; i++) {
-      if (in.dis2rob->dis_fire[i]) {
+      if (wires->dis2rob.dis_fire[i]) {
         entry_1[i][enq_ptr].valid = true;
         touch(i, enq_ptr);
         entry_1[i][enq_ptr].uop =
-            (in.dis2rob->uop[i]);
+            (wires->dis2rob.uop[i]);
         entry_1[i][enq_ptr].uop.cplt_mask = 0;
         if (tbhook::enabled) {
           const auto &d = entry_1[i][enq_ptr].uop->dbg;
@@ -721,11 +722,11 @@ void Rob::comb_fire() {
 }
 
 // 功能：在全局 flush 时清空 ROB 并复位头尾指针。
-// 输入依赖：out.rob_bcast->flush。
+// 输入依赖：wires->rob_bcast.flush。
 // 输出更新：entry_1[][].valid、enq_ptr_1/deq_ptr_1、enq_flag_1/deq_flag_1。
 // 约束：flush 为最终状态覆盖，生效后 ROB 进入空队列初始态。
 void Rob::comb_flush() {
-  if (out.rob_bcast->flush) {
+  if (wires->rob_bcast.flush) {
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       for (int j = 0; j < ROB_LINE_NUM; j++) {
         entry_1[i][j].valid = false;

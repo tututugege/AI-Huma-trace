@@ -4,24 +4,6 @@
 
 class BackTop;
 
-struct DisOut {
-  DisRenIO *dis2ren;
-  DisRobIO *dis2rob;
-  DisIssIO *dis2iss;
-  DisLsuIO *dis2lsu;
-};
-
-struct DisIn {
-  RenDisIO *ren2dis;
-  RobDisIO *rob2dis;
-  IssDisIO *iss2dis;
-  LsuDisIO *lsu2dis;
-  PrfAwakeIO *prf_awake;
-  IssAwakeIO *iss_awake;
-  RobBroadcastIO *rob_bcast;
-  DecBroadcastIO *dec_bcast;
-};
-
 struct UopPacket {
   int iq_id;               // 目标 IQ
   Uop uop; // Dispatch 内部直接使用发往 Issue 的线网格式
@@ -55,8 +37,7 @@ private:
 public:
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
-  DisIn in;
-  DisOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）

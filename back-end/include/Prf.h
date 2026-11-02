@@ -3,26 +3,11 @@
 #include "Exu.h"
 #include "IO.h"
 
-struct PrfOut {
-  PrfExeIO *prf2exe;
-  PrfAwakeIO *prf_awake;
-  FtqPrfPcReqIO *ftq_prf_pc_req;
-};
-
-struct PrfIn {
-  IssPrfIO *iss2prf;
-  ExePrfIO *exe2prf;
-  DecBroadcastIO *dec_bcast;
-  RobBroadcastIO *rob_bcast;
-  FtqPrfPcRespIO *ftq_prf_pc_resp;
-};
-
 class Prf {
 public:
   Prf(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
-  PrfIn in;
-  PrfOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
   void comb_complete();

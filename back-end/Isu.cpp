@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "BeginCheck.h"
 #include "Isu.h"
 #include "config.h"
@@ -14,10 +15,10 @@ void Isu::add_iq(const IssueQueueConfig &cfg) {
 
 void Isu::apply_wakeup_to_uop(Uop &uop) const {
   for (int k = 0; k < MAX_WAKEUP_PORTS; k++) {
-    if (!out.iss_awake->wake[k].valid) {
+    if (!wires->iss_awake.wake[k].valid) {
       continue;
     }
-    uint32_t preg = out.iss_awake->wake[k].preg;
+    uint32_t preg = wires->iss_awake.wake[k].preg;
     if (uop->src1_en && uop->src1_preg == preg) {
       uop.src1_busy = false;
     }
@@ -133,19 +134,19 @@ int Isu::get_latency(UopType uop, wire<7> func7) {
  * comb_ready
  * 功能: 计算每个 IQ 的剩余容量并反馈给 Dispatch。
  * 输入依赖: iqs[i].out.free_slots。
- * 输出更新: out.iss2dis->ready_num[i]。
+ * 输出更新: wires->iss2dis.ready_num[i]。
  * 约束: 仅报告容量，不改变 IQ 内部状态。
  */
 void Isu::comb_ready() {
   for (int i = 0; i < IQ_NUM; i++) {
-    out.iss2dis->ready_num[i] = iqs[i].out.free_slots;
+    wires->iss2dis.ready_num[i] = iqs[i].out.free_slots;
   }
 }
 
 /*
  * comb_enq
  * 功能: 接收 dis2iss 请求，经 iq.in.enq_reqs 驱动对应 IQ 入队。
- * 输入依赖: in.dis2iss->req[][], configs[i].dispatch_width, out.iss_awake（用于入队前叠加唤醒）。
+ * 输入依赖: wires->dis2iss.req[][], configs[i].dispatch_width, &wires->iss_awake（用于入队前叠加唤醒）。
  * 输出更新: IQ 内部 *_1 状态（通过 q.comb_enq 写入）。
  * 约束: 仅对 valid 请求入队；入队失败视为设计错误并触发 Assert。
  */
@@ -161,8 +162,8 @@ void Isu::comb_enq() {
     // 遍历该 IQ 的所有输入通道
     for (int w = 0; w < max_w; w++) {
       // 使用新接口结构 req[i][w]
-      if (in.dis2iss->req[i][w].valid) {
-        Uop uop = (in.dis2iss->req[i][w].uop);
+      if (wires->dis2iss.req[i][w].valid) {
+        Uop uop = (wires->dis2iss.req[i][w].uop);
         // 本拍入队前叠加唤醒总线，避免把“可读源”误标成 busy。
         apply_wakeup_to_uop(uop);
 
@@ -180,21 +181,21 @@ void Isu::comb_enq() {
 /*
  * comb_issue
  * 功能: 通过 IQ 输入 IO 驱动调度/发射，并消费 IQ 输出 grant 生成 iss2prf。
- * 输入依赖: in.exe2iss->ready, in.exe2iss->fu_ready_mask, in.rob_bcast->flush, in.dec_bcast->mispred。
- * 输出更新: out.iss2prf->iss_entry[]，IQ 内部提交结果（由 q.comb_issue 完成）。
+ * 输入依赖: wires->exe2iss.ready, wires->exe2iss.fu_ready_mask, wires->rob_bcast.flush, wires->dec_bcast.mispred。
+ * 输出更新: wires->iss2prf.iss_entry[]，IQ 内部提交结果（由 q.comb_issue 完成）。
  * 约束: 发射需同时满足端口 ready 与 FU 能力掩码；flush/mispred 时禁止新发射。
  */
 void Isu::comb_issue() {
 
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    out.iss2prf->iss_entry[i].valid = false;
+    wires->iss2prf.iss_entry[i].valid = false;
   }
 
   for (size_t i = 0; i < iqs.size(); i++) {
     IssueQueue &q = iqs[i];
-    q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
+    q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
     for (int p = 0; p < ISSUE_WIDTH; p++) {
-      q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];
+      q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
     }
 
     q.comb_issue();
@@ -204,9 +205,9 @@ void Isu::comb_issue() {
       if (!grant.valid) {
         continue;
       }
-      Assert(!out.iss2prf->iss_entry[phys_port].valid);
-      out.iss2prf->iss_entry[phys_port].valid = true;
-      out.iss2prf->iss_entry[phys_port].uop = grant.uop;
+      Assert(!wires->iss2prf.iss_entry[phys_port].valid);
+      wires->iss2prf.iss_entry[phys_port].valid = true;
+      wires->iss2prf.iss_entry[phys_port].uop = grant.uop;
     }
   }
 }
@@ -214,7 +215,7 @@ void Isu::comb_issue() {
 /*
  * comb_calc_latency_next
  * 功能: 更新两类延迟唤醒状态：DIV/FP countdown 槽位 + MUL 移位寄存器。
- * 输入依赖: mul/div/fp 当前状态, out.iss2prf->iss_entry[], get_latency(op)。
+ * 输入依赖: mul/div/fp 当前状态, wires->iss2prf.iss_entry[], get_latency(op)。
  * 输出更新: mul/div/fp *_1 状态。
  * 约束: 仅 MUL/DIV/FP 且 latency>1 进入延迟唤醒；countdown==0 的 DIV/FP 条目不再保留到下一拍。
  */
@@ -295,7 +296,7 @@ void Isu::comb_calc_latency_next() {
 
   // 新发射条目写入对应延迟结构。
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &inst = out.iss2prf->iss_entry[i]; 
+    const auto &inst = wires->iss2prf.iss_entry[i]; 
     if (!(inst.valid && inst.uop.dest_en)) {
       continue;
     }
@@ -320,14 +321,14 @@ void Isu::comb_calc_latency_next() {
 /*
  * comb_awake
  * 功能: 汇总慢速/延迟/快速唤醒源，唤醒 IQ 内等待项并对外广播 iss_awake。
- * 输入依赖: in.prf_awake, mul/div/fp 延迟唤醒当前状态, out.iss2prf->iss_entry, get_latency(op), iqs[]。
- * 输出更新: iqs[]（通过 q.in.wake_valid/wake_pregs + q.comb_wakeup）, out.iss_awake->wake[]。
+ * 输入依赖: &wires->prf_awake, mul/div/fp 延迟唤醒当前状态, wires->iss2prf.iss_entry, get_latency(op), iqs[]。
+ * 输出更新: iqs[]（通过 q.in.wake_valid/wake_pregs + q.comb_wakeup）, wires->iss_awake.wake[]。
  * 约束: 唤醒端口数不超过 MAX_WAKEUP_PORTS；分配独立唤醒通道以避免写回冲突。
  */
 void Isu::comb_awake() {
   for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
-    out.iss_awake->wake[i].valid = false;
-    out.iss_awake->wake[i].preg = 0;
+    wires->iss_awake.wake[i].valid = false;
+    wires->iss_awake.wake[i].preg = 0;
   }
 
   uint64_t fast_mask = OP_MASK_ALU;
@@ -353,10 +354,10 @@ void Isu::comb_awake() {
 
   // 来源 A: 慢速唤醒 (来自写回阶段：Load / 缓存缺失)
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
-    if (in.prf_awake->wake[i].valid) {
+    if (wires->prf_awake.wake[i].valid) {
       int ch = lsu_base + i;
-      out.iss_awake->wake[ch].valid = true;
-      out.iss_awake->wake[ch].preg = in.prf_awake->wake[i].preg;
+      wires->iss_awake.wake[ch].valid = true;
+      wires->iss_awake.wake[ch].preg = wires->prf_awake.wake[i].preg;
     }
   }
 
@@ -365,9 +366,9 @@ void Isu::comb_awake() {
     const auto &slot = div_wake_slots[i];
     if (slot.valid && slot.countdown == 0) {
       int ch = div_base + i;
-      Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
-      out.iss_awake->wake[ch].valid = true;
-      out.iss_awake->wake[ch].preg = slot.dest_preg;
+      Assert(!wires->iss_awake.wake[ch].valid && "Delayed writeback collision");
+      wires->iss_awake.wake[ch].valid = true;
+      wires->iss_awake.wake[ch].preg = slot.dest_preg;
     }
   }
 
@@ -376,9 +377,9 @@ void Isu::comb_awake() {
     const auto &slot = fp_wake_slots[i];
     if (slot.valid && slot.countdown == 0) {
       int ch = fp_base + i;
-      Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
-      out.iss_awake->wake[ch].valid = true;
-      out.iss_awake->wake[ch].preg = slot.dest_preg;
+      Assert(!wires->iss_awake.wake[ch].valid && "Delayed writeback collision");
+      wires->iss_awake.wake[ch].valid = true;
+      wires->iss_awake.wake[ch].preg = slot.dest_preg;
     }
   }
 
@@ -388,25 +389,25 @@ void Isu::comb_awake() {
       const auto &slot = mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i];
       if (slot.valid) {
         int ch = mul_base + i;
-        Assert(!out.iss_awake->wake[ch].valid && "Delayed writeback collision");
-        out.iss_awake->wake[ch].valid = true;
-        out.iss_awake->wake[ch].preg = slot.dest_preg;
+        Assert(!wires->iss_awake.wake[ch].valid && "Delayed writeback collision");
+        wires->iss_awake.wake[ch].valid = true;
+        wires->iss_awake.wake[ch].preg = slot.dest_preg;
       }
     }
   }
 
   // 来源 C: 快速唤醒 (本周期发射的单周期 ALU 指令)
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &entry = out.iss2prf->iss_entry[i];
+    const auto &entry = wires->iss2prf.iss_entry[i];
     if (entry.valid && entry.uop.dest_en) {
       UopType op = decode_uop_type(entry.uop.op);
       int lat = get_latency(op, entry.uop->func7);
       if (lat <= 1 && op != UOP_LOAD && op != UOP_STA) {
         int ch = fast_ch_map[i];
         if (ch != -1) {
-          Assert(!out.iss_awake->wake[ch].valid && "Fast writeback collision");
-          out.iss_awake->wake[ch].valid = true;
-          out.iss_awake->wake[ch].preg = entry.uop.dest_preg;
+          Assert(!wires->iss_awake.wake[ch].valid && "Fast writeback collision");
+          wires->iss_awake.wake[ch].valid = true;
+          wires->iss_awake.wake[ch].preg = entry.uop.dest_preg;
         }
       }
     }
@@ -417,8 +418,8 @@ void Isu::comb_awake() {
   // 1. 唤醒所有 IQ
   for (auto &q : iqs) {
     for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
-      q.in.wake_valid[i] = out.iss_awake->wake[i].valid;
-      q.in.wake_pregs[i] = out.iss_awake->wake[i].preg;
+      q.in.wake_valid[i] = wires->iss_awake.wake[i].valid;
+      q.in.wake_pregs[i] = wires->iss_awake.wake[i].preg;
     }
     q.comb_wakeup();
   }
@@ -427,15 +428,15 @@ void Isu::comb_awake() {
 /*
  * comb_flush
  * 功能: 通过 IQ 输入 IO 处理 flush/mispred/clear，并同步清理延迟管线。
- * 输入依赖: in.rob_bcast->flush, in.dec_bcast->{mispred, br_mask, clear_mask}, mul/div/fp *_1, iqs[]。
+ * 输入依赖: wires->rob_bcast.flush, wires->dec_bcast.{mispred, br_mask, clear_mask}, mul/div/fp *_1, iqs[]。
  * 输出更新: iqs[]（经 q.comb_flush）, mul/div/fp 当前态与下一态。
  * 约束: flush 优先级高于 mispred；clear_mask 在 flush/mispred 处理后作用于存活条目。
  */
 void Isu::comb_flush() {
-  bool flush_all = in.rob_bcast->flush;
-  bool flush_br = (!flush_all) && in.dec_bcast->mispred;
-  wire<BR_MASK_WIDTH> br_mask = in.dec_bcast->br_mask;
-  wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
+  bool flush_all = wires->rob_bcast.flush;
+  bool flush_br = (!flush_all) && wires->dec_bcast.mispred;
+  wire<BR_MASK_WIDTH> br_mask = wires->dec_bcast.br_mask;
+  wire<BR_MASK_WIDTH> clear = wires->dec_bcast.clear_mask;
 
   for (auto &q : iqs) {
     q.in.flush_all = flush_all;
@@ -445,7 +446,7 @@ void Isu::comb_flush() {
     q.comb_flush();
   }
 
-  if (in.rob_bcast->flush) {
+  if (wires->rob_bcast.flush) {
     for (auto &stage : mul_wake_pipe) {
       for (auto &e : stage)
         e = {};
@@ -462,7 +463,7 @@ void Isu::comb_flush() {
       e = {};
     for (auto &e : fp_wake_slots_1)
       e = {};
-  } else if (in.dec_bcast->mispred) {
+  } else if (wires->dec_bcast.mispred) {
     auto kill_by_mask = [&](auto &slot) {
       if (slot.valid && ((slot.br_mask & br_mask) != 0)) {
         slot = {};

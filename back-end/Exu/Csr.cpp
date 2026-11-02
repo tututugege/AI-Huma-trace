@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "BeginCheck.h"
 #include "Csr.h"
 #include "DebugPtwTrace.h"
@@ -64,15 +65,15 @@ void Csr::comb_begin() {
 }
 
 void Csr::comb_csr_status() {
-  out.csr_status->mstatus = CSR_RegFile[csr_mstatus];
-  out.csr_status->sstatus = CSR_RegFile[csr_sstatus];
-  out.csr_status->satp = CSR_RegFile[csr_satp];
-  out.csr_status->privilege = privilege;
+  wires->csr_status.mstatus = CSR_RegFile[csr_mstatus];
+  wires->csr_status.sstatus = CSR_RegFile[csr_sstatus];
+  wires->csr_status.satp = CSR_RegFile[csr_satp];
+  wires->csr_status.privilege = privilege;
 }
 
 void Csr::comb_csr_read() {
-  if (in.exe2csr->re) {
-    out.csr2exe->rdata = CSR_RegFile[cvt_number_to_csr(in.exe2csr->idx)];
+  if (wires->exe2csr.re) {
+    wires->csr2exe.rdata = CSR_RegFile[cvt_number_to_csr(wires->exe2csr.idx)];
   }
 }
 
@@ -82,19 +83,19 @@ void Csr::comb_interrupt() {
   uint32_t mip_reg = CSR_RegFile[csr_mip];
   uint32_t mideleg = CSR_RegFile[csr_mideleg];
   IrqState irq = eval_interrupts(mstatus, mie_reg, mip_reg, mideleg, privilege);
-  out.csr2rob->interrupt_req =
+  wires->csr2rob.interrupt_req =
       irq.m_software_interrupt || irq.m_timer_interrupt ||
       irq.m_external_interrupt || irq.s_software_interrupt ||
       irq.s_timer_interrupt || irq.s_external_interrupt;
 }
 
 void Csr::comb_interrupt_inject() {
-  if (in.interrupt_inject == nullptr) {
+  if (&wires->csr_interrupt_inject_io == nullptr) {
     return;
   }
 
-  if (static_cast<bool>(in.interrupt_inject->external_irq_pending_valid)) {
-    if (static_cast<bool>(in.interrupt_inject->external_irq_pending)) {
+  if (static_cast<bool>(wires->csr_interrupt_inject_io.external_irq_pending_valid)) {
+    if (static_cast<bool>(wires->csr_interrupt_inject_io.external_irq_pending)) {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_MEIP;
     } else {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_MEIP;
@@ -103,9 +104,9 @@ void Csr::comb_interrupt_inject() {
   }
 
   if (static_cast<bool>(
-          in.interrupt_inject->supervisor_external_irq_pending_valid)) {
+          wires->csr_interrupt_inject_io.supervisor_external_irq_pending_valid)) {
     if (static_cast<bool>(
-            in.interrupt_inject->supervisor_external_irq_pending)) {
+            wires->csr_interrupt_inject_io.supervisor_external_irq_pending)) {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_SEIP;
     } else {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_SEIP;
@@ -113,8 +114,8 @@ void Csr::comb_interrupt_inject() {
     CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & 0x00000333u;
   }
 
-  if (static_cast<bool>(in.interrupt_inject->timer_irq_pending_valid)) {
-    if (static_cast<bool>(in.interrupt_inject->timer_irq_pending)) {
+  if (static_cast<bool>(wires->csr_interrupt_inject_io.timer_irq_pending_valid)) {
+    if (static_cast<bool>(wires->csr_interrupt_inject_io.timer_irq_pending)) {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_MTIP;
     } else {
       CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_MTIP;
@@ -133,11 +134,11 @@ void Csr::comb_exception() {
   uint32_t mtvec = CSR_RegFile[csr_mtvec];
   uint32_t stvec = CSR_RegFile[csr_stvec];
 
-  bool ecall = in.rob_bcast->ecall;
-  bool page_fault_inst = in.rob_bcast->page_fault_inst;
-  bool page_fault_load = in.rob_bcast->page_fault_load;
-  bool page_fault_store = in.rob_bcast->page_fault_store;
-  bool illegal_exceptinn = in.rob_bcast->illegal_inst;
+  bool ecall = wires->rob_bcast.ecall;
+  bool page_fault_inst = wires->rob_bcast.page_fault_inst;
+  bool page_fault_load = wires->rob_bcast.page_fault_load;
+  bool page_fault_store = wires->rob_bcast.page_fault_store;
+  bool illegal_exceptinn = wires->rob_bcast.illegal_inst;
 
   // 异常委托位 (Exceptions)
   bool medeleg_U_ecall = (medeleg >> 8) & 1;
@@ -152,10 +153,10 @@ void Csr::comb_exception() {
   IrqState irq = eval_interrupts(mstatus, mie_reg, mip_reg, mideleg, privilege);
   bool S_interrupt_resp = (irq.s_software_interrupt || irq.s_timer_interrupt ||
                            irq.s_external_interrupt) &&
-                          in.rob2csr->interrupt_resp;
+                          wires->rob2csr.interrupt_resp;
   bool M_interrupt_resp = (irq.m_software_interrupt || irq.m_timer_interrupt ||
                            irq.m_external_interrupt) &&
-                          in.rob2csr->interrupt_resp;
+                          wires->rob2csr.interrupt_resp;
 
   bool MTrap =
       M_interrupt_resp || (ecall && (privilege == 0) && !medeleg_U_ecall) ||
@@ -175,7 +176,7 @@ void Csr::comb_exception() {
                (illegal_exceptinn && medeleg_illegal_inst);
 
   if (MTrap) {
-    CSR_RegFile_1[csr_mepc] = in.rob_bcast->pc;
+    CSR_RegFile_1[csr_mepc] = wires->rob_bcast.pc;
 
     // next_mcause = interruptType;
     uint32_t cause =
@@ -201,10 +202,10 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_mcause] = cause;
 
     if ((mtvec & 1) && (cause & (1u << 31))) {
-      out.csr2front->trap_pc = CSR_RegFile[csr_mtvec] & 0xfffffffc;
-      out.csr2front->trap_pc += 4 * (cause & 0x7fffffff);
+      wires->csr2front.trap_pc = CSR_RegFile[csr_mtvec] & 0xfffffffc;
+      wires->csr2front.trap_pc += 4 * (cause & 0x7fffffff);
     } else {
-      out.csr2front->trap_pc = CSR_RegFile[csr_mtvec];
+      wires->csr2front.trap_pc = CSR_RegFile[csr_mtvec];
     }
 
     mstatus = (mstatus & ~MSTATUS_MPP) | ((privilege & 0x3) << 11);
@@ -224,15 +225,15 @@ void Csr::comb_exception() {
     privilege_1 = RISCV_MODE_M; // 机器模式 (Machine Mode)
 
     if (page_fault_store || page_fault_load || page_fault_inst) {
-      CSR_RegFile_1[csr_mtval] = in.rob_bcast->trap_val;
+      CSR_RegFile_1[csr_mtval] = wires->rob_bcast.trap_val;
     } else if (illegal_exceptinn) {
-      CSR_RegFile_1[csr_mtval] = in.rob_bcast->trap_val;
+      CSR_RegFile_1[csr_mtval] = wires->rob_bcast.trap_val;
     } else {
       CSR_RegFile_1[csr_mtval] = 0;
     }
 
   } else if (STrap) {
-    CSR_RegFile_1[csr_sepc] = in.rob_bcast->pc;
+    CSR_RegFile_1[csr_sepc] = wires->rob_bcast.pc;
     uint32_t cause =
         (irq.s_software_interrupt || irq.s_timer_interrupt ||
          irq.s_external_interrupt)
@@ -254,10 +255,10 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_scause] = cause;
 
     if ((stvec & 1) && (cause & (1u << 31))) {
-      out.csr2front->trap_pc = CSR_RegFile[csr_stvec] & 0xfffffffc;
-      out.csr2front->trap_pc += 4 * (cause & 0x7fffffff);
+      wires->csr2front.trap_pc = CSR_RegFile[csr_stvec] & 0xfffffffc;
+      wires->csr2front.trap_pc += 4 * (cause & 0x7fffffff);
     } else {
-      out.csr2front->trap_pc = CSR_RegFile[csr_stvec];
+      wires->csr2front.trap_pc = CSR_RegFile[csr_stvec];
     }
 
     // 更新 sstatus
@@ -286,12 +287,12 @@ void Csr::comb_exception() {
 
     if (page_fault_store || page_fault_load || page_fault_inst ||
         illegal_exceptinn) {
-      CSR_RegFile_1[csr_stval] = in.rob_bcast->trap_val;
+      CSR_RegFile_1[csr_stval] = wires->rob_bcast.trap_val;
     } else {
       CSR_RegFile_1[csr_stval] = 0;
     }
 
-  } else if (in.rob_bcast->mret) {
+  } else if (wires->rob_bcast.mret) {
     // MIE = MPIE
     if (mstatus & MSTATUS_MPIE)
       mstatus |= MSTATUS_MIE;
@@ -310,8 +311,8 @@ void Csr::comb_exception() {
     uint32_t sstatus_mask = 0x800DE133;
     CSR_RegFile_1[csr_mstatus] = mstatus;
     CSR_RegFile_1[csr_sstatus] = mstatus & sstatus_mask;
-    out.csr2front->epc = CSR_RegFile[csr_mepc];
-  } else if (in.rob_bcast->sret) {
+    wires->csr2front.epc = CSR_RegFile[csr_mepc];
+  } else if (wires->rob_bcast.sret) {
     // SIE = SPIE
     if (sstatus & MSTATUS_SPIE)
       sstatus |= MSTATUS_SIE;
@@ -331,19 +332,19 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_mstatus] =
         (CSR_RegFile[csr_mstatus] & ~sstatus_mask) | (sstatus & sstatus_mask);
 
-    out.csr2front->epc = CSR_RegFile[csr_sepc];
+    wires->csr2front.epc = CSR_RegFile[csr_sepc];
   }
 }
 
 void Csr::comb_csr_write() {
-  if (in.exe2csr->we) {
-    csr_we_1 = in.exe2csr->we;
-    csr_idx_1 = in.exe2csr->idx;
-    csr_wcmd_1 = in.exe2csr->wcmd;
-    csr_wdata_1 = in.exe2csr->wdata;
+  if (wires->exe2csr.we) {
+    csr_we_1 = wires->exe2csr.we;
+    csr_idx_1 = wires->exe2csr.idx;
+    csr_wcmd_1 = wires->exe2csr.wcmd;
+    csr_wdata_1 = wires->exe2csr.wdata;
   }
 
-  if (in.rob2csr->commit && csr_we) {
+  if (wires->rob2csr.commit && csr_we) {
     uint32_t old_val = CSR_RegFile[cvt_number_to_csr(csr_idx)];
 
     if (csr_wcmd == CSR_S) {

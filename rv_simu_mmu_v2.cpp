@@ -658,7 +658,7 @@ void SimCpu::init() {
   mem_subsystem.peripheral_resp = &back.in.peripheral_resp;
   mem_subsystem.set_ptw_coherent_source(back.lsu);
 
-  front.in.csr_status = back.csr->out.csr_status;
+  front.in.csr_status = &back.csr_status;
   front.ctx = &ctx;
 
   back.set_lsu_ptw_walk_port(mem_subsystem.dtlb_walk_port);
@@ -878,7 +878,7 @@ void SimCpu::front_comb_before_back() {
   const auto reset = front.in.reset;
   front.in = front.back2front;
   front.in.reset = reset;
-  front.in.csr_status = back.csr->out.csr_status;
+  front.in.csr_status = &back.csr_status;
 
   if (frontend_can_read) {
     front.in.FIFO_read_enable = true;
@@ -935,7 +935,7 @@ void SimCpu::back2front_comb() {
   front.back2front_1 = front.back2front;
   front.back2front_stall_1 = back.out.stall;
   front.back2front_1.FIFO_read_enable = false;
-  front.back2front_1.csr_status = back.csr->out.csr_status;
+  front.back2front_1.csr_status = &back.csr_status;
   front.back2front_1.refetch = back.out.mispred || back.out.flush;
   front.back2front_1.itlb_flush = back.out.itlb_flush;
   front.back2front_1.fence_i = back.out.fence_i;

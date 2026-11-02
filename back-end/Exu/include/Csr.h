@@ -116,21 +116,14 @@ inline int cvt_number_to_csr(int csr_idx) {
 }
 
 typedef struct {
-  ExeCsrIO *exe2csr;
-  RobCsrIO *rob2csr;
-  RobBroadcastIO *rob_bcast;
-  CsrInterruptInjectIO *interrupt_inject;
 } CsrIn;
 
 typedef struct {
-  CsrExeIO *csr2exe;
-  CsrRobIO *csr2rob;
-  CsrFrontIO *csr2front;
-  CsrStatusIO *csr_status;
 } CsrOut;
 
 class Csr {
 public:
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   CsrIn in;
   CsrOut out;
 

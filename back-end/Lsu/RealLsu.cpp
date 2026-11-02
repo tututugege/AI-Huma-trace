@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "RealLsu.h"
 #include "DcacheConfig.h"
 #include "MemUtils.h"
@@ -78,32 +79,32 @@ void RealLsu::comb_cal() {
 }
 
 void RealLsu::comb_lsu2rob() {
-  *out.lsu2rob = {};
-  out.lsu2rob->committed_store_pending = cur.stq_commit_count != 0;
-  out.lsu2rob->tma.miss_mask = load_miss_mask(cur);
+  wires->lsu2rob = {};
+  wires->lsu2rob.committed_store_pending = cur.stq_commit_count != 0;
+  wires->lsu2rob.tma.miss_mask = load_miss_mask(cur);
 }
 
 void RealLsu::comb_lsu2dis() {
-  *out.lsu2dis = {};
-  out.lsu2dis->stq_tail = stq_idx_after(cur.stq_head, cur.stq_count);
-  out.lsu2dis->stq_tail_flag = stq_tail_flag(cur.stq_head, cur.stq_count, cur.stq_head_flag);
+  wires->lsu2dis = {};
+  wires->lsu2dis.stq_tail = stq_idx_after(cur.stq_head, cur.stq_count);
+  wires->lsu2dis.stq_tail_flag = stq_tail_flag(cur.stq_head, cur.stq_count, cur.stq_head_flag);
 
   uint32_t ldq_free = min<uint32_t>(LDQ_SIZE - ldq_allocated_ - cur.wait_mmu_ldq.count, ldq_empty_);
   uint32_t stq_free = STQ_SIZE - stq_allocated_ - std::max<uint32_t>(cur.wait_mmu_stq.count, cur.mmu_done_stq.count);
   stq_free = min<uint32_t>(stq_free, STQ_SIZE - cur.stq_count);
-  out.lsu2dis->stq_free = stq_free;
-  out.lsu2dis->ldq_free = ldq_free;
+  wires->lsu2dis.stq_free = stq_free;
+  wires->lsu2dis.ldq_free = ldq_free;
 
   uint32_t n = 0;
   for (int i = 0; i < LDQ_SIZE && n < MAX_LDQ_DISPATCH_WIDTH && n < ldq_free; i++)
     if (cur.ldq[i].load_state == LoadState::Empty) {
-      out.lsu2dis->ldq_alloc_idx[n] = i;
-      out.lsu2dis->ldq_alloc_valid[n++] = true;
+      wires->lsu2dis.ldq_alloc_idx[n] = i;
+      wires->lsu2dis.ldq_alloc_valid[n++] = true;
     }
 }
 
 void RealLsu::comb_dis2lsu() {
-  const DisLsuIO &d = *in.dis2lsu;
+  const DisLsuIO &d = wires->dis2lsu;
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
     LdqEntry &e = nxt.ldq[d.ldq_idx[i]];
@@ -135,7 +136,7 @@ void RealLsu::comb_dis2lsu() {
 }
 
 void RealLsu::comb_exe2lsu() {
-  const ExeLsuIO &x = *in.exe2lsu;
+  const ExeLsuIO &x = wires->exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++)
     if (x.sdu_req[i].valid) handle_store_data(x.sdu_req[i].uop);
   for (int i = 0; i < LSU_AGU_COUNT; i++)
@@ -199,26 +200,26 @@ void RealLsu::handle_load_req(const MicroOp &inst) {
 }
 
 void RealLsu::comb_mmio_out() {
-  *out.peripheral_req = {};
-  if (!in.peripheral_resp->ready) return;
+  wires->out.peripheral_req = {};
+  if (!wires->in.peripheral_resp.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
-  out.peripheral_req->is_mmio = u.valid;
+  wires->out.peripheral_req.is_mmio = u.valid;
   if (u.valid) {
-    out.peripheral_req->wen = !u.is_load;
-    out.peripheral_req->mmio_addr = u.addr;
-    out.peripheral_req->mmio_wdata = u.wdata;
-    out.peripheral_req->mmio_fun3 = u.func3;
+    wires->out.peripheral_req.wen = !u.is_load;
+    wires->out.peripheral_req.mmio_addr = u.addr;
+    wires->out.peripheral_req.mmio_wdata = u.wdata;
+    wires->out.peripheral_req.mmio_fun3 = u.func3;
   }
 }
 
 void RealLsu::comb_mmio_in() {
-  if (!(in.peripheral_resp->is_mmio && cur.uncached_unit.valid)) return;
+  if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
     if (nxt.finish.count >= LDQ_SIZE) return;
     LdqEntry &e = nxt.ldq[idx];
     if (e.load_state == LoadState::WaitMmioResp) {
-      e.result = in.peripheral_resp->mmio_rdata;
+      e.result = wires->in.peripheral_resp.mmio_rdata;
       e.load_state = LoadState::ReadyToWb;
       nxt.finish.push(idx);
     }
@@ -229,8 +230,8 @@ void RealLsu::comb_mmio_in() {
 }
 
 void RealLsu::comb_tlb_out() {
-  *out.lsu2mmu = {};
-  out.lsu2mmu->csr_status = *in.csr_status;
+  wires->lsu2mmu_io = {};
+  wires->lsu2mmu_io.csr_status = wires->csr_status;
 
   uint32_t issued = 0;
   const uint32_t nl = nxt.wait_mmu_ldq.window(LSU_LOAD_WINDOW_WIDTH);
@@ -239,7 +240,7 @@ void RealLsu::comb_tlb_out() {
     const QIdx &w = nxt.wait_mmu_ldq.e[wait_idx];
     const LdqEntry &l = nxt.ldq[w.idx];
     if (w.valid && l.load_state == LoadState::WaitTlb) {
-      auto &r = out.lsu2mmu->ldq_req[issued++];
+      auto &r = wires->lsu2mmu_io.ldq_req[issued++];
       r.valid = true;
       r.vaddr = l.v_addr;
       r.entry_idx = w.idx;
@@ -253,7 +254,7 @@ void RealLsu::comb_tlb_out() {
     const QIdx &w = nxt.wait_mmu_stq.e[wait_idx];
     const StqEntry &s = nxt.stq[w.idx];
     if (w.valid && s.store_state == StoreState::WaitTlb) {
-      auto &r = out.lsu2mmu->stq_req[issued++];
+      auto &r = wires->lsu2mmu_io.stq_req[issued++];
       r.valid = true;
       r.vaddr = s.vaddr;
       r.entry_idx = w.idx;
@@ -264,7 +265,7 @@ void RealLsu::comb_tlb_out() {
 
 void RealLsu::comb_tlb_in_ldq() {
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    const auto &resp = in.mmu2lsu->ldq_resp[i];
+    const auto &resp = wires->mmu2lsu_io.ldq_resp[i];
     if (!resp.valid || resp.wait_idx >= LDQ_SIZE || resp.entry_idx >= LDQ_SIZE) continue;
     QIdx &w = nxt.wait_mmu_ldq.e[resp.wait_idx];
     if (!w.valid || w.idx != resp.entry_idx) continue;
@@ -319,7 +320,7 @@ void RealLsu::comb_tlb_in_ldq() {
 
 void RealLsu::comb_tlb_in_stq() {
   for (int i = 0; i < LSU_STA_COUNT; i++) {
-    const auto &resp = in.mmu2lsu->stq_resp[i];
+    const auto &resp = wires->mmu2lsu_io.stq_resp[i];
     if (!resp.valid || resp.wait_idx >= STQ_SIZE || resp.entry_idx >= STQ_SIZE) continue;
     const QIdx &w = nxt.wait_mmu_stq.e[resp.wait_idx];
     if (!w.valid || w.idx != resp.entry_idx) continue;
@@ -385,7 +386,7 @@ void RealLsu::comb_stlf() {
         break;
       }
       if (l.is_mmio) {
-        if (older == 0 && lsu_mmio_is_oldest_unfinished(in.rob_bcast, l.rob_idx) && !nxt.uncached_unit.valid) {
+        if (older == 0 && lsu_mmio_is_oldest_unfinished(&wires->rob_bcast, l.rob_idx) && !nxt.uncached_unit.valid) {
           l.load_state = LoadState::WaitMmioResp;
           UncachedUnit &u = nxt.uncached_unit;  // wdata is left untouched on purpose (it reaches the bus for loads too)
           u.valid = true;
@@ -450,7 +451,7 @@ void RealLsu::comb_stlf() {
 }
 
 void RealLsu::comb_lsu2dcache_ldq() {
-  auto &ports = out.lsu2dcache->req_ports.load_ports;
+  auto &ports = wires->out.lsu2dcache.req_ports.load_ports;
   for (int i = 0; i < LSU_LDU_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
   uint32_t issued = 0;
@@ -478,7 +479,7 @@ void RealLsu::comb_lsu2dcache_ldq() {
 
 void RealLsu::comb_dcache2lsu_ldq() {
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    const auto &resp = in.dcache2lsu->resp_ports.load_resps[i];
+    const auto &resp = wires->in.dcache2lsu.resp_ports.load_resps[i];
     if (!resp.valid) continue;
     if (resp.req_id & (1u << 31)) {
       LSU_NON_BSD_ASSERT(0 && "Invalid load response ID from DCache");
@@ -504,7 +505,7 @@ void RealLsu::comb_dcache2lsu_ldq() {
       nxt.wait_dcache_ldq.e[entry_idx].replay_wait_cycles = replay_delay_cycles(resp.replay);
     }
   }
-  wake_load_replays_on_mshr_fill(*in.dcache2lsu, nxt);
+  wake_load_replays_on_mshr_fill(wires->in.dcache2lsu, nxt);
 
   const uint32_t n = nxt.wait_dcache_ldq.window(LSU_LOAD_WINDOW_WIDTH);
   for (uint32_t i = 0; i < n; i++) {
@@ -519,7 +520,7 @@ void RealLsu::comb_dcache2lsu_ldq() {
 
 void RealLsu::comb_dcache2lsu_stq() {
   for (int i = 0; i < LSU_STA_COUNT; i++) {
-    const auto &resp = in.dcache2lsu->resp_ports.store_resps[i];
+    const auto &resp = wires->in.dcache2lsu.resp_ports.store_resps[i];
     if (!resp.valid) continue;
     if (resp.req_id >= STQ_SIZE) {
       LSU_NON_BSD_ASSERT(0 && "Store response idx out of bound");
@@ -536,11 +537,11 @@ void RealLsu::comb_dcache2lsu_stq() {
       s.replay_wait_cycles = replay_delay_cycles(resp.replay);
     }
   }
-  wake_store_replays_on_mshr_fill(*in.dcache2lsu, nxt);
+  wake_store_replays_on_mshr_fill(wires->in.dcache2lsu, nxt);
 }
 
 void RealLsu::comb_lsu2dcache_stq() {
-  auto &ports = out.lsu2dcache->req_ports.store_ports;
+  auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
   const uint32_t n = min<uint32_t>(nxt.stq_commit_count, LSU_STORE_WINDOW_WIDTH);
@@ -586,7 +587,7 @@ void RealLsu::comb_lsu2dcache_stq() {
 }
 
 void RealLsu::comb_lsu2exe() {
-  *out.lsu2exe = {};
+  wires->lsu2exe = {};
   uint32_t issue_st = 0, issue_ld = 0;
 
   const uint32_t nd = nxt.mmu_done_stq.window(LSU_STORE_WINDOW_WIDTH);
@@ -618,14 +619,14 @@ void RealLsu::comb_lsu2exe() {
         wb.dest_preg = s.dest_preg;
         wb.dest_en = s.dest_preg != 0;
       }
-      out.lsu2exe->wb_req[issue_ld].valid = true;
-      out.lsu2exe->wb_req[issue_ld++].uop = (wb);
+      wires->lsu2exe.wb_req[issue_ld].valid = true;
+      wires->lsu2exe.wb_req[issue_ld++].uop = (wb);
     } else {
       if (issue_st >= LSU_STA_COUNT) continue;
       wb.op = UOP_STA;
       wb.result = s.vaddr;
-      out.lsu2exe->sta_wb_req[issue_st].valid = true;
-      out.lsu2exe->sta_wb_req[issue_st++].uop = (wb);
+      wires->lsu2exe.sta_wb_req[issue_st].valid = true;
+      wires->lsu2exe.sta_wb_req[issue_st++].uop = (wb);
     }
     s.store_state = StoreState::WaitCommit;
     d.valid = false;
@@ -651,8 +652,8 @@ void RealLsu::comb_lsu2exe() {
     wb.page_fault_load = l.page_fault;
     wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
     wb.is_mmio = l.is_mmio;
-    out.lsu2exe->wb_req[issue_ld].valid = true;
-    out.lsu2exe->wb_req[issue_ld++].uop = (wb);
+    wires->lsu2exe.wb_req[issue_ld].valid = true;
+    wires->lsu2exe.wb_req[issue_ld++].uop = (wb);
 
     l.load_state = LoadState::Empty;
     f.valid = false;
@@ -670,8 +671,8 @@ void RealLsu::comb_lsu2exe() {
 
 void RealLsu::comb_stq_commit() {
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (!in.rob_commit->commit_entry[i].valid) continue;
-    const auto &u = in.rob_commit->commit_entry[i].uop;
+    if (!wires->rob_commit.commit_entry[i].valid) continue;
+    const auto &u = wires->rob_commit.commit_entry[i].uop;
     if (!is_store(u)) continue;
     const int idx = u.stq_idx;
     if (idx != nxt.stq_commit || nxt.stq[idx].store_state != StoreState::WaitCommit) {
@@ -679,7 +680,7 @@ void RealLsu::comb_stq_commit() {
       continue;
     }
     StqEntry &s = nxt.stq[idx];
-    if (static_cast<bool>(in.rob_bcast->flush) || (s.is_lrsc && !s.sc_pass)) {
+    if (static_cast<bool>(wires->rob_bcast.flush) || (s.is_lrsc && !s.sc_pass)) {
       s.suppress_write = true;  // flushed or failed SC: retire without writing
       s.store_state = StoreState::Done;
     } else {
@@ -700,7 +701,7 @@ void RealLsu::comb_check() {  // retire finished stores from the STQ head
 }
 
 void RealLsu::comb_flush() {
-  if (in.rob_bcast->flush) {
+  if (wires->rob_bcast.flush) {
     for (LdqEntry &l : nxt.ldq) l.load_state = LoadState::Empty;
     const uint32_t keep = min<uint32_t>(nxt.stq_commit_count, nxt.stq_count);
     nxt.stq_count = nxt.stq_commit_count = keep;
@@ -718,7 +719,7 @@ void RealLsu::comb_flush() {
     if (!keep_store) nxt.uncached_unit.valid = false;
   }
 
-  const DecBroadcastIO &dec = *in.dec_bcast;
+  const DecBroadcastIO &dec = wires->dec_bcast;
   if (dec.mispred) {
     for (LdqEntry &l : nxt.ldq)
       if (l.load_state != LoadState::Empty && (l.br_mask & dec.br_mask) != 0) l.load_state = LoadState::Empty;

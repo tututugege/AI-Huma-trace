@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "BeginCheck.h"
 #include "Dispatch.h"
 #include "config.h"
@@ -5,12 +6,12 @@
 
 bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
   for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++) {
-    if (in.prf_awake->wake[w].valid && in.prf_awake->wake[w].preg == preg) {
+    if (wires->prf_awake.wake[w].valid && wires->prf_awake.wake[w].preg == preg) {
       return true;
     }
   }
   for (int w = 0; w < MAX_WAKEUP_PORTS; w++) {
-    if (in.iss_awake->wake[w].valid && in.iss_awake->wake[w].preg == preg) {
+    if (wires->iss_awake.wake[w].valid && wires->iss_awake.wake[w].preg == preg) {
       return true;
     }
   }
@@ -65,24 +66,24 @@ void Dispatch::comb_begin() {
 /*
  * comb_alloc
  * 功能: 预分配 ROB/LDQ/STQ 相关元数据，并生成 dis2rob 初始 valid/uop。
- * 输入依赖: inst_r/inst_valid, in.rob2dis->enq_idx/rob_flag, in.lsu2dis->{stq_tail,stq_tail_flag,stq_free,ldq_free,ldq_alloc_*}, in.dec_bcast->clear_mask。
- * 输出更新: inst_alloc[], out.dis2rob->valid/uop, stq_port_owner[], ldq_port_owner[], out.dis2lsu 的 alloc 请求初值。
+ * 输入依赖: inst_r/inst_valid, wires->rob2dis.enq_idx/rob_flag, wires->lsu2dis.{stq_tail,stq_tail_flag,stq_free,ldq_free,ldq_alloc_*}, wires->dec_bcast.clear_mask。
+ * 输出更新: inst_alloc[], wires->dis2rob.valid/uop, stq_port_owner[], ldq_port_owner[], &wires->dis2lsu 的 alloc 请求初值。
  * 约束: 资源不足时该槽位 dis2rob->valid 置 0；br_mask 入队前先清除 clear_mask。
  */
 void Dispatch::comb_alloc() {
   int store_alloc_count = 0; // 当前周期已分配的 store 数量
   int load_alloc_count = 0;  // 当前周期已分配的 load 数量
-  wire<BR_MASK_WIDTH> clear_mask = in.dec_bcast->clear_mask;
+  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
 
   // 初始化输出
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    out.dis2lsu->alloc_req[k] = false;
-    out.dis2lsu->br_mask[k] = 0;
+    wires->dis2lsu.alloc_req[k] = false;
+    wires->dis2lsu.br_mask[k] = 0;
     stq_port_owner[k] = -1;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    out.dis2lsu->ldq_alloc_req[k] = false;
-    out.dis2lsu->ldq_br_mask[k] = 0;
+    wires->dis2lsu.ldq_alloc_req[k] = false;
+    wires->dis2lsu.ldq_br_mask[k] = 0;
     ldq_port_owner[k] = -1;
   }
 
@@ -90,56 +91,56 @@ void Dispatch::comb_alloc() {
     inst_alloc[i] = (inst_r[i]);
     // 入队口强制清理：本拍已解析分支对应 bit 不应继续进入后端缓冲结构。
     inst_alloc[i].br_mask &= ~clear_mask;
-    out.dis2rob->valid[i] = inst_valid[i];
+    wires->dis2rob.valid[i] = inst_valid[i];
 
     // 分配 ROB ID (重排序缓存索引)
-    inst_alloc[i].rob_idx = make_rob_idx(in.rob2dis->enq_idx, i);
-    inst_alloc[i].rob_flag = in.rob2dis->rob_flag;
+    inst_alloc[i].rob_idx = make_rob_idx(wires->rob2dis.enq_idx, i);
+    inst_alloc[i].rob_flag = wires->rob2dis.rob_flag;
     inst_alloc[i].expect_mask = 0;
     inst_alloc[i].cplt_mask = 0;
 
     // Load 需要知道之前的 Store
     if (inst_valid[i] && is_load(inst_r[i])) {
-      int stop_pos = in.lsu2dis->stq_tail + store_alloc_count;
+      int stop_pos = wires->lsu2dis.stq_tail + store_alloc_count;
       inst_alloc[i].stq_idx = stop_pos % STQ_SIZE;
       inst_alloc[i].stq_flag =
-          in.lsu2dis->stq_tail_flag ^ ((stop_pos / STQ_SIZE) & 0x1);
+          wires->lsu2dis.stq_tail_flag ^ ((stop_pos / STQ_SIZE) & 0x1);
 
       // 检查 Load 队列限制和端口限制
-      if (load_alloc_count < in.lsu2dis->ldq_free &&
+      if (load_alloc_count < wires->lsu2dis.ldq_free &&
           load_alloc_count < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width &&
           load_alloc_count < MAX_LDQ_DISPATCH_WIDTH &&
-          in.lsu2dis->ldq_alloc_valid[load_alloc_count]) {
-        inst_alloc[i].ldq_idx = in.lsu2dis->ldq_alloc_idx[load_alloc_count];
+          wires->lsu2dis.ldq_alloc_valid[load_alloc_count]) {
+        inst_alloc[i].ldq_idx = wires->lsu2dis.ldq_alloc_idx[load_alloc_count];
         ldq_port_owner[load_alloc_count] = i;
         load_alloc_count++;
       } else {
-        out.dis2rob->valid[i] = false;
+        wires->dis2rob.valid[i] = false;
       }
     }
 
     // 处理 Store 分配
     if (inst_valid[i] && is_store(inst_r[i])) {
       // 检查是否有足够的 STQ 端口和队列空间
-      if (store_alloc_count < in.lsu2dis->stq_free &&
+      if (store_alloc_count < wires->lsu2dis.stq_free &&
           store_alloc_count < MAX_STQ_DISPATCH_WIDTH) {
         // 计算 STQ Index
         int allocated_idx =
-            (in.lsu2dis->stq_tail + store_alloc_count) % STQ_SIZE;
-        int allocated_pos = in.lsu2dis->stq_tail + store_alloc_count;
+            (wires->lsu2dis.stq_tail + store_alloc_count) % STQ_SIZE;
+        int allocated_pos = wires->lsu2dis.stq_tail + store_alloc_count;
         inst_alloc[i].stq_idx = allocated_idx;
         inst_alloc[i].stq_flag =
-            in.lsu2dis->stq_tail_flag ^ ((allocated_pos / STQ_SIZE) & 0x1);
+            wires->lsu2dis.stq_tail_flag ^ ((allocated_pos / STQ_SIZE) & 0x1);
 
         stq_port_owner[store_alloc_count] = i;
 
         store_alloc_count++;
       } else {
-        out.dis2rob->valid[i] = false;
+        wires->dis2rob.valid[i] = false;
       }
     }
 
-    out.dis2rob->uop[i] = inst_alloc[i];
+    wires->dis2rob.uop[i] = inst_alloc[i];
   }
 }
 
@@ -147,13 +148,13 @@ void Dispatch::comb_alloc() {
 /*
  * comb_wake
  * 功能: 根据 busy_table 与唤醒总线更新 inst_alloc 源操作数 busy 状态。
- * 输入依赖: busy_table, in.prf_awake, in.iss_awake, inst_alloc, out.dis2rob->valid。
+ * 输入依赖: busy_table, &wires->prf_awake, &wires->iss_awake, inst_alloc, wires->dis2rob.valid。
  * 输出更新: inst_alloc[].src1_busy/src2_busy。
  * 约束: 同拍更早槽位若写同一 preg，则后续槽位对应源 busy 必须保持 true（防止过早就绪）。
  */
 void Dispatch::comb_wake() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!out.dis2rob->valid[i]) {
+    if (!wires->dis2rob.valid[i]) {
       continue;
     }
 
@@ -163,7 +164,7 @@ void Dispatch::comb_wake() {
     apply_wakeup_to_uop(uop);
 
     for (int j = 0; j < i; j++) {
-      if (!out.dis2rob->valid[j] || !inst_alloc[j].dest_en) {
+      if (!wires->dis2rob.valid[j] || !inst_alloc[j].dest_en) {
         continue;
       }
       if (inst_alloc[j]->dest_areg == 0) {
@@ -183,15 +184,15 @@ void Dispatch::comb_wake() {
 /*
  * comb_dispatch
  * 功能: 拆分宏指令为 uop 并尝试写入各 IQ 请求端口，同时缓存拆分元数据供 comb_fire 回滚。
- * 输入依赖: inst_valid, inst_alloc, in.iss2dis->ready_num, GLOBAL_IQ_CONFIG（dispatch_width）, decompose_inst()。
- * 输出更新: out.dis2iss->req[][], dispatch_success_flags[], dispatch_cache[], out.dis2rob->uop[i].expect_mask/cplt_mask。
+ * 输入依赖: inst_valid, inst_alloc, wires->iss2dis.ready_num, GLOBAL_IQ_CONFIG（dispatch_width）, decompose_inst()。
+ * 输出更新: wires->dis2iss.req[][], dispatch_success_flags[], dispatch_cache[], wires->dis2rob.uop[i].expect_mask/cplt_mask。
  * 约束: 按槽位顺序分配 IQ 端口；任一槽位不满足容量后停止后续槽位分配。
  */
 void Dispatch::comb_dispatch() {
   // 1. 清空输出 req
   for (int i = 0; i < IQ_NUM; i++) {
     for (int w = 0; w < MAX_IQ_DISPATCH_WIDTH; w++) {
-      out.dis2iss->req[i][w].valid = false;
+      wires->dis2iss.req[i][w].valid = false;
     }
   }
 
@@ -237,7 +238,7 @@ void Dispatch::comb_dispatch() {
       int port_limit = GLOBAL_IQ_CONFIG[target].dispatch_width;
 
       if (iq_usage[target] >= port_limit ||
-          iq_usage[target] >= in.iss2dis->ready_num[target]) {
+          iq_usage[target] >= wires->iss2dis.ready_num[target]) {
         fit = false;
         break;
       }
@@ -246,14 +247,14 @@ void Dispatch::comb_dispatch() {
     // === 4. 提交发射请求 ===
     if (fit) {
       dispatch_success_flags[i] = true;
-      out.dis2rob->uop[i].expect_mask = expect_mask;
-      out.dis2rob->uop[i].cplt_mask = 0;
+      wires->dis2rob.uop[i].expect_mask = expect_mask;
+      wires->dis2rob.uop[i].cplt_mask = 0;
       for (int k = 0; k < cnt; k++) {
         int target = temp_uops[k].iq_id;
         int slot = iq_usage[target];
 
-        out.dis2iss->req[target][slot].valid = true;
-        out.dis2iss->req[target][slot].uop = temp_uops[k].uop;
+        wires->dis2iss.req[target][slot].valid = true;
+        wires->dis2iss.req[target][slot].uop = temp_uops[k].uop;
 
         iq_usage[target]++;
       }
@@ -266,8 +267,8 @@ void Dispatch::comb_dispatch() {
 /*
  * comb_fire
  * 功能: 计算最终 dis_fire 与 dis2ren.ready，提交 busy_table 更新，并根据 fire 成败确认/回滚 IQ 与 LSU 请求。
- * 输入依赖: out.dis2rob->valid, dispatch_success_flags, dispatch_cache, inst_valid/inst_r/inst_alloc, in.rob2dis, in.rob_bcast, in.dec_bcast, in.prf_awake, in.iss_awake。
- * 输出更新: out.dis2rob->dis_fire[], out.dis2ren->ready, out.dis2iss->req[][]（回滚后结果）, out.dis2lsu->{alloc_req/ldq_alloc_req/...}, busy_table_1。
+ * 输入依赖: wires->dis2rob.valid, dispatch_success_flags, dispatch_cache, inst_valid/inst_r/inst_alloc, &wires->rob2dis, &wires->rob_bcast, &wires->dec_bcast, &wires->prf_awake, &wires->iss_awake。
+ * 输出更新: wires->dis2rob.dis_fire[], wires->dis2ren.ready, wires->dis2iss.req[][]（回滚后结果）, wires->dis2lsu.{alloc_req/ldq_alloc_req/...}, busy_table_1。
  * 约束: flush/mispred/stall 阻断发射；CSR/AMO 需满足串行化条件；older 指令阻塞后续槽位发射。
  */
 void Dispatch::comb_fire() {
@@ -296,19 +297,19 @@ void Dispatch::comb_fire() {
   bool pre_fire = false;
   bool serializing_barrier = false;
   int dis2ren_block_reason = DIS2REN_BLOCK_NONE;
-  wire<BR_MASK_WIDTH> clear_mask = in.dec_bcast->clear_mask;
+  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
   bool global_flush =
-      in.rob_bcast->flush || in.dec_bcast->mispred || in.rob2dis->stall;
+      wires->rob_bcast.flush || wires->dec_bcast.mispred || wires->rob2dis.stall;
 
   std::memcpy(busy_table_1, busy_table, sizeof(busy_table_1));
   for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++) {
-    if (in.prf_awake->wake[w].valid) {
-      busy_table_1[in.prf_awake->wake[w].preg] = false;
+    if (wires->prf_awake.wake[w].valid) {
+      busy_table_1[wires->prf_awake.wake[w].preg] = false;
     }
   }
   for (int w = 0; w < MAX_WAKEUP_PORTS; w++) {
-    if (in.iss_awake->wake[w].valid) {
-      busy_table_1[in.iss_awake->wake[w].preg] = false;
+    if (wires->iss_awake.wake[w].valid) {
+      busy_table_1[wires->iss_awake.wake[w].preg] = false;
     }
   }
 
@@ -320,33 +321,33 @@ void Dispatch::comb_fire() {
     bool is_wfi_inst = inst_valid[i] && inst_type == WFI;
     bool csr_blocked = false;
     bool atomic_blocked = false;
-    bool basic_fire = out.dis2rob->valid[i] &&
+    bool basic_fire = wires->dis2rob.valid[i] &&
                       dispatch_success_flags[i] && // IQ 检查通过
-                      in.rob2dis->ready &&         // ROB 有空间
+                      wires->rob2dis.ready &&         // ROB 有空间
                       !pre_stall && !global_flush;
 
     // 特殊检查：CSR
     if (is_CSR(inst_r[i]->type)) {
-      if (!in.rob2dis->empty || pre_fire) {
+      if (!wires->rob2dis.empty || pre_fire) {
         basic_fire = false;
         csr_blocked = true;
       }
     }
     // 原子指令串行化：仅允许在 ROB 空且本拍无更早指令发射时进入后端。
     if (is_atomic_inst) {
-      if (!in.rob2dis->empty || pre_fire) {
+      if (!wires->rob2dis.empty || pre_fire) {
         basic_fire = false;
         atomic_blocked = true;
       }
     }
 
-    out.dis2rob->dis_fire[i] = basic_fire;
+    wires->dis2rob.dis_fire[i] = basic_fire;
 
     if (inst_valid[i] && !basic_fire) {
       if (dis2ren_block_reason == DIS2REN_BLOCK_NONE) {
         if (global_flush) {
           dis2ren_block_reason = DIS2REN_BLOCK_FLUSH_STALL;
-        } else if (!in.rob2dis->ready) {
+        } else if (!wires->rob2dis.ready) {
           dis2ren_block_reason = DIS2REN_BLOCK_ROB;
         } else if (csr_blocked || atomic_blocked || serializing_barrier) {
           dis2ren_block_reason = DIS2REN_BLOCK_SERIALIZE;
@@ -370,13 +371,13 @@ void Dispatch::comb_fire() {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (out.dis2rob->dis_fire[i] && inst_r[i].dest_en) {
+    if (wires->dis2rob.dis_fire[i] && inst_r[i].dest_en) {
       busy_table_1[inst_r[i].dest_preg] = true;
     }
   }
 
   // 更新 Rename 单元的 Ready 信号
-  out.dis2ren->ready = !pre_stall;
+  wires->dis2ren.ready = !pre_stall;
 
   // === 步骤 2: 撤销无效的 IQ 请求 (回滚) ===
   int iq_slot_idx[IQ_NUM] = {0};
@@ -390,14 +391,14 @@ void Dispatch::comb_fire() {
     // 从缓存读取元数据
     int cnt = dispatch_cache[i].count;
 
-    if (!out.dis2rob->dis_fire[i]) {
+    if (!wires->dis2rob.dis_fire[i]) {
       // Fire 失败 -> 撤销请求
       for (int k = 0; k < cnt; k++) {
         // 直接使用缓存的 ID
         int target = dispatch_cache[i].iq_ids[k];
         int slot = iq_slot_idx[target];
 
-        out.dis2iss->req[target][slot].valid = false; // 撤销！
+        wires->dis2iss.req[target][slot].valid = false; // 撤销！
         iq_slot_idx[target]++;
       }
     } else {
@@ -412,27 +413,27 @@ void Dispatch::comb_fire() {
   // === 步骤 3: 更新 STQ 的 Fire 信号 ===
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
     int inst_idx = stq_port_owner[k];
-    if (inst_idx >= 0 && out.dis2rob->dis_fire[inst_idx]) {
-      out.dis2lsu->alloc_req[k] = true;
-      out.dis2lsu->br_mask[k] =
-          out.dis2rob->uop[inst_idx].br_mask & ~clear_mask;
-      out.dis2lsu->rob_idx[k] = out.dis2rob->uop[inst_idx].rob_idx;
-      out.dis2lsu->rob_flag[k] = out.dis2rob->uop[inst_idx].rob_flag;
-      out.dis2lsu->stq_flag[k] = out.dis2rob->uop[inst_idx].stq_flag;
-      out.dis2lsu->func3[k] = out.dis2rob->uop[inst_idx]->func3;
+    if (inst_idx >= 0 && wires->dis2rob.dis_fire[inst_idx]) {
+      wires->dis2lsu.alloc_req[k] = true;
+      wires->dis2lsu.br_mask[k] =
+          wires->dis2rob.uop[inst_idx].br_mask & ~clear_mask;
+      wires->dis2lsu.rob_idx[k] = wires->dis2rob.uop[inst_idx].rob_idx;
+      wires->dis2lsu.rob_flag[k] = wires->dis2rob.uop[inst_idx].rob_flag;
+      wires->dis2lsu.stq_flag[k] = wires->dis2rob.uop[inst_idx].stq_flag;
+      wires->dis2lsu.func3[k] = wires->dis2rob.uop[inst_idx]->func3;
     }
   }
 
   // === 步骤 4: 更新 LDQ 的 Fire 信号 ===
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
     int inst_idx = ldq_port_owner[k];
-    if (inst_idx >= 0 && out.dis2rob->dis_fire[inst_idx]) {
-      out.dis2lsu->ldq_alloc_req[k] = true;
-      out.dis2lsu->ldq_idx[k] = out.dis2rob->uop[inst_idx].ldq_idx;
-      out.dis2lsu->ldq_br_mask[k] =
-          out.dis2rob->uop[inst_idx].br_mask & ~clear_mask;
-      out.dis2lsu->ldq_rob_idx[k] = out.dis2rob->uop[inst_idx].rob_idx;
-      out.dis2lsu->ldq_rob_flag[k] = out.dis2rob->uop[inst_idx].rob_flag;
+    if (inst_idx >= 0 && wires->dis2rob.dis_fire[inst_idx]) {
+      wires->dis2lsu.ldq_alloc_req[k] = true;
+      wires->dis2lsu.ldq_idx[k] = wires->dis2rob.uop[inst_idx].ldq_idx;
+      wires->dis2lsu.ldq_br_mask[k] =
+          wires->dis2rob.uop[inst_idx].br_mask & ~clear_mask;
+      wires->dis2lsu.ldq_rob_idx[k] = wires->dis2rob.uop[inst_idx].rob_idx;
+      wires->dis2lsu.ldq_rob_flag[k] = wires->dis2rob.uop[inst_idx].rob_flag;
     }
   }
 
@@ -441,29 +442,29 @@ void Dispatch::comb_fire() {
 /*
  * comb_pipeline
  * 功能: 推进 Dispatch 流水寄存器，处理 flush/mispred 清空与背压保留项更新。
- * 输入依赖: in.ren2dis, out.dis2ren->ready, out.dis2rob->dis_fire, inst_valid/inst_r, inst_alloc, in.rob_bcast->flush, in.dec_bcast->{mispred, clear_mask}。
+ * 输入依赖: &wires->ren2dis, wires->dis2ren.ready, wires->dis2rob.dis_fire, inst_valid/inst_r, inst_alloc, wires->rob_bcast.flush, wires->dec_bcast.{mispred, clear_mask}。
  * 输出更新: inst_valid_1[], inst_r_1[]（保留项 busy 状态可被同拍唤醒修正）。
  * 约束: flush/mispred 时全部置无效；ready=1 时采样新输入；保留项及新采样项都需清除 clear_mask。
  */
 void Dispatch::comb_pipeline() {
-  wire<BR_MASK_WIDTH> clear_mask = in.dec_bcast->clear_mask;
+  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
 
-  if (in.rob_bcast->flush || in.dec_bcast->mispred) {
+  if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (in.rob_bcast->flush || in.dec_bcast->mispred) {
+    if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
       inst_valid_1[i] = false;
       continue;
     }
-    if (out.dis2ren->ready) {
-      inst_valid_1[i] = in.ren2dis->valid[i];
-      inst_r_1[i] = in.ren2dis->uop[i];
+    if (wires->dis2ren.ready) {
+      inst_valid_1[i] = wires->ren2dis.valid[i];
+      inst_r_1[i] = wires->ren2dis.uop[i];
       inst_r_1[i].br_mask &= ~clear_mask;
       continue;
     }
 
-    inst_valid_1[i] = inst_valid[i] && !out.dis2rob->dis_fire[i];
+    inst_valid_1[i] = inst_valid[i] && !wires->dis2rob.dis_fire[i];
     if (inst_valid_1[i]) {
       inst_r_1[i].src1_busy = inst_alloc[i].src1_busy;
       inst_r_1[i].src2_busy = inst_alloc[i].src2_busy;

@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "BeginCheck.h"
 #include "Ren.h"
 #include "config.h"
@@ -95,7 +96,7 @@ void Ren::comb_begin() {
  * comb_alloc
  * 功能: 从 free list 预选目的物理寄存器，并生成 ren2dis.valid 的资源可用性结果。
  * 输入依赖: free_list/head/count, inst_valid, inst_r[].dest_en。
- * 输出更新: alloc_reg, out.ren2dis->valid[]（以及性能计数器相关统计）。
+ * 输出更新: alloc_reg, wires->ren2dis.valid[]（以及性能计数器相关统计）。
  * 约束: 顺序分配且一旦前序指令因寄存器不足 stall，后续槽位同拍全部阻塞。
  */
 void Ren::comb_alloc() {
@@ -118,12 +119,12 @@ void Ren::comb_alloc() {
   wire<1> stall = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (inst_valid[i] && inst_r[i].dest_en && !stall) {
-      out.ren2dis->valid[i] = alloc_valid[i];
+      wires->ren2dis.valid[i] = alloc_valid[i];
       stall = !alloc_valid[i];
     } else if (inst_valid[i] && !inst_r[i].dest_en) {
-      out.ren2dis->valid[i] = !stall;
+      wires->ren2dis.valid[i] = !stall;
     } else {
-      out.ren2dis->valid[i] = false;
+      wires->ren2dis.valid[i] = false;
     }
   }
 
@@ -132,8 +133,8 @@ void Ren::comb_alloc() {
 /*
  * comb_rename
  * 功能: 基于 spec_RAT 完成源/目的寄存器重命名，并处理同拍 RAW/WAW 旁路。
- * 输入依赖: inst_r/inst_valid, spec_RAT, alloc_reg, out.ren2dis->uop[j].dest_preg（同拍前序旁路）。
- * 输出更新: out.ren2dis->uop[] 的 src1_preg/src2_preg/old_dest_preg/dest_preg。
+ * 输入依赖: inst_r/inst_valid, spec_RAT, alloc_reg, wires->ren2dis.uop[j].dest_preg（同拍前序旁路）。
+ * 输出更新: wires->ren2dis.uop[] 的 src1_preg/src2_preg/old_dest_preg/dest_preg。
  * 约束: 旁路仅来自同拍更早槽位；x0 写入不参与旁路；旁路优先于 spec_RAT 常规查表结果。
  */
 void Ren::comb_rename() {
@@ -152,8 +153,8 @@ void Ren::comb_rename() {
 
   // 无waw raw的输出 读spec_RAT
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.ren2dis->uop[i] = (inst_r[i]);
-    out.ren2dis->uop[i].dest_preg = alloc_reg[i];
+    wires->ren2dis.uop[i] = (inst_r[i]);
+    wires->ren2dis.uop[i].dest_preg = alloc_reg[i];
     old_dest_preg_normal[i] = spec_RAT[inst_r[i]->dest_areg];
     src1_preg_normal[i] = spec_RAT[inst_r[i]->src1_areg];
     src2_preg_normal[i] = spec_RAT[inst_r[i]->src2_areg];
@@ -179,17 +180,17 @@ void Ren::comb_rename() {
 
       if (inst_r[i]->src1_areg == inst_r[j]->dest_areg) {
         src1_bypass_hit[i] = true;
-        src1_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
+        src1_preg_bypass[i] = wires->ren2dis.uop[j].dest_preg;
       }
 
       if (inst_r[i]->src2_areg == inst_r[j]->dest_areg) {
         src2_bypass_hit[i] = true;
-        src2_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
+        src2_preg_bypass[i] = wires->ren2dis.uop[j].dest_preg;
       }
 
       if (inst_r[i]->dest_areg == inst_r[j]->dest_areg) {
         old_dest_bypass_hit[i] = true;
-        old_dest_preg_bypass[i] = out.ren2dis->uop[j].dest_preg;
+        old_dest_preg_bypass[i] = wires->ren2dis.uop[j].dest_preg;
       }
     }
   }
@@ -202,21 +203,21 @@ void Ren::comb_rename() {
       continue;
     }
     if (src1_bypass_hit[i]) {
-      out.ren2dis->uop[i]->src1_preg = src1_preg_bypass[i];
+      wires->ren2dis.uop[i]->src1_preg = src1_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i]->src1_preg = src1_preg_normal[i];
+      wires->ren2dis.uop[i]->src1_preg = src1_preg_normal[i];
     }
 
     if (src2_bypass_hit[i]) {
-      out.ren2dis->uop[i]->src2_preg = src2_preg_bypass[i];
+      wires->ren2dis.uop[i]->src2_preg = src2_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i]->src2_preg = src2_preg_normal[i];
+      wires->ren2dis.uop[i]->src2_preg = src2_preg_normal[i];
     }
 
     if (old_dest_bypass_hit[i]) {
-      out.ren2dis->uop[i]->old_dest_preg = old_dest_preg_bypass[i];
+      wires->ren2dis.uop[i]->old_dest_preg = old_dest_preg_bypass[i];
     } else {
-      out.ren2dis->uop[i]->old_dest_preg = old_dest_preg_normal[i];
+      wires->ren2dis.uop[i]->old_dest_preg = old_dest_preg_normal[i];
     }
   }
 }
@@ -224,18 +225,18 @@ void Ren::comb_rename() {
 /*
  * comb_fire
  * 功能: 在 ren->dis 握手成功时提交重命名状态更新，并处理 commit/flush/mispred 恢复。
- * 输入依赖: out.ren2dis->valid, in.dis2ren->ready, inst_r, in.rob_commit, in.rob_bcast, in.dec_bcast, arch/spec RAT 与 checkpoint 状态。
- * 输出更新: spec_RAT_1, arch_RAT_1, free_list_1 与指针计数, RAT_checkpoint_1, out.ren2dec->ready。
+ * 输入依赖: wires->ren2dis.valid, wires->dis2ren.ready, inst_r, &wires->rob_commit, &wires->rob_bcast, &wires->dec_bcast, arch/spec RAT 与 checkpoint 状态。
+ * 输出更新: spec_RAT_1, arch_RAT_1, free_list_1 与指针计数, RAT_checkpoint_1, wires->ren2dec.ready。
  * 约束: flush 优先于 mispred；mispred 从 checkpoint 恢复；flush 从 arch_RAT 恢复；分支 fire 时保存 checkpoint。
  */
 void Ren::comb_fire() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    fire[i] = out.ren2dis->valid[i] && in.dis2ren->ready;
+    fire[i] = wires->ren2dis.valid[i] && wires->dis2ren.ready;
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (fire[i] && out.ren2dis->uop[i].dest_en) {
-      int dest_preg = out.ren2dis->uop[i].dest_preg;
+    if (fire[i] && wires->ren2dis.uop[i].dest_en) {
+      int dest_preg = wires->ren2dis.uop[i].dest_preg;
       Assert(free_head_1 != free_tail_1 &&
              "Ren: allocate when free list is empty");
       spec_RAT_1[inst_r[i]->dest_areg] = dest_preg;
@@ -256,19 +257,19 @@ void Ren::comb_fire() {
     }
   }
 
-  out.ren2dec->ready = true;
+  wires->ren2dec.ready = true;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.ren2dec->ready &= fire[i] || !inst_valid[i];
+    wires->ren2dec.ready &= fire[i] || !inst_valid[i];
   }
-  if (in.rob_bcast->flush || in.dec_bcast->mispred) {
-    out.ren2dec->ready = false;
+  if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
+    wires->ren2dec.ready = false;
   }
 
   // 提交指令修改RAT
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (in.rob_commit->commit_entry[i].valid) {
-      const auto &commit_uop = in.rob_commit->commit_entry[i].uop;
-      const bool interrupt_nop = in.rob_bcast->interrupt;
+    if (wires->rob_commit.commit_entry[i].valid) {
+      const auto &commit_uop = wires->rob_commit.commit_entry[i].uop;
+      const bool interrupt_nop = wires->rob_bcast.interrupt;
       if (!interrupt_nop) {
         ctx->perf.commit_num++;
         if (is_load(commit_uop)) {
@@ -298,12 +299,12 @@ void Ren::comb_fire() {
       }
 
       InstEntry commit_entry = commit_uop.to_inst_entry(
-          in.rob_commit->commit_entry[i].valid);
+          wires->rob_commit.commit_entry[i].valid);
       InstInfo *inst = &commit_entry.uop;
 
       // 异常指令提交时不回收 old_dest，保持“异常指令看起来未提交”的语义。
       if (inst->dest_en) {
-        if (!is_exception(*inst) && !in.rob_bcast->interrupt) {
+        if (!is_exception(*inst) && !wires->rob_bcast.interrupt) {
           Assert(free_head_commit_1 != free_head_1 &&
                  "Ren: commit reclaim when no pending spec allocation");
           free_list_1[free_tail_1] = (*inst)->old_dest_preg;
@@ -314,7 +315,7 @@ void Ren::comb_fire() {
 
       BE_LOG("ROB commit PC=0x%08x Inst=0x%08x idx=%ld",
              (*inst)->dbg.pc, (*inst)->dbg.instruction, (*inst)->dbg.inst_idx);
-      if (inst->dest_en && !is_exception(*inst) && !in.rob_bcast->interrupt) {
+      if (inst->dest_en && !is_exception(*inst) && !wires->rob_bcast.interrupt) {
         arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
       }
       if (!interrupt_nop) { 
@@ -322,18 +323,18 @@ void Ren::comb_fire() {
       }
     }
   }
-  if (in.rob_bcast->interrupt) {
+  if (wires->rob_bcast.interrupt) {
     ctx->run_interrupt_hook();
   }
 
   // 在 comb_fire 直接决定下一拍 freelist/RAT 状态。
-  if (in.rob_bcast->flush) {
+  if (wires->rob_bcast.flush) {
     for (int i = 0; i < ARF_NUM + 1; i++) {
       spec_RAT_1[i] = arch_RAT_1[i];
     }
     free_head_1 = free_head_commit_1;
-  } else if (in.dec_bcast->mispred) { // flush/mispred 不会同时发生
-    const auto br_idx = in.dec_bcast->br_id;
+  } else if (wires->dec_bcast.mispred) { // flush/mispred 不会同时发生
+    const auto br_idx = wires->dec_bcast.br_id;
     Assert(br_idx < MAX_BR_NUM && "Ren: mispred br_id out of range");
     Assert(br_idx != 0 && "Ren: mispred br_id should not be zero");
     for (int i = 0; i < ARF_NUM + 1; i++) {
@@ -349,21 +350,21 @@ void Ren::comb_fire() {
 /*
  * comb_pipeline
  * 功能: 推进 Rename 级流水寄存器，处理 flush/mispred 清空与 clear_mask 清理。
- * 输入依赖: in.dec2ren, out.ren2dec->ready, fire[], in.rob_bcast->flush, in.dec_bcast->{mispred, clear_mask}, inst_valid/inst_r。
+ * 输入依赖: &wires->dec2ren, wires->ren2dec.ready, fire[], wires->rob_bcast.flush, wires->dec_bcast.{mispred, clear_mask}, inst_valid/inst_r。
  * 输出更新: inst_valid_1[], inst_r_1[]。
  * 约束: flush/mispred 时本级全部无效；ready=1 时从 dec2ren 采样新输入；保留项需清除已解析分支 bit。
  */
 void Ren ::comb_pipeline() {
-  wire<BR_MASK_WIDTH> clear_mask = in.dec_bcast->clear_mask;
-  if (in.rob_bcast->flush || in.dec_bcast->mispred) {
+  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
+  if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (in.rob_bcast->flush || in.dec_bcast->mispred) {
+    if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
       inst_valid_1[i] = false;
-    } else if (out.ren2dec->ready) {
-      inst_valid_1[i] = in.dec2ren->valid[i];
-      inst_r_1[i] = in.dec2ren->uop[i];
+    } else if (wires->ren2dec.ready) {
+      inst_valid_1[i] = wires->dec2ren.valid[i];
+      inst_r_1[i] = wires->dec2ren.uop[i];
       inst_r_1[i].br_mask &= ~clear_mask;
     } else {
       inst_valid_1[i] = inst_valid[i] && !fire[i];

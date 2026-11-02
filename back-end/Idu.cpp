@@ -1,3 +1,4 @@
+#include "Wires.h"
 #include "BeginCheck.h"
 #include "Idu.h"
 #include "Csr.h"
@@ -42,9 +43,9 @@ void Idu::comb_begin() {
 
 /*
  * comb_decode
- * 功能: 译码 in.issue 指令并生成 dec2ren uop，同时为分支指令预分配 br_id/br_mask（遇 Tag 不足时截断）。
- * 输入依赖: in.issue->entries, br_latch.clear_mask, now_br_mask, tag_vec, max_br_per_cycle。
- * 输出更新: out.dec2ren->valid/uop, alloc_tag（供 comb_fire 在 fire 时提交分配）。
+ * 功能: 译码 &wires->pre_issue 指令并生成 dec2ren uop，同时为分支指令预分配 br_id/br_mask（遇 Tag 不足时截断）。
+ * 输入依赖: wires->pre_issue.entries, br_latch.clear_mask, now_br_mask, tag_vec, max_br_per_cycle。
+ * 输出更新: wires->dec2ren.valid/uop, alloc_tag（供 comb_fire 在 fire 时提交分配）。
  * 约束: 每拍最多分配 max_br_per_cycle 个分支 Tag, Tag 不足时后续槽位 valid 置 0。
  */
 void Idu::comb_decode() {
@@ -63,17 +64,17 @@ void Idu::comb_decode() {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.dec2ren->valid[i] = false;
-    out.dec2ren->uop[i] = {};
+    wires->dec2ren.valid[i] = false;
+    wires->dec2ren.uop[i] = {};
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    const InstructionBufferEntry &entry = in.issue->entries[i];
+    const InstructionBufferEntry &entry = wires->pre_issue.entries[i];
     if (!entry.valid)
       continue;
 
-    out.dec2ren->valid[i] = true;
-    auto &decoded = out.dec2ren->uop[i];
+    wires->dec2ren.valid[i] = true;
+    auto &decoded = wires->dec2ren.uop[i];
     decoded = {};
     decoded.id = entry.uop_id;
     if (entry.page_fault_inst) {
@@ -101,34 +102,34 @@ void Idu::comb_decode() {
   bool stall = false;
   int i = 0;
   for (; i < DECODE_WIDTH; i++) {
-    if (!out.dec2ren->valid[i]) {
-      out.dec2ren->uop[i]->br_id = 0;
-      out.dec2ren->uop[i].br_mask = running_mask;
+    if (!wires->dec2ren.valid[i]) {
+      wires->dec2ren.uop[i]->br_id = 0;
+      wires->dec2ren.uop[i].br_mask = running_mask;
       continue;
     }
 
-    if (is_branch(out.dec2ren->uop[i]->type)) {
+    if (is_branch(wires->dec2ren.uop[i]->type)) {
       if (!alloc_valid[br_num]) {
         stall = true;
         break;
       }
       wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
-      out.dec2ren->uop[i]->br_id = new_tag;
+      wires->dec2ren.uop[i]->br_id = new_tag;
       // 分支自身不依赖自己；self bit 只作用于后续更年轻指令。
-      out.dec2ren->uop[i].br_mask = running_mask;
+      wires->dec2ren.uop[i].br_mask = running_mask;
       running_mask |= (wire<BR_MASK_WIDTH>(1) << new_tag);
       br_num++;
     } else {
-      out.dec2ren->uop[i]->br_id = 0;
-      out.dec2ren->uop[i].br_mask = running_mask;
+      wires->dec2ren.uop[i]->br_id = 0;
+      wires->dec2ren.uop[i].br_mask = running_mask;
     }
   }
 
   if (stall) {
     for (; i < DECODE_WIDTH; i++) {
-      out.dec2ren->valid[i] = false;
-      out.dec2ren->uop[i]->br_id = 0;
-      out.dec2ren->uop[i].br_mask = 0;
+      wires->dec2ren.valid[i] = false;
+      wires->dec2ren.uop[i]->br_id = 0;
+      wires->dec2ren.uop[i].br_mask = 0;
     }
   }
 }
@@ -137,48 +138,48 @@ void Idu::comb_decode() {
  * comb_branch
  * 功能: 将锁存的分支解析结果打包并广播到 dec_bcast（含 mispred 与 clear_mask）。
  * 输入依赖: br_latch.{mispred, br_id, redirect_rob_idx, clear_mask}。
- * 输出更新: out.dec_bcast->mispred, br_id, redirect_rob_idx, br_mask, clear_mask。
+ * 输出更新: wires->dec_bcast.mispred, br_id, redirect_rob_idx, br_mask, clear_mask。
  * 约束: 本函数仅广播，不修改 IDU 本地 Tag/Mask 状态；本地状态更新统一由 comb_fire 处理。
  */
 void Idu::comb_branch() {
   // comb_branch 仅负责广播分支结果；IDU本地状态更新统一在 comb_fire 处理。
   wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
   if (br_latch.mispred) {
-    out.dec_bcast->mispred = true;
-    out.dec_bcast->br_id = br_latch.br_id;
-    out.dec_bcast->redirect_rob_idx = br_latch.redirect_rob_idx;
-    out.dec_bcast->br_mask = wire<BR_MASK_WIDTH>(1) << br_latch.br_id;
+    wires->dec_bcast.mispred = true;
+    wires->dec_bcast.br_id = br_latch.br_id;
+    wires->dec_bcast.redirect_rob_idx = br_latch.redirect_rob_idx;
+    wires->dec_bcast.br_mask = wire<BR_MASK_WIDTH>(1) << br_latch.br_id;
   } else {
-    out.dec_bcast->br_mask = 0;
-    out.dec_bcast->mispred = false;
-    out.dec_bcast->br_id = 0;
+    wires->dec_bcast.br_mask = 0;
+    wires->dec_bcast.mispred = false;
+    wires->dec_bcast.br_id = 0;
   }
 
   // 广播 clear_mask（包含误预测分支的 bit）
   // 下游模块负责: 先 flush，再对存活条目清除 bit
-  out.dec_bcast->clear_mask = clear;
+  wires->dec_bcast.clear_mask = clear;
 }
 
 /*
  * comb_fire
  * 功能: 在 ready/flush/分支解析条件下推进 IDU 分支状态机（Tag 释放、误预测回收、新分支提交分配）。
- * 输入依赖: in.rob_bcast->flush, in.ren2dec->ready, out.dec2ren->valid/uop, alloc_tag, br_latch, now_br_mask, br_mask_cp。
+ * 输入依赖: wires->rob_bcast.flush, wires->ren2dec.ready, wires->dec2ren.valid/uop, alloc_tag, br_latch, now_br_mask, br_mask_cp。
  * 输出更新: tag_vec_1, now_br_mask_1, br_mask_cp_1, br_latch_1。
  * 约束: flush 最高优先级并直接返回；mispred 路径不进行新分支分配；仅对 fire 且为分支的槽位提交 Tag 占用。
  */
 void Idu::comb_fire() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.idu_consume->fire[i] = false;
+    wires->idu_consume.fire[i] = false;
   }
 
-  if (!in.rob_bcast->flush) {
-    br_latch_1 = *in.exu2id;
+  if (!wires->rob_bcast.flush) {
+    br_latch_1 = wires->exu2id;
   } else {
     br_latch_1 = {};
   }
 
   // 0. flush 最高优先级：清空本地分支状态。
-  if (in.rob_bcast->flush) {
+  if (wires->rob_bcast.flush) {
     for (int i = 1; i < MAX_BR_NUM; i++) {
       tag_vec_1[i] = true;
     }
@@ -220,9 +221,9 @@ void Idu::comb_fire() {
   // 分支 tag 的推进仅在启用 BPU 时生效。
   int br_num = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    wire<1> fire = out.dec2ren->valid[i] && in.ren2dec->ready;
-    out.idu_consume->fire[i] = fire;
-    if (fire && is_branch(out.dec2ren->uop[i]->type)) {
+    wire<1> fire = wires->dec2ren.valid[i] && wires->ren2dec.ready;
+    wires->idu_consume.fire[i] = fire;
+    if (fire && is_branch(wires->dec2ren.uop[i]->type)) {
       wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
       tag_vec_1[new_tag] = false;
       now_br_mask_1 |= (wire<BR_MASK_WIDTH>(1) << new_tag);

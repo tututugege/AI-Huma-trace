@@ -4,25 +4,11 @@
 
 class BackTop;
 
-struct RenIn {
-  DecRenIO *dec2ren;
-  DecBroadcastIO *dec_bcast;
-  DisRenIO *dis2ren;
-  RobBroadcastIO *rob_bcast;
-  RobCommitIO *rob_commit;
-};
-
-struct RenOut {
-  RenDecIO *ren2dec;
-  RenDisIO *ren2dis;
-};
-
 class Ren {
 public:
   Ren(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
-  RenIn in;
-  RenOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）

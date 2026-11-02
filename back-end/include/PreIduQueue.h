@@ -7,31 +7,12 @@
 
 class SimContext;
 
-struct PreIduQueueIn {
-  FrontPreIO *front2pre = nullptr;
-  IduConsumeIO *idu_consume = nullptr;
-  RobBroadcastIO *rob_bcast = nullptr;
-  RobCommitIO *rob_commit = nullptr;
-  ExuIdIO *idu_br_latch = nullptr;
-  FtqPrfPcReqIO *ftq_prf_pc_req = nullptr;
-  FtqRobPcReqIO *ftq_rob_pc_req = nullptr;
-};
-
-struct PreIduQueueOut {
-  PreFrontIO *pre2front = nullptr;
-  PreIssueIO *issue = nullptr;
-  FtqPrfPcRespIO *ftq_prf_pc_resp = nullptr;
-  FtqRobPcRespIO *ftq_rob_pc_resp = nullptr;
-  FtqCommitInfoIO *ftq_commit_info = nullptr;
-};
-
 static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
 
 class PreIduQueue {
 public:
   explicit PreIduQueue(SimContext *ctx = nullptr) : ctx(ctx) {}
-  PreIduQueueIn in;
-  PreIduQueueOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
   void comb_begin();

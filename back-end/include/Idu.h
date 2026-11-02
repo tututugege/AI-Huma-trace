@@ -4,19 +4,6 @@
 #include "config.h"
 class SimContext;
 
-struct IduIn {
-  PreIduIssueIO *issue;
-  RenDecIO *ren2dec;
-  RobBroadcastIO *rob_bcast;
-  ExuIdIO *exu2id; // [New] From Exu
-};
-
-struct IduOut {
-  DecRenIO *dec2ren;
-  DecBroadcastIO *dec_bcast;
-  IduConsumeIO *idu_consume;
-};
-
 class Idu {
 public:
   Idu(SimContext *ctx, int max_br = 1) {
@@ -25,8 +12,7 @@ public:
   }
   SimContext *ctx;
   int max_br_per_cycle;
-  IduIn in;
-  IduOut out;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   void decode(Uop &uop, uint32_t inst);
 
   void init();

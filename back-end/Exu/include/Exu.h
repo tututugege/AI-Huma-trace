@@ -27,22 +27,10 @@ struct Fu2ExuIO {
 };
 
 struct ExuIn {
-  PrfExeIO *prf2exe;
-  DecBroadcastIO *dec_bcast;
-  RobBroadcastIO *rob_bcast;
-  CsrExeIO *csr2exe;
-  LsuExeIO *lsu2exe;
-  CsrStatusIO *csr_status;
   Fu2ExuIO *fu2exu;
 };
 
 struct ExuOut {
-  ExePrfIO *exe2prf;
-  ExeIssIO *exe2iss;
-  ExeCsrIO *exe2csr;
-  ExeLsuIO *exe2lsu;
-  ExuIdIO *exu2id; // [New] Early Branch Resolution
-  ExuRobIO *exu2rob;
   Exu2FuIO *exu2fu;
 };
 
@@ -72,6 +60,7 @@ public:
   // 时序逻辑
   void seq();
 
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   ExuIn in;
   ExuOut out;
 

@@ -10,22 +10,7 @@ struct RobCommitExtra {
 };
 
 struct RobOut {
-  RobDisIO *rob2dis;
-  RobCsrIO *rob2csr;
-  RobCommitIO *rob_commit;
-  RobBroadcastIO *rob_bcast;
-  FtqRobPcReqIO *ftq_pc_req;
   RobCommitExtra commit_extra[COMMIT_WIDTH];
-};
-
-struct RobIn {
-  DisRobIO *dis2rob;
-  CsrRobIO *csr2rob;
-  LsuRobIO *lsu2rob;
-  DecBroadcastIO *dec_bcast;
-  ExuRobIO *exu2rob;
-  FtqRobPcRespIO *ftq_pc_resp;
-  wire<1> *front_stall;
 };
 
 struct RobStoredEntry {
@@ -48,7 +33,7 @@ public:
   void comb_branch();
   void comb_flush();
 
-  RobIn in;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   RobOut out;
 
   // 状态
