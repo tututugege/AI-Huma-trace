@@ -14,6 +14,11 @@
 #else
 #define ROB(f) rob->f()
 #endif
+#ifdef EXU_SHADOW
+#include "ExuShadow.h"
+#else
+#define EXU(f) exu->f()
+#endif
 #ifdef DIS_SHADOW
 #include "DisShadow.h"
 #else
@@ -150,7 +155,7 @@ void BackTop::comb_begin_all() {
   DIS(comb_begin);
   isu->comb_begin();
   prf->comb_begin();
-  exu->comb_begin();
+  EXU(comb_begin);
   ROB(comb_begin);
   csr->comb_begin();
 }
@@ -188,19 +193,19 @@ void BackTop::comb_stage_memory_responses() {
   LSU(comb_dcache2lsu_ldq);
   LSU(comb_dcache2lsu_stq);
   LSU(comb_lsu2exe);
-  exu->comb_to_csr();
+  EXU(comb_to_csr);
   csr->comb_csr_read();
 }
 
 // Functional units execute; their results complete ROB entries.
 void BackTop::comb_stage_execute() {
-  exu->comb_exec();
+  EXU(comb_exec);
   ROB(comb_complete);
 }
 
 // Issue selection, then LSU address translation (the MMU sits between the LSU's request and response phases).
 void BackTop::comb_stage_issue_and_translate() {
-  exu->comb_ready();
+  EXU(comb_ready);
   isu->comb_issue();
   LSU(comb_exe2lsu);
   LSU(comb_tlb_out);
@@ -248,7 +253,7 @@ void BackTop::comb_stage_fire_and_recover() {
 
   pre->comb_fire();
   prf->comb_pipeline();
-  exu->comb_pipeline();
+  EXU(comb_pipeline);
   DIS(comb_pipeline);
   rename->comb_pipeline();
   csr->comb_interrupt_inject();
@@ -382,7 +387,7 @@ void BackTop::seq() {
   DIS(seq);
   idu->seq();
   isu->seq();
-  exu->seq();
+  EXU(seq);
   prf->seq();
   ROB(seq);
   csr->seq();

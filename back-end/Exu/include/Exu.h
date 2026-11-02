@@ -26,14 +26,6 @@ struct Fu2ExuIO {
   Fu::FuOutput entry[TOTAL_FU_COUNT];
 };
 
-struct ExuIn {
-  Fu2ExuIO *fu2exu;
-};
-
-struct ExuOut {
-  Exu2FuIO *exu2fu;
-};
-
 struct FuInstSlot {
   wire<1> valid = false;
   ExuInst uop{};
@@ -41,6 +33,7 @@ struct FuInstSlot {
 
 class Exu {
 public:
+  friend struct ExuDigestAccess;  // lockstep test hook
   Exu(SimContext *ctx);
   ~Exu(); // 析构函数释放 FU 内存
 
@@ -51,7 +44,6 @@ public:
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
 
   // 组合逻辑
-  void comb_ftq_pc_req();
   void comb_exec(); // 核心：发射到 FU + 收集结果
   void comb_to_csr();
   void comb_pipeline(); // 将本拍 issue 入 FU 输入槽（在 pipeline 阶段生效）
@@ -61,9 +53,6 @@ public:
   void seq();
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
-  ExuIn in;
-  ExuOut out;
-
   // === FU 资源管理 ===
   // 物理 FU 实例
   std::vector<Fu *> units;

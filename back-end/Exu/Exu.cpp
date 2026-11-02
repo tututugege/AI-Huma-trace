@@ -1,519 +1,277 @@
-#include "Wires.h"
 #include "BeginCheck.h"
-#include "trace_hook.h"
 #include "Exu.h"
+#include "Wires.h"
 #include "config.h"
+#include "trace_hook.h"
 
-static inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO *db) {
-  if (!db->mispred)
-    return false;
-  return (uop.br_mask & db->br_mask) != 0;
-}
+namespace {
+// A uop whose branch was squashed by this cycle's mispredict is dead.
+inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO &db) { return db.mispred && (uop.br_mask & db.br_mask) != 0; }
+}  // namespace
 
-
-
-
-Exu::Exu(SimContext *ctx) : ctx(ctx) {
-  in.fu2exu = &fu2exu_io;
-  out.exu2fu = &exu2fu_io;
-}
+Exu::Exu(SimContext *ctx) : ctx(ctx) {}
 
 Exu::~Exu() {
-  for (auto fu : units) {
-    delete fu;
-  }
+  for (auto fu : units) delete fu;
 }
 
+// Functional units are created per issue port, in write-back priority order (MUL first).
 void Exu::init() {
-  // Per-port functional units, in writeback-priority order (MUL first).
-  struct Spec {
-    FuKind kind;
-    uint64_t mask;
-  };
-  static const Spec kSpecs[] = {
-      {FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV},
-      {FuKind::AGU, OP_MASK_LD},  {FuKind::AGU, OP_MASK_STA},
-      {FuKind::SDU, OP_MASK_STD}, {FuKind::BRU, OP_MASK_BR},
-      {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
-      {FuKind::FPU, OP_MASK_FP}};
-  int agu_cnt = 0;
-  int sdu_cnt = 0;
+  struct Spec { FuKind kind; uint64_t mask; };
+  static const Spec kSpecs[] = {{FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV}, {FuKind::AGU, OP_MASK_LD},
+                                {FuKind::AGU, OP_MASK_STA}, {FuKind::SDU, OP_MASK_STD}, {FuKind::BRU, OP_MASK_BR},
+                                {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR}, {FuKind::FPU, OP_MASK_FP}};
+  int agu = 0, sdu = 0;
   port_mappings.resize(ISSUE_WIDTH);
-
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const uint64_t port_mask = GLOBAL_ISSUE_PORT_CONFIG[i].support_mask;
     for (const Spec &spec : kSpecs) {
-      if (!(port_mask & spec.mask)) {
-        continue;
-      }
-      auto *fu = new Fu(spec.kind, i);
-      FuEntry entry;
-      entry.fu = fu;
-      entry.fu_idx = static_cast<int>(units.size());
-      entry.support_mask = spec.mask;
-      if (spec.kind == FuKind::AGU) entry.lsu_agu_port = agu_cnt++;
-      if (spec.kind == FuKind::SDU) entry.lsu_sdu_port = sdu_cnt++;
-      units.push_back(fu);
-      port_mappings[i].entries.push_back(entry);
+      if (!(GLOBAL_ISSUE_PORT_CONFIG[i].support_mask & spec.mask)) continue;
+      FuEntry e;
+      e.fu = new Fu(spec.kind, i);
+      e.fu_idx = static_cast<int>(units.size());
+      e.support_mask = spec.mask;
+      if (spec.kind == FuKind::AGU) e.lsu_agu_port = agu++;
+      if (spec.kind == FuKind::SDU) e.lsu_sdu_port = sdu++;
+      units.push_back(e.fu);
+      port_mappings[i].entries.push_back(e);
     }
   }
-
   for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    fu_inst_r[i] = {};
-    fu_inst_r_1[i] = {};
+    fu_inst_r[i] = fu_inst_r_1[i] = {};
     fu_to_port[i] = -1;
   }
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
-    for (auto &entry : port_mappings[i].entries) {
-      fu_to_port[entry.fu_idx] = i;
-    }
-  }
+  for (int i = 0; i < ISSUE_WIDTH; i++)
+    for (auto &e : port_mappings[i].entries) fu_to_port[e.fu_idx] = i;
 }
 
-/*
- * comb_begin
- * 功能: 组合阶段开始默认清零 EXU 输出，并初始化各 FU 的输入。
- * 输入依赖: units[] 当前状态。
- * 输出更新: EXU 各输出默认值，以及 units[i]->in 的默认清零。
- * 约束: 不执行发射/写回/冲刷，仅建立本拍组合逻辑初值。
- */
+// Default (idle) outputs and FU request buses; each FU starts its cycle and publishes its state.
 void Exu::comb_begin() {
+  Wires &w = *wires;
   BEGIN_EQ(fu_inst_r_1, fu_inst_r);
 
-  // 每拍默认清零：统一在组合开始阶段完成，避免分散在各 comb_xxx。
-
-  wires->exe2csr.we = false;
-  wires->exe2csr.re = false;
-  wires->exe2csr.idx = 0;
-  wires->exe2csr.wcmd = 0;
-  wires->exe2csr.wdata = 0;
-
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    wires->exe2prf.bypass[i].valid = false;
-  }
-
+  w.exe2csr.we = w.exe2csr.re = false;
+  w.exe2csr.idx = 0;
+  w.exe2csr.wcmd = 0;
+  w.exe2csr.wdata = 0;
+  for (int i = 0; i < TOTAL_FU_COUNT; i++) w.exe2prf.bypass[i].valid = false;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    wires->exe2prf.entry[i].valid = false;
-    wires->exu2rob.entry[i].valid = false;
-    wires->exe2iss.fu_ready_mask[i] = 0;
+    w.exe2prf.entry[i].valid = false;
+    w.exu2rob.entry[i].valid = false;
+    w.exe2iss.fu_ready_mask[i] = 0;
   }
-
-  for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    wires->exe2lsu.agu_req[i].valid = false;
-  }
-  for (int i = 0; i < LSU_SDU_COUNT; i++) {
-    wires->exe2lsu.sdu_req[i].valid = false;
-  }
-
-  wires->exu2id.clear_mask = 0;
-  wires->exu2id.mispred = false;
-  wires->exu2id.redirect_pc = 0;
-  wires->exu2id.redirect_rob_idx = 0;
-  wires->exu2id.br_id = 0;
-  wires->exu2id.ftq_idx = 0;
-
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    out.exu2fu->entry[i].en = false;
-    out.exu2fu->entry[i].consume = false;
-    out.exu2fu->entry[i].flush = false;
-    out.exu2fu->entry[i].flush_mask = 0;
-    out.exu2fu->entry[i].clear_mask = 0;
+  for (int i = 0; i < LSU_AGU_COUNT; i++) w.exe2lsu.agu_req[i].valid = false;
+  for (int i = 0; i < LSU_SDU_COUNT; i++) w.exe2lsu.sdu_req[i].valid = false;
+  w.exu2id.clear_mask = 0;
+  w.exu2id.mispred = false;
+  w.exu2id.redirect_pc = 0;
+  w.exu2id.redirect_rob_idx = 0;
+  w.exu2id.br_id = 0;
+  w.exu2id.ftq_idx = 0;
+  for (auto &e : exu2fu_io.entry) {
+    e.en = e.consume = e.flush = false;
+    e.flush_mask = e.clear_mask = 0;
   }
   for (size_t i = 0; i < units.size(); i++) {
     units[i]->comb_begin();
-    in.fu2exu->entry[i] = units[i]->out;
+    fu2exu_io.entry[i] = units[i]->out;
   }
 }
 
-
-
-/*
- * comb_ready
- * 功能: 生成 EXU->ISU 反压信息（端口 ready 与 FU ready mask）。
- * 输入依赖: FU 输入槽占用状态、wires->rob_bcast.flush、port_mappings、units[].out.ready。
- * 输出更新: wires->exe2iss.ready[], wires->exe2iss.fu_ready_mask[]。
- * 约束: flush 时所有端口 ready 置 0；FU 输入槽 ready 条件为 (!valid || fu_ready)。
- */
+// Which operation classes each issue port can accept: an FU takes a new uop when its input slot is free or the FU frees it.
+// Nothing is accepted during a flush.
 void Exu::comb_ready() {
-  // 异常状态下（Flush/Mispred），Exu 停止接收新指令，防止脏数据进入
-  if (wires->rob_bcast.flush) {
-    for (int i = 0; i < ISSUE_WIDTH; i++) {
-      wires->exe2iss.fu_ready_mask[i] = 0;
-    }
-    return;
-  }
-
+  Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    // FU 输入槽作为 FU 内部一级流水：slot_ready = !valid || fu_ready。
     uint64_t mask = 0;
-    for (auto &entry : port_mappings[i].entries) {
-      Assert(entry.fu_idx >= 0 && entry.fu_idx < TOTAL_FU_COUNT);
-      const bool slot_valid = fu_inst_r_1[entry.fu_idx].valid;
-      const bool fu_ready = in.fu2exu->entry[entry.fu_idx].ready;
-      if (!slot_valid || fu_ready) {
-        mask |= entry.support_mask;
-      }
-    }
-
-    wires->exe2iss.fu_ready_mask[i] = mask;
+    if (!w.rob_bcast.flush)
+      for (auto &e : port_mappings[i].entries)
+        if (!fu_inst_r_1[e.fu_idx].valid || fu2exu_io.entry[e.fu_idx].ready) mask |= e.support_mask;
+    w.exe2iss.fu_ready_mask[i] = mask;
   }
 }
 
-/*
- * comb_to_csr
- * 功能: 从 CSR 执行槽提取 CSR 读写请求并驱动 exe2csr 接口。
- * 输入依赖: 端口 0 下 FU 的 fu_inst_r、wires->rob_bcast.flush、CSR 编码字段。
- * 输出更新: wires->exe2csr.{we,re,idx,wcmd,wdata}。
- * 约束: 非 CSR 或 flush 场景下输出默认无请求；仅端口 0 的 CSR 指令参与驱动。
- */
+// The CSR uop sitting in port 0's FU slot drives the CSR file's read/write request.
 void Exu::comb_to_csr() {
-  if (wires->rob_bcast.flush) {
+  Wires &w = *wires;
+  if (w.rob_bcast.flush) return;
+  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++) {
+    if (!fu_inst_r[fu].valid || fu_to_port[fu] != 0) continue;
+    const ExuInst &u = fu_inst_r[fu].uop;
+    if (u.op != UOP_CSR || is_br_killed(u, w.dec_bcast)) continue;
+
+    const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;  // CSRRW / CSRRWI always write
+    w.exe2csr.we = rw_family || u->imm != 0;
+    w.exe2csr.re = !rw_family || u.dest_preg != 0;
+    w.exe2csr.idx = u->csr_idx;
+    w.exe2csr.wcmd = u->func3 & 0b11;
+    w.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
+    if (const tb::Fact *f = tbhook::fact_by_rob(u.rob_idx)) w.exe2csr.wdata = f->csr_wdata;
     return;
-  }
-  const ExuInst *csr_uop = nullptr;
-  for (int fu_idx = 0; fu_idx < TOTAL_FU_COUNT; fu_idx++) {
-    if (!fu_inst_r[fu_idx].valid) {
-      continue;
-    }
-    if (fu_to_port[fu_idx] != 0) {
-      continue;
-    }
-    const ExuInst &uop = fu_inst_r[fu_idx].uop;
-    if (uop.op == UOP_CSR && !is_br_killed(uop, &wires->dec_bcast)) {
-      csr_uop = &uop;
-      break;
-    }
-  }
-  if (!csr_uop) {
-    return;
-  }
-  const ExuInst &uop = *csr_uop;
-
-  bool is_csrrw_family = (uop->func3 == 0b001) || (uop->func3 == 0b101);
-  bool src_is_zero = (uop->imm == 0);
-  bool rd_is_zero = (uop.dest_preg == 0);
-
-  wires->exe2csr.we = is_csrrw_family || !src_is_zero;
-  wires->exe2csr.re = !is_csrrw_family || !rd_is_zero;
-
-  wires->exe2csr.idx = uop->csr_idx;
-  wires->exe2csr.wcmd = uop->func3 & 0b11;
-  // The write data is a fact of the trace (rs1 value or zimm).
-  wires->exe2csr.wdata = 0;
-  if (const tb::Fact *f = tbhook::fact_by_rob(uop.rob_idx)) {
-    wires->exe2csr.wdata = f->csr_wdata;
   }
 }
 
-/*
- * comb_pipeline
- * 功能: pipeline 阶段将本拍 issue 指令入 FU 输入槽（fu_inst_r_1）。
- * 输入依赖: wires->prf2exe.iss_entry[]、wires->rob_bcast.flush、&wires->dec_bcast、FU 输入槽下一态。
- * 输出更新: FU 输入槽下一态（fu_inst_r_1）。
- * 约束: flush 时不接收新指令；每端口按映射顺序选择首个可接收 FU。
- */
+// Issued uops enter the FU input slots (killed ones are dropped, resolved branch bits are cleared); a flush empties them.
 void Exu::comb_pipeline() {
-  if (wires->rob_bcast.flush) {
-    for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-      fu_inst_r_1[i].valid = false;
-    }
+  Wires &w = *wires;
+  if (w.rob_bcast.flush) {
+    for (auto &s : fu_inst_r_1) s.valid = false;
     return;
   }
-
-  wire<BR_MASK_WIDTH> clear = wires->dec_bcast.clear_mask;
-  for (int fu_idx = 0; fu_idx < TOTAL_FU_COUNT; fu_idx++) {
-    if (!fu_inst_r_1[fu_idx].valid) {
-      continue;
-    }
-    if (is_br_killed(fu_inst_r_1[fu_idx].uop, &wires->dec_bcast)) {
-      fu_inst_r_1[fu_idx].valid = false;
-      continue;
-    }
-    if (clear) {
-      fu_inst_r_1[fu_idx].uop.br_mask &= ~clear;
-    }
+  const auto clear = w.dec_bcast.clear_mask;
+  for (auto &s : fu_inst_r_1) {
+    if (!s.valid) continue;
+    if (is_br_killed(s.uop, w.dec_bcast)) s.valid = false;
+    else if (clear) s.uop.br_mask &= ~clear;
   }
-
-  for (int p_idx = 0; p_idx < ISSUE_WIDTH; p_idx++) {
-    if (!wires->prf2exe.iss_entry[p_idx].valid) {
-      continue;
-    }
-    ExuInst uop = (wires->prf2exe.iss_entry[p_idx].uop);
-    if (is_br_killed(uop, &wires->dec_bcast)) {
-      continue;
-    }
-    if (clear) {
-      uop.br_mask &= ~clear;
-    }
-    uint64_t req_bit = (1ULL << uop.op);
-    int target_fu_idx = -1;
-    for (const auto &entry : port_mappings[p_idx].entries) {
-      const bool slot_valid = fu_inst_r_1[entry.fu_idx].valid;
-      const bool fu_ready = in.fu2exu->entry[entry.fu_idx].ready;
-      if ((entry.support_mask & req_bit) &&
-          (!slot_valid || fu_ready)) {
-        target_fu_idx = entry.fu_idx;
-        break;
-      }
-    }
-    Assert(target_fu_idx >= 0 && "EXU enqueue without free FU input slot");
-    fu_inst_r_1[target_fu_idx].valid = true;
-    fu_inst_r_1[target_fu_idx].uop = uop;
+  for (int p = 0; p < ISSUE_WIDTH; p++) {
+    if (!w.prf2exe.iss_entry[p].valid) continue;
+    ExuInst uop = w.prf2exe.iss_entry[p].uop;
+    if (is_br_killed(uop, w.dec_bcast)) continue;
+    if (clear) uop.br_mask &= ~clear;
+    const uint64_t bit = 1ULL << uop.op;
+    int target = -1;  // first FU of the port that supports the op and can take it
+    for (const auto &e : port_mappings[p].entries)
+      if ((e.support_mask & bit) && (!fu_inst_r_1[e.fu_idx].valid || fu2exu_io.entry[e.fu_idx].ready)) { target = e.fu_idx; break; }
+    Assert(target >= 0 && "EXU enqueue without free FU input slot");
+    fu_inst_r_1[target].valid = true;
+    fu_inst_r_1[target].uop = uop;
   }
 }
 
-/*
- * comb_fu_ctrl
- * 功能: Stage-0，FU 控制阶段；每拍对所有 FU 下发 flush/clear 控制。
- * 输入依赖: wires->rob_bcast.flush, wires->dec_bcast.{mispred, br_mask, clear_mask}。
- * 输出更新: FU 内部状态（经 units[].comb_ctrl）。
- * 约束: 每个 FU 每拍仅调用一次 comb_ctrl。
- */
+// Stage 0: every FU gets the cycle's flush/clear controls.
 void Exu::comb_fu_ctrl() {
-  const bool flush_all = wires->rob_bcast.flush;
-  const bool flush_br = (!flush_all) && wires->dec_bcast.mispred;
-  const wire<BR_MASK_WIDTH> flush_mask =
-      flush_all ? ~wire<BR_MASK_WIDTH>(0)
-                : (flush_br ? wires->dec_bcast.br_mask : wire<BR_MASK_WIDTH>(0));
-  const wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
-
+  Wires &w = *wires;
+  const bool flush_all = w.rob_bcast.flush, flush_br = !flush_all && w.dec_bcast.mispred;
+  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? ~wire<BR_MASK_WIDTH>(0) : flush_br ? w.dec_bcast.br_mask : wire<BR_MASK_WIDTH>(0);
   for (size_t i = 0; i < units.size(); i++) {
-    out.exu2fu->entry[i].flush = (flush_all || flush_br);
-    out.exu2fu->entry[i].flush_mask = flush_mask;
-    out.exu2fu->entry[i].clear_mask = clear_mask;
-    
-    units[i]->in = out.exu2fu->entry[i];
+    exu2fu_io.entry[i].flush = flush_all || flush_br;
+    exu2fu_io.entry[i].flush_mask = flush_mask;
+    exu2fu_io.entry[i].clear_mask = w.dec_bcast.clear_mask;
+    units[i]->in = exu2fu_io.entry[i];
     units[i]->comb_ctrl();
   }
 }
 
-/*
- * comb_exu2fu_dispatch
- * 功能: Stage-1，将 FU 输入槽中的有效条目分发给对应的 FU 执行模块。
- * 输入依赖: FU 输入槽（fu_inst_r）、&wires->rob_bcast、&wires->dec_bcast、in.ftq_pc_resp。
- * 输出更新: units[].in.{en, inst} 以及下一态输入槽 fu_inst_r_1 的清除。
- * 约束: flush/kill 条目不下发。
- */
+// Stage 1: valid input slots go to their FU unless flushed or killed (those slots are freed).
 void Exu::comb_exu2fu_dispatch() {
-  for (int fu_idx = 0; fu_idx < TOTAL_FU_COUNT; fu_idx++) {
-    if (!fu_inst_r[fu_idx].valid) {
+  Wires &w = *wires;
+  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++) {
+    if (!fu_inst_r[fu].valid || fu_to_port[fu] < 0 || fu_to_port[fu] >= ISSUE_WIDTH) continue;
+    ExuInst u = fu_inst_r[fu].uop;
+    if (w.rob_bcast.flush || is_br_killed(u, w.dec_bcast)) {
+      fu_inst_r_1[fu].valid = false;
       continue;
     }
-    ExuInst issued_uop = fu_inst_r[fu_idx].uop;
-    int p_idx = fu_to_port[fu_idx];
-    if (p_idx < 0 || p_idx >= ISSUE_WIDTH) {
-      continue;
-    }
-    if (wires->rob_bcast.flush || is_br_killed(issued_uop, &wires->dec_bcast)) {
-      fu_inst_r_1[fu_idx].valid = false;
-      continue;
-    }
-    if (wires->dec_bcast.clear_mask) {
-      issued_uop.br_mask &= ~wires->dec_bcast.clear_mask;
-    }
-
-    out.exu2fu->entry[fu_idx].en = true;
-    out.exu2fu->entry[fu_idx].inst = issued_uop;
+    if (w.dec_bcast.clear_mask) u.br_mask &= ~w.dec_bcast.clear_mask;
+    exu2fu_io.entry[fu].en = true;
+    exu2fu_io.entry[fu].inst = u;
   }
 }
 
-/*
- * comb_fu_exec
- * 功能: Stage-2，FU 执行阶段；触发各个 FU 的组合逻辑。
- * 输入依赖: units[].in。
- * 输出更新: units[].out（ready/complete/inst）。
- * 约束: 每个 FU 每拍仅调用一次 comb_issue。
- */
+// Stage 2: the FUs evaluate.
 void Exu::comb_fu_exec() {
   for (size_t i = 0; i < units.size(); i++) {
-    units[i]->in = out.exu2fu->entry[i];
+    units[i]->in = exu2fu_io.entry[i];
     units[i]->comb_issue();
-    in.fu2exu->entry[i].complete = units[i]->out.complete;
-    in.fu2exu->entry[i].inst = units[i]->out.inst;
+    fu2exu_io.entry[i].complete = units[i]->out.complete;
+    fu2exu_io.entry[i].inst = units[i]->out.inst;
   }
 }
 
-/*
- * comb_fu2exu_collect
- * 功能: Stage-3，从各 FU 收集执行结果，完成旁路/写回/LSU请求分发/分支仲裁。
- * 输入依赖: units[].out、port_mappings、&wires->rob_bcast、&wires->dec_bcast、&wires->lsu2exe、&wires->csr2exe。
- * 输出更新: wires->exe2prf.{bypass,entry}、wires->exu2rob.entry[]、wires->exe2lsu.{agu_req,sdu_req}、wires->exu2id.{mispred,clear_mask,redirect_*}、units[].in.consume。
- * 约束: 被 flush/kill 的结果不产生有效完成；端口内按映射顺序选择 winner FU；分支误预测取最老条目。
- */
+// Stage 3: collect results. Every completing FU is broadcast for bypass; each port's first completing FU wins the port
+// and, unless flushed/killed, completes in the ROB, sends its LSU request, writes back (ALU ports) or takes part in the
+// branch arbitration (the oldest mispredicted branch redirects). LSU write-backs come in on their own ports.
 void Exu::comb_fu2exu_collect() {
-  // 旁路逻辑
-  int fu_global_idx = 0; // 用于给每个 FU 编号
-  // 遍历所有 FU 单元
-  for (size_t i = 0; i < units.size(); i++) {
-    if (in.fu2exu->entry[i].complete) {
-      // ✅ 无论是否能写回，先广播出去给 Bypass 用！
-      wires->exe2prf.bypass[fu_global_idx].uop =
-          in.fu2exu->entry[i].inst;
-      wires->exe2prf.bypass[fu_global_idx].valid = true;
+  Wires &w = *wires;
+  const bool flush = w.rob_bcast.flush;
+  for (size_t i = 0; i < units.size(); i++)
+    if (fu2exu_io.entry[i].complete) {
+      w.exe2prf.bypass[i].uop = fu2exu_io.entry[i].inst;
+      w.exe2prf.bypass[i].valid = true;
     }
 
-    fu_global_idx++;
-  }
+  ExuEntry int_res[ALU_NUM] = {}, br_res[BRU_NUM] = {};
+  for (int p = 0; p < ISSUE_WIDTH; p++) {
+    const FuEntry *winner = nullptr;
+    for (auto &e : port_mappings[p].entries)
+      if (fu2exu_io.entry[e.fu_idx].complete) { winner = &e; break; }
+    if (!winner) continue;
+    ExuInst u = fu2exu_io.entry[winner->fu_idx].inst;
+    const bool dead = flush || is_br_killed(u, w.dec_bcast);
 
-  // ==========================================
-  // 二、写回逻辑 (Writeback) - 终极解耦重构
-  // ==========================================
-
-  // 结果收集容器
-  ExuEntry int_res[ALU_NUM] = {};
-  ExuEntry br_res[BRU_NUM] = {};
-
-  // 1. 全局端口扫描与立即分发 (Total Port Scan)
-  for (int p_idx = 0; p_idx < ISSUE_WIDTH; p_idx++) {
-    const FuEntry *winner_entry = nullptr;
-    ExuInst u = {};
-    bool has_u = false;
-
-    // 仲裁：选择该端口的胜出 FU
-    for (auto &map_entry : port_mappings[p_idx].entries) {
-      if (in.fu2exu->entry[map_entry.fu_idx].complete) {
-        u = in.fu2exu->entry[map_entry.fu_idx].inst;
-        has_u = true;
-        winner_entry = &map_entry;
-        break;
+    if (u.op == UOP_CSR && w.exe2csr.re) u.result = w.csr2exe.rdata;
+    if (!dead) {
+      if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back
+        w.exu2rob.entry[p].valid = true;
+        w.exu2rob.entry[p].uop = u;
       }
-    }
-    if (!has_u)
-      continue;
-
-    Assert(winner_entry != nullptr);
-
-    bool flushed = wires->rob_bcast.flush || is_br_killed(u, &wires->dec_bcast);
-
-    if (u.op == UOP_CSR && wires->exe2csr.re) {
-      u.result = wires->csr2exe.rdata;
-    }
-
-    // A. 立即驱动 ROB (非访存指令在此完成)
-    // 注意：LOAD/STA 的完成通报由 LSU 回调阶段处理
-    if (!flushed && u.op != UOP_LOAD && u.op != UOP_STA) {
-      wires->exu2rob.entry[p_idx].valid = true;
-      wires->exu2rob.entry[p_idx].uop = u;
-    }
-
-    // B. 立即外发 LSU 请求
-    if (!flushed) {
       if (u.op == UOP_STA || u.op == UOP_LOAD) {
-        int lsu_idx = winner_entry->lsu_agu_port;
-        Assert(lsu_idx >= 0 && lsu_idx < LSU_AGU_COUNT);
-        wires->exe2lsu.agu_req[lsu_idx].valid = true;
-        wires->exe2lsu.agu_req[lsu_idx].uop = u;
+        Assert(winner->lsu_agu_port >= 0 && winner->lsu_agu_port < LSU_AGU_COUNT);
+        w.exe2lsu.agu_req[winner->lsu_agu_port].valid = true;
+        w.exe2lsu.agu_req[winner->lsu_agu_port].uop = u;
       } else if (u.op == UOP_STD) {
-        int lsu_idx = winner_entry->lsu_sdu_port;
-        Assert(lsu_idx >= 0 && lsu_idx < LSU_SDU_COUNT);
-        wires->exe2lsu.sdu_req[lsu_idx].valid = true;
-        wires->exe2lsu.sdu_req[lsu_idx].uop = u;
+        Assert(winner->lsu_sdu_port >= 0 && winner->lsu_sdu_port < LSU_SDU_COUNT);
+        w.exe2lsu.sdu_req[winner->lsu_sdu_port].valid = true;
+        w.exe2lsu.sdu_req[winner->lsu_sdu_port].uop = u;
       }
     }
-
-    // C. 收集分类结果
-    // 收集 INT 写回信息 (仅限需要写回目的寄存器的 ALU 指令)
-    if (p_idx >= IQ_ALU_PORT_BASE && p_idx < IQ_ALU_PORT_BASE + ALU_NUM &&
-        u.dest_en) {
-      int idx = p_idx - IQ_ALU_PORT_BASE;
-      int_res[idx].uop = u;
-      int_res[idx].valid = true;
+    if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM && u.dest_en) {
+      int_res[p - IQ_ALU_PORT_BASE].uop = u;
+      int_res[p - IQ_ALU_PORT_BASE].valid = true;
     }
-    // 收集 BR 信息 (用于分支仲裁)
-    // 仅保留存活分支结果；被 flush/kill 的分支不应继续驱动恢复广播。
-    if (!flushed && p_idx >= IQ_BR_PORT_BASE &&
-        p_idx < IQ_BR_PORT_BASE + BRU_NUM) {
-      int idx = p_idx - IQ_BR_PORT_BASE;
-      br_res[idx].uop = u;
-      br_res[idx].valid = true;
+    if (!dead && p >= IQ_BR_PORT_BASE && p < IQ_BR_PORT_BASE + BRU_NUM) {  // a squashed branch must not drive recovery
+      br_res[p - IQ_BR_PORT_BASE].uop = u;
+      br_res[p - IQ_BR_PORT_BASE].valid = true;
     }
-
-    out.exu2fu->entry[winner_entry->fu_idx].consume = true;
+    exu2fu_io.entry[winner->fu_idx].consume = true;
   }
 
-  // 消费阶段：FU 基于 consume 弹出完成项。
+  // FUs pop what was consumed; a ready FU frees its input slot
   for (size_t i = 0; i < units.size(); i++) {
-    units[i]->in = out.exu2fu->entry[i];
+    units[i]->in = exu2fu_io.entry[i];
     units[i]->comb_consume();
-    in.fu2exu->entry[i].ready = units[i]->out.ready;
+    fu2exu_io.entry[i].ready = units[i]->out.ready;
   }
-  // consume 后由 FU.ready 决定是否释放 EXU 输入槽位
-  for (int fu_idx = 0; fu_idx < TOTAL_FU_COUNT; fu_idx++) {
-    if (fu_inst_r_1[fu_idx].valid && in.fu2exu->entry[fu_idx].ready) {
-      fu_inst_r_1[fu_idx].valid = false;
-    }
-  }
+  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++)
+    if (fu_inst_r_1[fu].valid && fu2exu_io.entry[fu].ready) fu_inst_r_1[fu].valid = false;
 
-  // 2. 选择性写回分发 (Writeback Distribution)
-
-  // A. 处理常规计算写回 (仅扫描 INT 结果)
-  for (int i = 0; i < ALU_NUM; i++) {
+  for (int i = 0; i < ALU_NUM; i++)
     if (int_res[i].valid) {
-      int p_idx = IQ_ALU_PORT_BASE + i;
-      wires->exe2prf.entry[p_idx].valid = true;
-      wires->exe2prf.entry[p_idx].uop = int_res[i].uop;
+      w.exe2prf.entry[IQ_ALU_PORT_BASE + i].valid = true;
+      w.exe2prf.entry[IQ_ALU_PORT_BASE + i].uop = int_res[i].uop;
     }
-  }
-
-  // B. 处理 LSU 回调写回 (LOAD/STA 数据回流)
-  // 此处同时驱动 PRF 和 ROB
-  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
-    if (wires->lsu2exe.wb_req[i].valid) {
-      int p_idx = IQ_LD_PORT_BASE + i;
-      MicroOp u = wires->lsu2exe.wb_req[i].uop;
-      bool flushed = wires->rob_bcast.flush || is_br_killed(u, &wires->dec_bcast);
-      Assert(!wires->exe2prf.entry[p_idx].valid);
-      wires->exe2prf.entry[p_idx].valid = true;
-      wires->exe2prf.entry[p_idx].uop = (u);
-      if (!flushed) {
-        wires->exu2rob.entry[p_idx].valid = true;
-        wires->exu2rob.entry[p_idx].uop = (u);
-      }
+  // LSU write-backs feed both the register file and the ROB
+  auto lsu_writeback = [&](int port, const Uop &u) {
+    Assert(!w.exe2prf.entry[port].valid);
+    w.exe2prf.entry[port].valid = true;
+    w.exe2prf.entry[port].uop = u;
+    if (!(flush || is_br_killed(u, w.dec_bcast))) {
+      w.exu2rob.entry[port].valid = true;
+      w.exu2rob.entry[port].uop = u;
     }
-  }
+  };
+  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
+    if (w.lsu2exe.wb_req[i].valid) lsu_writeback(IQ_LD_PORT_BASE + i, w.lsu2exe.wb_req[i].uop);
+  for (int i = 0; i < LSU_STA_COUNT; i++)
+    if (w.lsu2exe.sta_wb_req[i].valid) lsu_writeback(IQ_STA_PORT_BASE + i, w.lsu2exe.sta_wb_req[i].uop);
 
-  for (int i = 0; i < LSU_STA_COUNT; i++) {
-    if (wires->lsu2exe.sta_wb_req[i].valid) {
-      int p_idx = IQ_STA_PORT_BASE + i;
-      MicroOp u = wires->lsu2exe.sta_wb_req[i].uop;
-      bool flushed = wires->rob_bcast.flush || is_br_killed(u, &wires->dec_bcast);
-      Assert(!wires->exe2prf.entry[p_idx].valid);
-      wires->exe2prf.entry[p_idx].valid = true;
-      wires->exe2prf.entry[p_idx].uop = (u);
-      if (!flushed) {
-        wires->exu2rob.entry[p_idx].valid = true;
-        wires->exu2rob.entry[p_idx].uop = (u);
-      }
-    }
-  }
-
-  // ==========================================
-  // 三、分支误预测仲裁 (Early Recovery)
-  // ==========================================
+  // branch resolution: every resolved branch frees its mask bit, the oldest mispredict redirects
   bool mispred = false;
-  ExuInst *mispred_uop = nullptr;
+  const ExuInst *oldest = nullptr;
   wire<BR_MASK_WIDTH> clear_mask = 0;
-
   for (int i = 0; i < BRU_NUM; i++) {
-    if (br_res[i].valid) {
-      // 所有已解析的 branch 贡献 clear_mask
-      clear_mask |= (wire<BR_MASK_WIDTH>(1) << br_res[i].uop->br_id);
-
-      if (br_res[i].uop.mispred) {
-        if (!mispred) {
-          mispred = true;
-          mispred_uop = &br_res[i].uop;
-        } else if (cmp_inst_age(*mispred_uop, br_res[i].uop)) {
-          mispred_uop = &br_res[i].uop;
-        }
-      }
+    if (!br_res[i].valid) continue;
+    clear_mask |= wire<BR_MASK_WIDTH>(1) << br_res[i].uop->br_id;
+    if (br_res[i].uop.mispred && (!mispred || cmp_inst_age(*oldest, br_res[i].uop))) {
+      mispred = true;
+      oldest = &br_res[i].uop;
     }
   }
 
-  if (tbhook::enabled) {
+  if (tbhook::enabled)
     for (int p = 0; p < ISSUE_WIDTH; p++) {
-      if (!wires->exu2rob.entry[p].valid) continue;
-      const auto &u = wires->exu2rob.entry[p].uop;
+      if (!w.exu2rob.entry[p].valid) continue;
+      const auto &u = w.exu2rob.entry[p].uop;
       tbhook::ExecObs o;
       o.rob_idx = u.rob_idx;
       o.uid_dbg = (uint64_t)u->dbg.inst_idx;
@@ -525,53 +283,24 @@ void Exu::comb_fu2exu_collect() {
       o.page_fault = u.page_fault_inst || u.page_fault_load || u.page_fault_store;
       tbhook::on_exec(o);
     }
-  }
 
-  // clear_mask 统一经由 IDU 广播到各模块，EXU 不再本地同拍清除
-  wires->exu2id.clear_mask = clear_mask;
-  wires->exu2id.mispred = mispred;
-  if (mispred) {
-    wires->exu2id.redirect_pc = mispred_uop->diag_val;
-    wires->exu2id.redirect_rob_idx = mispred_uop->rob_idx;
-    wires->exu2id.br_id = (*mispred_uop)->br_id;
-    wires->exu2id.ftq_idx = (*mispred_uop)->ftq_idx;
-  } else {
-    wires->exu2id.redirect_pc = 0;
-    wires->exu2id.redirect_rob_idx = 0;
-    wires->exu2id.br_id = 0;
-    wires->exu2id.ftq_idx = 0;
-  }
+  w.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
+  w.exu2id.mispred = mispred;
+  w.exu2id.redirect_pc = mispred ? oldest->diag_val : 0;
+  w.exu2id.redirect_rob_idx = mispred ? oldest->rob_idx : 0;
+  w.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
+  w.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
 }
 
-/*
- * comb_exec
- * 功能: FU 交互执行总控（fu_ctrl -> dispatch -> fu_exec -> collect）。
- * 输入依赖: 各子阶段依赖集合。
- * 输出更新: 各子阶段输出集合。
- * 约束: 严格按照逻辑依赖排序，保持正确的组合逻辑语义。
- */
+// FU interaction in dependency order: controls -> dispatch to FUs -> FU evaluation -> collection.
 void Exu::comb_exec() {
-  // Stage 0: FU 冲刷与掩码控制下发（flush/clear）
   comb_fu_ctrl();
-
-  // Stage 1: 将输入槽的指令分发到对应 FU
   comb_exu2fu_dispatch();
-
-  // Stage 2: 触发 FU 内部执行组合逻辑
   comb_fu_exec();
-
-  // Stage 3: 从 FU 回收结果、分发旁路写回以及冲刷仲裁
   comb_fu2exu_collect();
 }
 
-// ==========================================
-// 时序逻辑
-// ==========================================
 void Exu::seq() {
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    fu_inst_r[i] = fu_inst_r_1[i];
-  }
-  for (auto fu : units) {
-    fu->seq();
-  }
+  for (int i = 0; i < TOTAL_FU_COUNT; i++) fu_inst_r[i] = fu_inst_r_1[i];
+  for (auto fu : units) fu->seq();
 }
