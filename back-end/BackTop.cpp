@@ -9,6 +9,11 @@
 #else
 #define LSU(f) lsu->f()
 #endif
+#ifdef ROB_SHADOW
+#include "RobShadow.h"
+#else
+#define ROB(f) rob->f()
+#endif
 #include "config.h"
 #include "diff.h"
 #include "mmio_address_map.h"
@@ -141,7 +146,7 @@ void BackTop::comb_begin_all() {
   isu->comb_begin();
   prf->comb_begin();
   exu->comb_begin();
-  rob->comb_begin();
+  ROB(comb_begin);
   csr->comb_begin();
 }
 
@@ -163,10 +168,10 @@ void BackTop::comb_stage_decode_and_resources() {
 
 // ROB head -> commit group; committed stores release their STQ entries in the LSU.
 void BackTop::comb_stage_commit() {
-  rob->comb_ready();
-  rob->comb_ftq_pc_req();
+  ROB(comb_ready);
+  ROB(comb_ftq_pc_req);
   pre->comb_ftq_lookup_rob();
-  rob->comb_commit();
+  ROB(comb_commit);
   pre->comb_commit_info();
   LSU(comb_stq_commit);
 }
@@ -185,7 +190,7 @@ void BackTop::comb_stage_memory_responses() {
 // Functional units execute; their results complete ROB entries.
 void BackTop::comb_stage_execute() {
   exu->comb_exec();
-  rob->comb_complete();
+  ROB(comb_complete);
 }
 
 // Issue selection, then LSU address translation (the MMU sits between the LSU's request and response phases).
@@ -231,9 +236,9 @@ void BackTop::comb_stage_fire_and_recover() {
   isu->comb_enq();
   // Rob recovery was split out of comb_fire(); keep the original priority:
   // branch rollback happens before enqueue, and global flush overrides both.
-  rob->comb_branch();
-  rob->comb_fire();
-  rob->comb_flush();
+  ROB(comb_branch);
+  ROB(comb_fire);
+  ROB(comb_flush);
   isu->comb_flush();
 
   pre->comb_fire();
@@ -374,7 +379,7 @@ void BackTop::seq() {
   isu->seq();
   exu->seq();
   prf->seq();
-  rob->seq();
+  ROB(seq);
   csr->seq();
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->seq();

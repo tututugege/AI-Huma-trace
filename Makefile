@@ -87,6 +87,18 @@ INCLUDES += -I./lsu_ref
 CXXFLAGS += -DLSU_SHADOW
 endif
 
+ifdef DDR_SHADOW
+CXXSRC += ./ddr_ref/SimDDRRef.cpp ./ddr_ref/DdrShadow.cpp
+INCLUDES += -I./ddr_ref
+CXXFLAGS += -DDR_SHADOW
+endif
+
+ifdef ROB_SHADOW
+CXXSRC += ./rob_ref/RobRef.cpp ./rob_ref/RobShadow.cpp
+INCLUDES += -I./rob_ref
+CXXFLAGS += -DROB_SHADOW
+endif
+
 # Object Files
 OBJS := $(CXXSRC:%.cpp=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
