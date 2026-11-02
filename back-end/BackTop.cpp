@@ -217,6 +217,123 @@ void BackTop::comb_csr_status() {
 
 void BackTop::clear_comb_inputs() { in = Back_in{}; }
 
+// ---------------------------------------------------------------------------------------------
+// One back-end cycle is evaluated in dependency order: every stage reads only signals that an
+// earlier stage (or registered state) already produced. The call order in BackTop::comb() is that order.
+// ---------------------------------------------------------------------------------------------
+
+// Working copies and default outputs of every module.
+void BackTop::comb_begin_all() {
+  pre->comb_begin();
+  idu->comb_begin();
+  rename->comb_begin();
+  dis->comb_begin();
+  isu->comb_begin();
+  prf->comb_begin();
+  exu->comb_begin();
+  rob->comb_begin();
+  csr->comb_begin();
+}
+
+// Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
+void BackTop::comb_stage_decode_and_resources() {
+  idu->comb_branch();
+  pre->comb_accept_front();
+  idu->comb_decode();
+  csr->comb_interrupt();
+  rename->comb_alloc();
+  prf->comb_complete();
+  prf->comb_awake();
+  prf->comb_write();
+  isu->comb_ready();
+  LSU(comb_cal);
+  LSU(comb_lsu2dis);
+  LSU(comb_lsu2rob);
+}
+
+// ROB head -> commit group; committed stores release their STQ entries in the LSU.
+void BackTop::comb_stage_commit() {
+  rob->comb_ready();
+  rob->comb_ftq_pc_req();
+  pre->comb_ftq_lookup_rob();
+  rob->comb_commit();
+  pre->comb_commit_info();
+  LSU(comb_stq_commit);
+}
+
+// MMIO/DCache responses finish loads and stores and produce write-backs; CSR read data.
+void BackTop::comb_stage_memory_responses() {
+  dis->comb_alloc();
+  LSU(comb_mmio_in);
+  LSU(comb_dcache2lsu_ldq);
+  LSU(comb_dcache2lsu_stq);
+  LSU(comb_lsu2exe);
+  exu->comb_to_csr();
+  csr->comb_csr_read();
+}
+
+// Functional units execute; their results complete ROB entries.
+void BackTop::comb_stage_execute() {
+  exu->comb_exec();
+  rob->comb_complete();
+}
+
+// Issue selection, then LSU address translation (the MMU sits between the LSU's request and response phases).
+void BackTop::comb_stage_issue_and_translate() {
+  exu->comb_ready();
+  isu->comb_issue();
+  LSU(comb_exe2lsu);
+  LSU(comb_tlb_out);
+  comb_lsu_mmu();
+  LSU(comb_tlb_in_ldq);
+  LSU(comb_tlb_in_stq);
+  LSU(comb_stlf);
+}
+
+// Register reads, next-cycle wakeups, exceptions, rename and dispatch of the instructions leaving decode.
+void BackTop::comb_stage_operands_and_dispatch() {
+  prf->comb_req_ftq();
+  pre->comb_ftq_lookup_prf();
+  prf->comb_read();
+
+  isu->comb_awake();
+  isu->comb_calc_latency_next();
+  csr->comb_exception();
+  csr->comb_csr_write();
+  dis->comb_wake();
+  rename->comb_rename();
+
+  dis->comb_dispatch();
+}
+
+// Handshakes that move instructions (fire), the LSU's DCache/MMIO requests, queue enqueue, and recovery of ROB/IQs from a mispredict or global flush (flush wins).
+void BackTop::comb_stage_fire_and_recover() {
+  dis->comb_fire();
+  LSU(comb_dis2lsu);
+  rename->comb_fire();
+  idu->comb_fire();
+  // Kill flushed LSU work before driving new DCache/MMIO requests.
+  LSU(comb_flush);
+  LSU(comb_lsu2dcache_ldq);
+  LSU(comb_lsu2dcache_stq);
+  LSU(comb_mmio_out);
+  LSU(comb_check);
+  isu->comb_enq();
+  // Rob recovery was split out of comb_fire(); keep the original priority:
+  // branch rollback happens before enqueue, and global flush overrides both.
+  rob->comb_branch();
+  rob->comb_fire();
+  rob->comb_flush();
+  isu->comb_flush();
+
+  pre->comb_fire();
+  prf->comb_pipeline();
+  exu->comb_pipeline();
+  dis->comb_pipeline();
+  rename->comb_pipeline();
+  csr->comb_interrupt_inject();
+}
+
 void BackTop::comb() {
   // CSR 状态由 SimCpu::cycle() 在进入 front/back 组合逻辑前统一刷新。
 #if CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN
@@ -275,69 +392,13 @@ void BackTop::comb() {
   mmu2lsu_io = {};
 #endif
 
-  pre->comb_begin();
-  idu->comb_begin();
-  rename->comb_begin();
-  dis->comb_begin();
-  isu->comb_begin();
-  prf->comb_begin();
-  exu->comb_begin();
-  rob->comb_begin();
-  csr->comb_begin();
-
-  // 每个空行表示分层  下层会依赖上层产生的某个信号
-  idu->comb_branch();
-  pre->comb_accept_front();
-  idu->comb_decode();
-  csr->comb_interrupt();
-  rename->comb_alloc();
-  prf->comb_complete();
-  prf->comb_awake();
-  prf->comb_write();
-  isu->comb_ready();
-  LSU(comb_cal);
-  LSU(comb_lsu2dis);
-  LSU(comb_lsu2rob);
-
-  rob->comb_ready();
-  rob->comb_ftq_pc_req();
-  pre->comb_ftq_lookup_rob();
-  rob->comb_commit();
-  pre->comb_commit_info();
-  LSU(comb_stq_commit);
-
-  dis->comb_alloc();
-  LSU(comb_mmio_in);
-  LSU(comb_dcache2lsu_ldq);
-  LSU(comb_dcache2lsu_stq);
-  LSU(comb_lsu2exe);
-  exu->comb_to_csr();
-  csr->comb_csr_read();
-
-  exu->comb_exec();
-  rob->comb_complete();
-
-  exu->comb_ready();
-  isu->comb_issue();
-  LSU(comb_exe2lsu);
-  LSU(comb_tlb_out);
-  comb_lsu_mmu();
-  LSU(comb_tlb_in_ldq);
-  LSU(comb_tlb_in_stq);
-  LSU(comb_stlf);
-
-  prf->comb_req_ftq();
-  pre->comb_ftq_lookup_prf();
-  prf->comb_read();
-
-  isu->comb_awake();
-  isu->comb_calc_latency_next();
-  csr->comb_exception();
-  csr->comb_csr_write();
-  dis->comb_wake();
-  rename->comb_rename();
-
-  dis->comb_dispatch();
+  comb_begin_all();
+  comb_stage_decode_and_resources();
+  comb_stage_commit();
+  comb_stage_memory_responses();
+  comb_stage_execute();
+  comb_stage_issue_and_translate();
+  comb_stage_operands_and_dispatch();
 
   // 用于调试
   // 修正pc_next 以及difftest对应的pc_next
@@ -390,30 +451,7 @@ void BackTop::comb() {
     }
   }
 
-  dis->comb_fire();
-  LSU(comb_dis2lsu);
-  rename->comb_fire();
-  idu->comb_fire();
-  // Kill flushed LSU work before driving new DCache/MMIO requests.
-  LSU(comb_flush);
-  LSU(comb_lsu2dcache_ldq);
-  LSU(comb_lsu2dcache_stq);
-  LSU(comb_mmio_out);
-  LSU(comb_check);
-  isu->comb_enq();
-  // Rob recovery was split out of comb_fire(); keep the original priority:
-  // branch rollback happens before enqueue, and global flush overrides both.
-  rob->comb_branch();
-  rob->comb_fire();
-  rob->comb_flush();
-  isu->comb_flush();
-
-  pre->comb_fire();
-  prf->comb_pipeline();
-  exu->comb_pipeline();
-  dis->comb_pipeline();
-  rename->comb_pipeline();
-  csr->comb_interrupt_inject();
+  comb_stage_fire_and_recover();
 }
 
 void BackTop::seq() {
