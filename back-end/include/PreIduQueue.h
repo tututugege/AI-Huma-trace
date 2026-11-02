@@ -50,6 +50,9 @@ private:
 
   InstructionBuffer ibuf;
   InstructionBuffer ibuf_1;
+  // committed (x) == working (x_1) at comb_begin; seq copies only dirty parts.
+  bool ibuf_dirty = false;
+  bool ftq_dirty = false;
 
   FTQEntry ftq_lookup_entries[FTQ_SIZE];
   FTQEntry ftq_lookup_entries_1[FTQ_SIZE];

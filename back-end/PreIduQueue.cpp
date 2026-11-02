@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstdio>
 #include "PreIduQueue.h"
 #include "types.h"
 
@@ -39,6 +41,7 @@ void PreIduQueue::ftq_pop(int pop_cnt) {
       break;
     }
     ftq_valid_1[ftq_head_1] = false;
+    ftq_dirty = true;
     ftq_head_1 = (ftq_head_1 + 1) % FTQ_SIZE;
     ftq_count_1--;
   }
@@ -50,6 +53,7 @@ void PreIduQueue::ftq_recover(int new_tail) {
   for (int i = 0; i < discarded; i++) {
     int idx = (normalized_tail + i) % FTQ_SIZE;
     ftq_valid_1[idx] = false;
+    ftq_dirty = true;
   }
   ftq_tail_1 = normalized_tail;
   ftq_count_1 -= discarded;
@@ -62,6 +66,7 @@ void PreIduQueue::ftq_flush() {
   for (int i = 0; i < FTQ_SIZE; i++) {
     ftq_valid_1[i] = false;
   }
+  ftq_dirty = true;
 }
 
 void PreIduQueue::init() {
@@ -81,13 +86,18 @@ void PreIduQueue::init() {
 }
 
 void PreIduQueue::comb_begin() {
-  ibuf_1 = ibuf;
+#ifdef IQ_SELFCHECK
+  if (std::memcmp(&ibuf, &ibuf_1, sizeof(ibuf)) != 0 ||
+      std::memcmp(ftq_lookup_entries, ftq_lookup_entries_1, sizeof(ftq_lookup_entries)) != 0 ||
+      std::memcmp(ftq_train_meta_fifo, ftq_train_meta_fifo_1, sizeof(ftq_train_meta_fifo)) != 0 ||
+      std::memcmp(ftq_valid, ftq_valid_1, sizeof(ftq_valid)) != 0) {
+    std::fprintf(stderr, "[IQ_SELFCHECK] PreIduQueue committed != working\n");
+    std::abort();
+  }
+#endif
   ftq_head_1 = ftq_head;
   ftq_tail_1 = ftq_tail;
   ftq_count_1 = ftq_count;
-  std::memcpy(ftq_lookup_entries_1, ftq_lookup_entries, sizeof(ftq_lookup_entries));
-  std::memcpy(ftq_train_meta_fifo_1, ftq_train_meta_fifo, sizeof(ftq_train_meta_fifo));
-  std::memcpy(ftq_valid_1, ftq_valid, sizeof(ftq_valid));
 
   for (auto &e : out.issue->entries) {
     e = {};
@@ -169,6 +179,7 @@ void PreIduQueue::comb_accept_front() {
   ftq_lookup_entries_1[ftq_alloc_idx] = ftq_lookup_entry;
   ftq_train_meta_fifo_1[ftq_alloc_idx] = ftq_train_meta_entry;
   ftq_valid_1[ftq_alloc_idx] = true;
+  ftq_dirty = true;
 
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     out.pre2front->fire[i] = in.front2pre->valid[i];
@@ -235,13 +246,17 @@ void PreIduQueue::comb_fire() {
 
   if (in.rob_bcast->flush) {
     ibuf_1.clear();
+    ibuf_dirty = true;
   } else if (in.idu_br_latch->mispred) {
     ibuf_1.clear();
+    ibuf_dirty = true;
   } else {
     if (pop_count > 0) {
       ibuf_1.pop_front(pop_count);
+      ibuf_dirty = true;
     }
     if (push_count > 0) {
+      ibuf_dirty = true;
       for (int i = 0; i < push_count; i++) {
         ibuf_1.push_back(push_entries[i]);
       }
@@ -339,11 +354,17 @@ void PreIduQueue::comb_commit_info() {
 }
 
 void PreIduQueue::seq() {
-  ibuf = ibuf_1;
+  if (ibuf_dirty) {
+    ibuf = ibuf_1;
+    ibuf_dirty = false;
+  }
   ftq_head = ftq_head_1;
   ftq_tail = ftq_tail_1;
   ftq_count = ftq_count_1;
-  std::memcpy(ftq_lookup_entries, ftq_lookup_entries_1, sizeof(ftq_lookup_entries));
-  std::memcpy(ftq_train_meta_fifo, ftq_train_meta_fifo_1, sizeof(ftq_train_meta_fifo));
-  std::memcpy(ftq_valid, ftq_valid_1, sizeof(ftq_valid));
+  if (ftq_dirty) {
+    std::memcpy(ftq_lookup_entries, ftq_lookup_entries_1, sizeof(ftq_lookup_entries));
+    std::memcpy(ftq_train_meta_fifo, ftq_train_meta_fifo_1, sizeof(ftq_train_meta_fifo));
+    std::memcpy(ftq_valid, ftq_valid_1, sizeof(ftq_valid));
+    ftq_dirty = false;
+  }
 }

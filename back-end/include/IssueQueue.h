@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 // 定义每个issue port操作类型的位掩码
@@ -167,6 +170,32 @@ private:
   std::vector<uint64_t> wake_matrix_src1_1;
   std::vector<uint64_t> wake_matrix_src2_1;
 
+  // Dirty tracking: entry/wake_matrix (committed) always equal entry_1/
+  // wake_matrix_*_1 (working) at comb_begin (seq copies back). Writes to the
+  // working copy are recorded so seq() copies only what changed.
+  bool entry_dirty = false;
+  bool matrix_all_dirty = false;
+  std::vector<uint8_t> row_dirty;
+  std::vector<uint32_t> dirty_rows;
+  void mark_row(uint32_t preg) {
+    if (!row_dirty[preg]) {
+      row_dirty[preg] = 1;
+      dirty_rows.push_back(preg);
+    }
+  }
+#ifdef IQ_SELFCHECK
+  void selfcheck(const char *where) const {
+    bool ok = entry.size() == entry_1.size() && count == count_1 &&
+              wake_matrix_src1 == wake_matrix_src1_1 &&
+              wake_matrix_src2 == wake_matrix_src2_1 &&
+              std::memcmp(entry.data(), entry_1.data(),
+                          entry.size() * sizeof(IqStoredEntry)) == 0;
+    if (!ok) {
+      std::fprintf(stderr, "[IQ_SELFCHECK] committed != working at %s\n", where);
+      std::abort();
+    }
+  }
+#endif
 
 public:
   IssueQueue(const IssueQueueConfig &cfg)
@@ -184,15 +213,16 @@ public:
     wake_matrix_src2.resize(PRF_NUM * wake_words_per_row, 0);
     wake_matrix_src1_1.resize(PRF_NUM * wake_words_per_row, 0);
     wake_matrix_src2_1.resize(PRF_NUM * wake_words_per_row, 0);
+    row_dirty.assign(PRF_NUM, 0);
 
     in.enq_reqs.resize(dispatch_width);
   }
 
   void comb_begin() {
-    entry_1 = entry;
+#ifdef IQ_SELFCHECK
+    selfcheck("comb_begin");
+#endif
     count_1 = count;
-    wake_matrix_src1_1 = wake_matrix_src1;
-    wake_matrix_src2_1 = wake_matrix_src2;
     out.free_slots = size - count;
     for (auto &grant : out.issue_grants) {
       grant = {};
@@ -235,6 +265,7 @@ public:
         continue;
       }
       size_t row_base = matrix_row_base(preg);
+      mark_row(preg);
 
       for (int w = 0; w < wake_words_per_row; w++) {
         uint64_t mask1 = wake_matrix_src1_1[row_base + w];
@@ -244,6 +275,7 @@ public:
           if (idx < size && entry_1[idx].valid && entry_1[idx].uop.src1_en &&
               entry_1[idx].uop.src1_busy && entry_1[idx].uop.src1_preg == preg) {
             entry_1[idx].uop.src1_busy = false;
+            entry_dirty = true;
           }
           mask1 &= (mask1 - 1);
         }
@@ -256,6 +288,7 @@ public:
           if (idx < size && entry_1[idx].valid && entry_1[idx].uop.src2_en &&
               entry_1[idx].uop.src2_busy && entry_1[idx].uop.src2_preg == preg) {
             entry_1[idx].uop.src2_busy = false;
+            entry_dirty = true;
           }
           mask2 &= (mask2 - 1);
         }
@@ -307,6 +340,9 @@ private:
       return 0;
     for (int i = 0; i < size; i++) {
       if (!entry_1[i].valid) {
+#ifndef IQ_NEG_CONTROL
+        entry_dirty = true;
+#endif
         entry_1[i] = inst;
         entry_1[i].valid = true;
         set_dep_bits_for_slot(entry_1[i], i);
@@ -328,6 +364,7 @@ private:
       if (match_mask) {
         clear_dep_bits_for_slot(entry_1[i], i);
         entry_1[i].valid = false;
+        entry_dirty = true;
         count_1--;
       }
     }
@@ -336,6 +373,7 @@ private:
   // Clear resolved branch bits from surviving entries
   void clear_br(wire<BR_MASK_WIDTH> clear_mask) {
     if (clear_mask == 0) return;
+    entry_dirty = true;
     for (int i = 0; i < size; i++) {
       if (entry_1[i].valid) {
         entry_1[i].uop.br_mask &= ~clear_mask;
@@ -346,6 +384,8 @@ private:
   void flush_all() {
     for (auto &e : entry_1)
       e.valid = false;
+    entry_dirty = true;
+    matrix_all_dirty = true;
     count_1 = 0;
     
     // Clear Wakeup Matrices
@@ -359,6 +399,7 @@ private:
       if (entry_1[idx].valid) {
         clear_dep_bits_for_slot(entry_1[idx], idx);
         entry_1[idx].valid = false;
+        entry_dirty = true;
         count_1--;
       }
     }
@@ -366,10 +407,31 @@ private:
 
 public:
   void seq() {
-    entry = entry_1;
+    if (entry_dirty) {
+      entry = entry_1;
+      entry_dirty = false;
+    }
     count = count_1;
-    wake_matrix_src1 = wake_matrix_src1_1;
-    wake_matrix_src2 = wake_matrix_src2_1;
+    if (matrix_all_dirty) {
+      wake_matrix_src1 = wake_matrix_src1_1;
+      wake_matrix_src2 = wake_matrix_src2_1;
+      matrix_all_dirty = false;
+      for (uint32_t r : dirty_rows) row_dirty[r] = 0;
+      dirty_rows.clear();
+    } else {
+      for (uint32_t r : dirty_rows) {
+        const size_t base = matrix_row_base(r);
+        for (int w = 0; w < wake_words_per_row; w++) {
+          wake_matrix_src1[base + w] = wake_matrix_src1_1[base + w];
+          wake_matrix_src2[base + w] = wake_matrix_src2_1[base + w];
+        }
+        row_dirty[r] = 0;
+      }
+      dirty_rows.clear();
+    }
+#ifdef IQ_SELFCHECK
+    selfcheck("seq");
+#endif
   }
 
 private:
@@ -457,12 +519,14 @@ private:
       uint32_t preg = ent.uop.src1_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] |= bit;
+        mark_row(preg);
       }
     }
     if (ent.uop.src2_en && ent.uop.src2_busy) {
       uint32_t preg = ent.uop.src2_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] |= bit;
+        mark_row(preg);
       }
     }
   }
@@ -476,12 +540,14 @@ private:
       uint32_t preg = ent.uop.src1_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] &= clear_mask;
+        mark_row(preg);
       }
     }
     if (ent.uop.src2_en) {
       uint32_t preg = ent.uop.src2_preg;
       if (preg < PRF_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] &= clear_mask;
+        mark_row(preg);
       }
     }
   }
