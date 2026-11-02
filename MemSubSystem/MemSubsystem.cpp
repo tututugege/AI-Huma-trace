@@ -8,27 +8,8 @@
 #include <cstring>
 #include <memory>
 
-#if __has_include("UART16550_Device.h") &&                                        \
-                  __has_include("AXI_Interconnect.h") &&                          \
-                                __has_include("AXI_Router_AXI4.h") &&             \
-                                              __has_include("MMIO_Bus_AXI4.h") && \
-                                                            __has_include("SimDDR.h")
-#define AXI_KIT_HEADERS_AVAILABLE 1
 #include "AXI_Interconnect.h"
-#include "AXI_Router_AXI4.h"
-#include "MMIO_Bus_AXI4.h"
-#include "SimDDR.h"
-#include "UART16550_Device.h"
-namespace {
-using InterconnectImpl = axi_interconnect::AXI_Interconnect;
-using DdrImpl = sim_ddr::SimDDR;
-using RouterImpl = axi_interconnect::AXI_Router_AXI4;
-using MmioImpl = mmio::MMIO_Bus_AXI4;
-} // namespace
-#else
-#define AXI_KIT_HEADERS_AVAILABLE 0
-#error "CONFIG_ICACHE_USE_AXI_MEM_PORT requires axi-interconnect-kit"
-#endif
+#define AXI_KIT_HEADERS_AVAILABLE 1
 
 #if AXI_KIT_HEADERS_AVAILABLE && CONFIG_ICACHE_USE_AXI_MEM_PORT
 #define AXI_KIT_RUNTIME_ENABLED 1
@@ -232,11 +213,6 @@ struct AxiLlcTableRuntime {
 } // namespace
 
 struct AxiKitRuntime {
-  InterconnectImpl interconnect;
-  DdrImpl ddr;
-  RouterImpl router;
-  MmioImpl mmio;
-  mmio::UART16550_Device uart0{0x10000000u};
   AxiLlcTableRuntime llc_tables;
   axi_interconnect::AXI_LLCPerfCounters_t llc_perf_snapshot{};
 };
@@ -368,21 +344,12 @@ void MemSubsystem::sync_ptw_port_outputs() {
 
 
 
-void MemSubsystem::set_internal_axi_runtime_active(bool active) {
-#if AXI_KIT_RUNTIME_ENABLED
-  internal_axi_runtime_active_ = active;
-#else
-  (void)active;
-  internal_axi_runtime_active_ = false;
-#endif
-}
 
 void MemSubsystem::set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg) {
 #if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {
     return;
   }
-  axi_kit_runtime->interconnect.set_llc_config(cfg);
   axi_kit_runtime->llc_tables.configure(cfg);
   axi_kit_runtime->llc_perf_snapshot = {};
 #else
@@ -427,23 +394,10 @@ void MemSubsystem::llc_seq(
 #endif
 }
 
-axi_interconnect::ReadMasterPort_t *MemSubsystem::icache_read_port() {
-#if AXI_KIT_RUNTIME_ENABLED
-  if (axi_kit_runtime == nullptr || !internal_axi_runtime_active_) {
-    return nullptr;
-  }
-  return &axi_kit_runtime->interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
-#else
-  return nullptr;
-#endif
-}
 
 MemSubsystem::MemSubsystem(SimContext *ctx) : ctx(ctx) {
 #if AXI_KIT_RUNTIME_ENABLED
   axi_kit_runtime = std::make_unique<AxiKitRuntime>();
-  internal_axi_runtime_active_ = true;
-#else
-  internal_axi_runtime_active_ = false;
 #endif
   ptw_block.bind_context(ctx);
   dtlb_ptw_port_inst = std::make_unique<MemSubsystemPtwMemPortAdapter>();
@@ -582,7 +536,6 @@ void MemSubsystem::init() {
   peripheral_axi_write_out = {};
 
 #if AXI_KIT_RUNTIME_ENABLED
-  axi_kit_runtime->interconnect.init();
   {
     axi_interconnect::AXI_LLCConfig llc_cfg;
     llc_cfg.enable = (CONFIG_AXI_LLC_ENABLE != 0);
@@ -591,68 +544,6 @@ void MemSubsystem::init() {
     llc_cfg.mshr_num = CONFIG_AXI_LLC_MSHR_NUM;
     llc_cfg.lookup_latency = CONFIG_AXI_LLC_LOOKUP_LATENCY;
     set_llc_config(llc_cfg);
-  }
-  axi_kit_runtime->router.init();
-  axi_kit_runtime->mmio.init();
-  axi_kit_runtime->mmio.add_device(UART_ADDR_BASE, UART_MMIO_SIZE,
-                                   &axi_kit_runtime->uart0);
-  axi_kit_runtime->ddr.init();
-  static bool printed_axi_cfg = false;
-  if (!printed_axi_cfg) {
-    printed_axi_cfg = true;
-    printf(
-        "[CONFIG][AXI] ddr_read_latency=%ucy ddr_write_resp_latency=%ucy "
-        "ddr_beat=%uB wq=%u wag=%ucy wfifo=%u wdrain=%ucy whi=%u wlo=%u "
-        "r2w=%ucy w2r=%ucy "
-        "out=%u per_master=%u ddr_out=%u "
-        "dcache_line=%uB(%u words) "
-        "upstream_write_payload=%uB upstream_read_resp=%uB\n",
-        static_cast<unsigned>(sim_ddr::SIM_DDR_LATENCY),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_RESP_LATENCY),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_BEAT_BYTES),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_QUEUE_DEPTH),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_ACCEPT_GAP),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DATA_FIFO_DEPTH),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_GAP),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_DRAIN_LOW_WATERMARK),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_READ_TO_WRITE_TURNAROUND),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_WRITE_TO_READ_TURNAROUND),
-        static_cast<unsigned>(axi_interconnect::MAX_OUTSTANDING),
-        static_cast<unsigned>(axi_interconnect::MAX_READ_OUTSTANDING_PER_MASTER),
-        static_cast<unsigned>(sim_ddr::SIM_DDR_MAX_OUTSTANDING),
-        static_cast<unsigned>(DCACHE_LINE_SIZE),
-        static_cast<unsigned>(DCACHE_WORD_NUM),
-        static_cast<unsigned>(axi_interconnect::AXI_UPSTREAM_PAYLOAD_BYTES),
-        static_cast<unsigned>(axi_interconnect::MAX_READ_TRANSACTION_BYTES));
-    if (DCACHE_WORD_NUM > axi_interconnect::CACHELINE_WORDS) {
-      printf(
-          "[MEM][AXI CFG][WARN] dcache line (%u words) is wider than AXI upstream "
-          "write payload (%u words). High words may be dropped in bridge path.\n",
-          static_cast<unsigned>(DCACHE_WORD_NUM),
-          static_cast<unsigned>(axi_interconnect::CACHELINE_WORDS));
-    }
-  }
-#endif
-
-#if AXI_KIT_RUNTIME_ENABLED
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) {
-    auto &port = axi_kit_runtime->interconnect.read_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.resp.ready = false;
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) {
-    auto &port = axi_kit_runtime->interconnect.write_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.wdata.clear();
-    port.req.wstrb = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.resp.ready = false;
   }
 #endif
 }
@@ -677,17 +568,6 @@ void MemSubsystem::load_sdcard_image(const std::string &path) {
 
 void MemSubsystem::sync_mmio_devices_from_backing() {
   peripheral_model_.sync_from_backing();
-#if AXI_KIT_RUNTIME_ENABLED
-  if (axi_kit_runtime != nullptr) {
-    for (uint32_t reg_off = 1; reg_off < 8; ++reg_off) {
-      const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
-      const uint32_t shift = (reg_off & 0x3u) * 8u;
-      const uint8_t value =
-          static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
-      axi_kit_runtime->uart0.write(UART_ADDR_BASE + reg_off, &value, 1u, 1u);
-    }
-  }
-#endif
 }
 
 static bool replay_waits_for_mshr_fill(ReplayType replay) {
@@ -880,22 +760,6 @@ void MemSubsystem::dcache_fast_seq(bool sample_mshr_perf) {
 
 void MemSubsystem::comb_outputs() {
 #if AXI_KIT_RUNTIME_ENABLED
-  if (internal_axi_runtime_active_) {
-    auto &interconnect = axi_kit_runtime->interconnect;
-    auto &ddr = axi_kit_runtime->ddr;
-    auto &router = axi_kit_runtime->router;
-    auto &mmio = axi_kit_runtime->mmio;
-
-    // Internal icache-only runtime is optional. When shared LLC is driven by
-    // the top-level interconnect, keep this path idle and let SimCpu feed the
-    // LLC tables/perf shadow directly.
-    llc_comb_outputs();
-    interconnect.set_llc_lookup_in(llc_lookup_in());
-    ddr.comb_outputs();
-    mmio.comb_outputs();
-    router.comb_outputs(interconnect.axi_io, ddr.io, mmio.io);
-    interconnect.comb_outputs();
-  }
 #endif
 
   dcache_domain_comb_outputs();
@@ -1033,40 +897,6 @@ void MemSubsystem::comb_inputs() {
 
   // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
 #if AXI_KIT_RUNTIME_ENABLED
-  if (internal_axi_runtime_active_) {
-    auto &interconnect = axi_kit_runtime->interconnect;
-    auto &ddr = axi_kit_runtime->ddr;
-    auto &router = axi_kit_runtime->router;
-    auto &mmio = axi_kit_runtime->mmio;
-
-    for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) {
-      if (i == axi_interconnect::MASTER_ICACHE) {
-        continue;
-      }
-      auto &port = interconnect.read_ports[i];
-      port.req.valid = false;
-      port.req.addr = 0;
-      port.req.total_size = 0;
-      port.req.id = 0;
-      port.resp.ready = false;
-    }
-    for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) {
-      auto &port = interconnect.write_ports[i];
-      port.req.valid = false;
-      port.req.addr = 0;
-      port.req.wdata.clear();
-      port.req.wstrb = 0;
-      port.req.total_size = 0;
-      port.req.id = 0;
-      port.resp.ready = false;
-    }
-
-    // AXI-kit phase-2 combinational inputs.
-    interconnect.comb_inputs();
-    router.comb_inputs(interconnect.axi_io, ddr.io, mmio.io);
-    ddr.comb_inputs();
-    mmio.comb_inputs();
-  }
 #endif
 
   sync_ptw_port_outputs();
@@ -1094,16 +924,6 @@ void MemSubsystem::seq() {
   mem_route_block.seq();
   clear_pending_dcache_response();
 #if AXI_KIT_RUNTIME_ENABLED
-  if (internal_axi_runtime_active_) {
-    axi_kit_runtime->ddr.seq();
-    axi_kit_runtime->mmio.seq();
-    axi_kit_runtime->router.seq(axi_kit_runtime->interconnect.axi_io,
-                                axi_kit_runtime->ddr.io,
-                                axi_kit_runtime->mmio.io);
-    llc_seq(axi_kit_runtime->interconnect.get_llc_table_out(),
-            axi_kit_runtime->interconnect.get_llc_perf_counters());
-    axi_kit_runtime->interconnect.seq();
-  }
 #endif
   dtlb_walk_port_inst->reset_seq_input();
   itlb_walk_port_inst->reset_seq_input();

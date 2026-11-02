@@ -1,13 +1,11 @@
 #pragma once
 #include "AXI_Interconnect.h"
-#include "AXI_Router_AXI4.h"
 #include "BackTop.h"
 #include "FrontTop.h"
 #include "MMIO_Bus_AXI4.h"
 #include "MemSubsystem.h"
 #include "SimDDR.h"
 using AxiInterconnectImpl = axi_interconnect::AXI_Interconnect;
-using AxiRouterImpl = axi_interconnect::AXI_Router_AXI4;
 using AxiDdrImpl = sim_ddr::SimDDR;
 using AxiMmioImpl = mmio::MMIO_Bus_AXI4;
 #include "UART16550_Device.h"
@@ -25,7 +23,6 @@ public:
   FrontTop front;
   MemSubsystem mem_subsystem;
   AxiInterconnectImpl axi_interconnect;
-  AxiRouterImpl axi_router;
   AxiDdrImpl axi_ddr;
   AxiMmioImpl axi_mmio;
   mmio::UART16550_Device axi_uart{MMIO_RANGE_BASE};

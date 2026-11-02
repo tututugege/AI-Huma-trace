@@ -80,8 +80,6 @@ public:
   bool consume_dma_write(uint32_t &paddr, size_t &size);
   void load_sdcard_image(const std::string &path);
   void sync_mmio_devices_from_backing();
-  axi_interconnect::ReadMasterPort_t *icache_read_port();
-  void set_internal_axi_runtime_active(bool active);
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);
   bool timer_irq_level() const { return peripheral_model_.timer_irq_level(); }
@@ -159,7 +157,6 @@ private:
   ReplayWakeup wakeup;
 
   std::unique_ptr<AxiKitRuntime> axi_kit_runtime;
-  bool internal_axi_runtime_active_ = true;
 
   void sync_ptw_port_outputs();
   void dcache_domain_comb_outputs();

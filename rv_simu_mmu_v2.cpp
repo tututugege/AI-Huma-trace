@@ -679,7 +679,6 @@ void SimCpu::init() {
   // whenever the real BPU frontend is enabled. Oracle mode does not step the
   // icache model, so it simply leaves the port disconnected instead of falling
   // back to MemSubsystem's legacy private AXI runtime.
-  mem_subsystem.set_internal_axi_runtime_active(false);
   front.icache_mem_read_port =
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
 
@@ -688,7 +687,6 @@ void SimCpu::init() {
   mem_subsystem.init();
   axi_interconnect.set_llc_config(llc_cfg);
   axi_interconnect.init();
-  axi_router.init();
   axi_ddr.init();
   axi_mmio.init();
   axi_mmio.add_device(UART_ADDR_BASE, UART_MMIO_SIZE, &axi_uart);
