@@ -59,11 +59,7 @@ struct Counters {
 
 void ensure() {
   if (g_bridge) return;
-  g_ctx = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
-  refcpu_set_uart_print(g_ctx, false);
-  const char *e = std::getenv("TB_IMG_BYTES");
-  size_t bytes = e ? strtoull(e, 0, 0) : (1u << 20);
-  refcpu_sync_ram_from_dut(g_ctx, pmem_ram_ptr(), bytes);
+  g_ctx = pmem_core_ctx();  // the RAM image was loaded straight into the core
   // Boot ROM (word-backed MMIO at 0x0): the core fetches the reset stub from there.
   for (uint32_t a = 0; a < 0x100000u; a += 4) {
     const uint32_t w = pmem_read(a);

@@ -381,10 +381,12 @@ int main(int argc, char *argv[]) {
       std::cout << "[Boot] direct OpenSBI from SD boot blob" << std::endl;
       cpu.back.load_sd_boot_blob(config.sdcard_image_file);
     }
-    difftest_configure_run_assets(
-        config.sdcard_image_file.empty() ? nullptr
-                                         : config.sdcard_image_file.c_str());
-    difftest_init_run_state();
+    if (!tbhook::inject) {  // the reference core (another full RAM) is only needed by difftest
+      difftest_configure_run_assets(
+          config.sdcard_image_file.empty() ? nullptr
+                                           : config.sdcard_image_file.c_str());
+      difftest_init_run_state();
+    }
   } else if (config.mode == SimConfig::CKPT) {
     std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;

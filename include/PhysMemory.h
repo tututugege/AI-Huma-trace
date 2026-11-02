@@ -21,7 +21,9 @@ constexpr uint32_t PMEM_RAM_BASE = 0x80000000u;
 
 extern uint32_t *p_memory;
 
+struct RefCpuContext;
 bool pmem_init();
+RefCpuContext *pmem_core_ctx();  // the core that owns the RAM
 void pmem_release();
 void pmem_clear_all();
 

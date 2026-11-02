@@ -1,5 +1,6 @@
 #include "PhysMemory.h"
 #include "config.h"
+#include "refcpu_api.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,7 +9,10 @@
 
 uint32_t *p_memory = nullptr;
 
+// The functional memory is the core's own RAM: one copy, shared by the loader, the model's
+// instruction/page-table reads and the trace bridge (only the IO window is kept here).
 namespace {
+RefCpuContext *g_core = nullptr;
 uint32_t *g_sdram_memory = nullptr;
 std::unordered_map<uint32_t, uint32_t> g_io_words;
 
@@ -34,33 +38,28 @@ bool pmem_init() {
     pmem_clear_all();
     return true;
   }
-  p_memory =
-      static_cast<uint32_t *>(std::calloc(PHYSICAL_MEMORY_LENGTH, sizeof(uint32_t)));
-  if (p_memory == nullptr) {
+  g_core = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
+  if (g_core == nullptr) {
     return false;
   }
-  g_sdram_memory = static_cast<uint32_t *>(
-      std::calloc(PMEM_SDRAM_SIZE / sizeof(uint32_t), sizeof(uint32_t)));
-  if (g_sdram_memory == nullptr) {
-    std::free(p_memory);
-    p_memory = nullptr;
-    return false;
-  }
+  refcpu_set_uart_print(g_core, false);
+  p_memory = refcpu_get_ram_ptr(g_core);
+  g_sdram_memory = refcpu_get_sdram_ptr(g_core);
   g_io_words.clear();
-  return true;
+  return p_memory != nullptr && g_sdram_memory != nullptr;
 }
 
 void pmem_release() {
-  if (p_memory != nullptr) {
-    std::free(p_memory);
-    p_memory = nullptr;
+  if (g_core != nullptr) {
+    refcpu_destroy(g_core);
+    g_core = nullptr;
   }
-  if (g_sdram_memory != nullptr) {
-    std::free(g_sdram_memory);
-    g_sdram_memory = nullptr;
-  }
+  p_memory = nullptr;
+  g_sdram_memory = nullptr;
   g_io_words.clear();
 }
+
+RefCpuContext *pmem_core_ctx() { return g_core; }
 
 void pmem_clear_all() {
   if (p_memory != nullptr) {
