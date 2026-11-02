@@ -1,470 +1,244 @@
-#include "Wires.h"
 #include "BeginCheck.h"
 #include "Dispatch.h"
+#include "Wires.h"
 #include "config.h"
 #include "util.h"
 
 bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
-  for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++) {
-    if (wires->prf_awake.wake[w].valid && wires->prf_awake.wake[w].preg == preg) {
-      return true;
-    }
-  }
-  for (int w = 0; w < MAX_WAKEUP_PORTS; w++) {
-    if (wires->iss_awake.wake[w].valid && wires->iss_awake.wake[w].preg == preg) {
-      return true;
-    }
-  }
+  for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++)
+    if (wires->prf_awake.wake[w].valid && wires->prf_awake.wake[w].preg == preg) return true;
+  for (int w = 0; w < MAX_WAKEUP_PORTS; w++)
+    if (wires->iss_awake.wake[w].valid && wires->iss_awake.wake[w].preg == preg) return true;
   return false;
 }
 
 void Dispatch::apply_wakeup_to_uop(Uop &uop) const {
-  if (uop->src1_en && is_preg_woken(uop->src1_preg)) {
-    uop.src1_busy = false;
-  }
-  if (uop->src2_en && is_preg_woken(uop->src2_preg)) {
-    uop.src2_busy = false;
-  }
+  if (uop->src1_en && is_preg_woken(uop->src1_preg)) uop.src1_busy = false;
+  if (uop->src2_en && is_preg_woken(uop->src2_preg)) uop.src2_busy = false;
 }
 
 void Dispatch::init() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    inst_r[i] = {};
-    inst_r_1[i] = {};
-    inst_valid[i] = false;
-    inst_valid_1[i] = false;
-    inst_alloc[i] = {};
+    inst_r[i] = inst_r_1[i] = inst_alloc[i] = {};
+    inst_valid[i] = inst_valid_1[i] = false;
     dispatch_success_flags[i] = false;
-    dispatch_cache[i].count = 0;
-    for (int k = 0; k < MAX_UOPS_PER_INST; k++) {
-      dispatch_cache[i].iq_ids[k] = 0;
-    }
+    dispatch_cache[i] = {};
   }
-  for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    stq_port_owner[k] = -1;
-  }
-  for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    ldq_port_owner[k] = -1;
-  }
+  for (int &o : stq_port_owner) o = -1;
+  for (int &o : ldq_port_owner) o = -1;
   std::memset(busy_table, 0, sizeof(busy_table));
   std::memset(busy_table_1, 0, sizeof(busy_table_1));
 }
 
-/*
- * comb_begin
- * 功能: 组合阶段开始时复制流水状态和 busy_table 到 *_1 工作副本。
- * 输入依赖: inst_r/inst_valid, busy_table。
- * 输出更新: inst_r_1/inst_valid_1, busy_table_1。
- * 约束: 仅做镜像，不做资源分配/发射决策。
- */
+// The working copies already equal the registered state (seq() copies them back).
 void Dispatch::comb_begin() {
   BEGIN_EQ(inst_r_1, inst_r);
   BEGIN_EQ(inst_valid_1, inst_valid);
   BEGIN_EQ(busy_table_1, busy_table);
 }
 
-/*
- * comb_alloc
- * 功能: 预分配 ROB/LDQ/STQ 相关元数据，并生成 dis2rob 初始 valid/uop。
- * 输入依赖: inst_r/inst_valid, wires->rob2dis.enq_idx/rob_flag, wires->lsu2dis.{stq_tail,stq_tail_flag,stq_free,ldq_free,ldq_alloc_*}, wires->dec_bcast.clear_mask。
- * 输出更新: inst_alloc[], wires->dis2rob.valid/uop, stq_port_owner[], ldq_port_owner[], &wires->dis2lsu 的 alloc 请求初值。
- * 约束: 资源不足时该槽位 dis2rob->valid 置 0；br_mask 入队前先清除 clear_mask。
- */
+// Allocate ROB ids and LDQ/STQ entries for the instructions waiting in the stage. A load records the STQ tail it must
+// see (the stores before it); a load or store that finds no queue entry or port is marked invalid for the ROB.
 void Dispatch::comb_alloc() {
-  int store_alloc_count = 0; // 当前周期已分配的 store 数量
-  int load_alloc_count = 0;  // 当前周期已分配的 load 数量
-  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
+  Wires &w = *wires;
+  const auto clear_mask = w.dec_bcast.clear_mask;
+  int stores = 0, loads = 0;
 
-  // 初始化输出
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    wires->dis2lsu.alloc_req[k] = false;
-    wires->dis2lsu.br_mask[k] = 0;
+    w.dis2lsu.alloc_req[k] = false;
+    w.dis2lsu.br_mask[k] = 0;
     stq_port_owner[k] = -1;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    wires->dis2lsu.ldq_alloc_req[k] = false;
-    wires->dis2lsu.ldq_br_mask[k] = 0;
+    w.dis2lsu.ldq_alloc_req[k] = false;
+    w.dis2lsu.ldq_br_mask[k] = 0;
     ldq_port_owner[k] = -1;
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    inst_alloc[i] = (inst_r[i]);
-    // 入队口强制清理：本拍已解析分支对应 bit 不应继续进入后端缓冲结构。
-    inst_alloc[i].br_mask &= ~clear_mask;
-    wires->dis2rob.valid[i] = inst_valid[i];
+    Uop &u = inst_alloc[i];
+    u = inst_r[i];
+    u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
+    u.rob_idx = make_rob_idx(w.rob2dis.enq_idx, i);
+    u.rob_flag = w.rob2dis.rob_flag;
+    u.expect_mask = 0;
+    u.cplt_mask = 0;
+    w.dis2rob.valid[i] = inst_valid[i];
 
-    // 分配 ROB ID (重排序缓存索引)
-    inst_alloc[i].rob_idx = make_rob_idx(wires->rob2dis.enq_idx, i);
-    inst_alloc[i].rob_flag = wires->rob2dis.rob_flag;
-    inst_alloc[i].expect_mask = 0;
-    inst_alloc[i].cplt_mask = 0;
-
-    // Load 需要知道之前的 Store
     if (inst_valid[i] && is_load(inst_r[i])) {
-      int stop_pos = wires->lsu2dis.stq_tail + store_alloc_count;
-      inst_alloc[i].stq_idx = stop_pos % STQ_SIZE;
-      inst_alloc[i].stq_flag =
-          wires->lsu2dis.stq_tail_flag ^ ((stop_pos / STQ_SIZE) & 0x1);
-
-      // 检查 Load 队列限制和端口限制
-      if (load_alloc_count < wires->lsu2dis.ldq_free &&
-          load_alloc_count < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width &&
-          load_alloc_count < MAX_LDQ_DISPATCH_WIDTH &&
-          wires->lsu2dis.ldq_alloc_valid[load_alloc_count]) {
-        inst_alloc[i].ldq_idx = wires->lsu2dis.ldq_alloc_idx[load_alloc_count];
-        ldq_port_owner[load_alloc_count] = i;
-        load_alloc_count++;
+      const int pos = w.lsu2dis.stq_tail + stores;  // stores older than this load, allocated this cycle
+      u.stq_idx = pos % STQ_SIZE;
+      u.stq_flag = w.lsu2dis.stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+      if (loads < w.lsu2dis.ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH &&
+          w.lsu2dis.ldq_alloc_valid[loads]) {
+        u.ldq_idx = w.lsu2dis.ldq_alloc_idx[loads];
+        ldq_port_owner[loads++] = i;
       } else {
-        wires->dis2rob.valid[i] = false;
+        w.dis2rob.valid[i] = false;
       }
     }
-
-    // 处理 Store 分配
     if (inst_valid[i] && is_store(inst_r[i])) {
-      // 检查是否有足够的 STQ 端口和队列空间
-      if (store_alloc_count < wires->lsu2dis.stq_free &&
-          store_alloc_count < MAX_STQ_DISPATCH_WIDTH) {
-        // 计算 STQ Index
-        int allocated_idx =
-            (wires->lsu2dis.stq_tail + store_alloc_count) % STQ_SIZE;
-        int allocated_pos = wires->lsu2dis.stq_tail + store_alloc_count;
-        inst_alloc[i].stq_idx = allocated_idx;
-        inst_alloc[i].stq_flag =
-            wires->lsu2dis.stq_tail_flag ^ ((allocated_pos / STQ_SIZE) & 0x1);
-
-        stq_port_owner[store_alloc_count] = i;
-
-        store_alloc_count++;
+      if (stores < w.lsu2dis.stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
+        const int pos = w.lsu2dis.stq_tail + stores;
+        u.stq_idx = pos % STQ_SIZE;
+        u.stq_flag = w.lsu2dis.stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+        stq_port_owner[stores++] = i;
       } else {
-        wires->dis2rob.valid[i] = false;
+        w.dis2rob.valid[i] = false;
       }
     }
-
-    wires->dis2rob.uop[i] = inst_alloc[i];
+    w.dis2rob.uop[i] = u;
   }
 }
 
-// BusyTable owner: Dispatch
-/*
- * comb_wake
- * 功能: 根据 busy_table 与唤醒总线更新 inst_alloc 源操作数 busy 状态。
- * 输入依赖: busy_table, &wires->prf_awake, &wires->iss_awake, inst_alloc, wires->dis2rob.valid。
- * 输出更新: inst_alloc[].src1_busy/src2_busy。
- * 约束: 同拍更早槽位若写同一 preg，则后续槽位对应源 busy 必须保持 true（防止过早就绪）。
- */
+// Source-operand busy bits: busy table, this cycle's wakeups, and a register written by an older slot of the same group
+// stays busy (the older instruction has not issued yet).
 void Dispatch::comb_wake() {
+  Wires &w = *wires;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!wires->dis2rob.valid[i]) {
-      continue;
-    }
-
-    auto &uop = inst_alloc[i];
-    uop.src1_busy = uop->src1_en ? busy_table[uop->src1_preg] : false;
-    uop.src2_busy = uop->src2_en ? busy_table[uop->src2_preg] : false;
-    apply_wakeup_to_uop(uop);
-
+    if (!w.dis2rob.valid[i]) continue;
+    Uop &u = inst_alloc[i];
+    u.src1_busy = u->src1_en ? busy_table[u->src1_preg] : false;
+    u.src2_busy = u->src2_en ? busy_table[u->src2_preg] : false;
+    apply_wakeup_to_uop(u);
     for (int j = 0; j < i; j++) {
-      if (!wires->dis2rob.valid[j] || !inst_alloc[j].dest_en) {
-        continue;
-      }
-      if (inst_alloc[j]->dest_areg == 0) {
-        continue;
-      }
-
-      if (uop->src1_en && uop->src1_preg == inst_alloc[j].dest_preg) {
-        uop.src1_busy = true;
-      }
-      if (uop->src2_en && uop->src2_preg == inst_alloc[j].dest_preg) {
-        uop.src2_busy = true;
-      }
+      if (!w.dis2rob.valid[j] || !inst_alloc[j].dest_en || inst_alloc[j]->dest_areg == 0) continue;
+      if (u->src1_en && u->src1_preg == inst_alloc[j].dest_preg) u.src1_busy = true;
+      if (u->src2_en && u->src2_preg == inst_alloc[j].dest_preg) u.src2_busy = true;
     }
   }
 }
 
-/*
- * comb_dispatch
- * 功能: 拆分宏指令为 uop 并尝试写入各 IQ 请求端口，同时缓存拆分元数据供 comb_fire 回滚。
- * 输入依赖: inst_valid, inst_alloc, wires->iss2dis.ready_num, GLOBAL_IQ_CONFIG（dispatch_width）, decompose_inst()。
- * 输出更新: wires->dis2iss.req[][], dispatch_success_flags[], dispatch_cache[], wires->dis2rob.uop[i].expect_mask/cplt_mask。
- * 约束: 按槽位顺序分配 IQ 端口；任一槽位不满足容量后停止后续槽位分配。
- */
+// Split each instruction into uops and place them in the issue-queue request ports, in slot order; the first
+// instruction that does not fit stops the group. What was placed is remembered so comb_fire can take it back.
 void Dispatch::comb_dispatch() {
-  // 1. 清空输出 req
-  for (int i = 0; i < IQ_NUM; i++) {
-    for (int w = 0; w < MAX_IQ_DISPATCH_WIDTH; w++) {
-      wires->dis2iss.req[i][w].valid = false;
-    }
-  }
+  Wires &w = *wires;
+  for (int i = 0; i < IQ_NUM; i++)
+    for (int k = 0; k < MAX_IQ_DISPATCH_WIDTH; k++) w.dis2iss.req[i][k].valid = false;
 
-  int iq_usage[IQ_NUM] = {0};
-
+  int usage[IQ_NUM] = {0};
   for (int i = 0; i < DECODE_WIDTH; i++) {
     dispatch_success_flags[i] = false;
-    dispatch_cache[i].count = 0; // 重置计数
-
+    dispatch_cache[i].count = 0;
     if (!inst_valid[i]) {
       dispatch_success_flags[i] = true;
       continue;
     }
 
-    // === 1. 临时拆分 (Full Data) ===
-    // 在栈上分配，用完即弃，不占用类成员空间
-    UopPacket temp_uops[MAX_UOPS_PER_INST];
-    int cnt = decompose_inst(inst_alloc[i], temp_uops);
-
-    // === 2. 相当于中间变量 存入缓存 ===
+    UopPacket uops[MAX_UOPS_PER_INST];
+    const int cnt = decompose_inst(inst_alloc[i], uops);
     dispatch_cache[i].count = cnt;
-    wire<ROB_CPLT_MASK_WIDTH> expect_mask = 0;
+    wire<ROB_CPLT_MASK_WIDTH> expect = 0;
     for (int k = 0; k < cnt; k++) {
-      expect_mask |= rob_cplt_mask_from_iq(temp_uops[k].iq_id);
+      expect |= rob_cplt_mask_from_iq(uops[k].iq_id);
+      dispatch_cache[i].iq_ids[k] = uops[k].iq_id;
     }
-    if (decode_inst_type(inst_alloc[i]->type) == AMO &&
-        ((inst_alloc[i]->func7 >> 2) == AmoOp::SC)) {
-      // SC returns architectural 0/1 through load-like wb path and still has
-      // STD completion.
-      expect_mask = ROB_CPLT_G0 | ROB_CPLT_G2;
-    }
-    inst_alloc[i].expect_mask = expect_mask;
+    // SC returns its 0/1 result through the load-like write-back and still completes an STD
+    if (decode_inst_type(inst_alloc[i]->type) == AMO && (inst_alloc[i]->func7 >> 2) == AmoOp::SC)
+      expect = ROB_CPLT_G0 | ROB_CPLT_G2;
+    inst_alloc[i].expect_mask = expect;
     inst_alloc[i].cplt_mask = 0;
-    for (int k = 0; k < cnt; k++) {
-      dispatch_cache[i].iq_ids[k] = temp_uops[k].iq_id;
-    }
 
-    // === 3. 检查容量 ===
     bool fit = true;
-    for (int k = 0; k < cnt; k++) {
-      int target = temp_uops[k].iq_id;
-      // 直接查表！不需要 Isu 告诉它，它自己就能看 config.h
-      int port_limit = GLOBAL_IQ_CONFIG[target].dispatch_width;
-
-      if (iq_usage[target] >= port_limit ||
-          iq_usage[target] >= wires->iss2dis.ready_num[target]) {
-        fit = false;
-        break;
-      }
+    for (int k = 0; k < cnt && fit; k++) {
+      const int q = uops[k].iq_id;
+      fit = usage[q] < GLOBAL_IQ_CONFIG[q].dispatch_width && usage[q] < w.iss2dis.ready_num[q];
     }
+    if (!fit) break;
 
-    // === 4. 提交发射请求 ===
-    if (fit) {
-      dispatch_success_flags[i] = true;
-      wires->dis2rob.uop[i].expect_mask = expect_mask;
-      wires->dis2rob.uop[i].cplt_mask = 0;
-      for (int k = 0; k < cnt; k++) {
-        int target = temp_uops[k].iq_id;
-        int slot = iq_usage[target];
-
-        wires->dis2iss.req[target][slot].valid = true;
-        wires->dis2iss.req[target][slot].uop = temp_uops[k].uop;
-
-        iq_usage[target]++;
-      }
-    } else {
-      break;
+    dispatch_success_flags[i] = true;
+    w.dis2rob.uop[i].expect_mask = expect;
+    w.dis2rob.uop[i].cplt_mask = 0;
+    for (int k = 0; k < cnt; k++) {
+      const int q = uops[k].iq_id;
+      w.dis2iss.req[q][usage[q]].valid = true;
+      w.dis2iss.req[q][usage[q]].uop = uops[k].uop;
+      usage[q]++;
     }
   }
 }
 
-/*
- * comb_fire
- * 功能: 计算最终 dis_fire 与 dis2ren.ready，提交 busy_table 更新，并根据 fire 成败确认/回滚 IQ 与 LSU 请求。
- * 输入依赖: wires->dis2rob.valid, dispatch_success_flags, dispatch_cache, inst_valid/inst_r/inst_alloc, &wires->rob2dis, &wires->rob_bcast, &wires->dec_bcast, &wires->prf_awake, &wires->iss_awake。
- * 输出更新: wires->dis2rob.dis_fire[], wires->dis2ren.ready, wires->dis2iss.req[][]（回滚后结果）, wires->dis2lsu.{alloc_req/ldq_alloc_req/...}, busy_table_1。
- * 约束: flush/mispred/stall 阻断发射；CSR/AMO 需满足串行化条件；older 指令阻塞后续槽位发射。
- */
+// Final fire decision per slot, busy-table update, and confirm/take back the issue-queue and LSU requests.
+// Flushes and stalls block everything; CSR and atomic instructions only go when the ROB is empty and nothing
+// older fires in the same cycle; an atomic or WFI that fires blocks the slots behind it; a slot that does not
+// fire blocks the slots behind it.
 void Dispatch::comb_fire() {
-  enum Dis2RenBlockReason {
-    DIS2REN_BLOCK_NONE = 0,
-    DIS2REN_BLOCK_FLUSH_STALL,
-    DIS2REN_BLOCK_ROB,
-    DIS2REN_BLOCK_SERIALIZE,
-    DIS2REN_BLOCK_DISPATCH,
-    DIS2REN_BLOCK_OLDER,
-  };
-  enum Dis2RenDispatchDetail {
-    DIS2REN_DISPATCH_DETAIL_NONE = 0,
-    DIS2REN_DISPATCH_DETAIL_LDQ,
-    DIS2REN_DISPATCH_DETAIL_STQ,
-    DIS2REN_DISPATCH_DETAIL_IQ_INT,
-    DIS2REN_DISPATCH_DETAIL_IQ_LD,
-    DIS2REN_DISPATCH_DETAIL_IQ_STA,
-    DIS2REN_DISPATCH_DETAIL_IQ_STD,
-    DIS2REN_DISPATCH_DETAIL_IQ_BR,
-    DIS2REN_DISPATCH_DETAIL_IQ_UNKNOWN,
-    DIS2REN_DISPATCH_DETAIL_OTHER,
-  };
-
-  bool pre_stall = false;
-  bool pre_fire = false;
-  bool serializing_barrier = false;
-  int dis2ren_block_reason = DIS2REN_BLOCK_NONE;
-  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
-  bool global_flush =
-      wires->rob_bcast.flush || wires->dec_bcast.mispred || wires->rob2dis.stall;
+  Wires &w = *wires;
+  const auto clear_mask = w.dec_bcast.clear_mask;
+  const bool global_flush = w.rob_bcast.flush || w.dec_bcast.mispred || w.rob2dis.stall;
 
   std::memcpy(busy_table_1, busy_table, sizeof(busy_table_1));
-  for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++) {
-    if (wires->prf_awake.wake[w].valid) {
-      busy_table_1[wires->prf_awake.wake[w].preg] = false;
-    }
-  }
-  for (int w = 0; w < MAX_WAKEUP_PORTS; w++) {
-    if (wires->iss_awake.wake[w].valid) {
-      busy_table_1[wires->iss_awake.wake[w].preg] = false;
-    }
-  }
+  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
+    if (w.prf_awake.wake[k].valid) busy_table_1[w.prf_awake.wake[k].preg] = false;
+  for (int k = 0; k < MAX_WAKEUP_PORTS; k++)
+    if (w.iss_awake.wake[k].valid) busy_table_1[w.iss_awake.wake[k].preg] = false;
 
-  // === 步骤 1: 计算 Fire 信号 (确认分派) ===
+  bool pre_stall = false, pre_fire = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    bool older_block = pre_stall;
-    InstType inst_type = inst_valid[i] ? decode_inst_type(inst_r[i]->type) : NOP;
-    bool is_atomic_inst = inst_valid[i] && inst_type == AMO;
-    bool is_wfi_inst = inst_valid[i] && inst_type == WFI;
-    bool csr_blocked = false;
-    bool atomic_blocked = false;
-    bool basic_fire = wires->dis2rob.valid[i] &&
-                      dispatch_success_flags[i] && // IQ 检查通过
-                      wires->rob2dis.ready &&         // ROB 有空间
-                      !pre_stall && !global_flush;
-
-    // 特殊检查：CSR
-    if (is_CSR(inst_r[i]->type)) {
-      if (!wires->rob2dis.empty || pre_fire) {
-        basic_fire = false;
-        csr_blocked = true;
-      }
-    }
-    // 原子指令串行化：仅允许在 ROB 空且本拍无更早指令发射时进入后端。
-    if (is_atomic_inst) {
-      if (!wires->rob2dis.empty || pre_fire) {
-        basic_fire = false;
-        atomic_blocked = true;
-      }
-    }
-
-    wires->dis2rob.dis_fire[i] = basic_fire;
-
-    if (inst_valid[i] && !basic_fire) {
-      if (dis2ren_block_reason == DIS2REN_BLOCK_NONE) {
-        if (global_flush) {
-          dis2ren_block_reason = DIS2REN_BLOCK_FLUSH_STALL;
-        } else if (!wires->rob2dis.ready) {
-          dis2ren_block_reason = DIS2REN_BLOCK_ROB;
-        } else if (csr_blocked || atomic_blocked || serializing_barrier) {
-          dis2ren_block_reason = DIS2REN_BLOCK_SERIALIZE;
-        } else if (older_block) {
-          dis2ren_block_reason = DIS2REN_BLOCK_OLDER;
-        } else {
-          dis2ren_block_reason = DIS2REN_BLOCK_DISPATCH;
-        }
-      }
-      pre_stall = true;
-    }
-
-    // 原子指令本拍独占发射，后续槽位全部阻塞。
-    if (basic_fire && (is_atomic_inst || is_wfi_inst)) {
-      pre_stall = true;
-      serializing_barrier = true;
-    }
-
-    if (basic_fire)
-      pre_fire = true;
+    const InstType type = inst_valid[i] ? decode_inst_type(inst_r[i]->type) : NOP;
+    const bool atomic = type == AMO, wfi = type == WFI;
+    bool fire = w.dis2rob.valid[i] && dispatch_success_flags[i] && w.rob2dis.ready && !pre_stall && !global_flush;
+    // serializing instructions need an empty ROB and nothing older firing this cycle
+    if ((is_CSR(inst_r[i]->type) || atomic) && (!w.rob2dis.empty || pre_fire)) fire = false;
+    w.dis2rob.dis_fire[i] = fire;
+    if (inst_valid[i] && !fire) pre_stall = true;
+    if (fire && (atomic || wfi)) pre_stall = true;  // exclusive issue slot
+    if (fire) pre_fire = true;
   }
+  for (int i = 0; i < DECODE_WIDTH; i++)
+    if (w.dis2rob.dis_fire[i] && inst_r[i].dest_en) busy_table_1[inst_r[i].dest_preg] = true;
+  w.dis2ren.ready = !pre_stall;
 
+  // take back the issue requests of instructions that did not fire (ports were assigned in slot order)
+  int next_slot[IQ_NUM] = {0};
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (wires->dis2rob.dis_fire[i] && inst_r[i].dest_en) {
-      busy_table_1[inst_r[i].dest_preg] = true;
+    if (!inst_valid[i]) continue;
+    if (!dispatch_success_flags[i]) break;
+    for (int k = 0; k < dispatch_cache[i].count; k++) {
+      const int q = dispatch_cache[i].iq_ids[k];
+      if (!w.dis2rob.dis_fire[i]) w.dis2iss.req[q][next_slot[q]].valid = false;
+      next_slot[q]++;
     }
   }
 
-  // 更新 Rename 单元的 Ready 信号
-  wires->dis2ren.ready = !pre_stall;
-
-  // === 步骤 2: 撤销无效的 IQ 请求 (回滚) ===
-  int iq_slot_idx[IQ_NUM] = {0};
-
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!inst_valid[i])
-      continue;
-    if (!dispatch_success_flags[i])
-      break;
-
-    // 从缓存读取元数据
-    int cnt = dispatch_cache[i].count;
-
-    if (!wires->dis2rob.dis_fire[i]) {
-      // Fire 失败 -> 撤销请求
-      for (int k = 0; k < cnt; k++) {
-        // 直接使用缓存的 ID
-        int target = dispatch_cache[i].iq_ids[k];
-        int slot = iq_slot_idx[target];
-
-        wires->dis2iss.req[target][slot].valid = false; // 撤销！
-        iq_slot_idx[target]++;
-      }
-    } else {
-      // Fire 成功 -> 跳过
-      for (int k = 0; k < cnt; k++) {
-        int target = dispatch_cache[i].iq_ids[k];
-        iq_slot_idx[target]++;
-      }
-    }
-  }
-
-  // === 步骤 3: 更新 STQ 的 Fire 信号 ===
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    int inst_idx = stq_port_owner[k];
-    if (inst_idx >= 0 && wires->dis2rob.dis_fire[inst_idx]) {
-      wires->dis2lsu.alloc_req[k] = true;
-      wires->dis2lsu.br_mask[k] =
-          wires->dis2rob.uop[inst_idx].br_mask & ~clear_mask;
-      wires->dis2lsu.rob_idx[k] = wires->dis2rob.uop[inst_idx].rob_idx;
-      wires->dis2lsu.rob_flag[k] = wires->dis2rob.uop[inst_idx].rob_flag;
-      wires->dis2lsu.stq_flag[k] = wires->dis2rob.uop[inst_idx].stq_flag;
-      wires->dis2lsu.func3[k] = wires->dis2rob.uop[inst_idx]->func3;
-    }
+    const int i = stq_port_owner[k];
+    if (i < 0 || !w.dis2rob.dis_fire[i]) continue;
+    const Uop &u = w.dis2rob.uop[i];
+    w.dis2lsu.alloc_req[k] = true;
+    w.dis2lsu.br_mask[k] = u.br_mask & ~clear_mask;
+    w.dis2lsu.rob_idx[k] = u.rob_idx;
+    w.dis2lsu.rob_flag[k] = u.rob_flag;
+    w.dis2lsu.stq_flag[k] = u.stq_flag;
+    w.dis2lsu.func3[k] = u->func3;
   }
-
-  // === 步骤 4: 更新 LDQ 的 Fire 信号 ===
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    int inst_idx = ldq_port_owner[k];
-    if (inst_idx >= 0 && wires->dis2rob.dis_fire[inst_idx]) {
-      wires->dis2lsu.ldq_alloc_req[k] = true;
-      wires->dis2lsu.ldq_idx[k] = wires->dis2rob.uop[inst_idx].ldq_idx;
-      wires->dis2lsu.ldq_br_mask[k] =
-          wires->dis2rob.uop[inst_idx].br_mask & ~clear_mask;
-      wires->dis2lsu.ldq_rob_idx[k] = wires->dis2rob.uop[inst_idx].rob_idx;
-      wires->dis2lsu.ldq_rob_flag[k] = wires->dis2rob.uop[inst_idx].rob_flag;
-    }
+    const int i = ldq_port_owner[k];
+    if (i < 0 || !w.dis2rob.dis_fire[i]) continue;
+    const Uop &u = w.dis2rob.uop[i];
+    w.dis2lsu.ldq_alloc_req[k] = true;
+    w.dis2lsu.ldq_idx[k] = u.ldq_idx;
+    w.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
+    w.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
+    w.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
   }
-
 }
 
-/*
- * comb_pipeline
- * 功能: 推进 Dispatch 流水寄存器，处理 flush/mispred 清空与背压保留项更新。
- * 输入依赖: &wires->ren2dis, wires->dis2ren.ready, wires->dis2rob.dis_fire, inst_valid/inst_r, inst_alloc, wires->rob_bcast.flush, wires->dec_bcast.{mispred, clear_mask}。
- * 输出更新: inst_valid_1[], inst_r_1[]（保留项 busy 状态可被同拍唤醒修正）。
- * 约束: flush/mispred 时全部置无效；ready=1 时采样新输入；保留项及新采样项都需清除 clear_mask。
- */
+// Stage register: cleared by a flush or mispredict, refilled from rename when the stage is free, otherwise the
+// instructions that did not fire stay (with busy bits refreshed by this cycle's wakeups).
 void Dispatch::comb_pipeline() {
-  wire<BR_MASK_WIDTH> clear_mask = wires->dec_bcast.clear_mask;
-
-  if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
-  }
-
+  Wires &w = *wires;
+  const auto clear_mask = w.dec_bcast.clear_mask;
+  const bool kill = w.rob_bcast.flush || w.dec_bcast.mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (wires->rob_bcast.flush || wires->dec_bcast.mispred) {
-      inst_valid_1[i] = false;
-      continue;
-    }
-    if (wires->dis2ren.ready) {
-      inst_valid_1[i] = wires->ren2dis.valid[i];
-      inst_r_1[i] = wires->ren2dis.uop[i];
+    if (kill) { inst_valid_1[i] = false; continue; }
+    if (w.dis2ren.ready) {
+      inst_valid_1[i] = w.ren2dis.valid[i];
+      inst_r_1[i] = w.ren2dis.uop[i];
       inst_r_1[i].br_mask &= ~clear_mask;
       continue;
     }
-
-    inst_valid_1[i] = inst_valid[i] && !wires->dis2rob.dis_fire[i];
+    inst_valid_1[i] = inst_valid[i] && !w.dis2rob.dis_fire[i];
     if (inst_valid_1[i]) {
       inst_r_1[i].src1_busy = inst_alloc[i].src1_busy;
       inst_r_1[i].src2_busy = inst_alloc[i].src2_busy;
@@ -482,9 +256,10 @@ void Dispatch::seq() {
   std::memcpy(busy_table, busy_table_1, sizeof(busy_table));
 }
 
+// A uop of `inst`: it gets its own pool slot (static fields are copied; STA/STD, JAL/JALR pieces differ).
 Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   Uop uop;
-  uop.id = static_cast<uint16_t>(inst.id + 1 + k);  // each uop owns its static fields (STA/STD, JAL/JALR splits differ)
+  uop.id = static_cast<uint16_t>(inst.id + 1 + k);
   uop_pool[uop.id] = uop_pool[inst.id];
   uop.dest_preg = inst.dest_preg;
   uop->src1_preg = inst->src1_preg;
@@ -514,200 +289,84 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   return uop;
 }
 
-int Dispatch::decompose_inst(const Uop &inst, UopPacket *out_uops) {
-  int count = 0;
-  InstType type = decode_inst_type(inst->type);
+namespace {
+// One uop of a decomposition: target queue, operation, and the fields it overrides (-1 = keep the instruction's value).
+struct Piece {
+  int iq, op;
+  int src1_en, src2_en, dest_en;
+  bool imm4;    // immediate becomes 4 (the "PC + 4" link value)
+  bool atomic;  // marks the STD of an atomic
+};
+}  // namespace
 
+int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
+  const InstType type = decode_inst_type(inst->type);
+  const int amo = inst->func7 >> 2;
+  Piece pieces[MAX_UOPS_PER_INST];
+  int n = 0;
+  auto add = [&](int iq, int op, int s1 = -1, int s2 = -1, int dst = -1, bool imm4 = false, bool atomic = false) {
+    pieces[n++] = {iq, op, s1, s2, dst, imm4, atomic};
+  };
   switch (type) {
-  case ADD:
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_ADD;
-    count = 1;
+  case ADD:   add(IQ_INT, UOP_ADD); break;
+  case MUL:   add(IQ_INT, UOP_MUL); break;
+  case DIV:   add(IQ_INT, UOP_DIV); break;
+  case FP:    add(IQ_INT, UOP_FP); break;
+  case BR:    add(IQ_BR, UOP_BR); break;
+  case LOAD:  add(IQ_LD, UOP_LOAD); break;
+  case STORE:  // STA uses the base register, STD the data register
+    add(IQ_STA, UOP_STA, -1, 0);
+    add(IQ_STD, UOP_STD, 0, 1);
     break;
-  case MUL:
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_MUL;
-    count = 1;
+  case JALR:  // link value through the integer queue, then the jump (needs the base register)
+    add(IQ_INT, UOP_ADD, 0, 0, -1, true);
+    add(IQ_BR, UOP_JUMP, 1, -1, 0);
     break;
-  case DIV:
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_DIV;
-    count = 1;
-    break;
-  case FP:
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_FP;
-    count = 1;
-    break;
-  case BR:
-    out_uops[0].iq_id = IQ_BR;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_BR;
-    count = 1;
-    break;
-
-  case LOAD:
-    out_uops[0].iq_id = IQ_LD;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_LOAD;
-    count = 1;
-    break;
-
-  case STORE:
-    // 拆分为 STA + STD
-    out_uops[0].iq_id = IQ_STA;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_STA;
-    out_uops[0].uop->src2_en = false; // STA 只用 src1 (Base)
-
-    out_uops[1].iq_id = IQ_STD;
-    out_uops[1].uop = make_dis_iss_uop(inst, 1);
-    out_uops[1].uop.op = UOP_STD;
-    out_uops[1].uop->src1_en = false; // STD 数据源修正
-    out_uops[1].uop->src2_en = true;  // STD 只用 src2 (Data)
-    count = 2;
-    break;
-
-  case JALR:
-    // JALR -> ADD (PC+4) + JUMP
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_ADD;
-    out_uops[0].uop->imm = 4;
-    out_uops[0].uop->src1_en = false; // PC+4 不需要 src1
-    out_uops[0].uop->src2_en = false; // PC+4 不需要 src2
-
-    out_uops[1].iq_id = IQ_BR;
-    out_uops[1].uop = make_dis_iss_uop(inst, 1);
-    out_uops[1].uop.op = UOP_JUMP;
-    out_uops[1].uop->src1_en = true; // JALR 需要 src1 (Base)
-    out_uops[1].uop.dest_en = false;
-    count = 2;
-    break;
-
   case JAL:
-    // JAL -> ADD (PC+4) + JUMP
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    out_uops[0].uop.op = UOP_ADD;
-    out_uops[0].uop->imm = 4;
-    out_uops[0].uop->src1_en = false; // PC+4 不需要 src1
-    out_uops[0].uop->src2_en = false; // PC+4 不需要 src2
-
-    out_uops[1].iq_id = IQ_BR;
-    out_uops[1].uop = make_dis_iss_uop(inst, 1);
-    out_uops[1].uop.op = UOP_JUMP;
-    out_uops[1].uop.dest_en = false; // 跳转不写寄存器
-    count = 2;
+    add(IQ_INT, UOP_ADD, 0, 0, -1, true);
+    add(IQ_BR, UOP_JUMP, -1, -1, 0);
     break;
-
   case AMO:
-    if ((inst->func7 >> 2) == AmoOp::LR) {
-      out_uops[0].iq_id = IQ_LD;
-      out_uops[0].uop = make_dis_iss_uop(inst, 0);
-      out_uops[0].uop.op = UOP_LOAD;
-      out_uops[0].uop->src2_en = false;
-      count = 1;
-    } else if ((inst->func7 >> 2) == AmoOp::SC) {
-      // SC -> STA + STD
-      // SC 的 0/1 返回值由 LSU 在地址阶段决定后，经 LSU load-like wb
-      // 路径返回；这里不再保留 INT 占位 uop。
-      out_uops[0].iq_id = IQ_STA;
-      out_uops[0].uop = make_dis_iss_uop(inst, 0);
-      out_uops[0].uop.op = UOP_STA;
-      out_uops[0].uop->src2_en = false;
-      out_uops[0].uop.dest_en =
-          true; // Reuse LSU STA wb port to write SC result (0/1)
-
-      out_uops[1].iq_id = IQ_STD;
-      out_uops[1].uop = make_dis_iss_uop(inst, 1);
-      out_uops[1].uop.op = UOP_STD;
-      out_uops[1].uop->is_atomic = true;
-      out_uops[1].uop->src1_en = false;
-      out_uops[1].uop.dest_en = false;
-      count = 2;
-    } else {
-      // AMO RMW -> LOAD + STA + STD
-      out_uops[0].iq_id = IQ_LD;
-      out_uops[0].uop = make_dis_iss_uop(inst, 0);
-      out_uops[0].uop.op = UOP_LOAD;
-      out_uops[0].uop->src2_en = false;
-
-      out_uops[1].iq_id = IQ_STA;
-      out_uops[1].uop = make_dis_iss_uop(inst, 1);
-      out_uops[1].uop.op = UOP_STA;
-      out_uops[1].uop->src2_en = false;
-      out_uops[1].uop.dest_en = false; // Fix: STA 不写回寄存器
-
-      out_uops[2].iq_id = IQ_STD;
-      out_uops[2].uop = make_dis_iss_uop(inst, 2);
-      out_uops[2].uop.op = UOP_STD;
-      out_uops[2].uop->is_atomic = true;
-      // 假设 SDU 负责计算，需要原 dest_preg 作为操作数 (数据源)
-      // 注意: 这里 src1_preg 被设为 dest_preg，用于读取内存旧值进行原子运算?
-      // 不，Load 结果写到了 dest_preg。STD 需要用到这个 dest_preg (Load Result)
-      // 吗? 通常 AMO: Load -> (ALU in LSU or STD?) -> Store 如果计算在 LSU
-      // 内部完成 (Atomic)，则 STD 可能只需要传 src2 (rs2)? 代码原意:
-      // out_uops[2].uop.src1_preg = src_uop.dest_preg; 这意味着 STD 依赖于 Load
-      // 的结果 (dest_preg)。 如果 Load 正确写回了 dest_preg，那么 STD
-      // 读取它是对的。
-      out_uops[2].uop->src1_preg = inst.dest_preg;
-      if ((inst->func7 >> 2) == AmoOp::SWAP) {
-        out_uops[2].uop.src1_busy =
-            false; // Swap doesn't need Load result (Old Val) for Store
-      } else {
-        out_uops[2].uop.src1_busy = true;
-      }
-      out_uops[2].uop.dest_en = false; // Fix: STD 不写回寄存器
-      count = 3;
+    if (amo == AmoOp::LR) {
+      add(IQ_LD, UOP_LOAD, -1, 0);
+    } else if (amo == AmoOp::SC) {  // the 0/1 result comes back through the STA write-back port
+      add(IQ_STA, UOP_STA, -1, 0, 1);
+      add(IQ_STD, UOP_STD, 0, -1, 0, false, true);
+    } else {  // read-modify-write: load, store address, store data (data source patched below)
+      add(IQ_LD, UOP_LOAD, -1, 0);
+      add(IQ_STA, UOP_STA, -1, 0, 0);
+      add(IQ_STD, UOP_STD, -1, -1, 0, false, true);
     }
     break;
-
-  // 改编自：NOP, CSR, 等
-  default: // NOP, CSR, 等
-    out_uops[0].iq_id = IQ_INT;
-    out_uops[0].uop = make_dis_iss_uop(inst, 0);
-    // 特殊指令走整数队列 (IQ_INT)
-    switch (type) {
-    case NOP:
-      out_uops[0].uop.op = UOP_ADD;
-      break;
-    case CSR:
-      out_uops[0].uop.op = UOP_CSR;
-      break;
-    case FENCE:
-      out_uops[0].uop.op = UOP_FENCE;
-      break;
-    case ECALL:
-      out_uops[0].uop.op = UOP_ECALL;
-      break;
-    case MRET:
-      out_uops[0].uop.op = UOP_MRET;
-      break;
-    case SRET:
-      out_uops[0].uop.op = UOP_SRET;
-      break;
-    case SFENCE_VMA:
-      out_uops[0].uop.op = UOP_SFENCE_VMA;
-      break;
-    case FENCE_I:
-      out_uops[0].uop.op = UOP_FENCE_I;
-      break;
-    case EBREAK:
-      out_uops[0].uop.op = UOP_EBREAK;
-      break;
-    case WFI:
-      out_uops[0].uop.op = UOP_WFI;
-      break;
-    default:
-      Assert(0 && "unknown instruction");
-    }
-    count = 1;
-    break;
+  case NOP:        add(IQ_INT, UOP_ADD); break;
+  case CSR:        add(IQ_INT, UOP_CSR); break;
+  case FENCE:      add(IQ_INT, UOP_FENCE); break;
+  case ECALL:      add(IQ_INT, UOP_ECALL); break;
+  case MRET:       add(IQ_INT, UOP_MRET); break;
+  case SRET:       add(IQ_INT, UOP_SRET); break;
+  case SFENCE_VMA: add(IQ_INT, UOP_SFENCE_VMA); break;
+  case FENCE_I:    add(IQ_INT, UOP_FENCE_I); break;
+  case EBREAK:     add(IQ_INT, UOP_EBREAK); break;
+  case WFI:        add(IQ_INT, UOP_WFI); break;
+  default: Assert(0 && "unknown instruction");
   }
-  return count;
+
+  for (int k = 0; k < n; k++) {
+    const Piece &p = pieces[k];
+    out[k].iq_id = p.iq;
+    Uop &u = out[k].uop;
+    u = make_dis_iss_uop(inst, k);
+    u.op = static_cast<UopType>(p.op);
+    if (p.src1_en >= 0) u->src1_en = p.src1_en;
+    if (p.src2_en >= 0) u->src2_en = p.src2_en;
+    if (p.dest_en >= 0) u.dest_en = p.dest_en;
+    if (p.imm4) u->imm = 4;
+    if (p.atomic) u->is_atomic = true;
+  }
+  if (type == AMO && amo != AmoOp::LR && amo != AmoOp::SC) {
+    // the store data of an AMO comes from the loaded value (the load's destination), except for SWAP
+    out[2].uop->src1_preg = inst.dest_preg;
+    out[2].uop.src1_busy = amo != AmoOp::SWAP;
+  }
+  return n;
 }

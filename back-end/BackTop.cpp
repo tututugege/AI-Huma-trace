@@ -14,6 +14,11 @@
 #else
 #define ROB(f) rob->f()
 #endif
+#ifdef DIS_SHADOW
+#include "DisShadow.h"
+#else
+#define DIS(f) dis->f()
+#endif
 #include "config.h"
 #include "diff.h"
 #include "mmio_address_map.h"
@@ -142,7 +147,7 @@ void BackTop::comb_begin_all() {
   pre->comb_begin();
   idu->comb_begin();
   rename->comb_begin();
-  dis->comb_begin();
+  DIS(comb_begin);
   isu->comb_begin();
   prf->comb_begin();
   exu->comb_begin();
@@ -178,7 +183,7 @@ void BackTop::comb_stage_commit() {
 
 // MMIO/DCache responses finish loads and stores and produce write-backs; CSR read data.
 void BackTop::comb_stage_memory_responses() {
-  dis->comb_alloc();
+  DIS(comb_alloc);
   LSU(comb_mmio_in);
   LSU(comb_dcache2lsu_ldq);
   LSU(comb_dcache2lsu_stq);
@@ -215,15 +220,15 @@ void BackTop::comb_stage_operands_and_dispatch() {
   isu->comb_calc_latency_next();
   csr->comb_exception();
   csr->comb_csr_write();
-  dis->comb_wake();
+  DIS(comb_wake);
   rename->comb_rename();
 
-  dis->comb_dispatch();
+  DIS(comb_dispatch);
 }
 
 // Handshakes that move instructions (fire), the LSU's DCache/MMIO requests, queue enqueue, and recovery of ROB/IQs from a mispredict or global flush (flush wins).
 void BackTop::comb_stage_fire_and_recover() {
-  dis->comb_fire();
+  DIS(comb_fire);
   LSU(comb_dis2lsu);
   rename->comb_fire();
   idu->comb_fire();
@@ -244,7 +249,7 @@ void BackTop::comb_stage_fire_and_recover() {
   pre->comb_fire();
   prf->comb_pipeline();
   exu->comb_pipeline();
-  dis->comb_pipeline();
+  DIS(comb_pipeline);
   rename->comb_pipeline();
   csr->comb_interrupt_inject();
 }
@@ -374,7 +379,7 @@ void BackTop::seq() {
   // exu -> prf
   pre->seq();
   rename->seq();
-  dis->seq();
+  DIS(seq);
   idu->seq();
   isu->seq();
   exu->seq();

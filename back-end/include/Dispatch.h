@@ -35,6 +35,7 @@ private:
   DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:
+  friend struct DisDigestAccess;  // lockstep test hook
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules

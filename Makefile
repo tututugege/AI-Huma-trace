@@ -99,6 +99,12 @@ INCLUDES += -I./rob_ref
 CXXFLAGS += -DROB_SHADOW
 endif
 
+ifdef DIS_SHADOW
+CXXSRC += ./dis_ref/DispatchRef.cpp ./dis_ref/DisShadow.cpp
+INCLUDES += -I./dis_ref
+CXXFLAGS += -DDIS_SHADOW
+endif
+
 # Object Files
 OBJS := $(CXXSRC:%.cpp=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
