@@ -29,84 +29,9 @@ inline bool icache_trace_pc(uint32_t pc, long long cycle) {
   return icache_focus_pc(pc) || icache_window_debug_active(cycle);
 }
 
-inline void dump_icache_module_line(const char *tag, long long cycle,
-                                    const ICache_IO_t &io, bool mem_gnt,
-                                    const uint32_t *line_words) {
-  std::printf(
-      "[ICACHE][MODULE][%s] cyc=%lld state=%u mem_axi=%u req_valid=%u "
-      "lookup_pending=%u meta_resp=%u data_resp=%u data_way=%u "
-      "req_pc=0x%08x req_idx=%u ppn_r=0x%05x "
-      "in_ppn_v=%u in_ppn=0x%05x mmu_req_v=%u mmu_vtag=0x%05x "
-      "mem_req_v=%u mem_req_addr=0x%08x miss_txid_v=%u miss_txid=%u "
-      "mem_req_acc=%u mem_req_acc_id=%u mem_resp_v=%u mem_resp_id=%u "
-      "mem_gnt=%u line=[",
-      tag, cycle, static_cast<unsigned>(io.regs.state),
-      static_cast<unsigned>(io.regs.mem_axi_state),
-      static_cast<unsigned>(io.regs.req_valid_r),
-      static_cast<unsigned>(io.regs.lookup_pending_r),
-      static_cast<unsigned>(io.lookup_in.meta_resp_valid),
-      static_cast<unsigned>(io.lookup_in.data_resp_valid),
-      static_cast<unsigned>(io.lookup_in.data_resp_way),
-      static_cast<unsigned>(io.regs.req_pc_r),
-      static_cast<unsigned>(io.regs.req_index_r),
-      static_cast<unsigned>(io.regs.ppn_r),
-      static_cast<unsigned>(io.in.ppn_valid),
-      static_cast<unsigned>(io.in.ppn),
-      static_cast<unsigned>(io.out.mmu_req_valid),
-      static_cast<unsigned>(io.out.mmu_req_vtag),
-      static_cast<unsigned>(io.out.mem_req_valid),
-      static_cast<unsigned>(io.out.mem_req_addr),
-      static_cast<unsigned>(io.regs.miss_txid_valid_r),
-      static_cast<unsigned>(io.regs.miss_txid_r),
-      static_cast<unsigned>(io.in.mem_req_accepted),
-      static_cast<unsigned>(io.in.mem_req_accepted_id & 0xF),
-      static_cast<unsigned>(io.in.mem_resp_valid),
-      static_cast<unsigned>(io.in.mem_resp_id & 0xF),
-      static_cast<unsigned>(mem_gnt));
-  for (uint32_t word = 0; word < ICACHE_LINE_SIZE / 4; ++word) {
-    std::printf("%s%08x", (word == 0) ? "" : " ",
-                static_cast<unsigned>(line_words[word]));
-  }
-  std::printf("]\n");
-}
 
-inline void dump_icache_module_ctx(const char *tag, long long cycle,
-                                   const ICache_IO_t &io, bool mem_gnt) {
-  std::printf(
-      "[ICACHE][MODULE][%s] cyc=%lld state=%u mem_axi=%u req_valid=%u "
-      "lookup_pending=%u meta_resp=%u data_resp=%u data_way=%u "
-      "req_pc=0x%08x req_idx=%u ppn_r=0x%05x "
-      "in_ppn_v=%u in_ppn=0x%05x mmu_req_v=%u mmu_vtag=0x%05x "
-      "mem_req_v=%u mem_req_addr=0x%08x miss_txid_v=%u miss_txid=%u "
-      "mem_req_acc=%u mem_req_acc_id=%u mem_resp_v=%u mem_resp_id=%u "
-      "mem_gnt=%u page_fault=%u refetch=%u flush=%u\n",
-      tag, cycle, static_cast<unsigned>(io.regs.state),
-      static_cast<unsigned>(io.regs.mem_axi_state),
-      static_cast<unsigned>(io.regs.req_valid_r),
-      static_cast<unsigned>(io.regs.lookup_pending_r),
-      static_cast<unsigned>(io.lookup_in.meta_resp_valid),
-      static_cast<unsigned>(io.lookup_in.data_resp_valid),
-      static_cast<unsigned>(io.lookup_in.data_resp_way),
-      static_cast<unsigned>(io.regs.req_pc_r),
-      static_cast<unsigned>(io.regs.req_index_r),
-      static_cast<unsigned>(io.regs.ppn_r),
-      static_cast<unsigned>(io.in.ppn_valid),
-      static_cast<unsigned>(io.in.ppn),
-      static_cast<unsigned>(io.out.mmu_req_valid),
-      static_cast<unsigned>(io.out.mmu_req_vtag),
-      static_cast<unsigned>(io.out.mem_req_valid),
-      static_cast<unsigned>(io.out.mem_req_addr),
-      static_cast<unsigned>(io.regs.miss_txid_valid_r),
-      static_cast<unsigned>(io.regs.miss_txid_r),
-      static_cast<unsigned>(io.in.mem_req_accepted),
-      static_cast<unsigned>(io.in.mem_req_accepted_id & 0xF),
-      static_cast<unsigned>(io.in.mem_resp_valid),
-      static_cast<unsigned>(io.in.mem_resp_id & 0xF),
-      static_cast<unsigned>(mem_gnt),
-      static_cast<unsigned>(io.in.page_fault),
-      static_cast<unsigned>(io.in.refetch),
-      static_cast<unsigned>(io.in.flush));
-}
+
+
 
 inline bool icache_req_slot_idle(const ICache_regs_t &regs) {
   return !regs.req_valid_r &&
@@ -670,8 +595,7 @@ void ICache::eval_state_machine() {
       }
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-        dump_icache_module_line(debug_tag, sim_time, io, mem_gnt,
-                                io.out.rd_data);
+
       }
     }
     req_ready_w = true;
@@ -698,7 +622,7 @@ void ICache::eval_state_machine() {
         io.out.ifu_page_fault = true;
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-          dump_icache_module_ctx("FAST_PF_BYPASS", sim_time, io, mem_gnt);
+
         }
         req_ready_w = true;
         fast_bypass_fire = true;
@@ -717,8 +641,7 @@ void ICache::eval_state_machine() {
         io.out.ifu_page_fault = false;
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-          dump_icache_module_line("FAST_HIT_BYPASS", sim_time, io, mem_gnt,
-                                  io.out.rd_data);
+
         }
         req_ready_w = true;
         fast_bypass_fire = true;
@@ -744,7 +667,7 @@ void ICache::eval_state_machine() {
         io.out.ifu_page_fault = true;
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-          dump_icache_module_ctx("REG_PF", sim_time, io, mem_gnt);
+
         }
         req_ready_w = true;
         state_next = IDLE;
@@ -754,7 +677,7 @@ void ICache::eval_state_machine() {
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.regs.req_pc_r, sim_time) &&
           !io.lookup_in.meta_resp_valid) {
-        dump_icache_module_ctx("REG_LOOKUP_STALE", sim_time, io, mem_gnt);
+
       }
 
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
@@ -767,8 +690,7 @@ void ICache::eval_state_machine() {
         }
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-          dump_icache_module_line("REG_HIT", sim_time, io, mem_gnt,
-                                  io.out.rd_data);
+
         }
         state_next = IDLE;
       } else if (lookup_hit_valid_w) {
@@ -779,7 +701,7 @@ void ICache::eval_state_machine() {
       } else {
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-          dump_icache_module_ctx("REG_MISS", sim_time, io, mem_gnt);
+
           std::printf(
               "[ICACHE][MODULE][REG_MISS_SET] cyc=%lld req_pc=0x%08x req_idx=%u "
               "cmp_ppn=0x%05x hit_v=%u has_inv=%u first_inv=%u",
@@ -907,7 +829,7 @@ void ICache::eval_state_machine() {
       io.out.mem_req_id = io.regs.miss_txid_r;
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.regs.req_pc_r, sim_time)) {
-        dump_icache_module_ctx("SWAP_REQ", sim_time, io, mem_gnt);
+
       }
       state_next = SWAP_IN;
       if (io.in.mem_req_accepted &&

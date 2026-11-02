@@ -1779,7 +1779,7 @@ public:
   }
 
   void reset_internal_all() {
-    DEBUG_LOG_SMALL_4("reset_internal_all\n");
+
     pc_reg = RESET_PC;
     pc_can_send_to_icache = true;
     pred_base_pc_fired = 0;
@@ -1838,9 +1838,9 @@ public:
       nlp_table[i].conf = 0;
     }
     // 初始化2-ahead预测器为下一个cache line的地址
-    DEBUG_LOG_SMALL_4("reset_internal_all,pc_reg: %x\n", pc_reg);
+
     saved_2ahead_prediction = pc_reg + (FETCH_WIDTH * 4);
-    DEBUG_LOG_SMALL_4("reset_internal_all,saved_2ahead_prediction: %x\n", saved_2ahead_prediction);
+
     saved_2ahead_pred_valid = false;
     saved_mini_flush_req = false;
     saved_mini_flush_correct = false;

@@ -248,8 +248,7 @@ public:
     if (size_ == 0) {
       return false;
     }
-    DEBUG_LOG_SMALL_4("ptab_peeking for pc=%x,need_mini_flush=%d\n",
-                      entries_[0].predict_base_pc[0], entries_[0].need_mini_flush);
+
     return entries_[0].need_mini_flush;
   }
 

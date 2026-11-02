@@ -215,15 +215,7 @@ inline bool icache_focus_vaddr(uint32_t v_addr) {
   return end > begin && (v_addr - begin) < (end - begin);
 }
 
-inline void dump_icache_focus_line(const char *tag, uint32_t fetch_pc,
-                                   const uint32_t *line_words) {
-  std::printf("[ICACHE][TRACE][%s] cyc=%lld fetch_pc=0x%08x line=[", tag,
-              (long long)sim_time, fetch_pc);
-  for (int i = 0; i < ICACHE_LINE_SIZE / 4; ++i) {
-    std::printf("%s%08x", (i == 0) ? "" : " ", line_words[i]);
-  }
-  std::printf("]\n");
-}
+
 
 static_assert(ICACHE_LINE_SIZE <= axi_interconnect::MAX_READ_TRANSACTION_BYTES,
               "ICACHE_LINE_SIZE exceeds AXI upstream read transaction limit");
@@ -787,7 +779,7 @@ public:
     read_port.bind(runtime.mem_read_port);
 
     if (in->reset) {
-      DEBUG_LOG("[icache] reset\n");
+
       icache_hw.reset();
       read_port.reset();
       reset_dcache_probe_req_port(runtime.mem_probe_req_port);
@@ -881,7 +873,7 @@ public:
         std::exit(1);
       }
       if (icache_focus_vaddr(out->fetch_pc)) {
-        dump_icache_focus_line("RESP", out->fetch_pc, icache_hw.io.out.rd_data);
+
       }
     }
 
@@ -998,7 +990,7 @@ public:
     runtime.resp_fire_comb = false;
 
     if (in->reset) {
-      DEBUG_LOG("[icache] reset\n");
+
       ICacheMmuReqView mmu_req;
       mmu_req.context_flush = true;
       (void)comb_mmu_view(runtime, ctx, mmu_req);
@@ -1141,16 +1133,6 @@ public:
       out->perf_itlb_hit = true;
       out->fetch_group[i] = pmem_read(p_addr);
 
-      if (DEBUG_PRINT) {
-        uint32_t satp =
-            in->csr_status ? static_cast<uint32_t>(in->csr_status->satp) : 0;
-        uint32_t privilege = in->csr_status
-                                 ? static_cast<uint32_t>(in->csr_status->privilege)
-                                 : 0;
-        printf("[icache] vaddr: %08x -> paddr: %08x, inst: %08x, satp: %x, "
-               "priv: %d\n",
-               v_addr, p_addr, out->fetch_group[i], satp, privilege);
-      }
     }
 
     if (out->icache_read_complete) {

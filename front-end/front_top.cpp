@@ -98,47 +98,9 @@ static bool front_focus_any_out_pc(const front_top_out &out) {
   return false;
 }
 
-static void dump_front_focus_source(const instruction_FIFO_out &fifo_out,
-                                    const PTAB_out &ptab_out,
-                                    bool global_refetch,
-                                    bool predecode_can_run,
-                                    bool front2back_can_write,
-                                    bool use_front2back_output_bypass) {
-  if (!SIM_DEBUG_PRINT_ACTIVE || !front_focus_any_fifo_pc(fifo_out)) {
-    return;
-  }
-  std::printf(
-      "[FRONT][TRACE][SRC] cyc=%lld global_refetch=%d predecode_can_run=%d "
-      "front2back_can_write=%d bypass=%d seq_next=0x%08x predict_next=0x%08x\n",
-      (long long)sim_time, static_cast<int>(global_refetch),
-      static_cast<int>(predecode_can_run), static_cast<int>(front2back_can_write),
-      static_cast<int>(use_front2back_output_bypass), fifo_out.seq_next_pc,
-      ptab_out.predict_next_fetch_address);
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    std::printf(
-        "[FRONT][TRACE][SRC] lane=%d inst_valid=%d fifo_pc=0x%08x fifo_inst=0x%08x "
-        "ptab_pc=0x%08x pdir=%d\n",
-        i, static_cast<int>(fifo_out.inst_valid[i]), fifo_out.pc[i],
-        fifo_out.instructions[i], ptab_out.predict_base_pc[i],
-        static_cast<int>(ptab_out.predict_dir[i]));
-  }
-}
 
-static void dump_front_focus_output(const front_top_out &out) {
-  if (!SIM_DEBUG_PRINT_ACTIVE || !front_focus_any_out_pc(out)) {
-    return;
-  }
-  std::printf(
-      "[FRONT][TRACE][OUT] cyc=%lld valid=%d predict_next=0x%08x\n",
-      (long long)sim_time, static_cast<int>(out.FIFO_valid),
-      out.predict_next_fetch_address);
-  for (int i = 0; i < FETCH_WIDTH; ++i) {
-    std::printf(
-        "[FRONT][TRACE][OUT] lane=%d inst_valid=%d pc=0x%08x inst=0x%08x pf=%d\n",
-        i, static_cast<int>(out.inst_valid[i]), out.pc[i], out.instructions[i],
-        static_cast<int>(out.page_fault_inst[i]));
-  }
-}
+
+
 
 void front_dump_debug_state() {
   std::printf(
@@ -614,7 +576,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     Front2BackCombOut &front2back_fifo_final_req = req.front2back_fifo_req;
     std::memset(&out, 0, sizeof(struct front_top_out));
     uint32_t front_sim_time = rd.front_sim_time_snapshot + 1;
-    DEBUG_LOG_SMALL("--------front_top sim_time: %d----------------\n", front_sim_time);
+
     front_state_req.valid = false;
     
     // ========================================================================
@@ -705,7 +667,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         icache_peek_ready(&icache_in, &icache_out);
         icache_ready = icache_out.icache_read_ready;
         icache_ready_2 = icache_out.icache_read_ready_2;
-        DEBUG_LOG_SMALL_4("icache_ready: %d, icache_ready_2: %d\n", icache_ready, icache_ready_2);
+
         FrontReadEnableCombOut read_enable_out{};
         FrontReadEnableCombIn read_enable_in{};
         read_enable_in.backend_fifo_read_enable = in->FIFO_read_enable;
@@ -892,8 +854,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         }
         
         if (bpu_output.icache_read_valid && bpu_can_run) {
-            DEBUG_LOG_SMALL("[front_top] sim_time: %d, bpu_out.fetch_address: %x\n",
-                            front_sim_time, bpu_output.fetch_address);
+
         }
         
         // ========================================================================
@@ -906,8 +867,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             bpu_output.icache_read_valid && bpu_can_run && !global_reset;
         bool refetch_write_enable = normal_write_enable && global_refetch; 
         (void)refetch_write_enable;
-        DEBUG_LOG_SMALL_4("normal_write_enable: %d, bpu_out.mini_flush_correct: %d\n",
-                          normal_write_enable, bpu_output.mini_flush_correct);
+
         can_bypass_fetch_to_icache =
             !saved_fetch_addr_fifo_out_0.read_valid && normal_write_enable &&
             !bpu_output.mini_flush_correct && icache_ready && !global_refetch;
@@ -916,7 +876,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             !can_bypass_fetch_to_icache) {
             fetch_addr_fifo_in.write_enable = true;
             fetch_addr_fifo_in.fetch_address = bpu_output.fetch_address;
-            DEBUG_LOG_SMALL_4("normal write enable: %x\n", bpu_output.fetch_address);
+
             fetch_address_FIFO_comb_calc(&fetch_addr_fifo_in, &fetch_addr_fifo_rd,
                                          &fetch_addr_fifo_out, &fetch_addr_fifo_next_rd,
                                          &fetch_addr_fifo_step_req);
@@ -943,11 +903,11 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         if (saved_fetch_addr_fifo_out_0.read_valid) {
             icache_in.icache_read_valid = true;
             icache_in.fetch_address = saved_fetch_addr_fifo_out_0.fetch_address;
-            DEBUG_LOG_SMALL_4("icache_in.fetch_address: %x\n", icache_in.fetch_address);
+
         } else if (can_bypass_fetch_to_icache) {
             icache_in.icache_read_valid = true;
             icache_in.fetch_address = bpu_output.fetch_address;
-            DEBUG_LOG_SMALL_4("icache_in.fetch_address bypass: %x\n", icache_in.fetch_address);
+
         } else {
             icache_in.icache_read_valid = false;
             icache_in.fetch_address = 0;
@@ -1040,8 +1000,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                     predecode_comb(predecode_rd, result);
                     fifo_in.predecode_type[i] = result.type;
                     fifo_in.predecode_target_address[i] = result.target_address;
-                    DEBUG_LOG_SMALL_4("[icache_out] sim_time: %d, pc: %x, inst: %x\n",
-                                      front_sim_time, current_pc, icache_out.fetch_group[i]);
+
                 } else {
                     fifo_in.predecode_type[i] = PREDECODE_NON_BRANCH;
                     fifo_in.predecode_target_address[i] = 0;
@@ -1077,9 +1036,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                     predecode_comb(predecode_rd, result);
                     fifo_in.predecode_type[i] = result.type;
                     fifo_in.predecode_target_address[i] = result.target_address;
-                    DEBUG_LOG_SMALL_4("[icache_out] sim_time: %d, pc: %x, inst: %x\n",
-                                      front_sim_time, current_pc,
-                                      icache_out.fetch_group_2[i]);
+
                 } else {
                     fifo_in.predecode_type[i] = PREDECODE_NON_BRANCH;
                     fifo_in.predecode_target_address[i] = 0;
@@ -1113,8 +1070,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         ptab_in = ptab_write_out.ptab_in;
 
         if (ptab_can_write) {
-            DEBUG_LOG_SMALL_3("bpu_out.predict_next_fetch_address: %x\n",
-                              bpu_output.predict_next_fetch_address);
+
             
             PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_out, &ptab_next_rd,
                            &ptab_step_req);
@@ -1143,9 +1099,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             predecode_checker_seq_read(&checker_input_out.checker_in, &checker_rd);
             predecode_checker_comb(checker_rd, checker_out);
             
-            DEBUG_LOG_SMALL_4("[predecode on] seq_next_pc: %x, predict_next: %x\n",
-                              saved_fifo_out.seq_next_pc,
-                              saved_ptab_out.predict_next_fetch_address);
+
             
             if (checker_out.predecode_flush_enable) {
                 do_predecode_flush = true;
@@ -1164,9 +1118,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             use_front2back_output_bypass = true;
         }
 
-        dump_front_focus_source(saved_fifo_out, saved_ptab_out, global_refetch,
-                                predecode_can_run, front2back_can_write,
-                                use_front2back_output_bypass);
+
         
         front2back_fifo_in.reset = global_reset;
         front2back_fifo_in.refetch = in->refetch;
@@ -1215,7 +1167,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             front_state_req.next_predecode_refetch = true;
             front_state_req.next_predecode_refetch_address = predecode_flush_address;
             
-            DEBUG_LOG_SMALL("[front_top] predecode flush to: %x\n", predecode_flush_address);
+
         } else {
             front_state_req.next_predecode_refetch = false;
             front_state_req.next_predecode_refetch_address = 0;
@@ -1242,13 +1194,11 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         front_output_comb(final_output_in, final_output_out);
         *out_ptr = final_output_out.out;
         out_ptr->commit_stall = bpu_output.update_queue_full;
-        dump_front_focus_output(*out_ptr);
+
 
         for (int i = 0; i < FETCH_WIDTH; i++) {
             if (out_ptr->inst_valid[i]) {
-                DEBUG_LOG_SMALL_4("[front_top] sim_time: %d, out->pc[%d]: %x, inst: %x\n",
-                                  front_sim_time, i, out_ptr->pc[i],
-                                  out_ptr->instructions[i]);
+
             }
         }
         
