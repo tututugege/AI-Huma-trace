@@ -63,10 +63,6 @@ struct Front2BackCombOut {
   wire1_t pop_en;
 };
 
-using PredecodeCombIn = predecode_read_data;
-using PredecodeCombOut = PredecodeResult;
-using PredecodeCheckerCombIn = predecode_checker_read_data;
-using PredecodeCheckerCombOut = predecode_checker_out;
 
 using BpuPreReadReqCombIn = BPU_TOP::BpuPreReadReqCombIn;
 using BpuPreReadReqCombOut = BPU_TOP::BpuPreReadReqCombOut;
@@ -83,8 +79,6 @@ using BpuHistCombOut = BPU_TOP::BpuHistCombOut;
 using BpuQueueCombIn = BPU_TOP::BpuQueueCombIn;
 using BpuQueueCombOut = BPU_TOP::BpuQueueCombOut;
 
-using TypePredPreReadCombIn = TypePredictor::InputPayload;
-using TypePredPreReadCombOut = TypePredictor::PreReadCombOut;
 using TypePredCombIn = TypePredictor::TypePredCombIn;
 using TypePredCombOut = TypePredictor::TypePredCombOut;
 
@@ -237,13 +231,9 @@ struct FrontBpuControlCombOut {
   BPU_TOP::InputPayload bpu_input;
 };
 
-struct FrontBpuOutputCombIn {
-  BPU_TOP::OutputPayload bpu_output;
-};
 
-struct FrontBpuOutputCombOut {
-  BPU_out bpu_out;
-};
+
+
 
 struct FrontPtabWriteCombIn {
   BPU_TOP::OutputPayload bpu_output;
