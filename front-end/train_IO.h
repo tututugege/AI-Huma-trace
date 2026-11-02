@@ -82,8 +82,6 @@ using BpuHistCombIn = BPU_TOP::BpuHistCombIn;
 using BpuHistCombOut = BPU_TOP::BpuHistCombOut;
 using BpuQueueCombIn = BPU_TOP::BpuQueueCombIn;
 using BpuQueueCombOut = BPU_TOP::BpuQueueCombOut;
-using BpuCombIn = BPU_TOP::BpuCombIn;
-using BpuCombOut = BPU_TOP::BpuCombOut;
 
 using TypePredPreReadCombIn = TypePredictor::InputPayload;
 using TypePredPreReadCombOut = TypePredictor::PreReadCombOut;

@@ -264,6 +264,26 @@ static inline void tage_fh_update_comb(const TageFhUpdateCombIn &in,
   }
 }
 
+// In-place history update: FH is folded from the old GHR, then the GHR shifts.
+static inline void tage_hist_update_inplace(
+    wire1_t ghr[GHR_LENGTH], wire32_t fh[FH_N_MAX][TN_MAX], wire1_t new_history,
+    const uint32_t fh_len[FH_N_MAX][TN_MAX], const uint32_t ghr_len[TN_MAX]) {
+  for (int k = 0; k < FH_N_MAX; k++) {
+    for (int i = 0; i < TN_MAX; i++) {
+      uint32_t val = fh[k][i];
+      uint32_t len = fh_len[k][i];
+      bool old_highest = ((val >> (len - 1)) & 0x1) != 0;
+      val = (val << 1) & ((0x1 << len) - 1);
+      val |= static_cast<uint32_t>(new_history ^ old_highest);
+      uint32_t ghr_idx = ghr_len[i];
+      val ^= static_cast<uint32_t>(ghr[ghr_idx - 1]) << (ghr_idx % len);
+      fh[k][i] = val;
+    }
+  }
+  std::memmove(ghr + 1, ghr, GHR_LENGTH - 1);
+  ghr[0] = new_history;
+}
+
 static inline void tage_ghr_update_apply(const wire1_t current_GHR[GHR_LENGTH],
                                          wire1_t real_dir,
                                          wire1_t next_GHR[GHR_LENGTH]) {

@@ -418,17 +418,6 @@ public:
     BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
   };
 
-  struct BpuCombIn {
-    InputPayload inp;
-    ReadData rd;
-    BpuPostReadReqCombOut post_req;
-  };
-
-  struct BpuCombOut {
-    OutputPayload out_regs;
-    UpdateRequest update_req;
-  };
-
   struct BpuSubmoduleBindCombIn {
     wire1_t do_pred_on_this_pc[FETCH_WIDTH];
     bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
@@ -478,8 +467,8 @@ public:
   };
 
   struct BpuNlpCombIn {
-    InputPayload inp;
-    ReadData rd;
+    const InputPayload &inp;
+    const ReadData &rd;
     fetch_addr_t next_fetch_addr_calc;
     fetch_addr_t final_2_ahead_address_seed;
     OutputPayload out_seed;
@@ -1274,13 +1263,8 @@ public:
         br_type_t p_type = type_out.pred_type[i];
         const bool pred_taken = final_pred_dir[i];
         if (p_type == BR_DIRECT) {
-          bool next_ghr[GHR_LENGTH];
-          uint32_t next_fh[FH_N_MAX][TN_MAX];
-          tage_ghr_update_apply(spec_ghr_tmp, pred_taken, next_ghr);
-          tage_fh_update_apply(spec_fh_tmp, spec_ghr_tmp, pred_taken, next_fh,
-                               fh_length, ghr_length);
-          std::memcpy(spec_ghr_tmp, next_ghr, sizeof(next_ghr));
-          std::memcpy(spec_fh_tmp, next_fh, sizeof(next_fh));
+          tage_hist_update_inplace(spec_ghr_tmp, spec_fh_tmp, pred_taken,
+                                   fh_length, ghr_length);
           spec_path_tmp =
               tage_path_update_value(spec_path_tmp, in.do_pred_for_this_pc[i], pred_taken);
         }
@@ -1336,20 +1320,15 @@ public:
           continue;
         }
         bool real_dir = in.in_actual_dir[i];
-        bool next_ghr[GHR_LENGTH];
-        uint32_t next_fh[FH_N_MAX][TN_MAX];
-        tage_ghr_update_apply(arch_ghr_tmp, real_dir, next_ghr);
-        tage_fh_update_apply(arch_fh_tmp, arch_ghr_tmp, real_dir, next_fh, fh_length,
-                             ghr_length);
-        tage_path_hist_t next_path =
+        tage_hist_update_inplace(arch_ghr_tmp, arch_fh_tmp, real_dir, fh_length,
+                                 ghr_length);
+        const tage_path_hist_t next_path =
             tage_path_update_value(arch_path_tmp, in.in_update_base_pc[i], real_dir);
         if (in.in_pred_dir[i] != real_dir) {
-          std::memcpy(out.Spec_GHR_next, next_ghr, sizeof(out.Spec_GHR_next));
-          std::memcpy(out.Spec_FH_next, next_fh, sizeof(out.Spec_FH_next));
+          std::memcpy(out.Spec_GHR_next, arch_ghr_tmp, sizeof(out.Spec_GHR_next));
+          std::memcpy(out.Spec_FH_next, arch_fh_tmp, sizeof(out.Spec_FH_next));
           out.Spec_PATH_next = next_path;
         }
-        std::memcpy(arch_ghr_tmp, next_ghr, sizeof(arch_ghr_tmp));
-        std::memcpy(arch_fh_tmp, next_fh, sizeof(arch_fh_tmp));
         arch_path_tmp = next_path;
         arch_need_write = true;
       }
@@ -1460,9 +1439,7 @@ public:
 
   void bpu_core_comb_calc(const InputPayload &inp, ReadData &rd,
                           const BpuPostReadReqCombOut &post_req,
-                          BpuCombOut &comb_out) {
-    OutputPayload &out = comb_out.out_regs;
-    UpdateRequest &req = comb_out.update_req;
+                          OutputPayload &out, UpdateRequest &req) {
     std::memset(&out, 0, sizeof(OutputPayload));
     std::memset(&req, 0, sizeof(UpdateRequest));
     req.next_state = S_IDLE;
@@ -1625,12 +1602,8 @@ public:
       }
     }
 
-    BpuNlpCombIn nlp_in{};
-    nlp_in.inp = inp;
-    nlp_in.rd = rd;
-    nlp_in.next_fetch_addr_calc = req.next_fetch_addr_calc;
-    nlp_in.final_2_ahead_address_seed = req.final_2_ahead_address;
-    nlp_in.out_seed = out;
+    const BpuNlpCombIn nlp_in{inp, rd, req.next_fetch_addr_calc,
+                              req.final_2_ahead_address, out};
     BpuNlpCombOut nlp_out{};
     bpu_nlp_comb(nlp_in, nlp_out);
     out = nlp_out.out_regs;
@@ -1977,7 +1950,6 @@ public:
                      OutputPayload &out, UpdateRequest &req) {
     BpuPreReadReqCombOut pre_read_req{};
     BpuPostReadReqCombOut post_read_req{};
-    BpuCombOut comb_out{};
     BpuPreReadReqCombIn pre_read_in{};
     pre_read_in.refetch = inp.refetch;
     pre_read_in.refetch_address = inp.refetch_address;
@@ -2020,9 +1992,7 @@ public:
     post_read_in.nlp_pred_base_entry_snapshot = rd.nlp_pred_base_entry_snapshot;
     bpu_post_read_req_comb(post_read_in, post_read_req);
     bpu_submodule_seq_read(post_read_req, rd);
-    bpu_core_comb_calc(inp, rd, post_read_req, comb_out);
-    out = comb_out.out_regs;
-    req = comb_out.update_req;
+    bpu_core_comb_calc(inp, rd, post_read_req, out, req);
   }
 
 };

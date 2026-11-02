@@ -1015,12 +1015,11 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             bpu_output.two_ahead_target = bpu_output.fetch_address + (FETCH_WIDTH * 4);
         } else {
             BPU_TOP::ReadData bpu_rd;
-            BPU_TOP::UpdateRequest bpu_req;
             bpu_instance.bpu_seq_read(bpu_input, bpu_rd);
-            bpu_instance.bpu_comb_calc(bpu_input, bpu_rd, bpu_output, bpu_req);
+            bpu_instance.bpu_comb_calc(bpu_input, bpu_rd, bpu_output,
+                                       bpu_seq_txn_req.req);
             bpu_seq_txn_req.valid = true;
             bpu_seq_txn_req.inp = bpu_input;
-            bpu_seq_txn_req.req = bpu_req;
             bpu_seq_txn_req.reset = false;
         }
         if (bpu_output.mini_flush_req) {
