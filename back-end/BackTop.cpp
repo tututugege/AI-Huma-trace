@@ -338,7 +338,14 @@ void BackTop::comb() {
   // 修正pc_next 以及difftest对应的pc_next
   out.flush = rob->out.rob_bcast->flush;
   if (out.flush && tbhook::enabled) {
-    tbhook::on_flush();
+    int64_t committing = -1;
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      if (rob->out.rob_commit->commit_entry[i].valid) {
+        committing = (int64_t)rob->out.rob_commit->commit_entry[i].uop.dbg.inst_idx;
+        break;
+      }
+    }
+    tbhook::on_flush(committing, rob->out.rob_bcast->interrupt);
   }
   out.fence_i = rob->out.rob_bcast->fence_i;
   out.itlb_flush = rob->out.rob_bcast->fence;
@@ -364,7 +371,8 @@ void BackTop::comb() {
     out.commit_entry[i] =
         rob->out.rob_commit->commit_entry[i].uop.to_inst_entry(
             rob->out.rob_commit->commit_entry[i].valid);
-    if (tbhook::enabled && rob->out.rob_commit->commit_entry[i].valid) {
+    if (tbhook::enabled && rob->out.rob_commit->commit_entry[i].valid &&
+        !rob->out.rob_bcast->interrupt) {
       tbhook::on_commit(
           (uint64_t)rob->out.rob_commit->commit_entry[i].uop.dbg.inst_idx);
     }

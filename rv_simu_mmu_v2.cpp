@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -939,6 +940,12 @@ void SimContext::run_difftest_inst(InstEntry *inst_entry) {
 
 void SimContext::run_difftest_interrupt() {
   Assert(cpu != nullptr && "SimContext::run_difftest_interrupt: cpu is null");
+  if (tbhook::enabled) {
+    const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
+    const uint32_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
+                                          : cpu->back.csr->CSR_RegFile_1[csr_scause];
+    tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
+  }
   if (!enable_difftest) {
     return;
   }

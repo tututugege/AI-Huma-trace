@@ -1,6 +1,8 @@
 #include "TraceBridge.h"
 #include "refcpu_api.h"
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace tb {
@@ -26,6 +28,7 @@ struct Bridge::Entry {
   std::vector<uint32_t> csr_full;  // only for SYSTEM instructions
   bool has_undo = false;
   uint32_t undo_addr = 0, undo_old = 0;
+  std::unique_ptr<RefCpuState> trap_after;  // state the core reached by trapping (undone speculatively)
 };
 
 namespace {
@@ -185,6 +188,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   if (info.is_exception) {
     // Speculative trap: undo at once (state and store), continue at pc+4.
     e->f.trapped = true;
+    e->trap_after.reset(new RefCpuState(after));
     stats.trapped++;
     if (e->has_undo) refcpu_store_word(ctx_, e->undo_addr, e->undo_old);
     e->has_undo = false;
@@ -269,6 +273,28 @@ bool Bridge::patch_rd(uint64_t uid, uint32_t value) {
   stats.dispatched = d;  // replays are not new dispatches
   stats.forced_jumps = fj;
   return true;
+}
+
+void Bridge::commit_flush(uint64_t uid) {
+  rewind_after((int64_t)uid);
+  stats.rewinds--;  // counted as a flush, not a mispredict rewind
+  stats.flush_commits++;
+  if (chain_.empty() || chain_.back()->f.uid != uid) return;
+  Entry *x = chain_.back();
+  static const bool neg = std::getenv("TB_NEG_NO_TRAP_STATE") != nullptr;  // negative control
+  if (x->trap_after && !neg) {
+    refcpu_set_state(ctx_, x->trap_after.get());
+    stats.trap_commits++;
+  }
+  // X retires: every older entry has already retired, so it is the only one left.
+  while (!chain_.empty()) { delete chain_.front(); chain_.pop_front(); }
+}
+
+bool Bridge::take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
+  rewind_after(-1);
+  stats.rewinds--;
+  stats.interrupts++;
+  return refcpu_take_forced_interrupt(ctx_, cause, target_priv, pending_snapshot);
 }
 
 uint64_t Bridge::oldest_uid() const { return chain_.front()->f.uid; }

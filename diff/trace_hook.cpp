@@ -28,7 +28,7 @@ struct Counters {
   uint64_t mis_rd = 0, mis_br = 0, mis_addr = 0, mis_target = 0;
   uint64_t skip_nofact = 0, skip_blocked = 0, skip_trapped = 0, skip_fault = 0, skip_other = 0;
   uint64_t mis_by_op[32] = {0}, seen_by_op[32] = {0}, nofact_by_op[32] = {0};
-  uint64_t printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
+  uint64_t interrupt_rejected = 0, printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
   ~Counters() {
     if (!enabled) return;
     std::fprintf(stderr,
@@ -123,7 +123,21 @@ void on_commit(uint64_t uid) {
   g_bridge->commit(uid);
 }
 
-void on_flush() { ensure(); g_c.flush++; g_resync = true; }
+void on_flush(int64_t uid, bool interrupt) {
+  ensure();
+  g_c.flush++;
+  static const bool use_ref = std::getenv("TB_RESYNC_REF") != nullptr;  // P1b behaviour, for comparison
+  if (use_ref) { g_resync = true; return; }
+  if (interrupt || uid < 0) return;  // interrupt: handled by on_interrupt; no committing instruction: nothing to do yet
+  g_bridge->commit_flush((uint64_t)uid);
+}
+
+void on_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending) {
+  ensure();
+  static const bool use_ref = std::getenv("TB_RESYNC_REF") != nullptr;
+  if (use_ref) return;
+  if (!g_bridge->take_interrupt(cause, target_priv, pending)) g_c.interrupt_rejected++;
+}
 
 void on_exec(const ExecObs &o) {
   ensure();

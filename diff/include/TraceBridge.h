@@ -53,13 +53,20 @@ public:
   // rewind everything younger than uid, write the destination register, replay the younger
   // entries (same uid/pc/inst) so their facts follow the patched value.
   bool patch_rd(uint64_t uid, uint32_t value);
+  // Commit of an instruction that flushes the pipeline (trap, mret/sret, ecall, csr, fence...):
+  // drop everything younger; if the instruction trapped when executed speculatively, the core takes
+  // the state it computed then (handler entry, mret target, ...); then retire it.
+  void commit_flush(uint64_t uid);
+  // Interrupt taken at a commit boundary (before the oldest uncommitted instruction): drop every
+  // in-flight entry, then the core takes the interrupt with the cause the model chose.
+  bool take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot);
   uint64_t oldest_uid() const;
   void drop_oldest();  // commit-less removal of a killed entry at the head
   const Fact *find(uint64_t uid) const;
   size_t undo_bytes() const;  // per-entry undo log size (fixed part)
 
   struct Stats {
-    uint64_t dispatched = 0, forced_jumps = 0, rewinds = 0, entries_dropped = 0, patches = 0, replayed = 0;
+    uint64_t dispatched = 0, forced_jumps = 0, rewinds = 0, entries_dropped = 0, patches = 0, replayed = 0, flush_commits = 0, trap_commits = 0, interrupts = 0;
     uint64_t blocked[5] = {0}, trapped = 0;
   } stats;
 
