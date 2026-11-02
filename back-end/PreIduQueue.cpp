@@ -106,11 +106,6 @@ void PreIduQueue::comb_begin() {
   for (int i = 0; i < n; i++) {
     out.issue->entries[i] = ibuf.peek(i);
   }
-#ifdef CONFIG_PERF_COUNTER
-  if (ctx != nullptr) {
-    ctx->perf.ib_consume_available_slots += static_cast<uint64_t>(n);
-  }
-#endif
 
   out.pre2front->ready = false;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
@@ -136,10 +131,10 @@ void PreIduQueue::comb_accept_front() {
   out.pre2front->ready = ftq_ok && ib_ok;
   if (ctx != nullptr && incoming_valid_num > 0 && !out.pre2front->ready) {
     if (!ib_ok) {
-      ctx->perf.ib_blocked_cycles++;
+
     }
     if (!ftq_ok) {
-      ctx->perf.ftq_blocked_cycles++;
+
     }
   }
   if (!out.pre2front->ready || incoming_valid_num == 0) {
@@ -208,8 +203,8 @@ void PreIduQueue::comb_accept_front() {
   }
 
   if (ctx != nullptr && push_count > 0) {
-    ctx->perf.ib_write_cycle_total++;
-    ctx->perf.ib_write_inst_total += static_cast<uint64_t>(push_count);
+
+
   }
 }
 
@@ -226,11 +221,6 @@ void PreIduQueue::comb_fire() {
       break;
     }
   }
-#ifdef CONFIG_PERF_COUNTER
-  if (ctx != nullptr) {
-    ctx->perf.ib_consume_consumed_slots += static_cast<uint64_t>(pop_count);
-  }
-#endif
 
   if (in.rob_bcast->flush) {
     ftq_flush_req = true;

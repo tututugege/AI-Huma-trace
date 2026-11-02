@@ -139,9 +139,9 @@ void MSHR::comb_inputs_dcache()
                 const MSHREntry &e = nxt.mshr_entries[hold_id];
                 if (e.valid && e.lsu_origin &&
                     ctx->perf.cycle >= e.alloc_cycle) {
-                    ctx->perf.l1d_miss_penalty_total_cycles +=
-                        ctx->perf.cycle - e.alloc_cycle;
-                    ctx->perf.l1d_miss_penalty_samples++;
+
+
+
                 }
             }
 #endif
@@ -190,7 +190,7 @@ void MSHR::comb_inputs_dcache()
                             in.dcache2mshr->mshr_req[i].lsu_origin;
                         if (ctx != nullptr &&
                             in.dcache2mshr->mshr_req[i].lsu_origin) {
-                            ctx->perf.dcache_miss_num++;
+
                         }
 #endif
                         nxt.mshr_count = nxt.mshr_count + 1;
@@ -264,9 +264,9 @@ void MSHR::comb_inputs_axi()
                     const MSHREntry &e = nxt.mshr_entries[resp_id];
                     if (e.lsu_origin && e.axi_read_active &&
                         ctx->perf.cycle >= e.axi_read_start_cycle) {
-                        ctx->perf.l1d_axi_read_total_cycles +=
-                            ctx->perf.cycle - e.axi_read_start_cycle;
-                        ctx->perf.l1d_axi_read_samples++;
+
+
+
                     }
                     nxt.mshr_entries[resp_id].axi_read_active = false;
                     nxt.mshr_entries[resp_id].axi_read_start_cycle = 0;
@@ -285,15 +285,6 @@ void MSHR::comb_inputs_axi()
 void MSHR::seq(bool sample_perf)
 {
     cur = nxt;
-#if !BSD_CONFIG
-    if (sample_perf && ctx != nullptr) {
-        const uint64_t mshr_count = static_cast<uint64_t>(cur.mshr_count);
-        ctx->perf.l1d_mshr_average_count += mshr_count;
-        if (mshr_count > ctx->perf.l1d_mshr_max_count) {
-            ctx->perf.l1d_mshr_max_count = mshr_count;
-        }
-    }
-#endif
 }
 
 void MSHR::dump_debug_state(FILE *out) const {

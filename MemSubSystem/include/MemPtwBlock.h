@@ -814,13 +814,13 @@ private:
         nxt_.mem_clients[client_idx(Client::DTLB)].req_inflight ||
         nxt_.walk_clients[client_idx(Client::DTLB)].req_pending ||
         nxt_.walk_clients[client_idx(Client::DTLB)].req_inflight) {
-      ctx->perf.ptw_dtlb_wait_cycle++;
+
     }
     if (nxt_.mem_clients[client_idx(Client::ITLB)].req_pending ||
         nxt_.mem_clients[client_idx(Client::ITLB)].req_inflight ||
         nxt_.walk_clients[client_idx(Client::ITLB)].req_pending ||
         nxt_.walk_clients[client_idx(Client::ITLB)].req_inflight) {
-      ctx->perf.ptw_itlb_wait_cycle++;
+
     }
   }
 
@@ -955,18 +955,18 @@ private:
     auto &s = nxt_.mem_clients[client_idx(client)];
     if (ctx != nullptr) {
       if (client == Client::DTLB) {
-        ctx->perf.ptw_dtlb_req++;
+
       } else {
-        ctx->perf.ptw_itlb_req++;
+
       }
     }
     s.resp_valid = false;
     if (s.req_pending || s.req_inflight) {
       if (ctx != nullptr) {
         if (client == Client::DTLB) {
-          ctx->perf.ptw_dtlb_blocked++;
+
         } else {
-          ctx->perf.ptw_itlb_blocked++;
+
         }
       }
       return;
@@ -979,18 +979,18 @@ private:
     auto &s = nxt_.walk_clients[client_idx(client)];
     if (ctx != nullptr) {
       if (client == Client::DTLB) {
-        ctx->perf.ptw_dtlb_req++;
+
       } else {
-        ctx->perf.ptw_itlb_req++;
+
       }
     }
     s.resp_valid = false;
     if (s.req_pending || s.req_inflight) {
       if (ctx != nullptr) {
         if (client == Client::DTLB) {
-          ctx->perf.ptw_dtlb_blocked++;
+
         } else {
-          ctx->perf.ptw_itlb_blocked++;
+
         }
       }
       return;
@@ -1005,9 +1005,9 @@ private:
     s.req_inflight = true;
     if (ctx != nullptr) {
       if (client == Client::DTLB) {
-        ctx->perf.ptw_dtlb_grant++;
+
       } else {
-        ctx->perf.ptw_itlb_grant++;
+
       }
     }
   }
@@ -1019,9 +1019,9 @@ private:
     s.req_inflight = false;
     if (ctx != nullptr) {
       if (client == Client::DTLB) {
-        ctx->perf.ptw_dtlb_resp++;
+
       } else {
-        ctx->perf.ptw_itlb_resp++;
+
       }
     }
   }
@@ -1036,9 +1036,9 @@ private:
     nxt_.walk_req_id = req_id;
     if (ctx != nullptr) {
       if (nxt_.walk_owner == Client::DTLB) {
-        ctx->perf.ptw_dtlb_grant++;
+
       } else {
-        ctx->perf.ptw_itlb_grant++;
+
       }
     }
   }
@@ -1112,9 +1112,9 @@ private:
 
     if (ctx != nullptr && wc.resp_valid) {
       if (nxt_.walk_owner == Client::DTLB) {
-        ctx->perf.ptw_dtlb_resp++;
+
       } else {
-        ctx->perf.ptw_itlb_resp++;
+
       }
     }
     return WalkRespResult::HANDLED;

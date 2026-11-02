@@ -385,108 +385,7 @@ void MemSubsystem::sync_ptw_port_outputs() {
   }
 }
 
-void MemSubsystem::sync_llc_perf() {
-#if AXI_KIT_RUNTIME_ENABLED
-  if (axi_kit_runtime == nullptr) {
-    return;
-  }
-  const auto &perf = axi_kit_runtime->llc_perf_snapshot;
-  LlcPerfShadow current{};
-  current.read_access = perf.read_access;
-  current.read_hit = perf.read_hit;
-  current.read_miss = perf.read_miss;
-  current.read_access_icache = perf.read_access_by_master[axi_interconnect::MASTER_ICACHE];
-  current.read_hit_icache = perf.read_hit_by_master[axi_interconnect::MASTER_ICACHE];
-  current.read_miss_icache = perf.read_miss_by_master[axi_interconnect::MASTER_ICACHE];
-  current.read_access_dcache = perf.read_access_by_master[axi_interconnect::MASTER_DCACHE_R];
-  current.read_hit_dcache = perf.read_hit_by_master[axi_interconnect::MASTER_DCACHE_R];
-  current.read_miss_dcache = perf.read_miss_by_master[axi_interconnect::MASTER_DCACHE_R];
-  current.bypass_read = perf.bypass_read;
-  current.write_passthrough = perf.write_passthrough;
-  current.refill = perf.refill;
-  current.mshr_merge = perf.mshr_merge;
-  current.prefetch_issue = perf.prefetch_issue;
-  current.prefetch_hit = perf.prefetch_hit;
-  current.prefetch_drop_inflight = perf.prefetch_drop_inflight;
-  current.prefetch_drop_mshr_full = perf.prefetch_drop_mshr_full;
-  current.prefetch_drop_queue_full = perf.prefetch_drop_queue_full;
-  current.prefetch_drop_table_hit = perf.prefetch_drop_table_hit;
-  current.ddr_read_total_cycles = perf.ddr_read_total_cycles;
-  current.ddr_read_samples = perf.ddr_read_samples;
-  current.ddr_write_total_cycles = perf.ddr_write_total_cycles;
-  current.ddr_write_samples = perf.ddr_write_samples;
 
-  if (!llc_perf_shadow_valid_) {
-    llc_perf_shadow_ = current;
-    llc_perf_shadow_valid_ = true;
-    return;
-  }
-
-  auto sync_counter = [](uint64_t current_value, uint64_t &shadow_value,
-                         uint64_t &perf_value) {
-    perf_value +=
-        current_value >= shadow_value ? current_value - shadow_value
-                                      : current_value;
-    shadow_value = current_value;
-  };
-
-  if (ctx != nullptr) {
-    sync_counter(current.read_access, llc_perf_shadow_.read_access,
-                 ctx->perf.llc_read_access);
-    sync_counter(current.read_hit, llc_perf_shadow_.read_hit,
-                 ctx->perf.llc_read_hit);
-    sync_counter(current.read_miss, llc_perf_shadow_.read_miss,
-                 ctx->perf.llc_read_miss);
-    sync_counter(current.read_access_icache, llc_perf_shadow_.read_access_icache,
-                 ctx->perf.llc_icache_read_access);
-    sync_counter(current.read_hit_icache, llc_perf_shadow_.read_hit_icache,
-                 ctx->perf.llc_icache_read_hit);
-    sync_counter(current.read_miss_icache, llc_perf_shadow_.read_miss_icache,
-                 ctx->perf.llc_icache_read_miss);
-    sync_counter(current.read_access_dcache, llc_perf_shadow_.read_access_dcache,
-                 ctx->perf.llc_dcache_read_access);
-    sync_counter(current.read_hit_dcache, llc_perf_shadow_.read_hit_dcache,
-                 ctx->perf.llc_dcache_read_hit);
-    sync_counter(current.read_miss_dcache, llc_perf_shadow_.read_miss_dcache,
-                 ctx->perf.llc_dcache_read_miss);
-    sync_counter(current.bypass_read, llc_perf_shadow_.bypass_read,
-                 ctx->perf.llc_bypass_read);
-    sync_counter(current.write_passthrough, llc_perf_shadow_.write_passthrough,
-                 ctx->perf.llc_write_passthrough);
-    sync_counter(current.refill, llc_perf_shadow_.refill, ctx->perf.llc_refill);
-    sync_counter(current.mshr_merge, llc_perf_shadow_.mshr_merge,
-                 ctx->perf.llc_mshr_merge);
-    sync_counter(current.prefetch_issue, llc_perf_shadow_.prefetch_issue,
-                 ctx->perf.llc_prefetch_issue);
-    sync_counter(current.prefetch_hit, llc_perf_shadow_.prefetch_hit,
-                 ctx->perf.llc_prefetch_hit);
-    sync_counter(current.prefetch_drop_inflight,
-                 llc_perf_shadow_.prefetch_drop_inflight,
-                 ctx->perf.llc_prefetch_drop_inflight);
-    sync_counter(current.prefetch_drop_mshr_full,
-                 llc_perf_shadow_.prefetch_drop_mshr_full,
-                 ctx->perf.llc_prefetch_drop_mshr_full);
-    sync_counter(current.prefetch_drop_queue_full,
-                 llc_perf_shadow_.prefetch_drop_queue_full,
-                 ctx->perf.llc_prefetch_drop_queue_full);
-    sync_counter(current.prefetch_drop_table_hit,
-                 llc_perf_shadow_.prefetch_drop_table_hit,
-                 ctx->perf.llc_prefetch_drop_table_hit);
-    sync_counter(current.ddr_read_total_cycles,
-                 llc_perf_shadow_.ddr_read_total_cycles,
-                 ctx->perf.llc_ddr_read_total_cycles);
-    sync_counter(current.ddr_read_samples, llc_perf_shadow_.ddr_read_samples,
-                 ctx->perf.llc_ddr_read_samples);
-    sync_counter(current.ddr_write_total_cycles,
-                 llc_perf_shadow_.ddr_write_total_cycles,
-                 ctx->perf.llc_ddr_write_total_cycles);
-    sync_counter(current.ddr_write_samples, llc_perf_shadow_.ddr_write_samples,
-                 ctx->perf.llc_ddr_write_samples);
-  }
-#else
-  return;
-#endif
-}
 
 void MemSubsystem::set_internal_axi_runtime_active(bool active) {
 #if AXI_KIT_RUNTIME_ENABLED
@@ -505,8 +404,6 @@ void MemSubsystem::set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg) {
   axi_kit_runtime->interconnect.set_llc_config(cfg);
   axi_kit_runtime->llc_tables.configure(cfg);
   axi_kit_runtime->llc_perf_snapshot = {};
-  llc_perf_shadow_ = {};
-  llc_perf_shadow_valid_ = false;
 #else
   (void)cfg;
 #endif
@@ -542,7 +439,7 @@ void MemSubsystem::llc_seq(
   }
   axi_kit_runtime->llc_tables.seq(table_out);
   axi_kit_runtime->llc_perf_snapshot = perf;
-  sync_llc_perf();
+
 #else
   (void)table_out;
   (void)perf;
@@ -908,9 +805,9 @@ void MemSubsystem::capture_dcache_raw_response() {
   if (dcache_resp_raw_.mshr_fill) {
 #if !BSD_CONFIG
     if (ctx != nullptr) {
-      ctx->perf.l1d_fill_wakeup_seen++;
+
       if (dcache_resp_pending_.mshr_fill) {
-        ctx->perf.l1d_fill_wakeup_overwrite++;
+
       }
     }
 #endif
@@ -938,7 +835,7 @@ void MemSubsystem::forward_pending_response_from_fill() {
     resp.replay = ReplayType::HIT;
 #if !BSD_CONFIG
     if (ctx != nullptr) {
-      ctx->perf.l1d_fill_forward_load++;
+
     }
 #endif
   }
@@ -958,7 +855,7 @@ void MemSubsystem::forward_pending_response_from_fill() {
     resp.replay = ReplayType::HIT;
 #if !BSD_CONFIG
     if (ctx != nullptr) {
-      ctx->perf.l1d_fill_merge_store++;
+
     }
 #endif
   }

@@ -179,21 +179,21 @@ void update_icache_perf_counters(const struct icache_in *in,
   }
 
   if (!in->refetch && out->perf_req_fire) {
-    icache_ctx->perf.icache_access_num++;
+
   }
   if (icache.perf.miss_issue_valid) {
-    icache_ctx->perf.icache_miss_num++;
+
   }
 #ifndef USE_IDEAL_ICACHE
   if (icache.perf.miss_penalty_valid) {
-    icache_ctx->perf.icache_miss_penalty_total_cycles +=
-        static_cast<uint64_t>(icache.perf.miss_penalty_cycles);
-    icache_ctx->perf.icache_miss_penalty_samples++;
+
+
+
   }
   if (icache.perf.axi_read_valid) {
-    icache_ctx->perf.icache_axi_read_total_cycles +=
-        static_cast<uint64_t>(icache.perf.axi_read_cycles);
-    icache_ctx->perf.icache_axi_read_samples++;
+
+
+
   }
 #endif
 }

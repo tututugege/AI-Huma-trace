@@ -195,8 +195,5 @@ private:
     uint64_t ddr_write_total_cycles = 0;
     uint64_t ddr_write_samples = 0;
   };
-  void sync_llc_perf();
-  LlcPerfShadow llc_perf_shadow_{};
-  bool llc_perf_shadow_valid_ = false;
   RealLsu *ptw_coherent_source_ = nullptr;
 };

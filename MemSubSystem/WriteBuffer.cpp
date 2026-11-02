@@ -153,9 +153,9 @@ void WriteBuffer::comb_inputs_axi(){
                 cur.axi_write_active ? cur.axi_write_start_cycle
                                      : (ctx == nullptr ? 0 : ctx->perf.cycle);
             if (lsu_origin && ctx->perf.cycle >= start_cycle) {
-                ctx->perf.l1d_axi_write_total_cycles +=
-                    ctx->perf.cycle - start_cycle;
-                ctx->perf.l1d_axi_write_samples++;
+
+
+
             }
         }
 #endif

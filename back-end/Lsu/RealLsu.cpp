@@ -203,7 +203,7 @@ void RealLsu::comb_cal() {
     }
   }
 
-  lsu_perf::sample_queue_occupancy(ctx, cur, ldq_empty);
+
 }
 
 void RealLsu::comb_lsu2rob() {
@@ -555,10 +555,10 @@ void RealLsu::comb_stlf() {
           nxt.uncached_unit.addr = entry.p_addr;
           nxt.uncached_unit.func3 = entry.func3;
           nxt.uncached_unit.idx = ldq_idx;
-          lsu_perf::count_mmio_load_issue(ctx);
+
         } else {
           entry.load_state = LoadState::CheckStlfRetry;
-          lsu_perf::count_mmio_head_block(ctx);
+
         }
       } else {
         uint32_t check_stlf_num = 0;
@@ -576,11 +576,11 @@ void RealLsu::comb_stlf() {
             break;
           }
           if (!stq_entry.paddr_valid) {
-            lsu_perf::count_stlf_unknown_store_block(ctx);
+
             entry.load_state = LoadState::CheckStlfRetry;
             break;
           }
-          lsu_perf::count_stlf_check(ctx);
+
           STLFResult stlf_result = check_stlf(entry.p_addr, entry.func3, stq_entry.paddr, stq_entry.func3);
           if (stlf_result == STLFResult::Overlap) {
             // SC starts with sc_pass=false and suppress_write=false. Only
@@ -707,7 +707,7 @@ void RealLsu::comb_lsu2dcache_ldq() {
         make_lsu_load_req_id(wait_idx, gen);
     lsu_perf::set_replay(out.lsu2dcache->req_ports.load_ports[issued],
                          is_replay);
-    lsu_perf::count_load_dcache_issue(ctx, is_replay);
+
     nxt.wait_dcache_ldq[wait_idx].req_gen = gen;
     lsu_perf::mark_wait_start(ctx, nxt.wait_dcache_ldq[wait_idx]);
 
@@ -737,12 +737,12 @@ void RealLsu::comb_dcache2lsu_ldq() {
       const auto &wait_entry = nxt.wait_dcache_ldq[entry_idx];
 
       if (!wait_entry.valid) {
-        lsu_perf::count_stale_load_resp(ctx);
+
         continue; // stale response after flush/replay queue movement
       }
 
       if (wait_entry.req_gen != resp_gen) {
-        lsu_perf::count_stale_load_resp(ctx);
+
         lsu_report_load_req_gen_mismatch(
             i, req_id, entry_idx, resp_gen,
             static_cast<unsigned>(wait_entry.req_gen),
@@ -813,7 +813,7 @@ void RealLsu::comb_dcache2lsu_stq() {
       if (entry.store_state == StoreState::WaitDcacheResp) {
         if (in.dcache2lsu->resp_ports.store_resps[i].replay == ReplayType::HIT) {
           entry.store_state = StoreState::Done; // store完成，可以提交了
-          lsu_perf::count_store_dcache_hit(ctx);
+
           lsu_perf::mark_store_hit(entry);
           entry.replay_wait_cycles = 0;
           lsu_perf::finish_mem_inst(ctx, entry);
@@ -821,7 +821,7 @@ void RealLsu::comb_dcache2lsu_stq() {
           const ReplayType replay =
               in.dcache2lsu->resp_ports.store_resps[i].replay;
           entry.store_state = StoreState::Committed; // store重放，进入重放状态等待dcache fill
-          lsu_perf::count_store_replay_resp(ctx, replay);
+
           lsu_perf::mark_store_replay(entry, replay);
           entry.replay_wait_cycles = replay_delay_cycles(replay);
         }
@@ -838,7 +838,7 @@ void RealLsu::comb_lsu2dcache_stq() {
   }
 
   uint32_t commit_count = std::min<uint32_t>(nxt.stq_commit_count, LSU_STORE_WINDOW_WIDTH);
-  lsu_perf::sample_stq_issue_window(ctx, nxt, commit_count);
+
 
   int32_t issued_stq = 0;
   for (uint32_t i = 0; i < commit_count && issued_stq < LSU_STA_COUNT; i++) {
@@ -863,8 +863,7 @@ void RealLsu::comb_lsu2dcache_stq() {
         if (CheckAddr(nxt.stq[older_stq_idx].paddr, older_entry_strb, nxt_entry.paddr, entry_strb) && nxt.stq[older_stq_idx].store_state != StoreState::Done) {
           nxt_entry.store_state = StoreState::Committed; // 还有更老的store没有完成，当前store继续保持在提交状态等待更老的store完成
           has_older_unfinished_store = true;
-          lsu_perf::count_same_addr_block(
-              ctx, nxt.stq[older_stq_idx].store_state, i - j);
+
           break;
         }
       }
@@ -883,15 +882,15 @@ void RealLsu::comb_lsu2dcache_stq() {
           nxt.uncached_unit.idx = stq_idx;                  // 将准备好发出请求的store的STQ索引传递给uncached unit，方便后续处理响应时找到对应的STQ条目
           nxt_entry.store_state = StoreState::WaitMmioResp; // MMIO store发出后进入等待MMIO响应状态
           lsu_perf::start_mem_inst(ctx, nxt_entry);
-          lsu_perf::count_mmio_store_issue(ctx);
+
         } else {
-          lsu_perf::count_mmio_head_block(ctx);
+
         }
       } else {
         if (nxt_entry.suppress_write) {
           nxt_entry.store_state = StoreState::Done;
           nxt_entry.replay_wait_cycles = 0;
-          lsu_perf::count_suppress_store_done(ctx);
+
           continue;
         }
         out.lsu2dcache->req_ports.store_ports[issued_stq].valid = true;
@@ -903,7 +902,7 @@ void RealLsu::comb_lsu2dcache_stq() {
         const bool is_replay = lsu_perf::is_store_replay(nxt_entry);
         lsu_perf::set_replay(
             out.lsu2dcache->req_ports.store_ports[issued_stq], is_replay);
-        lsu_perf::count_store_dcache_issue(ctx, is_replay);
+
         nxt_entry.store_state = StoreState::WaitDcacheResp; // 发出store请求后，进入等待dcache响应状态
         lsu_perf::start_mem_inst_if_needed(ctx, cur_entry, nxt_entry);
         issued_stq++;
@@ -912,7 +911,7 @@ void RealLsu::comb_lsu2dcache_stq() {
       // break;
     }
   }
-  lsu_perf::count_store_issue_none(ctx, commit_count, issued_stq);
+
 }
 
 void RealLsu::comb_lsu2exe() {
@@ -1113,7 +1112,7 @@ void RealLsu::comb_check() {
       break;
     }
   }
-  lsu_perf::count_store_retire(ctx, committed_count, retired_stq);
+
 }
 void RealLsu::comb_flush() {
   if (in.rob_bcast->flush) {

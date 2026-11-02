@@ -44,7 +44,7 @@ void MemRouteBlock::comb_response() {
     ReplayType replay = in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].replay;
 #if !BSD_CONFIG
     if (ctx != nullptr && owner_is_ptw(owner) && replay != ReplayType::HIT) {
-      ctx->perf.ptw_port_replay_count++;
+
     }
 #endif
     if (replay == ReplayType::HIT) {

@@ -128,11 +128,6 @@ void Ren::comb_alloc() {
     }
   }
 
-#ifdef CONFIG_PERF_COUNTER
-  if (stall) {
-    ctx->perf.stall_preg_cycles++;
-  }
-#endif
 }
 
 /*
@@ -369,25 +364,6 @@ void Ren::comb_fire() {
 void Ren ::comb_pipeline() {
   wire<BR_MASK_WIDTH> clear_mask = in.dec_bcast->clear_mask;
   if (in.rob_bcast->flush || in.dec_bcast->mispred) {
-#ifdef CONFIG_PERF_COUNTER
-    uint64_t killed = 0;
-    for (int i = 0; i < DECODE_WIDTH; i++) {
-      if (inst_valid[i]) {
-        killed++;
-      }
-    }
-    if (killed > 0) {
-      if (in.rob_bcast->flush) {
-        ctx->perf.squash_flush_ren += killed;
-        ctx->perf.squash_flush_total += killed;
-        ctx->perf.pending_squash_flush_slots += killed;
-      } else {
-        ctx->perf.squash_mispred_ren += killed;
-        ctx->perf.squash_mispred_total += killed;
-        ctx->perf.pending_squash_mispred_slots += killed;
-      }
-    }
-#endif
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {

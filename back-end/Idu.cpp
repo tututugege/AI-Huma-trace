@@ -147,10 +147,6 @@ void Idu::comb_decode() {
 
     if (is_branch(out.dec2ren->uop[i]->type)) {
       if (!alloc_valid[br_num]) {
-#ifdef CONFIG_PERF_COUNTER
-        ctx->perf.idu_tag_stall++;
-        ctx->perf.stall_br_id_cycles++;
-#endif
         stall = true;
         break;
       }
