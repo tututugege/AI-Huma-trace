@@ -131,16 +131,6 @@ public:
     tage_loop_meta_tag_t out_loop_tag[FETCH_WIDTH];
     pc_t out_pred_base_pc;
     wire1_t update_queue_full;
-    // 2-Ahead Predictor outputs
-    // 下下行取指地址
-    wire1_t two_ahead_valid;
-    fetch_addr_t two_ahead_target;
-    // 指示要不要多消耗inst FIFO
-    wire1_t mini_flush_req;
-    // 指示要不要多写一次fetch_address_fifo
-    wire1_t mini_flush_correct;
-    // 如果要多写，多写的地址
-    fetch_addr_t mini_flush_target;
   };
 
   // 顶层三阶段兼容接口的数据容器
@@ -954,14 +944,6 @@ public:
       }
     }
 
-    const uint32_t refetch_twoahead_target = in.refetch_address + (FETCH_WIDTH * 4);
-    const uint32_t fallback_twoahead_target = out.out.fetch_address + (FETCH_WIDTH * 4);
-    out.out.two_ahead_valid = false;
-    out.out.two_ahead_target =
-        in.refetch ? refetch_twoahead_target : fallback_twoahead_target;
-    out.out.mini_flush_req = false;
-    out.out.mini_flush_correct = false;
-    out.out.mini_flush_target = 0;
   }
 
   

@@ -45,8 +45,6 @@ struct PtabCombOut {
   wire1_t clear_ptab;
   wire1_t push_write_en;
   PTAB_entry push_write_entry;
-  wire1_t push_dummy_en;
-  PTAB_entry push_dummy_entry;
   wire1_t pop_en;
 };
 

@@ -17,7 +17,6 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
   std::memset(&out, 0, sizeof(PtabCombOut));
   out.out_regs.full = false;
   out.out_regs.empty = true;
-  out.out_regs.dummy_entry = false;
 
   if (in.inp.reset) {
     out.clear_ptab = true;
@@ -33,8 +32,7 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
   }
 
   const bool do_write = in.inp.write_enable;
-  const bool push_dummy = in.inp.write_enable && in.inp.need_mini_flush;
-  const bool do_read = in.inp.read_enable && (has_data_before_read || do_write || push_dummy);
+  const bool do_read = in.inp.read_enable && (has_data_before_read || do_write);
 
   PTAB_entry write_entry{};
   if (do_write) {
@@ -65,14 +63,6 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
       write_entry.loop_tag[i] = in.inp.loop_tag[i];
     }
     write_entry.predict_next_fetch_address = in.inp.predict_next_fetch_address;
-    write_entry.need_mini_flush = in.inp.need_mini_flush;
-    write_entry.dummy_entry = false;
-  }
-
-  PTAB_entry dummy_entry{};
-  if (push_dummy) {
-    std::memset(&dummy_entry, 0, sizeof(dummy_entry));
-    dummy_entry.dummy_entry = true;
   }
 
   if (do_read) {
@@ -85,7 +75,6 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
     constexpr uint32_t kTageTagMask = bit_mask_u32(tage_tag_t_BITS);
     const PTAB_entry &read_entry =
         has_data_before_read ? in.rd.head_entry : write_entry;
-    out.out_regs.dummy_entry = read_entry.dummy_entry;
     for (int i = 0; i < FETCH_WIDTH; i++) {
       out.out_regs.predict_dir[i] = read_entry.predict_dir[i];
       out.out_regs.predict_base_pc[i] = read_entry.predict_base_pc[i];
@@ -116,13 +105,10 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
 
   out.push_write_en = do_write;
   out.push_write_entry = write_entry;
-  out.push_dummy_en = push_dummy;
-  out.push_dummy_entry = dummy_entry;
   out.pop_en = do_read;
 
   int next_size = static_cast<int>(queue_size_before);
   next_size += out.push_write_en ? 1 : 0;
-  next_size += out.push_dummy_en ? 1 : 0;
   next_size -= out.pop_en ? 1 : 0;
   if (next_size < 0) {
     next_size = 0;
@@ -167,21 +153,6 @@ public:
       first_push_recorded = true;
       ++next_rd.size;
     }
-    if (comb_out.push_dummy_en) {
-      if (next_rd.size >= PTAB_SIZE) {
-        std::printf("[PTAB_TOP] dummy entry push ERROR!!: ptab.size() >= PTAB_SIZE\n");
-        std::exit(1);
-      }
-      if (next_rd.size == 0) {
-        next_rd.head_entry = comb_out.push_dummy_entry;
-        next_rd.head_valid = true;
-      }
-      if (!first_push_recorded) {
-        first_push_entry = comb_out.push_dummy_entry;
-        first_push_recorded = true;
-      }
-      ++next_rd.size;
-    }
     if (comb_out.pop_en) {
       if (next_rd.size == 0) {
         std::printf("[PTAB_TOP] ERROR!!: ptab underflow on read\n");
@@ -224,13 +195,6 @@ public:
       }
       entries_[size_++] = req.push_write_entry;
     }
-    if (req.push_dummy_en) {
-      if (size_ >= PTAB_SIZE) {
-        std::printf("[PTAB_TOP] dummy entry push ERROR!!: ptab.size() >= PTAB_SIZE\n");
-        std::exit(1);
-      }
-      entries_[size_++] = req.push_dummy_entry;
-    }
     if (req.pop_en) {
       if (size_ == 0) {
         std::printf("[PTAB_TOP] ERROR!!: ptab underflow on read\n");
@@ -244,13 +208,6 @@ public:
     }
   }
 
-  bool peek_mini_flush() {
-    if (size_ == 0) {
-      return false;
-    }
-
-    return entries_[0].need_mini_flush;
-  }
 
 private:
   PTAB_entry entries_[PTAB_SIZE]{};

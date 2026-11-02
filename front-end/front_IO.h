@@ -120,12 +120,6 @@ struct BPU_out {
   wire1_t loop_pred[FETCH_WIDTH];
   tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
   tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
-  // 2-Ahead Predictor outputs
-  wire1_t two_ahead_valid;
-  fetch_addr_t two_ahead_target;
-  wire1_t mini_flush_req;
-  wire1_t mini_flush_correct;
-  fetch_addr_t mini_flush_target;
 };
 
 struct icache_in {
@@ -232,13 +226,9 @@ struct PTAB_in {
   tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
   // from back-end
   wire1_t read_enable;
-  // for 2-Ahead
-  wire1_t need_mini_flush;
 };
 
 struct PTAB_out {
-  // 为了2-ahead处理添加的dummy entry
-  wire1_t dummy_entry;
   wire1_t full;
   wire1_t empty;
   // to back-end

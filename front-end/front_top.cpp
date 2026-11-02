@@ -319,7 +319,6 @@ static void front_ptab_write_comb(const FrontPtabWriteCombIn &input,
         output.ptab_in.loop_tag[i] = bpu_output.out_loop_tag[i];
     }
     output.ptab_in.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
-    output.ptab_in.need_mini_flush = bpu_output.mini_flush_req;
 }
 
 static void front_checker_input_comb(const FrontCheckerInputCombIn &input,
@@ -530,14 +529,6 @@ static void accumulate_ptab_req(PtabCombOut &acc, const PtabCombOut &step) {
         }
         acc.push_write_en = true;
         acc.push_write_entry = step.push_write_entry;
-    }
-    if (step.push_dummy_en) {
-        if (acc.push_dummy_en) {
-            std::printf("[front_top] ERROR: PTAB dummy push requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.push_dummy_en = true;
-        acc.push_dummy_entry = step.push_dummy_entry;
     }
 }
 
@@ -842,7 +833,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             bpu_seq_txn_req.req = BPU_TOP::UpdateRequest{};
             bpu_seq_txn_req.reset = true;
             bpu_output.fetch_address = RESET_PC;
-            bpu_output.two_ahead_target = bpu_output.fetch_address + (FETCH_WIDTH * 4);
         } else {
             BPU_TOP::ReadData bpu_rd;
             bpu_instance.bpu_seq_read(bpu_input, bpu_rd);
@@ -868,12 +858,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         bool refetch_write_enable = normal_write_enable && global_refetch; 
         (void)refetch_write_enable;
 
-        can_bypass_fetch_to_icache =
-            !saved_fetch_addr_fifo_out_0.read_valid && normal_write_enable &&
-            !bpu_output.mini_flush_correct && icache_ready && !global_refetch;
         can_bypass_fetch_to_icache = false;
-        if (normal_write_enable && !bpu_output.mini_flush_correct &&
-            !can_bypass_fetch_to_icache) {
+        if (normal_write_enable) {
             fetch_addr_fifo_in.write_enable = true;
             fetch_addr_fifo_in.fetch_address = bpu_output.fetch_address;
 
@@ -882,7 +868,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                                          &fetch_addr_fifo_step_req);
             accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
             fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
-        } else if (normal_write_enable && bpu_output.mini_flush_correct) {
         }
     }
 
@@ -949,7 +934,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             saved_ptab_out = ptab_out;
             predecode_source_valid = true;
 
-            if (!saved_ptab_out.dummy_entry) {
+            {
                 use_icache_to_predecode_bypass = true;
                 for (int i = 0; i < FETCH_WIDTH; i++) {
                     bypass_fifo_out.instructions[i] = icache_out.fetch_group[i];
@@ -979,9 +964,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             }
         }
         predecode_can_run =
-            (predecode_source_valid && !saved_ptab_out.dummy_entry &&
-             use_icache_to_predecode_bypass) ||
-            (!saved_ptab_out.dummy_entry && inst_fifo_read_enable);
+            (predecode_source_valid && use_icache_to_predecode_bypass) ||
+            inst_fifo_read_enable;
         if (!inst_fifo_full_for_write && icache_slot0_data_valid && !global_reset &&
             !global_refetch && !use_icache_to_predecode_bypass) {
             fifo_in.write_enable = true;

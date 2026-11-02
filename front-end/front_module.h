@@ -59,8 +59,6 @@ struct PTAB_entry {
   wire1_t loop_pred[FETCH_WIDTH];
   tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
   tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
-  wire1_t need_mini_flush;
-  wire1_t dummy_entry;
 };
 
 struct PTAB_read_data {
