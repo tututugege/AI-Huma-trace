@@ -148,23 +148,14 @@ void icache_fill_lookup_data_input(icache_module_n::ICache_lookup_in_t &dst,
                                    uint32_t req_way) {
   dst.data_resp_valid = false;
   dst.data_resp_way = 0;
-  for (uint32_t word = 0; word < ICACHE_WORD_NUM; ++word) {
-    dst.data_resp_line[word] = 0;
-  }
   if (!req_valid || !g_lookup_table_resp.data_snapshot_valid ||
       g_lookup_table_resp.lookup_index != req_index ||
       req_way >= ICACHE_WAY_NUM) {
     return;
   }
 
-  const uint32_t line_paddr =
-      (g_lookup_table_resp.set_tag_snapshot[req_way] << 12) |
-      (req_index << ICACHE_OFFSET_BITS);
   dst.data_resp_valid = true;
   dst.data_resp_way = static_cast<uint8_t>(req_way);
-  for (uint32_t word = 0; word < ICACHE_WORD_NUM; ++word) {
-    dst.data_resp_line[word] = tbhook::mem_read(line_paddr + 4 * word);
-  }
 }
 
 void icache_seq_read(struct icache_in *in, struct icache_out *out) {

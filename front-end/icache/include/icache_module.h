@@ -101,7 +101,6 @@ struct ICache_lookup_in_t {
   // Single-way data response selected after the module finishes tag compare.
   wire<1> data_resp_valid = false;
   wire<8> data_resp_way = 0;
-  wire<ICACHE_WORD_BITS> data_resp_line[ICACHE_WORD_NUM] = {0};
 };
 
 // -----------------------------------------------------------------------------
@@ -120,7 +119,6 @@ struct ICache_regs_t {
   reg<1> mem_axi_state = static_cast<reg<1>>(AXI_IDLE);
 
   // Memory response registers
-  reg<ICACHE_WORD_BITS> mem_resp_data_r[ICACHE_WORD_NUM] = {0};
 
   // Replacement / translation state
   reg<8> replace_idx = 0;
@@ -177,7 +175,6 @@ struct ICache_in_t {
   wire<1> mem_resp_valid = false;
   // For compatibility with the top-level memory response wiring.
   wire<4> mem_resp_id = 0;
-  wire<ICACHE_WORD_BITS> mem_resp_data[ICACHE_WORD_NUM] = {0}; // Data from memory (Cache line)
   // Input from DCache coherent word probe path.
   wire<1> dcache_resp_valid = false;
   wire<1> dcache_resp_retry = false;
@@ -191,7 +188,7 @@ struct ICache_out_t {
   wire<1> ifu_resp_valid = false; // Indicates if output data is valid
   wire<1> ifu_req_ready = false;  // Indicates if i-cache is allow to accept next PC
   wire<32> ifu_resp_pc = 0;    // PC corresponding to ifu_resp
-  wire<ICACHE_WORD_BITS> rd_data[ICACHE_WORD_NUM] = {0}; // Data read from cache
+  wire<32> ifu_resp_paddr = 0; // physical address of ifu_resp_pc (the words come from the core's memory)
   wire<1> ifu_page_fault = false;                 // page fault exception signal
   wire<1> ifu_resp_single_word = false; // Uncache response contains only req_pc
 
@@ -277,7 +274,6 @@ private:
   bool lookup_hit_valid_w = false;
   bool lookup_data_ready_w = false;
   uint32_t lookup_hit_way_w = 0;
-  uint32_t lookup_hit_data_w[word_num] = {0};
   bool lookup_has_invalid_way_w = false;
   uint32_t lookup_first_invalid_way_w = 0;
   bool lookup_data_phase_en = false;
@@ -299,7 +295,6 @@ private:
       icache_module_n::AXI_IDLE; // Next state of the memory channel
 
   // received data from memory
-  uint32_t mem_resp_data_w[ICACHE_LINE_SIZE / 4] = {0}; // Data received wire
 
   // handshake signals
   bool mem_gnt = false;

@@ -83,7 +83,7 @@ struct TrueGlueInput {
   bool module_ifu_req_ready = false;
   bool module_ifu_resp_valid = false;
   uint32_t module_ifu_resp_pc = 0;
-  uint32_t module_rd_data[ICACHE_TOP_TRUE_GLUE_LINE_WORDS] = {0};
+  uint32_t module_resp_paddr = 0;
   bool module_ifu_page_fault = false;
   bool module_ifu_resp_single_word = false;
 };
@@ -141,7 +141,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
     const int base_idx = static_cast<int>((in.module_ifu_resp_pc & mask) / 4u);
     if (in.module_ifu_resp_single_word) {
       out.fetch_group[0] =
-          in.module_ifu_page_fault ? INST_NOP : in.module_rd_data[base_idx];
+          in.module_ifu_page_fault ? INST_NOP : tbhook::mem_read(in.module_resp_paddr);
       out.page_fault_inst[0] = in.module_ifu_page_fault;
       out.inst_valid[0] = true;
     } else {
@@ -154,7 +154,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
         }
         out.fetch_group[i] = in.module_ifu_page_fault
                                  ? INST_NOP
-                                 : in.module_rd_data[base_idx + i];
+                                 : tbhook::mem_read(in.module_resp_paddr + 4u * i);
         out.page_fault_inst[i] = in.module_ifu_page_fault;
         out.inst_valid[i] = true;
       }
@@ -530,9 +530,7 @@ make_true_glue_input(const HW &icache_hw, bool hold_for_recovery,
   glue_in.module_ifu_req_ready = icache_hw.io.out.ifu_req_ready;
   glue_in.module_ifu_resp_valid = icache_hw.io.out.ifu_resp_valid;
   glue_in.module_ifu_resp_pc = icache_hw.io.out.ifu_resp_pc;
-  for (int i = 0; i < icache_top_n::ICACHE_TOP_TRUE_GLUE_LINE_WORDS; ++i) {
-    glue_in.module_rd_data[i] = icache_hw.io.out.rd_data[i];
-  }
+  glue_in.module_resp_paddr = icache_hw.io.out.ifu_resp_paddr;
   glue_in.module_ifu_page_fault = icache_hw.io.out.ifu_page_fault;
   glue_in.module_ifu_resp_single_word =
       icache_hw.io.out.ifu_resp_single_word;
@@ -781,9 +779,6 @@ public:
     icache_hw.io.in.mem_req_accepted_id = mem.req_accepted_id;
     icache_hw.io.in.mem_resp_valid = mem.resp_valid;
     icache_hw.io.in.mem_resp_id = mem.resp_id;
-    for (int i = 0; i < ICACHE_LINE_SIZE / 4; ++i) {
-      icache_hw.io.in.mem_resp_data[i] = mem.resp_data[i];
-    }
     icache_hw.io.in.dcache_resp_valid = dcache_probe.resp_valid;
     icache_hw.io.in.dcache_resp_retry = dcache_probe.resp_retry;
     icache_hw.io.in.dcache_resp_miss = dcache_probe.resp_miss;

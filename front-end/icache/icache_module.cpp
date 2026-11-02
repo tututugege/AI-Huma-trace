@@ -215,9 +215,6 @@ void ICache::capture_lookup_meta_result(uint32_t compare_tag,
   lookup_hit_way_w = 0;
   lookup_has_invalid_way_w = false;
   lookup_first_invalid_way_w = 0;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    lookup_hit_data_w[word] = 0;
-  }
 
   if (lookup_meta_predecoded_w) {
     if (!lookup_meta_resp_valid_w) {
@@ -261,18 +258,12 @@ void ICache::capture_lookup_meta_result(uint32_t compare_tag,
 
 void ICache::capture_lookup_data_result() {
   lookup_data_ready_w = false;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    lookup_hit_data_w[word] = 0;
-  }
 
   if (!lookup_data_phase_en || !lookup_hit_valid_w || !io.lookup_in.data_resp_valid ||
       (io.lookup_in.data_resp_way != lookup_hit_way_w)) {
     return;
   }
   lookup_data_ready_w = true;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    lookup_hit_data_w[word] = io.lookup_in.data_resp_line[word];
-  }
 }
 
 void ICache::seq() {
@@ -535,18 +526,9 @@ void ICache::eval_state_machine() {
       perf.axi_read_cycles =
           static_cast<uint64_t>(sim_time) - perf_state.axi_read_start_cycle;
     }
-    for (uint32_t offset = 0; offset < word_num; ++offset) {
-      mem_resp_data_w[offset] = 0;
-    }
     if (icache_req_is_uncache(io.regs)) {
-      const uint32_t word_idx =
-          (io.regs.req_pc_r & (ICACHE_LINE_SIZE - 1u)) / 4u;
-      mem_resp_data_w[word_idx] = io.in.mem_resp_data[0];
       replace_idx_next = io.regs.replace_idx;
     } else {
-      for (uint32_t offset = 0; offset < word_num; ++offset) {
-        mem_resp_data_w[offset] = io.in.mem_resp_data[offset];
-      }
       capture_lookup_meta_result(io.regs.ppn_r & 0xFFFFF,
                                  /*compare_valid=*/false);
       if (lookup_has_invalid_way_w) {
@@ -561,7 +543,7 @@ void ICache::eval_state_machine() {
     perf_state_next.axi_read_start_cycle = 0;
   };
 
-  auto finish_refill = [&](const uint32_t *uncached_words, uint32_t replace_way,
+  auto finish_refill = [&](uint32_t replace_way,
                            const char *debug_tag) {
     const bool single_word = icache_req_is_uncache(io.regs);
     state_next = IDLE;
@@ -588,12 +570,7 @@ void ICache::eval_state_machine() {
     if (!io.in.refetch && !io.in.flush) {
       io.out.ifu_resp_valid = true;
       io.out.ifu_resp_single_word = single_word;
-      const uint32_t line_paddr =
-          icache_line_base_addr(io.regs.ppn_r, io.regs.req_index_r);
-      for (uint32_t word = 0; word < word_num; ++word) {
-        io.out.rd_data[word] =
-            single_word ? uncached_words[word] : tbhook::mem_read(line_paddr + 4 * word);
-      }
+      io.out.ifu_resp_paddr = ((io.regs.ppn_r & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
 
@@ -616,9 +593,6 @@ void ICache::eval_state_machine() {
         io.in.ppn_valid) {
       io.out.ifu_resp_pc = io.in.pc;
       if (io.in.page_fault) {
-        for (uint32_t word = 0; word < word_num; ++word) {
-          io.out.rd_data[word] = 0;
-        }
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = true;
         if (SIM_DEBUG_PRINT_ACTIVE &&
@@ -635,9 +609,7 @@ void ICache::eval_state_machine() {
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
       if (lookup_hit_valid_w && lookup_data_ready_w) {
-        for (uint32_t word = 0; word < word_num; ++word) {
-          io.out.rd_data[word] = lookup_hit_data_w[word];
-        }
+        io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = false;
         if (SIM_DEBUG_PRINT_ACTIVE &&
@@ -661,9 +633,6 @@ void ICache::eval_state_machine() {
 
     if (io.regs.req_valid_r && io.in.ppn_valid) {
       if (io.in.page_fault) {
-        for (uint32_t word = 0; word < word_num; ++word) {
-          io.out.rd_data[word] = 0;
-        }
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = true;
         if (SIM_DEBUG_PRINT_ACTIVE &&
@@ -686,9 +655,7 @@ void ICache::eval_state_machine() {
       io.out.ifu_resp_valid = lookup_hit_valid_w && lookup_data_ready_w;
       req_ready_w = lookup_hit_valid_w && lookup_data_ready_w;
       if (lookup_hit_valid_w && lookup_data_ready_w) {
-        for (uint32_t word = 0; word < word_num; ++word) {
-          io.out.rd_data[word] = lookup_hit_data_w[word];
-        }
+        io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
 
@@ -850,8 +817,7 @@ void ICache::eval_state_machine() {
             io.reg_write.miss_ready_seen_r = false;
             req_ready_w = false;
           } else {
-            finish_refill(mem_resp_data_w,
-                          replace_idx_next,
+            finish_refill(replace_idx_next,
                           dcache_step.hit ? "SWAP_DCACHE_HIT_SAME_CYCLE"
                                           : "SWAP_MEM_GNT_SAME_CYCLE");
           }
@@ -884,8 +850,7 @@ void ICache::eval_state_machine() {
           req_ready_w = false;
           break;
         }
-        finish_refill(mem_resp_data_w,
-                      replace_idx_next,
+        finish_refill(replace_idx_next,
                       dcache_step.hit ? "SWAP_DCACHE_HIT" : "SWAP_MEM_GNT");
       }
     }
@@ -919,8 +884,7 @@ void ICache::eval_state_machine() {
         perf.miss_penalty_cycles =
             static_cast<uint64_t>(sim_time) - perf_state.miss_penalty_start_cycle;
       }
-      finish_refill(io.regs.mem_resp_data_r,
-                    io.regs.replace_idx,
+      finish_refill(io.regs.replace_idx,
                     dcache_step.hit ? "DCACHE_HIT_AFTER_MEM"
                                     : "MEM_GNT_AFTER_DCACHE_MISS");
     }
@@ -1005,9 +969,6 @@ void ICache::eval_state_machine() {
 
   // Latch memory response data + replacement index when the response arrives.
   if (state == SWAP_IN && mem_gnt) {
-    for (uint32_t offset = 0; offset < ICACHE_LINE_SIZE / 4; ++offset) {
-      io.reg_write.mem_resp_data_r[offset] = mem_resp_data_w[offset];
-    }
     io.reg_write.replace_idx = replace_idx_next;
   }
 
