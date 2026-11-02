@@ -1,4 +1,5 @@
 #include "include/icache_module.h"
+#include "PhysMemory.h"
 #include "config.h"
 
 using namespace icache_module_n;
@@ -179,9 +180,6 @@ ICache::ICache() {
   io.regs.dcache_probe_done_r = false;
   io.regs.dcache_probe_hit_r = false;
   io.regs.dcache_probe_word_r = 0;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    io.regs.dcache_probe_data_r[word] = 0;
-  }
   for (int i = 0; i < 16; ++i) {
     io.regs.txid_inflight_r[i] = false;
     io.regs.txid_canceled_r[i] = false;
@@ -219,9 +217,6 @@ void ICache::reset() {
   io.regs.dcache_probe_done_r = false;
   io.regs.dcache_probe_hit_r = false;
   io.regs.dcache_probe_word_r = 0;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    io.regs.dcache_probe_data_r[word] = 0;
-  }
   for (int i = 0; i < 16; ++i) {
     io.regs.txid_inflight_r[i] = false;
     io.regs.txid_canceled_r[i] = false;
@@ -478,9 +473,6 @@ void ICache::eval_state_machine() {
   io.table_write.invalidate_all = io.in.flush;
   io.table_write.index = 0;
   io.table_write.way = 0;
-  for (uint32_t word = 0; word < word_num; ++word) {
-    io.table_write.data[word] = 0;
-  }
   io.table_write.tag = 0;
   io.table_write.valid = false;
 
@@ -550,15 +542,11 @@ void ICache::eval_state_machine() {
     io.reg_write.dcache_probe_done_r = false;
     io.reg_write.dcache_probe_hit_r = false;
     io.reg_write.dcache_probe_word_r = 0;
-    for (uint32_t word = 0; word < word_num; ++word) {
-      io.reg_write.dcache_probe_data_r[word] = 0;
-    }
   };
 
   struct DcacheProbeStep {
     bool done = false;
     bool hit = false;
-    uint32_t line[ICACHE_LINE_SIZE / 4] = {0};
   };
 
   auto step_dcache_probe = [&]() {
@@ -574,9 +562,6 @@ void ICache::eval_state_machine() {
     }
     step.done = io.regs.dcache_probe_done_r;
     step.hit = io.regs.dcache_probe_hit_r;
-    for (uint32_t word = 0; word < word_num; ++word) {
-      step.line[word] = io.regs.dcache_probe_data_r[word];
-    }
 
     const uint32_t word_idx = io.regs.dcache_probe_word_r;
     if (!io.regs.dcache_probe_done_r &&
@@ -603,9 +588,7 @@ void ICache::eval_state_machine() {
         io.reg_write.dcache_probe_hit_r = false;
       } else {
         step.hit = true;
-        step.line[word_idx] = io.in.dcache_resp_data;
         io.reg_write.dcache_probe_hit_r = true;
-        io.reg_write.dcache_probe_data_r[word_idx] = io.in.dcache_resp_data;
         if (word_idx + 1u >= word_num) {
           step.done = true;
           io.reg_write.dcache_probe_done_r = true;
@@ -663,7 +646,7 @@ void ICache::eval_state_machine() {
     perf_state_next.axi_read_start_cycle = 0;
   };
 
-  auto finish_refill = [&](const uint32_t *line_words, uint32_t replace_way,
+  auto finish_refill = [&](const uint32_t *uncached_words, uint32_t replace_way,
                            const char *debug_tag) {
     const bool single_word = icache_req_is_uncache(io.regs);
     state_next = IDLE;
@@ -683,9 +666,6 @@ void ICache::eval_state_machine() {
       io.table_write.we = true;
       io.table_write.index = io.regs.req_index_r;
       io.table_write.way = replace_way;
-      for (uint32_t word = 0; word < word_num; ++word) {
-        io.table_write.data[word] = line_words[word];
-      }
       io.table_write.tag = io.regs.ppn_r;
       io.table_write.valid = true;
     }
@@ -693,8 +673,11 @@ void ICache::eval_state_machine() {
     if (!io.in.refetch && !io.in.flush) {
       io.out.ifu_resp_valid = true;
       io.out.ifu_resp_single_word = single_word;
+      const uint32_t line_paddr =
+          icache_line_base_addr(io.regs.ppn_r, io.regs.req_index_r);
       for (uint32_t word = 0; word < word_num; ++word) {
-        io.out.rd_data[word] = line_words[word];
+        io.out.rd_data[word] =
+            single_word ? uncached_words[word] : pmem_read(line_paddr + 4 * word);
       }
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
@@ -833,9 +816,6 @@ void ICache::eval_state_machine() {
           io.reg_write.dcache_probe_done_r = false;
           io.reg_write.dcache_probe_hit_r = false;
           io.reg_write.dcache_probe_word_r = 0;
-          for (uint32_t word = 0; word < word_num; ++word) {
-            io.reg_write.dcache_probe_data_r[word] = 0;
-          }
           io.reg_write.miss_txid_valid_r = true;
           io.reg_write.miss_txid_r = static_cast<uint8_t>(txid & 0xF);
           io.reg_write.miss_ready_seen_r = false;
@@ -958,7 +938,7 @@ void ICache::eval_state_machine() {
             io.reg_write.miss_ready_seen_r = false;
             req_ready_w = false;
           } else {
-            finish_refill(dcache_step.hit ? dcache_step.line : mem_resp_data_w,
+            finish_refill(mem_resp_data_w,
                           replace_idx_next,
                           dcache_step.hit ? "SWAP_DCACHE_HIT_SAME_CYCLE"
                                           : "SWAP_MEM_GNT_SAME_CYCLE");
@@ -992,7 +972,7 @@ void ICache::eval_state_machine() {
           req_ready_w = false;
           break;
         }
-        finish_refill(dcache_step.hit ? dcache_step.line : mem_resp_data_w,
+        finish_refill(mem_resp_data_w,
                       replace_idx_next,
                       dcache_step.hit ? "SWAP_DCACHE_HIT" : "SWAP_MEM_GNT");
       }
@@ -1027,8 +1007,7 @@ void ICache::eval_state_machine() {
         perf.miss_penalty_cycles =
             static_cast<uint64_t>(sim_time) - perf_state.miss_penalty_start_cycle;
       }
-      finish_refill(dcache_step.hit ? dcache_step.line
-                                    : io.regs.mem_resp_data_r,
+      finish_refill(io.regs.mem_resp_data_r,
                     io.regs.replace_idx,
                     dcache_step.hit ? "DCACHE_HIT_AFTER_MEM"
                                     : "MEM_GNT_AFTER_DCACHE_MISS");

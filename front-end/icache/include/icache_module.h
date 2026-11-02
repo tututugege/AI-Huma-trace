@@ -150,7 +150,6 @@ struct ICache_regs_t {
   reg<1> dcache_probe_done_r = false;
   reg<1> dcache_probe_hit_r = false;
   reg<5> dcache_probe_word_r = 0;
-  reg<ICACHE_WORD_BITS> dcache_probe_data_r[ICACHE_WORD_NUM] = {0};
 
   // Lookup in-flight state (resource state, not SRAM implementation timing).
   reg<1> lookup_pending_r = false;
@@ -170,7 +169,6 @@ struct ICache_table_write_t {
   wire<1> invalidate_all = false;
   wire<ICACHE_INDEX_BITS> index = 0;
   wire<8> way = 0;
-  wire<ICACHE_WORD_BITS> data[ICACHE_WORD_NUM] = {0};
   wire<ICACHE_TAG_BITS> tag = 0;
   wire<1> valid = false;
 };
