@@ -213,6 +213,11 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     e->f.rd_value = after.gpr[rd];
   }
   if (e->f.is_br) e->f.br_taken = info.br_taken;
+  if (after.store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
+    e->f.has_mem_write = true;
+    e->f.mem_waddr = after.store_addr & ~3u;
+    e->f.mem_wdata = refcpu_load_word(ctx_, e->f.mem_waddr);
+  }
   chain_.push_back(e);
   return e->f;
 }

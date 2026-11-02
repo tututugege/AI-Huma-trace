@@ -37,6 +37,8 @@ struct Fact {
   uint8_t size = 0;
   uint32_t store_data = 0;     // size-masked
   uint32_t rs2_value = 0;      // full rs2 (what the model carries as store data)
+  bool has_mem_write = false;  // an executed store/AMO that changes RAM: word address and the word after it
+  uint32_t mem_waddr = 0, mem_wdata = 0;
   uint32_t csr_wdata = 0;      // SYSTEM csrr*: rs1 value or zimm
 };
 

@@ -1,3 +1,4 @@
+#include "SimDDR.h"
 #include "trace_hook.h"
 #include "SimCpu.h"
 #include "PhysMemory.h"
@@ -357,6 +358,7 @@ int main(int argc, char *argv[]) {
             << config.irq_delay_max << " cycles" << std::endl;
   cpu.init();
   if (tbhook::inject) {
+    axi_kit_ddr_functional_writes = false;  // memory is updated at ROB commit from the facts
     config.disable_difftest = true;  // the model no longer computes architectural values
   }
   if (config.disable_difftest) {

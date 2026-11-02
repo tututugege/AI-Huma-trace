@@ -29,7 +29,7 @@ struct Counters {
   uint64_t mis_rd = 0, mis_br = 0, mis_addr = 0, mis_target = 0;
   uint64_t skip_nofact = 0, skip_blocked = 0, skip_trapped = 0, skip_fault = 0, skip_other = 0;
   uint64_t mis_by_op[32] = {0}, seen_by_op[32] = {0}, nofact_by_op[32] = {0};
-  uint64_t interrupt_rejected = 0, printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
+  uint64_t mem_writes = 0, interrupt_rejected = 0, printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
   ~Counters() {
     if (!enabled) return;
     std::fprintf(stderr,
@@ -116,8 +116,17 @@ const tb::Fact *fact_by_rob(uint32_t rob_idx) {
   return f;
 }
 
+static void apply_mem_write(const tb::Fact *f) {
+  static const bool neg = std::getenv("TB_NEG_NO_MEMWRITE") != nullptr;  // negative control
+  if (!neg && f && f->has_mem_write && !f->trapped && f->blocked == tb::Blocked::None) {
+    pmem_write(f->mem_waddr, f->mem_wdata);  // functional memory is updated at ROB commit, from the fact
+    g_c.mem_writes++;
+  }
+}
+
 void on_commit(uint64_t uid) {
   ensure();
+  apply_mem_write(g_bridge->find(uid));
   g_c.commit++;
   // Entries older than the committing one that never committed were killed without a rewind: drop them.
   while (g_bridge->in_flight() && g_bridge->oldest_uid() < uid) { g_bridge->drop_oldest(); g_c.commit_front_miss++; }
@@ -130,6 +139,7 @@ void on_flush(int64_t uid, bool interrupt) {
   static const bool use_ref = std::getenv("TB_RESYNC_REF") != nullptr;  // P1b behaviour, for comparison
   if (use_ref) { g_resync = true; return; }
   if (interrupt || uid < 0) return;  // interrupt: handled by on_interrupt; no committing instruction: nothing to do yet
+  apply_mem_write(g_bridge->find((uint64_t)uid));
   g_bridge->commit_flush((uint64_t)uid);
 }
 
