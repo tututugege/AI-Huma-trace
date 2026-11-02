@@ -65,6 +65,8 @@ public:
   uint64_t oldest_uid() const;
   void drop_oldest();  // commit-less removal of a killed entry at the head
   const Fact *find(uint64_t uid) const;
+  // Functional word at a physical address as the core sees it now (RAM or boot ROM).
+  bool read_word(uint32_t paddr, uint32_t &word) const;
   size_t undo_bytes() const;  // per-entry undo log size (fixed part)
 
   struct Stats {

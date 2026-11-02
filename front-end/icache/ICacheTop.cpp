@@ -3,6 +3,7 @@
 // - translate external table responses into icache_module generalized IO
 // - do not add request/timing/register state here
 
+#include "trace_hook.h"
 #include "include/ICacheTop.h"
 
 #include "../front_module.h"
@@ -192,7 +193,7 @@ inline bool icache_focus_vaddr(uint32_t v_addr) {
 static_assert(ICACHE_LINE_SIZE <= axi_interconnect::MAX_READ_TRANSACTION_BYTES,
               "ICACHE_LINE_SIZE exceeds AXI upstream read transaction limit");
 
-uint32_t icache_coherent_read(uint32_t p_addr) { return pmem_read(p_addr); }
+uint32_t icache_coherent_read(uint32_t p_addr) { return tbhook::mem_read(p_addr); }
 
 void clear_secondary_outputs(struct icache_out *out) {
   out->icache_read_ready_2 = false;

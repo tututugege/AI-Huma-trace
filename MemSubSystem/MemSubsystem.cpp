@@ -146,26 +146,9 @@ struct AxiLlcTableRuntime {
     lookup_in.meta.bytes = meta_payload.bytes;
     lookup_in.valid.bytes = valid_payload.bytes;
     lookup_in.repl.bytes = repl_payload.bytes;
-    // Synthesize the data row of the set from functional memory.
+    // The data row carries no values (zero-filled).
     lookup_in.data_valid = lookup_in.meta_valid;
-    const uint32_t sets = config.set_count();
-    const uint32_t lb = config.line_bytes;
-    lookup_in.data.bytes.assign(static_cast<size_t>(config.ways) * lb, 0);
-    for (uint32_t w = 0; w < config.ways; ++w) {
-      if (w >= valid_payload.bytes.size() || valid_payload.bytes[w] == 0) {
-        continue;
-      }
-      const auto me = axi_interconnect::AXI_LLC::decode_meta(lookup_in.meta, w);
-      const uint32_t line_addr = (me.tag * sets + lookup_pending_index) * lb;
-      uint8_t *dst = lookup_in.data.bytes.data() + static_cast<size_t>(w) * lb;
-      for (uint32_t i = 0; i < lb; i += 4) {
-        const uint32_t word = pmem_read(line_addr + i);
-        dst[i] = static_cast<uint8_t>(word);
-        dst[i + 1] = static_cast<uint8_t>(word >> 8);
-        dst[i + 2] = static_cast<uint8_t>(word >> 16);
-        dst[i + 3] = static_cast<uint8_t>(word >> 24);
-      }
-    }
+    lookup_in.data.bytes.assign(static_cast<size_t>(config.ways) * config.line_bytes, 0);
   }
 
   void seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out) {
@@ -810,11 +793,7 @@ void MemSubsystem::forward_pending_response_from_fill() {
         !cache_line_match(meta.addr, fill.addr)) {
       continue;
     }
-    const AddrFields f = decode(meta.addr);
     resp.replay = ReplayType::HIT;
-    if (ctx != nullptr) {
-
-    }
   }
 
   for (int i = 0; i < LSU_STA_COUNT; i++) {

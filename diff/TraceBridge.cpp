@@ -87,6 +87,19 @@ bool Bridge::in_ram(uint32_t addr, uint32_t size) const {
   return addr >= ram_base_ && (uint64_t)addr + size <= (uint64_t)ram_base_ + ram_bytes_;
 }
 
+bool Bridge::read_word(uint32_t paddr, uint32_t &word) const {
+  const uint32_t a = paddr & ~3u;
+  if (in_ram(a, 4)) {
+    word = refcpu_load_word(ctx_, a);
+    return true;
+  }
+  if (boot_bytes_ && a >= boot_base_ && (uint64_t)a + 4 <= (uint64_t)boot_base_ + boot_bytes_) {
+    word = refcpu_get_io_word(ctx_, a);
+    return true;
+  }
+  return false;
+}
+
 const Fact *Bridge::find(uint64_t uid) const {
   for (auto *e : chain_) if (e->f.uid == uid) return &e->f;
   return nullptr;

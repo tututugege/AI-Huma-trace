@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "../front_IO.h"
 #include "PtwMemPort.h"
 #include "include/ICacheTop.h"
@@ -162,7 +163,7 @@ void icache_fill_lookup_data_input(icache_module_n::ICache_lookup_in_t &dst,
   dst.data_resp_valid = true;
   dst.data_resp_way = static_cast<uint8_t>(req_way);
   for (uint32_t word = 0; word < ICACHE_WORD_NUM; ++word) {
-    dst.data_resp_line[word] = pmem_read(line_paddr + 4 * word);
+    dst.data_resp_line[word] = tbhook::mem_read(line_paddr + 4 * word);
   }
 }
 

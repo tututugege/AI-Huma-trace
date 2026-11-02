@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "PhysMemory.h"
 #include "MemRouteBlock.h"
 #include "types.h"
@@ -47,12 +48,12 @@ void MemRouteBlock::comb_response() {
         out.icache_resp->resp_valid = true;
         out.icache_resp->resp_miss = false;
         // Instruction data is functional memory (the L1D stores no values in the trace-driven build).
-        out.icache_resp->resp_data = pmem_read(cur.issued_tags.req_addr);
+        out.icache_resp->resp_data = tbhook::mem_read(cur.issued_tags.req_addr);
       } else {
         out.ptw_events->valid = true;
         out.ptw_events->owner = owner;
         // Page table entries are functional memory too.
-        out.ptw_events->data = pmem_read(cur.issued_tags.req_addr);
+        out.ptw_events->data = tbhook::mem_read(cur.issued_tags.req_addr);
         out.ptw_events->replay = 0;
         out.ptw_events->req_addr = cur.issued_tags.req_addr;
         out.ptw_events->req_id = cur.issued_tags.req_id;

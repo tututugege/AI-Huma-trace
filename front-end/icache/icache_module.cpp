@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "include/icache_module.h"
 #include "PhysMemory.h"
 #include "config.h"
@@ -591,7 +592,7 @@ void ICache::eval_state_machine() {
           icache_line_base_addr(io.regs.ppn_r, io.regs.req_index_r);
       for (uint32_t word = 0; word < word_num; ++word) {
         io.out.rd_data[word] =
-            single_word ? uncached_words[word] : pmem_read(line_paddr + 4 * word);
+            single_word ? uncached_words[word] : tbhook::mem_read(line_paddr + 4 * word);
       }
       if (SIM_DEBUG_PRINT_ACTIVE &&
           icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {

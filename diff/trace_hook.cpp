@@ -103,6 +103,15 @@ void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_
   if (computed != injected) { g_ov_diff[kind]++; if (g_ov_diff[kind] <= 3) { const tb::Fact *ff = g_bridge ? g_bridge->find(g_rob_uid[rob_idx & 4095]) : nullptr; std::fprintf(stderr, "[TB_INJECT] kind=%d computed=0x%x injected=0x%x rob_idx=%u uid=%llu fact pc=0x%x inst=0x%x blocked=%d trapped=%d forced=%d\n", kind, computed, injected, rob_idx, (unsigned long long)g_rob_uid[rob_idx & 4095], ff ? ff->pc : 0, ff ? ff->inst : 0, ff ? (int)ff->blocked : -1, ff ? (int)ff->trapped : -1, ff ? (int)ff->forced_jump : -1); } }
 }
 struct OvPrint { ~OvPrint() { if (!inject) return; std::fprintf(stderr, "[TB_INJECT] overrides (n/differs): br=%llu/%llu jump=%llu/%llu agu=%llu/%llu std=%llu/%llu csr=%llu/%llu miss=%llu\n", (unsigned long long)g_ov[0], (unsigned long long)g_ov_diff[0], (unsigned long long)g_ov[1], (unsigned long long)g_ov_diff[1], (unsigned long long)g_ov[2], (unsigned long long)g_ov_diff[2], (unsigned long long)g_ov[3], (unsigned long long)g_ov_diff[3], (unsigned long long)g_ov[4], (unsigned long long)g_ov_diff[4], (unsigned long long)inject_miss); } } g_ovp;
+uint32_t mem_read(uint32_t paddr) {
+  if (inject) {
+    ensure();
+    uint32_t w;
+    if (g_bridge->read_word(paddr, w)) return w;
+  }
+  return pmem_read(paddr);
+}
+
 const tb::Fact *fact_by_rob(uint32_t rob_idx) {
   if (!inject || !g_bridge) return nullptr;
   const tb::Fact *f = g_bridge->find(g_rob_uid[rob_idx & 4095]);
@@ -120,7 +129,7 @@ const tb::Fact *fact_by_rob(uint32_t rob_idx) {
 static void apply_mem_write(const tb::Fact *f) {
   static const bool neg = std::getenv("TB_NEG_NO_MEMWRITE") != nullptr;  // negative control
   if (!neg && f && f->has_mem_write && !f->trapped && f->blocked == tb::Blocked::None) {
-    pmem_write(f->mem_waddr, f->mem_wdata);  // functional memory is updated at ROB commit, from the fact
+    // (no functional-memory write: the core owns the memory; instruction words and PTEs are read from it)
     g_c.mem_writes++;
     if (g_c.mem_writes <= 3 && std::getenv("TB_DEBUG_DDR")) std::fprintf(stderr, "[TB] commit mem write word=0x%08x data=0x%08x\n", f->mem_waddr, f->mem_wdata);
   }
