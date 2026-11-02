@@ -1010,7 +1010,107 @@ TlbMmu::build_top_common_input(const CsrStatusIO *status) const {
   return in;
 }
 
+namespace {
+uint64_t g_tlb_fast_checked = 0, g_tlb_fast_mismatch = 0;
+const bool g_tlb_fast_verify = [] {
+  const bool v = std::getenv("TLB_FAST_VERIFY") != nullptr;
+  if (v) {
+    std::atexit([] {
+      std::fprintf(stderr, "tlb-fast-verify: checked=%llu mismatch=%llu\n",
+                   (unsigned long long)g_tlb_fast_checked,
+                   (unsigned long long)g_tlb_fast_mismatch);
+    });
+  }
+  return v;
+}();
+} // namespace
+
+namespace {
+bool same_walk(const TlbMmu::WalkRegs &a, const TlbMmu::WalkRegs &b) {
+  return a.active == b.active && a.req_sent == b.req_sent && a.v_addr == b.v_addr &&
+         a.type == b.type && a.satp == b.satp && a.eff_priv == b.eff_priv &&
+         a.mxr == b.mxr && a.sum == b.sum;
+}
+bool same_refill(const TlbMmu::PendingRefill &a, const TlbMmu::PendingRefill &b) {
+  const auto &x = a.entry;
+  const auto &y = b.entry;
+  return a.valid == b.valid && a.slot == b.slot && a.next_repl_ptr == b.next_repl_ptr &&
+         x.valid == y.valid && x.global == y.global && x.asid == y.asid &&
+         x.level == y.level && x.vpn1 == y.vpn1 && x.vpn0 == y.vpn0 &&
+         x.ppn == y.ppn && x.perm == y.perm;
+}
+} // namespace
+
+// Translation-off fast path: when no port needs a page-table lookup (M-mode or
+// satp.MODE == bare for every valid port) and no flush/cancel is requested, the
+// kernel leaves the walk and refill registers untouched and returns the
+// identity mapping, so the bit-vector round trip can be skipped.
+bool TlbMmu::try_bare_top(const TopInput &in, int port_count,
+                          TopOutput &out) const {
+  if (in.flush || in.cancel) {
+    return false;
+  }
+  const bool dtlb = kind_ == Kind::DTLB;
+  for (int i = 0; i < port_count; ++i) {
+    if (!in.port[i].valid) {
+      continue;
+    }
+    const uint32_t type = dtlb ? ((i < LSU_LDU_COUNT) ? 1u : 2u) : 0u;
+    uint32_t eff_priv = in.privilege & 0x3u;
+    if (type != 0u && in.mstatus_mprv) {
+      eff_priv = in.mstatus_mpp & 0x3u;
+    }
+    if (eff_priv != 3u && (in.satp & 0x80000000u) != 0u) {
+      return false;
+    }
+  }
+  out = TopOutput{};
+  out.walk_next = in.walk;
+  out.refill_next = in.refill;
+  for (int i = 0; i < port_count; ++i) {
+    if (in.port[i].valid) {
+      out.port[i].resp_valid = true;
+      out.port[i].p_addr = in.port[i].v_addr;
+      out.port[i].trace_source = 1;
+    }
+  }
+  return true;
+}
+
 TlbMmu::TopOutput TlbMmu::run_top_via_io_generator(const TopInput &in) const {
+  {
+    const int port_count = kind_ == Kind::ITLB ? kItlbTopPortCount : kDtlbTopPortCount;
+    TopOutput fast;
+    if (try_bare_top(in, port_count, fast)) {
+      if (!g_tlb_fast_verify) {
+        return fast;
+      }
+      const TopOutput full = run_top_via_generator_bits(in);
+      ++g_tlb_fast_checked;
+      bool same = fast.table_flush == full.table_flush &&
+                  fast.walk_req_valid == full.walk_req_valid &&
+                  fast.walk_resp_consumed == full.walk_resp_consumed &&
+                  fast.walk_client_flush == full.walk_client_flush &&
+                  same_walk(fast.walk_next, full.walk_next) &&
+                  same_refill(fast.refill_next, full.refill_next);
+      for (int i = 0; i < port_count && same; ++i) {
+        const auto &a = fast.port[i];
+        const auto &b = full.port[i];
+        same = a.resp_valid == b.resp_valid && a.result == b.result &&
+               a.p_addr == b.p_addr && a.retry_reason == b.retry_reason &&
+               a.trace_source == b.trace_source && a.trace_level == b.trace_level &&
+               a.trace_perm == b.trace_perm;
+      }
+      if (!same) {
+        ++g_tlb_fast_mismatch;
+      }
+      return full;
+    }
+  }
+  return run_top_via_generator_bits(in);
+}
+
+TlbMmu::TopOutput TlbMmu::run_top_via_generator_bits(const TopInput &in) const {
   if (kind_ == Kind::ITLB) {
     bool pi[ITLB_TOP_PI_WIDTH] = {};
     bool po[ITLB_TOP_PO_WIDTH] = {};

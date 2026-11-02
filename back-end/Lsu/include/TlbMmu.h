@@ -398,6 +398,8 @@ private:
                                            CsrStatusIO *status);
   TopInput build_top_common_input(const CsrStatusIO *status) const;
   TopOutput run_top_via_io_generator(const TopInput &in) const;
+  TopOutput run_top_via_generator_bits(const TopInput &in) const;
+  bool try_bare_top(const TopInput &in, int port_count, TopOutput &out) const;
   void apply_top_output(const TopOutput &out);
   void run_control_via_top(bool flush, bool cancel);
   bool consume_completed_walk_refill(bool consume_fault);

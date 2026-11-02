@@ -140,7 +140,7 @@ public:
     count_1 = count;
     out.free_slots = size - count;
     for (auto &grant : out.issue_grants) {
-      grant = {};
+      grant.valid = false; // comb_issue() clears the payload before filling it
     }
     for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
       in.wake_pregs[i] = 0;
@@ -152,7 +152,7 @@ public:
     in.flush_br_mask = 0;
     in.clear_mask = 0;
     for (auto &req : in.enq_reqs) {
-      req = {};
+      req.valid = false; // the uop payload is only read when valid
     }
     for (int i = 0; i < ISSUE_WIDTH; i++) {
       in.port_fu_ready_mask[i] = 0;
@@ -216,9 +216,8 @@ public:
     for (auto &grant : out.issue_grants) {
       grant = {};
     }
-    std::vector<std::pair<int, int>> scheduled_pairs = schedule();
-    std::vector<int> committed_indices;
-    committed_indices.reserve(scheduled_pairs.size());
+    const std::vector<std::pair<int, int>> &scheduled_pairs = schedule();
+    committed_indices.clear();
 
     for (const auto &pair : scheduled_pairs) {
       int entry_idx = pair.first;
@@ -362,14 +361,20 @@ public:
   }
 
 private:
-  std::vector<std::pair<int, int>> schedule() {
-    std::vector<std::pair<int, int>> result;
+  // Scratch buffers reused every cycle (no per-cycle heap traffic).
+  std::vector<std::pair<int, int>> sched_result;
+  std::vector<int> ready_indices;
+  std::vector<uint8_t> inst_issued;
+  std::vector<int> committed_indices;
+
+  const std::vector<std::pair<int, int>> &schedule() {
+    std::vector<std::pair<int, int>> &result = sched_result;
+    result.clear();
     int num_ports = ports.size();
 
 
     // 1. Gather all ready instructions
-    std::vector<int> ready_indices;
-    ready_indices.reserve(count);
+    ready_indices.clear();
     int seen_valid = 0;
     for (int i = 0; i < size; i++) {
       if (!entry[i].valid) {
@@ -405,7 +410,7 @@ private:
     // If IQ_SLOT_PRIORITY, ready_indices is already sorted by slot index (lowest first).
 
     // 3. Port-centric scheduling: for each port, find the best instruction
-    std::vector<bool> inst_issued(size, false);
+    inst_issued.assign(size, 0);
     
     for (int p = 0; p < num_ports; p++) {
       for (int idx : ready_indices) {
@@ -418,7 +423,7 @@ private:
         
         if (ports[p].capability_mask & op_bit) {
           result.push_back({idx, ports[p].port_idx});
-          inst_issued[idx] = true;
+          inst_issued[idx] = 1;
           break; // Move to the next port
         }
       }
