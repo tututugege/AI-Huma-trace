@@ -274,26 +274,9 @@ static void front_output_comb(const FrontOutputCombIn &input,
         output.out.page_fault_inst[i] = out_src->page_fault_inst[i];
         output.out.predict_dir[i] = out_src->predict_dir_corrected[i];
         output.out.pc[i] = out_src->predict_base_pc[i];
-        output.out.alt_pred[i] = out_src->meta.alt_pred[i];
-        output.out.altpcpn[i] = out_src->meta.altpcpn[i];
-        output.out.pcpn[i] = out_src->meta.pcpn[i];
-        for (int j = 0; j < 4; j++) {
-            output.out.tage_idx[i][j] = out_src->meta.tage_idx[i][j];
-            output.out.tage_tag[i][j] = out_src->meta.tage_tag[i][j];
-        }
-        output.out.sc_used[i] = out_src->meta.sc_used[i];
-        output.out.sc_pred[i] = out_src->meta.sc_pred[i];
-        output.out.sc_sum[i] = out_src->meta.sc_sum[i];
-        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            output.out.sc_idx[i][t] = out_src->meta.sc_idx[i][t];
-        }
-        output.out.loop_used[i] = out_src->meta.loop_used[i];
-        output.out.loop_hit[i] = out_src->meta.loop_hit[i];
-        output.out.loop_pred[i] = out_src->meta.loop_pred[i];
-        output.out.loop_idx[i] = out_src->meta.loop_idx[i];
-        output.out.loop_tag[i] = out_src->meta.loop_tag[i];
         output.out.inst_valid[i] = out_src->inst_valid[i];
     }
+    output.out.meta.assign_prefix(out_src->meta);
     for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {
         output.out.instructions[i] = INST_NOP;
         output.out.page_fault_inst[i] = false;

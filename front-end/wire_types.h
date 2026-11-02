@@ -270,28 +270,53 @@ static constexpr bpu_bank_sel_ext_t BPU_BANK_SEL_INVALID = BPU_BANK_NUM;
 
 // Prediction/training metadata that travels with a fetch group from the BPU
 // through PTAB and the front2back FIFO to the back end (all lanes of one group).
-struct PredMeta {
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][TN_MAX];
-  tage_tag_t tage_tag[FETCH_WIDTH][TN_MAX];
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+template <int N>
+struct PredMetaT {
+  wire1_t alt_pred[N];
+  pcpn_t altpcpn[N];
+  pcpn_t pcpn[N];
+  tage_idx_t tage_idx[N][TN_MAX];
+  tage_tag_t tage_tag[N][TN_MAX];
+  wire1_t sc_used[N];
+  wire1_t sc_pred[N];
+  tage_scl_meta_sum_t sc_sum[N];
+  tage_scl_meta_idx_t sc_idx[N][BPU_SCL_META_NTABLE];
+  wire1_t loop_used[N];
+  wire1_t loop_hit[N];
+  wire1_t loop_pred[N];
+  tage_loop_meta_idx_t loop_idx[N];
+  tage_loop_meta_tag_t loop_tag[N];
+
+  // Copy the first M lanes of a narrower bundle; the other lanes keep their value.
+  template <int M>
+  void assign_prefix(const PredMetaT<M> &s) {
+    static_assert(M <= N, "source bundle wider than destination");
+    for (int i = 0; i < M; i++) {
+      alt_pred[i] = s.alt_pred[i];
+      altpcpn[i] = s.altpcpn[i];
+      pcpn[i] = s.pcpn[i];
+      for (int j = 0; j < TN_MAX; j++) {
+        tage_idx[i][j] = s.tage_idx[i][j];
+        tage_tag[i][j] = s.tage_tag[i][j];
+      }
+      sc_used[i] = s.sc_used[i];
+      sc_pred[i] = s.sc_pred[i];
+      sc_sum[i] = s.sc_sum[i];
+      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) sc_idx[i][t] = s.sc_idx[i][t];
+      loop_used[i] = s.loop_used[i];
+      loop_hit[i] = s.loop_hit[i];
+      loop_pred[i] = s.loop_pred[i];
+      loop_idx[i] = s.loop_idx[i];
+      loop_tag[i] = s.loop_tag[i];
+    }
+  }
 
   // Fields are stored at their declared hardware widths.
   void mask() {
     constexpr uint32_t kPcpnMask = (1u << pcpn_t_BITS) - 1u;
     constexpr uint32_t kTageIdxMask = (1u << tage_idx_t_BITS) - 1u;
     constexpr uint32_t kTageTagMask = (1u << tage_tag_t_BITS) - 1u;
-    for (int i = 0; i < FETCH_WIDTH; i++) {
+    for (int i = 0; i < N; i++) {
       altpcpn[i] = static_cast<pcpn_t>(altpcpn[i] & kPcpnMask);
       pcpn[i] = static_cast<pcpn_t>(pcpn[i] & kPcpnMask);
       for (int j = 0; j < TN_MAX; j++) {
@@ -300,6 +325,7 @@ struct PredMeta {
       }
     }
   }
-};
+};using PredMeta = PredMetaT<FETCH_WIDTH>;
+
 
 #endif

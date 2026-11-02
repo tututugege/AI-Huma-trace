@@ -923,27 +923,10 @@ void SimCpu::front_comb_before_back() {
       // }
 
       back.in.predict_dir[j] = front.out.predict_dir[j];
-      back.in.alt_pred[j] = front.out.alt_pred[j];
-      back.in.altpcpn[j] = front.out.altpcpn[j];
-      back.in.pcpn[j] = front.out.pcpn[j];
-      back.in.sc_used[j] = front.out.sc_used[j];
-      back.in.sc_pred[j] = front.out.sc_pred[j];
-      back.in.sc_sum[j] = front.out.sc_sum[j];
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        back.in.sc_idx[j][t] = front.out.sc_idx[j][t];
-      }
-      back.in.loop_used[j] = front.out.loop_used[j];
-      back.in.loop_hit[j] = front.out.loop_hit[j];
-      back.in.loop_pred[j] = front.out.loop_pred[j];
-      back.in.loop_idx[j] = front.out.loop_idx[j];
-      back.in.loop_tag[j] = front.out.loop_tag[j];
-      for (int k = 0; k < 4; k++) { // TN_MAX = 4 (分支预测相关索引)
-        back.in.tage_idx[j][k] = front.out.tage_idx[j][k];
-        back.in.tage_tag[j][k] = front.out.tage_tag[j][k];
-      }
       if (back.in.valid[j] && front.out.predict_dir[j])
         no_taken = false;
     }
+    back.in.meta = front.out.meta;
     back.in.front_stall = static_cast<bool>(front.out.commit_stall);
     perf_account_front_supply();
   } else {

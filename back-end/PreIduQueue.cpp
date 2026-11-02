@@ -147,25 +147,8 @@ void PreIduQueue::comb_accept_front() {
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     ftq_lookup_entry.slot_pc[i] = in.front2pre->pc[i];
     ftq_lookup_entry.pred_taken_mask[i] = in.front2pre->predict_dir[i];
-    ftq_train_meta_entry.alt_pred[i] = in.front2pre->alt_pred[i];
-    ftq_train_meta_entry.altpcpn[i] = in.front2pre->altpcpn[i];
-    ftq_train_meta_entry.pcpn[i] = in.front2pre->pcpn[i];
-    ftq_train_meta_entry.sc_used[i] = in.front2pre->sc_used[i];
-    ftq_train_meta_entry.sc_pred[i] = in.front2pre->sc_pred[i];
-    ftq_train_meta_entry.sc_sum[i] = in.front2pre->sc_sum[i];
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      ftq_train_meta_entry.sc_idx[i][t] = in.front2pre->sc_idx[i][t];
-    }
-    ftq_train_meta_entry.loop_used[i] = in.front2pre->loop_used[i];
-    ftq_train_meta_entry.loop_hit[i] = in.front2pre->loop_hit[i];
-    ftq_train_meta_entry.loop_pred[i] = in.front2pre->loop_pred[i];
-    ftq_train_meta_entry.loop_idx[i] = in.front2pre->loop_idx[i];
-    ftq_train_meta_entry.loop_tag[i] = in.front2pre->loop_tag[i];
-    for (int j = 0; j < 4; j++) {
-      ftq_train_meta_entry.tage_idx[i][j] = in.front2pre->tage_idx[i][j];
-      ftq_train_meta_entry.tage_tag[i][j] = in.front2pre->tage_tag[i][j];
-    }
   }
+  ftq_train_meta_entry.meta = in.front2pre->meta;
   const int ftq_alloc_idx = ftq_alloc();
   if (ftq_alloc_idx < 0) {
     out.pre2front->ready = false;
@@ -314,23 +297,23 @@ void PreIduQueue::comb_commit_info() {
     if (train_meta_cursor_valid) {
       Assert(ftq_idx == train_meta_cursor);
       const auto &meta = ftq_train_meta_fifo[train_meta_cursor];
-      resp.alt_pred = meta.alt_pred[ftq_offset];
-      resp.altpcpn = meta.altpcpn[ftq_offset];
-      resp.pcpn = meta.pcpn[ftq_offset];
-      resp.sc_used = meta.sc_used[ftq_offset];
-      resp.sc_pred = meta.sc_pred[ftq_offset];
-      resp.sc_sum = meta.sc_sum[ftq_offset];
+      resp.alt_pred = meta.meta.alt_pred[ftq_offset];
+      resp.altpcpn = meta.meta.altpcpn[ftq_offset];
+      resp.pcpn = meta.meta.pcpn[ftq_offset];
+      resp.sc_used = meta.meta.sc_used[ftq_offset];
+      resp.sc_pred = meta.meta.sc_pred[ftq_offset];
+      resp.sc_sum = meta.meta.sc_sum[ftq_offset];
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        resp.sc_idx[t] = meta.sc_idx[ftq_offset][t];
+        resp.sc_idx[t] = meta.meta.sc_idx[ftq_offset][t];
       }
-      resp.loop_used = meta.loop_used[ftq_offset];
-      resp.loop_hit = meta.loop_hit[ftq_offset];
-      resp.loop_pred = meta.loop_pred[ftq_offset];
-      resp.loop_idx = meta.loop_idx[ftq_offset];
-      resp.loop_tag = meta.loop_tag[ftq_offset];
+      resp.loop_used = meta.meta.loop_used[ftq_offset];
+      resp.loop_hit = meta.meta.loop_hit[ftq_offset];
+      resp.loop_pred = meta.meta.loop_pred[ftq_offset];
+      resp.loop_idx = meta.meta.loop_idx[ftq_offset];
+      resp.loop_tag = meta.meta.loop_tag[ftq_offset];
       for (int k = 0; k < 4; k++) {
-        resp.tage_idx[k] = meta.tage_idx[ftq_offset][k];
-        resp.tage_tag[k] = meta.tage_tag[ftq_offset][k];
+        resp.tage_idx[k] = meta.meta.tage_idx[ftq_offset][k];
+        resp.tage_tag[k] = meta.meta.tage_tag[ftq_offset][k];
       }
     }
 
