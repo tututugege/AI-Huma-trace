@@ -117,6 +117,12 @@ INCLUDES += -I./isu_ref
 CXXFLAGS += -DISU_SHADOW
 endif
 
+ifdef REN_SHADOW
+CXXSRC += ./ren_ref/RenRef.cpp ./ren_ref/RenShadow.cpp
+INCLUDES += -I./ren_ref
+CXXFLAGS += -DREN_SHADOW
+endif
+
 ifdef IDU_SHADOW
 CXXSRC += ./idu_ref/IduRef.cpp ./idu_ref/IduShadow.cpp
 INCLUDES += -I./idu_ref

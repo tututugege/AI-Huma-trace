@@ -19,6 +19,11 @@
 #else
 #define IDU(f) idu->f()
 #endif
+#ifdef REN_SHADOW
+#include "RenShadow.h"
+#else
+#define REN(f) rename->f()
+#endif
 #ifdef ISU_SHADOW
 #include "IsuShadow.h"
 #else
@@ -161,7 +166,7 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 void BackTop::comb_begin_all() {
   pre->comb_begin();
   IDU(comb_begin);
-  rename->comb_begin();
+  REN(comb_begin);
   DIS(comb_begin);
   ISU(comb_begin);
   prf->comb_begin();
@@ -176,7 +181,7 @@ void BackTop::comb_stage_decode_and_resources() {
   pre->comb_accept_front();
   IDU(comb_decode);
   csr->comb_interrupt();
-  rename->comb_alloc();
+  REN(comb_alloc);
   prf->comb_complete();
   prf->comb_awake();
   prf->comb_write();
@@ -236,7 +241,7 @@ void BackTop::comb_stage_operands_and_dispatch() {
   csr->comb_exception();
   csr->comb_csr_write();
   DIS(comb_wake);
-  rename->comb_rename();
+  REN(comb_rename);
 
   DIS(comb_dispatch);
 }
@@ -245,7 +250,7 @@ void BackTop::comb_stage_operands_and_dispatch() {
 void BackTop::comb_stage_fire_and_recover() {
   DIS(comb_fire);
   LSU(comb_dis2lsu);
-  rename->comb_fire();
+  REN(comb_fire);
   IDU(comb_fire);
   // Kill flushed LSU work before driving new DCache/MMIO requests.
   LSU(comb_flush);
@@ -265,7 +270,7 @@ void BackTop::comb_stage_fire_and_recover() {
   prf->comb_pipeline();
   EXU(comb_pipeline);
   DIS(comb_pipeline);
-  rename->comb_pipeline();
+  REN(comb_pipeline);
   csr->comb_interrupt_inject();
 }
 
@@ -393,7 +398,7 @@ void BackTop::seq() {
   // rename -> isu/stq/rob
   // exu -> prf
   pre->seq();
-  rename->seq();
+  REN(seq);
   DIS(seq);
   IDU(seq);
   ISU(seq);
