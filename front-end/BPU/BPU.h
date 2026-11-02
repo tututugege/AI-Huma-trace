@@ -279,33 +279,7 @@ public:
     wire1_t btb_result_valid_latch_next[FETCH_WIDTH];
   };
 
-  struct BpuPreReadReqCombIn {
-    wire1_t refetch;
-    fetch_addr_t refetch_address;
-    wire1_t icache_read_ready;
-    pc_t pc_reg_snapshot;
-    wire1_t pc_can_send_to_icache_snapshot;
-    queue_count_t q_count_snapshot[BPU_BANK_NUM];
-    queue_ptr_t q_rd_ptr_snapshot[BPU_BANK_NUM];
-    ras_count_t Arch_ras_count_snapshot;
-    ras_count_t Spec_ras_count_snapshot;
-  };
 
-  struct BpuPreReadReqCombOut {
-    wire1_t use_arch_ras_snapshot;
-    ras_count_t ras_count_snapshot;
-    wire1_t ras_has_entry_snapshot;
-    ras_index_t ras_top_index;
-    pc_t pred_base_pc;
-    fetch_addr_t boundary_addr;
-    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
-    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
-    pc_t do_pred_for_this_pc[FETCH_WIDTH];
-    queue_ptr_t q_read_slot[BPU_BANK_NUM];
-    wire1_t going_to_do_pred;
-    wire1_t going_to_do_upd[BPU_BANK_NUM];
-    wire1_t set_submodule_input;
-  };
 
   struct BpuPostReadReqCombIn {
     wire1_t refetch;
@@ -571,78 +545,50 @@ public:
     rd.ras_top_snapshot = 0;
   }
 
-  void bpu_pre_read_req_comb(const BpuPreReadReqCombIn &in,
-                             BpuPreReadReqCombOut &out) const {
-    out = BpuPreReadReqCombOut{};
-
-    out.use_arch_ras_snapshot = in.refetch;
-    out.ras_count_snapshot =
-        out.use_arch_ras_snapshot ? in.Arch_ras_count_snapshot : in.Spec_ras_count_snapshot;
-    out.ras_has_entry_snapshot = (out.ras_count_snapshot > 0);
-    out.ras_top_index = out.ras_has_entry_snapshot ? (out.ras_count_snapshot - 1) : 0;
-
-    out.pred_base_pc = in.refetch ? in.refetch_address : in.pc_reg_snapshot;
-
-    const uint32_t cache_mask = ~(ICACHE_LINE_SIZE - 1);
-    const uint32_t pc_plus_width = out.pred_base_pc + (FETCH_WIDTH * 4);
-    out.boundary_addr =
-        ((out.pred_base_pc & cache_mask) != (pc_plus_width & cache_mask))
-            ? (pc_plus_width & cache_mask)
-            : pc_plus_width;
-
-    for (int i = 0; i < FETCH_WIDTH; i++) {
-      out.do_pred_for_this_pc[i] = out.pred_base_pc + (i * 4);
-      if (out.do_pred_for_this_pc[i] < out.boundary_addr) {
-        BankSelCombOut bank_sel_out{};
-        bank_sel_comb(BankSelCombIn{out.do_pred_for_this_pc[i]}, bank_sel_out);
-        out.this_pc_bank_sel[i] = bank_sel_out.bank_sel;
-        out.do_pred_on_this_pc[i] = true;
-      } else {
-        out.this_pc_bank_sel[i] = BPU_BANK_SEL_INVALID;
-        out.do_pred_on_this_pc[i] = false;
-      }
-    }
-
-    out.going_to_do_pred =
-        in.pc_can_send_to_icache_snapshot && (in.icache_read_ready || in.refetch);
-    wire1_t going_to_do_upd_any = false;
-    for (int i = 0; i < BPU_BANK_NUM; i++) {
-      out.q_read_slot[i] = in.q_rd_ptr_snapshot[i];
-      out.going_to_do_upd[i] = (in.q_count_snapshot[i] != 0);
-      going_to_do_upd_any |= out.going_to_do_upd[i];
-    }
-    out.set_submodule_input = out.going_to_do_pred || going_to_do_upd_any;
-
-  }
-
-  void bpu_data_seq_read(const BpuPreReadReqCombOut &in, ReadData &rd) const {
-    rd.ras_count_snapshot = in.ras_count_snapshot;
-    rd.ras_has_entry_snapshot = in.ras_has_entry_snapshot;
-    if (in.ras_has_entry_snapshot) {
-      rd.ras_top_snapshot = in.use_arch_ras_snapshot
-                                ? rd.Arch_ras_stack_snapshot[in.ras_top_index]
-                                : rd.Spec_ras_stack_snapshot[in.ras_top_index];
+  // Address/queue stage of the read phase: everything that is derived from the
+  // registered state and this cycle's inputs, written straight into rd.
+  void bpu_data_read(const InputPayload &inp, ReadData &rd) const {
+    const bool use_arch_ras = inp.refetch;
+    rd.ras_count_snapshot =
+        use_arch_ras ? rd.Arch_ras_count_snapshot : rd.Spec_ras_count_snapshot;
+    rd.ras_has_entry_snapshot = (rd.ras_count_snapshot > 0);
+    if (rd.ras_has_entry_snapshot) {
+      const ras_index_t top = rd.ras_count_snapshot - 1;
+      rd.ras_top_snapshot =
+          use_arch_ras ? rd.Arch_ras_stack_snapshot[top] : rd.Spec_ras_stack_snapshot[top];
     } else {
       rd.ras_top_snapshot = 0;
     }
 
-    rd.pred_base_pc = in.pred_base_pc;
-    rd.boundary_addr = in.boundary_addr;
-    rd.going_to_do_pred = in.going_to_do_pred;
-    rd.set_submodule_input = in.set_submodule_input;
+    rd.pred_base_pc = inp.refetch ? inp.refetch_address : rd.pc_reg_snapshot;
+    const uint32_t cache_mask = ~(ICACHE_LINE_SIZE - 1);
+    const uint32_t pc_plus_width = rd.pred_base_pc + (FETCH_WIDTH * 4);
+    rd.boundary_addr =
+        ((rd.pred_base_pc & cache_mask) != (pc_plus_width & cache_mask))
+            ? (pc_plus_width & cache_mask)
+            : pc_plus_width;
 
     for (int i = 0; i < FETCH_WIDTH; i++) {
-      rd.do_pred_on_this_pc[i] = in.do_pred_on_this_pc[i];
-      rd.this_pc_bank_sel[i] = in.this_pc_bank_sel[i];
-      rd.do_pred_for_this_pc[i] = in.do_pred_for_this_pc[i];
+      rd.do_pred_for_this_pc[i] = rd.pred_base_pc + (i * 4);
+      if (rd.do_pred_for_this_pc[i] < rd.boundary_addr) {
+        BankSelCombOut bank_sel_out{};
+        bank_sel_comb(BankSelCombIn{rd.do_pred_for_this_pc[i]}, bank_sel_out);
+        rd.this_pc_bank_sel[i] = bank_sel_out.bank_sel;
+        rd.do_pred_on_this_pc[i] = true;
+      } else {
+        rd.this_pc_bank_sel[i] = BPU_BANK_SEL_INVALID;
+        rd.do_pred_on_this_pc[i] = false;
+      }
     }
 
+    rd.going_to_do_pred =
+        rd.pc_can_send_to_icache_snapshot && (inp.icache_read_ready || inp.refetch);
     rd.going_to_do_upd_any = false;
     for (int i = 0; i < BPU_BANK_NUM; i++) {
-      rd.going_to_do_upd[i] = in.going_to_do_upd[i];
-      rd.going_to_do_upd_any |= in.going_to_do_upd[i];
-      if (in.going_to_do_upd[i]) {
-        const QueueEntry &entry = update_queue[in.q_read_slot[i]][i];
+      rd.going_to_do_upd[i] = (rd.q_count_snapshot[i] != 0);
+      rd.going_to_do_upd_any |= rd.going_to_do_upd[i];
+      if (rd.going_to_do_upd[i]) {
+        const QueueEntry &entry = update_queue[rd.q_rd_ptr_snapshot[i]][i];
         rd.q_data[i].base_pc = entry.base_pc;
         rd.q_data[i].valid_mask = entry.valid_mask;
         rd.q_data[i].actual_dir = entry.actual_dir;
@@ -671,8 +617,9 @@ public:
         std::memset(&rd.q_data[i], 0, sizeof(rd.q_data[i]));
       }
     }
-
+    rd.set_submodule_input = rd.going_to_do_pred || rd.going_to_do_upd_any;
   }
+
 
   void bpu_post_read_req_comb(const BpuPostReadReqCombIn &in,
                               BpuPostReadReqCombOut &out) const {
@@ -1390,22 +1337,8 @@ public:
 
   void bpu_comb_calc(const InputPayload &inp, ReadData &rd,
                      OutputPayload &out, UpdateRequest &req) {
-    BpuPreReadReqCombOut pre_read_req{};
     BpuPostReadReqCombOut post_read_req{};
-    BpuPreReadReqCombIn pre_read_in{};
-    pre_read_in.refetch = inp.refetch;
-    pre_read_in.refetch_address = inp.refetch_address;
-    pre_read_in.icache_read_ready = inp.icache_read_ready;
-    pre_read_in.pc_reg_snapshot = rd.pc_reg_snapshot;
-    pre_read_in.pc_can_send_to_icache_snapshot = rd.pc_can_send_to_icache_snapshot;
-    std::memcpy(pre_read_in.q_count_snapshot, rd.q_count_snapshot,
-                sizeof(pre_read_in.q_count_snapshot));
-    std::memcpy(pre_read_in.q_rd_ptr_snapshot, rd.q_rd_ptr_snapshot,
-                sizeof(pre_read_in.q_rd_ptr_snapshot));
-    pre_read_in.Arch_ras_count_snapshot = rd.Arch_ras_count_snapshot;
-    pre_read_in.Spec_ras_count_snapshot = rd.Spec_ras_count_snapshot;
-    bpu_pre_read_req_comb(pre_read_in, pre_read_req);
-    bpu_data_seq_read(pre_read_req, rd);
+    bpu_data_read(inp, rd);
     BpuPostReadReqCombIn post_read_in{};
     post_read_in.refetch = inp.refetch;
     std::memcpy(post_read_in.in_update_base_pc, inp.in_update_base_pc,
