@@ -58,44 +58,12 @@ inline void bank_pc_comb(const BankPcCombIn &in, BankPcCombOut &out) {
   out.bank_pc = in.pc >> highest_bit_pos;
 }
 
-struct NlpIndexCombIn {
-  pc_t pc;
-};
 
-struct NlpIndexCombOut {
-  nlp_index_t index;
-};
 
-inline void nlp_index_comb(const NlpIndexCombIn &in, NlpIndexCombOut &out) {
-  out = NlpIndexCombOut{};
-  uint32_t mixed = (in.pc >> 2) ^ (in.pc >> 11) ^ (in.pc >> 19);
-  if ((NLP_TABLE_SIZE & (NLP_TABLE_SIZE - 1)) == 0) {
-    out.index = static_cast<nlp_index_t>(mixed & (NLP_TABLE_SIZE - 1));
-  } else {
-    out.index = static_cast<nlp_index_t>(mixed % NLP_TABLE_SIZE);
-  }
-}
 
-struct NlpTagCombIn {
-  pc_t pc;
-};
 
-struct NlpTagCombOut {
-  nlp_tag_t tag;
-};
 
-inline void nlp_tag_comb(const NlpTagCombIn &in, NlpTagCombOut &out) {
-  out = NlpTagCombOut{};
-  out.tag = static_cast<nlp_tag_t>(in.pc >> 2);
-}
 
-inline fetch_addr_t nlp_fallback_next_pc(fetch_addr_t base_pc) {
-  const uint32_t cache_mask = ~(ICACHE_LINE_SIZE - 1);
-  const uint32_t pc_plus_width = base_pc + (FETCH_WIDTH * 4);
-  return static_cast<fetch_addr_t>(((base_pc & cache_mask) != (pc_plus_width & cache_mask))
-                                       ? (pc_plus_width & cache_mask)
-                                       : pc_plus_width);
-}
 
 inline tage_path_hist_t tage_path_update_value(tage_path_hist_t current_path, pc_t pc,
                                                wire1_t dir) {
@@ -199,12 +167,6 @@ public:
       tage_loop_meta_idx_t loop_idx;
       tage_loop_meta_tag_t loop_tag;
     };
-    struct NlpEntrySnapshot {
-      wire1_t entry_valid;
-      nlp_tag_t entry_tag;
-      target_addr_t entry_target;
-      nlp_conf_t entry_conf;
-    };
 
     bpu_state_t state_snapshot;
     pc_t pc_reg_snapshot;
@@ -229,11 +191,6 @@ public:
     queue_ptr_t q_rd_ptr_snapshot[BPU_BANK_NUM];
     queue_count_t q_count_snapshot[BPU_BANK_NUM];
 
-    fetch_addr_t saved_2ahead_prediction_snapshot;
-    wire1_t saved_2ahead_pred_valid_snapshot;
-    wire1_t saved_mini_flush_req_snapshot;
-    wire1_t saved_mini_flush_correct_snapshot;
-    fetch_addr_t saved_mini_flush_target_snapshot;
     wire1_t ras_has_entry_snapshot;
     target_addr_t ras_top_snapshot;
     ras_count_t ras_count_snapshot;
@@ -270,10 +227,6 @@ public:
     TypePredictor::ReadData type_rd;
     TAGE_TOP::ReadData tage_rd[BPU_BANK_NUM];
     BTB_TOP::ReadData btb_rd[BPU_BANK_NUM];
-    NlpEntrySnapshot nlp_pred_base_entry_snapshot;
-    fetch_addr_t nlp_s1_req_pc_snapshot;
-    NlpEntrySnapshot nlp_s1_entry_snapshot;
-    NlpEntrySnapshot nlp_train_entry_snapshot;
   };
 
   struct UpdateRequest {
@@ -284,27 +237,6 @@ public:
     wire1_t do_pred_latch_next;
     wire1_t do_upd_latch_next[BPU_BANK_NUM];
     pc_t pred_base_pc_fired_next;
-    fetch_addr_t saved_2ahead_prediction_next;
-    wire1_t saved_2ahead_pred_valid_next;
-    wire1_t saved_mini_flush_req_next;
-    wire1_t saved_mini_flush_correct_next;
-    fetch_addr_t saved_mini_flush_target_next;
-    wire1_t nlp_s1_valid_next;
-    fetch_addr_t nlp_s1_req_pc_next;
-    fetch_addr_t nlp_s1_pred_next_pc_next;
-    wire1_t nlp_s1_hit_next;
-    nlp_conf_t nlp_s1_conf_next;
-    wire1_t nlp_s2_valid_next;
-    fetch_addr_t nlp_s2_req_pc_next;
-    fetch_addr_t nlp_s2_pred_2ahead_pc_next;
-    wire1_t nlp_s2_hit_next;
-    nlp_conf_t nlp_s2_conf_next;
-    wire1_t nlp_entry_we;
-    nlp_index_t nlp_entry_idx;
-    wire1_t nlp_entry_valid_next;
-    nlp_tag_t nlp_entry_tag_next;
-    target_addr_t nlp_entry_target_next;
-    nlp_conf_t nlp_entry_conf_next;
     wire1_t Spec_GHR_next[GHR_LENGTH];
     wire1_t Arch_GHR_next[GHR_LENGTH];
     wire32_t Spec_FH_next[FH_N_MAX][TN_MAX];
@@ -335,7 +267,6 @@ public:
 
     wire1_t final_pred_dir[FETCH_WIDTH];
     fetch_addr_t next_fetch_addr_calc;
-    fetch_addr_t final_2_ahead_address;
     wire1_t should_update_spec_hist;
 
     TAGE_TOP::InputPayload tage_in[BPU_BANK_NUM];
@@ -384,10 +315,6 @@ public:
     wire1_t going_to_do_pred;
     wire1_t going_to_do_upd[BPU_BANK_NUM];
     wire1_t set_submodule_input;
-    wire1_t nlp_pred_base_re;
-    nlp_index_t nlp_pred_base_idx;
-    wire1_t nlp_train_re;
-    nlp_index_t nlp_train_idx;
   };
 
   struct BpuPostReadReqCombIn {
@@ -406,13 +333,9 @@ public:
     pc_t do_pred_for_this_pc[FETCH_WIDTH];
     wire1_t going_to_do_upd[BPU_BANK_NUM];
     ReadData::QueueEntrySnapshot q_data[BPU_BANK_NUM];
-    ReadData::NlpEntrySnapshot nlp_pred_base_entry_snapshot;
   };
 
   struct BpuPostReadReqCombOut {
-    wire1_t nlp_s1_re;
-    nlp_index_t nlp_s1_idx;
-    fetch_addr_t nlp_s1_req_pc;
     TypePredictor::InputPayload type_in;
     TAGE_TOP::InputPayload tage_in[BPU_BANK_NUM];
     BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
@@ -441,10 +364,6 @@ public:
     pc_t do_pred_for_this_pc[FETCH_WIDTH];
     wire1_t ras_has_entry_snapshot;
     target_addr_t ras_top_snapshot;
-    fetch_addr_t saved_2ahead_prediction_snapshot;
-    wire1_t saved_2ahead_pred_valid_snapshot;
-    wire1_t saved_mini_flush_correct_snapshot;
-    fetch_addr_t saved_mini_flush_target_snapshot;
     TypePredictor::OutputPayload type_out;
     TAGE_TOP::OutputPayload tage_out[BPU_BANK_NUM];
     BTB_TOP::OutputPayload btb_out[BPU_BANK_NUM];
@@ -454,7 +373,6 @@ public:
     OutputPayload out;
     wire1_t final_pred_dir[FETCH_WIDTH];
     fetch_addr_t next_fetch_addr_calc;
-    fetch_addr_t final_2_ahead_address;
     wire1_t tage_calc_pred_dir_latch_next[FETCH_WIDTH];
     wire1_t tage_calc_altpred_latch_next[FETCH_WIDTH];
     pcpn_t tage_calc_pcpn_latch_next[FETCH_WIDTH];
@@ -466,30 +384,8 @@ public:
     wire1_t btb_result_valid_latch_next[FETCH_WIDTH];
   };
 
-  struct BpuNlpCombIn {
-    const InputPayload &inp;
-    const ReadData &rd;
-    fetch_addr_t next_fetch_addr_calc;
-    fetch_addr_t final_2_ahead_address_seed;
-    OutputPayload out_seed;
-  };
-
-  struct BpuNlpCombOut {
-    OutputPayload out_regs;
-    fetch_addr_t final_2_ahead_address;
-    fetch_addr_t saved_2ahead_prediction_next;
-    wire1_t saved_2ahead_pred_valid_next;
-    wire1_t saved_mini_flush_req_next;
-    wire1_t saved_mini_flush_correct_next;
-    fetch_addr_t saved_mini_flush_target_next;
-    wire1_t nlp_entry_we;
-    nlp_index_t nlp_entry_idx;
-    wire1_t nlp_entry_valid_next;
-    nlp_tag_t nlp_entry_tag_next;
-    target_addr_t nlp_entry_target_next;
-    nlp_conf_t nlp_entry_conf_next;
-  };
-
+  
+  
   struct BpuHistCombIn {
     wire1_t refetch;
     pc_t in_update_base_pc[COMMIT_WIDTH];
@@ -598,13 +494,7 @@ private:
     tage_loop_meta_tag_t loop_tag;
   };
 
-  struct NLPEntry {
-    wire1_t valid;
-    nlp_tag_t tag;
-    target_addr_t target;
-    nlp_conf_t conf;
-  };
-
+  
   enum State {
     S_IDLE = 0,
     S_WORKING = 1,  // TAGE和BTB并行执行
@@ -676,28 +566,14 @@ private:
   BTB_TOP *btb_inst[BPU_BANK_NUM];
   TypePredictor *type_pred_inst;
 
-  NLPEntry nlp_table[NLP_TABLE_SIZE];
   
   // 2-Ahead Predictor Registers
   // 类似pc_reg的2-ahead reg,跟pc_reg保持同步
-  fetch_addr_t saved_2ahead_prediction;
   // 指示的是上一个的2-ahead预测器是否有效
   wire1_t saved_2ahead_pred_valid; // may not used
   // goes to PTAB, 需要跟PTAB相关信号同步
-  wire1_t saved_mini_flush_req;
   // goes to fetch_address_FIFO, 需要跟fetch_address_FIFO相关信号同步
-  wire1_t saved_mini_flush_correct;
   fetch_addr_t saved_mini_flush_target; // may not used
-  wire1_t nlp_s1_valid;
-  fetch_addr_t nlp_s1_req_pc;
-  fetch_addr_t nlp_s1_pred_next_pc;
-  wire1_t nlp_s1_hit;
-  nlp_conf_t nlp_s1_conf;
-  wire1_t nlp_s2_valid;
-  fetch_addr_t nlp_s2_req_pc;
-  fetch_addr_t nlp_s2_pred_2ahead_pc;
-  wire1_t nlp_s2_hit;
-  nlp_conf_t nlp_s2_conf;
 
   void ras_push(target_addr_t *stack, ras_count_t &count, target_addr_t value) const {
     if (count < RAS_DEPTH) {
@@ -765,11 +641,6 @@ public:
       }
     }
 
-    rd.saved_2ahead_prediction_snapshot = saved_2ahead_prediction;
-    rd.saved_2ahead_pred_valid_snapshot = saved_2ahead_pred_valid;
-    rd.saved_mini_flush_req_snapshot = saved_mini_flush_req;
-    rd.saved_mini_flush_correct_snapshot = saved_mini_flush_correct;
-    rd.saved_mini_flush_target_snapshot = saved_mini_flush_target;
     std::memcpy(rd.Arch_GHR_snapshot, Arch_GHR, sizeof(rd.Arch_GHR_snapshot));
     std::memcpy(rd.Spec_GHR_snapshot, Spec_GHR, sizeof(rd.Spec_GHR_snapshot));
     std::memcpy(rd.Arch_FH_snapshot, Arch_FH, sizeof(rd.Arch_FH_snapshot));
@@ -827,12 +698,6 @@ public:
     }
     out.set_submodule_input = out.going_to_do_pred || going_to_do_upd_any;
 
-    NlpIndexCombOut nlp_idx_out{};
-    nlp_index_comb(NlpIndexCombIn{out.pred_base_pc}, nlp_idx_out);
-    out.nlp_pred_base_re = true;
-    out.nlp_pred_base_idx = nlp_idx_out.index;
-    out.nlp_train_re = true;
-    out.nlp_train_idx = nlp_idx_out.index;
   }
 
   void bpu_data_seq_read(const BpuPreReadReqCombOut &in, ReadData &rd) const {
@@ -892,23 +757,6 @@ public:
       }
     }
 
-    std::memset(&rd.nlp_pred_base_entry_snapshot, 0, sizeof(rd.nlp_pred_base_entry_snapshot));
-    if (in.nlp_pred_base_re) {
-      const NLPEntry &entry = nlp_table[in.nlp_pred_base_idx];
-      rd.nlp_pred_base_entry_snapshot.entry_valid = entry.valid;
-      rd.nlp_pred_base_entry_snapshot.entry_tag = entry.tag;
-      rd.nlp_pred_base_entry_snapshot.entry_target = entry.target;
-      rd.nlp_pred_base_entry_snapshot.entry_conf = entry.conf;
-    }
-
-    std::memset(&rd.nlp_train_entry_snapshot, 0, sizeof(rd.nlp_train_entry_snapshot));
-    if (in.nlp_train_re) {
-      const NLPEntry &entry = nlp_table[in.nlp_train_idx];
-      rd.nlp_train_entry_snapshot.entry_valid = entry.valid;
-      rd.nlp_train_entry_snapshot.entry_tag = entry.tag;
-      rd.nlp_train_entry_snapshot.entry_target = entry.target;
-      rd.nlp_train_entry_snapshot.entry_conf = entry.conf;
-    }
   }
 
   void bpu_post_read_req_comb(const BpuPostReadReqCombIn &in,
@@ -1106,39 +954,17 @@ public:
       }
     }
 
-    out.final_2_ahead_address = out.out.fetch_address + (FETCH_WIDTH * 4);
     const uint32_t refetch_twoahead_target = in.refetch_address + (FETCH_WIDTH * 4);
     const uint32_t fallback_twoahead_target = out.out.fetch_address + (FETCH_WIDTH * 4);
-    out.out.two_ahead_valid =
-        in.refetch ? false : in.saved_2ahead_pred_valid_snapshot;
+    out.out.two_ahead_valid = false;
     out.out.two_ahead_target =
-        in.refetch ? refetch_twoahead_target
-                       : (out.out.two_ahead_valid ? in.saved_2ahead_prediction_snapshot
-                                                  : fallback_twoahead_target);
+        in.refetch ? refetch_twoahead_target : fallback_twoahead_target;
     out.out.mini_flush_req = false;
-    out.out.mini_flush_correct =
-        in.saved_mini_flush_correct_snapshot && !in.refetch;
-    out.out.mini_flush_target = in.saved_mini_flush_target_snapshot;
+    out.out.mini_flush_correct = false;
+    out.out.mini_flush_target = 0;
   }
 
-  void bpu_nlp_comb(const BpuNlpCombIn &in, BpuNlpCombOut &out) const {
-    const ReadData &rd = in.rd;
-    const fetch_addr_t final_2_ahead_address_seed = in.final_2_ahead_address_seed;
-    std::memset(&out, 0, sizeof(out));
-    out.out_regs = in.out_seed;
-    out.final_2_ahead_address = final_2_ahead_address_seed;
-    out.saved_2ahead_prediction_next = rd.saved_2ahead_prediction_snapshot;
-    out.saved_2ahead_pred_valid_next = rd.saved_2ahead_pred_valid_snapshot;
-    out.saved_mini_flush_req_next = rd.saved_mini_flush_req_snapshot;
-    out.saved_mini_flush_correct_next = rd.saved_mini_flush_correct_snapshot;
-    out.saved_mini_flush_target_next = rd.saved_mini_flush_target_snapshot;
-
-
-    out.out_regs.two_ahead_valid = false;
-    out.out_regs.mini_flush_req = false;
-    out.out_regs.mini_flush_correct = false;
-  }
-
+  
   void bpu_hist_comb(const BpuHistCombIn &in, BpuHistCombOut &out) const {
     const TypePredictor::OutputPayload &type_out = in.type_out;
     const wire1_t (&final_pred_dir)[FETCH_WIDTH] = in.final_pred_dir;
@@ -1331,16 +1157,6 @@ public:
   }
 
   void bpu_submodule_seq_read(const BpuPostReadReqCombOut &in, ReadData &rd) const {
-    rd.nlp_s1_req_pc_snapshot = in.nlp_s1_req_pc;
-    std::memset(&rd.nlp_s1_entry_snapshot, 0, sizeof(rd.nlp_s1_entry_snapshot));
-    if (in.nlp_s1_re) {
-      const NLPEntry &entry = nlp_table[in.nlp_s1_idx];
-      rd.nlp_s1_entry_snapshot.entry_valid = entry.valid;
-      rd.nlp_s1_entry_snapshot.entry_tag = entry.tag;
-      rd.nlp_s1_entry_snapshot.entry_target = entry.target;
-      rd.nlp_s1_entry_snapshot.entry_conf = entry.conf;
-    }
-
     for (int i = 0; i < BPU_BANK_NUM; i++) {
       tage_inst[i]->tage_seq_read(in.tage_in[i], rd.tage_rd[i]);
       btb_inst[i]->btb_seq_read(in.btb_in[i], rd.btb_rd[i]);
@@ -1360,27 +1176,6 @@ public:
     req.pc_can_send_to_icache_next = rd.pc_can_send_to_icache_snapshot;
     req.do_pred_latch_next = false;
     req.pred_base_pc_fired_next = rd.pred_base_pc;
-    req.saved_2ahead_prediction_next = rd.saved_2ahead_prediction_snapshot;
-    req.saved_2ahead_pred_valid_next = rd.saved_2ahead_pred_valid_snapshot;
-    req.saved_mini_flush_req_next = rd.saved_mini_flush_req_snapshot;
-    req.saved_mini_flush_correct_next = rd.saved_mini_flush_correct_snapshot;
-    req.saved_mini_flush_target_next = rd.saved_mini_flush_target_snapshot;
-    req.nlp_s1_valid_next = false;
-    req.nlp_s1_req_pc_next = 0;
-    req.nlp_s1_pred_next_pc_next = 0;
-    req.nlp_s1_hit_next = false;
-    req.nlp_s1_conf_next = 0;
-    req.nlp_s2_valid_next = false;
-    req.nlp_s2_req_pc_next = 0;
-    req.nlp_s2_pred_2ahead_pc_next = 0;
-    req.nlp_s2_hit_next = false;
-    req.nlp_s2_conf_next = 0;
-    req.nlp_entry_we = false;
-    req.nlp_entry_idx = 0;
-    req.nlp_entry_valid_next = false;
-    req.nlp_entry_tag_next = 0;
-    req.nlp_entry_target_next = 0;
-    req.nlp_entry_conf_next = 0;
     std::memcpy(req.Spec_GHR_next, rd.Spec_GHR_snapshot, sizeof(req.Spec_GHR_next));
     std::memcpy(req.Arch_GHR_next, rd.Arch_GHR_snapshot, sizeof(req.Arch_GHR_next));
     std::memcpy(req.Spec_FH_next, rd.Spec_FH_snapshot, sizeof(req.Spec_FH_next));
@@ -1477,10 +1272,6 @@ public:
                 sizeof(predict_main_in.do_pred_for_this_pc));
     predict_main_in.ras_has_entry_snapshot = rd.ras_has_entry_snapshot;
     predict_main_in.ras_top_snapshot = rd.ras_top_snapshot;
-    predict_main_in.saved_2ahead_prediction_snapshot = rd.saved_2ahead_prediction_snapshot;
-    predict_main_in.saved_2ahead_pred_valid_snapshot = rd.saved_2ahead_pred_valid_snapshot;
-    predict_main_in.saved_mini_flush_correct_snapshot = rd.saved_mini_flush_correct_snapshot;
-    predict_main_in.saved_mini_flush_target_snapshot = rd.saved_mini_flush_target_snapshot;
     predict_main_in.type_out = type_out;
     for (int i = 0; i < BPU_BANK_NUM; ++i) {
       predict_main_in.tage_out[i] = tage_out[i];
@@ -1490,7 +1281,6 @@ public:
     bpu_predict_main_comb(predict_main_in, predict_main_out);
     out = predict_main_out.out;
     req.next_fetch_addr_calc = predict_main_out.next_fetch_addr_calc;
-    req.final_2_ahead_address = predict_main_out.final_2_ahead_address;
     for (int i = 0; i < FETCH_WIDTH; ++i) {
       req.final_pred_dir[i] = predict_main_out.final_pred_dir[i];
       req.tage_calc_pred_dir_latch_next[i] =
@@ -1512,24 +1302,6 @@ public:
             predict_main_out.tage_pred_calc_idxs_latch_next[i][k];
       }
     }
-
-    const BpuNlpCombIn nlp_in{inp, rd, req.next_fetch_addr_calc,
-                              req.final_2_ahead_address, out};
-    BpuNlpCombOut nlp_out{};
-    bpu_nlp_comb(nlp_in, nlp_out);
-    out = nlp_out.out_regs;
-    req.final_2_ahead_address = nlp_out.final_2_ahead_address;
-    req.saved_2ahead_prediction_next = nlp_out.saved_2ahead_prediction_next;
-    req.saved_2ahead_pred_valid_next = nlp_out.saved_2ahead_pred_valid_next;
-    req.saved_mini_flush_req_next = nlp_out.saved_mini_flush_req_next;
-    req.saved_mini_flush_correct_next = nlp_out.saved_mini_flush_correct_next;
-    req.saved_mini_flush_target_next = nlp_out.saved_mini_flush_target_next;
-    req.nlp_entry_we = nlp_out.nlp_entry_we;
-    req.nlp_entry_idx = nlp_out.nlp_entry_idx;
-    req.nlp_entry_valid_next = nlp_out.nlp_entry_valid_next;
-    req.nlp_entry_tag_next = nlp_out.nlp_entry_tag_next;
-    req.nlp_entry_target_next = nlp_out.nlp_entry_target_next;
-    req.nlp_entry_conf_next = nlp_out.nlp_entry_conf_next;
 
     BpuHistCombIn hist_in{};
     hist_in.refetch = inp.refetch;
@@ -1634,11 +1406,6 @@ public:
     if (inp.refetch) {
       req.pc_reg_next = inp.refetch_address;
       req.pc_can_send_to_icache_next = true;
-      req.saved_2ahead_prediction_next = inp.refetch_address + (FETCH_WIDTH * 4);
-      req.saved_2ahead_pred_valid_next = false;
-      req.saved_mini_flush_req_next = false;
-      req.saved_mini_flush_correct_next = false;
-      req.saved_mini_flush_target_next = 0;
       std::memcpy(req.Spec_GHR_next, req.Arch_GHR_next, sizeof(req.Spec_GHR_next));
       std::memcpy(req.Spec_FH_next, req.Arch_FH_next, sizeof(req.Spec_FH_next));
       req.Spec_PATH_next = req.Arch_PATH_next;
@@ -1692,21 +1459,6 @@ public:
     pred_base_pc_fired = req.pred_base_pc_fired_next;
     pc_reg = req.pc_reg_next;
     pc_can_send_to_icache = req.pc_can_send_to_icache_next;
-    saved_2ahead_prediction = req.saved_2ahead_prediction_next;
-    saved_2ahead_pred_valid = req.saved_2ahead_pred_valid_next;
-    saved_mini_flush_req = req.saved_mini_flush_req_next;
-    saved_mini_flush_correct = req.saved_mini_flush_correct_next;
-    saved_mini_flush_target = req.saved_mini_flush_target_next;
-    nlp_s1_valid = req.nlp_s1_valid_next;
-    nlp_s1_req_pc = req.nlp_s1_req_pc_next;
-    nlp_s1_pred_next_pc = req.nlp_s1_pred_next_pc_next;
-    nlp_s1_hit = req.nlp_s1_hit_next;
-    nlp_s1_conf = req.nlp_s1_conf_next;
-    nlp_s2_valid = req.nlp_s2_valid_next;
-    nlp_s2_req_pc = req.nlp_s2_req_pc_next;
-    nlp_s2_pred_2ahead_pc = req.nlp_s2_pred_2ahead_pc_next;
-    nlp_s2_hit = req.nlp_s2_hit_next;
-    nlp_s2_conf = req.nlp_s2_conf_next;
 
     std::memcpy(Spec_GHR, req.Spec_GHR_next, sizeof(Spec_GHR));
     std::memcpy(Arch_GHR, req.Arch_GHR_next, sizeof(Arch_GHR));
@@ -1756,14 +1508,6 @@ public:
       q_wr_ptr[i] = req.q_wr_ptr_next[i];
       q_rd_ptr[i] = req.q_rd_ptr_next[i];
       q_count[i] = req.q_count_next[i];
-    }
-
-    if (req.nlp_entry_we) {
-      NLPEntry &entry = nlp_table[req.nlp_entry_idx];
-      entry.valid = req.nlp_entry_valid_next;
-      entry.tag = req.nlp_entry_tag_next;
-      entry.target = req.nlp_entry_target_next;
-      entry.conf = req.nlp_entry_conf_next;
     }
 
     type_pred_inst->type_pred_seq_write(req.type_in, req.type_req, false);
@@ -1830,31 +1574,8 @@ public:
       btb_done[i] = false;
     }
 
-    // 初始化2-Ahead预测器
-    for (int i = 0; i < NLP_TABLE_SIZE; i++) {
-      nlp_table[i].valid = false;
-      nlp_table[i].tag = 0;
-      nlp_table[i].target = 0;
-      nlp_table[i].conf = 0;
-    }
-    // 初始化2-ahead预测器为下一个cache line的地址
 
-    saved_2ahead_prediction = pc_reg + (FETCH_WIDTH * 4);
 
-    saved_2ahead_pred_valid = false;
-    saved_mini_flush_req = false;
-    saved_mini_flush_correct = false;
-    saved_mini_flush_target = 0;
-    nlp_s1_valid = false;
-    nlp_s1_req_pc = 0;
-    nlp_s1_pred_next_pc = 0;
-    nlp_s1_hit = false;
-    nlp_s1_conf = 0;
-    nlp_s2_valid = false;
-    nlp_s2_req_pc = 0;
-    nlp_s2_pred_2ahead_pc = 0;
-    nlp_s2_hit = false;
-    nlp_s2_conf = 0;
   }
 
   void bpu_comb_calc(const InputPayload &inp, ReadData &rd,
@@ -1900,7 +1621,6 @@ public:
     std::memcpy(post_read_in.going_to_do_upd, rd.going_to_do_upd,
                 sizeof(post_read_in.going_to_do_upd));
     std::memcpy(post_read_in.q_data, rd.q_data, sizeof(post_read_in.q_data));
-    post_read_in.nlp_pred_base_entry_snapshot = rd.nlp_pred_base_entry_snapshot;
     bpu_post_read_req_comb(post_read_in, post_read_req);
     bpu_submodule_seq_read(post_read_req, rd);
     bpu_core_comb_calc(inp, rd, post_read_req, out, req);
