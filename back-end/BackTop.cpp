@@ -639,10 +639,6 @@ void BackTop::restore_from_ref() {
   number_PC = state.pc;
 
   csr->privilege = csr->privilege_1 = privilege;
-  for (int i = 0; i < ARF_NUM; i++) {
-    prf->reg_file[i] = state.gpr[i];
-    prf->reg_file_1[i] = state.gpr[i];
-  }
 
   for (int i = 0; i < CSR_NUM; i++) {
     csr->CSR_RegFile[i] = state.csr[i];
@@ -764,10 +760,6 @@ void BackTop::restore_checkpoint(const std::string &filename) {
       static_cast<uint8_t>(ckpt_header.privilege_mode & 0x3u);
   csr->privilege = csr->privilege_1 = restored_privilege;
 
-  for (int i = 0; i < ARF_NUM; i++) {
-    prf->reg_file[i] = state.gpr[i];
-    prf->reg_file_1[i] = state.gpr[i];
-  }
 
   for (int i = 0; i < CSR_NUM; i++) {
     csr->CSR_RegFile[i] = state.csr[i];

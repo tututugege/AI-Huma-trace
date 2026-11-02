@@ -175,6 +175,7 @@ public:
   void restore_from_ref();
 
   uint32_t get_reg(uint8_t arch_idx) {
-    return prf->reg_file[rename->arch_RAT_1[arch_idx]];
+    (void)arch_idx;
+    return 0;  // no register file: architectural values live in the trace bridge
   }
 };

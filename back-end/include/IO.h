@@ -802,8 +802,6 @@ struct PrfExeIO {
     wire<PRF_IDX_WIDTH> dest_preg;
     wire<PRF_IDX_WIDTH> src1_preg;
     wire<PRF_IDX_WIDTH> src2_preg;
-    wire<32> src1_rdata;
-    wire<32> src2_rdata;
 
     wire<FTQ_IDX_WIDTH> ftq_idx;
     wire<FTQ_OFFSET_WIDTH> ftq_offset;

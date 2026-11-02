@@ -11,37 +11,6 @@ static inline bool is_killed(const ExePrfIO::ExePrfWbUop &uop,
   return (uop.br_mask & db->br_mask) != 0;
 }
 
-inline uint32_t read_operand_with_bypass(
-    uint32_t preg, bool src_en, const reg<32> *reg_file,
-    const ExePrfIO::ExePrfEntry *inst_r, const ExePrfIO *exe2prf) {
-  // P0 is constant zero, including when a producer broadcasts tag zero.
-  if (!src_en || preg == 0) {
-    return 0;
-  }
-
-  uint32_t data = reg_file[preg];
-
-  // 写回级旁路：优先于寄存器堆读值。
-  for (int j = 0; j < ISSUE_WIDTH; j++) {
-    if (inst_r[j].valid && inst_r[j].uop.dest_en && inst_r[j].uop.dest_preg == preg) {
-      data = inst_r[j].uop.result;
-    }
-  }
-
-  // Exu 广播旁路：同拍 FU 结果可直接使用。
-  for (int k = 0; k < TOTAL_FU_COUNT; k++) {
-    if (exe2prf->bypass[k].valid) {
-      const auto &bypass_uop = exe2prf->bypass[k].uop;
-      if (bypass_uop.dest_en && bypass_uop.dest_preg == preg) {
-        data = bypass_uop.result;
-        break;
-      }
-    }
-  }
-
-  return data;
-}
-
 static inline int get_prf_ftq_slot(int p_idx, const IssPrfIO::IssPrfUop &uop,
                                    uint64_t req_bit) {
   if (p_idx >= IQ_ALU_PORT_BASE && p_idx < IQ_ALU_PORT_BASE + ALU_NUM &&
@@ -61,10 +30,6 @@ static inline bool is_load_wb(const ExePrfIO::ExePrfWbUop &uop) {
 } // namespace
 
 void Prf::init() {
-  for (int i = 0; i < PRF_NUM; i++) {
-    reg_file[i] = 0;
-    reg_file_1[i] = 0;
-  }
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     inst_r[i] = {};
     inst_r_1[i] = {};
@@ -76,9 +41,6 @@ void Prf::init() {
 // 输出更新：reg_file_1[]、inst_r_1[]。
 // 约束：仅状态镜像，不进行读/写/旁路决策。
 void Prf::comb_begin() {
-  for (int i = 0; i < PRF_NUM; i++) {
-    reg_file_1[i] = reg_file[i];
-  }
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     inst_r_1[i] = inst_r[i];
   }
@@ -131,13 +93,6 @@ void Prf::comb_read() {
       entry.uop.ftq_pred_taken = false;
       entry.uop.ftq_next_pc = 0;
     }
-
-    entry.uop.src1_rdata =
-        read_operand_with_bypass(entry.uop.src1_preg, entry.uop.src1_en,
-                                 reg_file, inst_r, in.exe2prf);
-    entry.uop.src2_rdata =
-        read_operand_with_bypass(entry.uop.src2_preg, entry.uop.src2_en,
-                                 reg_file, inst_r, in.exe2prf);
   }
 }
 
@@ -181,13 +136,8 @@ void Prf::comb_complete() {
 // 输出更新：reg_file_1[]。
 // 约束：x0 不可写，reg_file_1[0] 始终保持 0。
 void Prf::comb_write() {
-  // 将写回级结果写入寄存器堆，x0 始终保持为 0。
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
-    if (inst_r[i].valid && inst_r[i].uop.dest_en && inst_r[i].uop.dest_preg != 0) {
-      reg_file_1[inst_r[i].uop.dest_preg] = inst_r[i].uop.result;
-    }
-  }
-  reg_file_1[0] = 0;
+  // No register file (P3): values are facts of the trace. The write-back stage inst_r below still
+  // carries the tags that drive load wake-up and bypass timing.
 }
 
 // 功能：推进 PRF 写回流水寄存器，并处理 flush/mispred/clear_mask。
@@ -215,12 +165,6 @@ void Prf::comb_pipeline() {
 }
 
 void Prf::seq() {
-  for (int i = 0; i < PRF_NUM; i++) {
-    reg_file[i] = reg_file_1[i];
-  }
-  reg_file[0] = 0;
-  reg_file_1[0] = 0;
-
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     inst_r[i] = inst_r_1[i];
   }

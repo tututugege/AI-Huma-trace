@@ -80,11 +80,11 @@ struct AxiLlcTableRuntime {
     DynamicTableWriteReq write_req;
     write_req.enable = req.enable && req.write;
     write_req.address = req.index;
+    if (!write_req.enable) {
+      return write_req;  // write_chunks() ignores a disabled request: no payload needed
+    }
     write_req.payload.reset(row_bytes);
     write_req.chunk_enable.assign(row_bytes, 0);
-    if (!write_req.enable) {
-      return write_req;
-    }
     const size_t base =
         unit_bytes == 0 ? 0 : static_cast<size_t>(req.way) * unit_bytes;
     const size_t copy_bytes =

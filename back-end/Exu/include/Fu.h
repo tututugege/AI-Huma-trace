@@ -41,9 +41,9 @@ protected:
   void impl_compute(ExuInst &inst) override {
     // 1. 计算虚拟地址 (Common logic)
     // Load 和 Store (STA) 都需要计算地址： Base + Offset
-    uint64_t vaddr = inst.src1_rdata + inst.imm;
-    if (tbhook::inject) {
-      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) { tbhook::note_override(2, (uint32_t)vaddr, f->vaddr, inst.rob_idx); vaddr = f->vaddr; }
+    uint64_t vaddr = 0;  // the address is a fact of the trace (rs1 + imm is not computed)
+    if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
+      vaddr = f->vaddr;
     }
     inst.result =
         vaddr; // 记录结果，如果是 Load，这个值是地址；如果是 STA，也是地址
@@ -59,61 +59,12 @@ public:
 
 protected:
   void impl_compute(ExuInst &inst) override {
+    // The store data is a fact of the trace (rs2); the register value datapath no longer exists.
     uint32_t result_data = 0;
-
-    // === 1. 获取操作数 & 计算 Store Data ===
-    uint32_t op1 = inst.src1_rdata;
-    uint32_t op2 = inst.src2_rdata;
-    bool is_atomic = inst.is_atomic;
-
-    if (!is_atomic) {
-      // 普通 Store: src2_rdata 是要存的数据 (对应 RS2)
-      // 注意：根据你的架构定义，这里可能需要确认数据在 src1 还是 src2
-      // 通常 Store: Mem[RS1+Imm] = RS2. 所以数据在 src2_rdata.
-      // 但你的旧代码用了 src1_rdata 作为 op1 赋值给 result_data，请根据你的
-      // decode 逻辑确认。 假设 decode 将 rs2 的值放到了 src2_rdata：
-      result_data = inst.src2_rdata;
-    } else {
-      // AMO 运算逻辑
-      switch (inst.func7 >> 2) {
-      case AmoOp::SWAP:
-        result_data = op2;
-        break;
-      case AmoOp::ADD:
-        result_data = op1 + op2;
-        break;
-      case AmoOp::XOR:
-        result_data = op1 ^ op2;
-        break;
-      case AmoOp::AND:
-        result_data = op1 & op2;
-        break;
-      case AmoOp::OR:
-        result_data = op1 | op2;
-        break;
-      case AmoOp::MIN:
-        result_data = ((int32_t)op1 < (int32_t)op2) ? op1 : op2;
-        break;
-      case AmoOp::MAX:
-        result_data = ((int32_t)op1 > (int32_t)op2) ? op1 : op2;
-        break;
-      case AmoOp::MINU:
-        result_data = (op1 < op2) ? op1 : op2;
-        break;
-      case AmoOp::MAXU:
-        result_data = (op1 > op2) ? op1 : op2;
-        break;
-      default:
-        result_data = op2;
-        break;
-      }
+    if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
+      result_data = f->rs2_value;
     }
-
-    if (tbhook::inject && !is_atomic) {
-      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) { tbhook::note_override(3, result_data, f->rs2_value, inst.rob_idx); result_data = f->rs2_value; }
-    }
-    // 更新 uop 中的 result，以便传输给 LSU
-    inst.result = result_data; // 这里 result 存的是 Data
+    inst.result = result_data;  // result carries the store data to the LSU
   }
 };
 
@@ -147,51 +98,19 @@ public:
 
 protected:
   void impl_compute(ExuInst &inst) override {
-    uint32_t operand1 = inst.src1_rdata;
-    uint32_t operand2 = inst.src2_rdata;
+    // Direction and target are facts of the trace (the compare on register values is gone).
     uint32_t inst_pc = inst.pc;
     uint32_t pc_br = inst_pc + inst.imm;
-    bool br_taken = true;
-
-    if (inst.op == UOP_BR) {
-      switch (inst.func3) {
-      case BEQ:
-        br_taken = (operand1 == operand2);
-        break;
-      case BNE:
-        br_taken = (operand1 != operand2);
-        break;
-      case BGE:
-        br_taken = ((signed)operand1 >= (signed)operand2);
-        break;
-      case BLT:
-        br_taken = ((signed)operand1 < (signed)operand2);
-        break;
-      case BGEU:
-        br_taken = ((unsigned)operand1 >= (unsigned)operand2);
-        break;
-      case BLTU:
-        br_taken = ((unsigned)operand1 < (unsigned)operand2);
-        break;
+    bool br_taken = false;
+    if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
+      if (inst.op == UOP_BR) {
+        br_taken = f->br_taken;
+      } else if (inst.op == UOP_JUMP) {
+        br_taken = true;
+        pc_br = f->next_pc;  // jal/jalr target
       }
-    }
-
-    switch (inst.op) {
-    case UOP_BR:
-      break;
-    case UOP_JUMP:
-      br_taken = true;
-      if (inst.src1_en)
-        pc_br = (inst.src1_rdata + inst.imm) & (~0x1);
-      break;
-    default:
-      br_taken = false;
-    }
-    if (tbhook::inject && (inst.op == UOP_BR || inst.op == UOP_JUMP)) {
-      if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
-        if (inst.op == UOP_BR) { tbhook::note_override(0, br_taken, f->br_taken, inst.rob_idx); br_taken = f->br_taken; }
-        else { tbhook::note_override(1, pc_br, f->next_pc, inst.rob_idx); pc_br = f->next_pc; }  // jal/jalr target
-      }
+    } else if (inst.op == UOP_JUMP) {
+      br_taken = true;  // killed instruction: no fact, outcome unobservable
     }
 
 #if defined(CONFIG_ORACLE_STEADY_FETCH_WIDTH) && !defined(CONFIG_BPU)

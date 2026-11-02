@@ -804,8 +804,7 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
 void SimCpu::difftest_capture_registers() {
   BackTop *back = &this->back;
   for (int i = 0; i < ARF_NUM; i++) {
-    // Observe same-cycle PRF writeback through the combinational state.
-    dut_cpu.gpr[i] = back->prf->reg_file_1[back->rename->arch_RAT_1[i]];
+    dut_cpu.gpr[i] = 0;  // no register file (P3)
   }
   for (int i = 0; i < CSR_NUM; i++) {
     dut_cpu.csr[i] = back->csr->CSR_RegFile_1[i];

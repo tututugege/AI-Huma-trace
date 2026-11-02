@@ -135,7 +135,6 @@ struct MicroOp {
 
   wire<AREG_IDX_WIDTH> dest_areg, src1_areg;
   wire<PRF_IDX_WIDTH> dest_preg, src1_preg, src2_preg; // log2(PRF_NUM)
-  wire<32> src1_rdata, src2_rdata;
   wire<32> result;
 
   wire<FTQ_IDX_WIDTH> ftq_idx;
