@@ -1,19 +1,14 @@
 #pragma once
 
 #include "IO.h"
+#include "MemUtils.h"
 #include "RealLsuBsdConfig.h"
 #include "TlbMmu.h"
 #include "config.h"
-#include <cstdio>
-#include "MemUtils.h"
 #include <cstdint>
-#include <memory>
 
-constexpr int LDQ_STQ_IDX_WIDTH  = clog2(LDQ_SIZE+STQ_SIZE);
+constexpr int LDQ_STQ_IDX_WIDTH = clog2(LDQ_SIZE + STQ_SIZE);
 constexpr int MAX_IDX_WIDTH = clog2(std::max(LDQ_SIZE, STQ_SIZE));
-class Csr;
-class PtwMemPort;
-class PtwWalkPort;
 class SimContext;
 
 typedef struct {
@@ -36,86 +31,55 @@ typedef struct {
   LsuDcacheIO *lsu2dcache;
   LsuMMUIO *lsu2mmu;
 } LsuOut;
-enum class LoadState : uint8_t {
-  Empty,
-  Allocated,
-  WaitAddr,
-  WaitTlb,
-  WaitTlbRetry,
-  WaitSTLF,
-  CheckStlf,
-  CheckStlfRetry,
-  WaitOlderStore,
-  ReadyToIssue,
-  WaitDcacheResp,
-  WaitMmioResp,
-  ReadyToWb,
-  Replaying,
-  PageFault,
-  WaitFinish,
-  WaitDcache,
-  Done
-};
 
-struct LoadTag {
-  reg<LDQ_IDX_WIDTH> idx = 0;
-  reg<1> flag = false;
+// Numeric values are kept stable (lockstep digest compares them).
+enum class LoadState : uint8_t {
+  Empty = 0,
+  Allocated = 1,
+  WaitTlb = 3,
+  WaitTlbRetry = 4,
+  WaitSTLF = 5,
+  CheckStlf = 6,
+  CheckStlfRetry = 7,
+  ReadyToIssue = 9,
+  WaitDcacheResp = 10,
+  WaitMmioResp = 11,
+  ReadyToWb = 12,
+  PageFault = 14,
+  WaitFinish = 15,
+  WaitDcache = 16,
 };
 
 struct LdqEntry {
-
   LoadState load_state;
-  
   wire<1> v_addr_valid;
   wire<32> v_addr;
-
   wire<1> p_addr_valid;
   wire<32> p_addr;
-
   ReplayType replay_type;
-
   wire<3> func3;
-  
   wire<32> result;
   wire<PRF_IDX_WIDTH> dest_preg;
-  wire<4> byte_mask;
-
   wire<ROB_IDX_WIDTH> rob_idx;
   wire<1> rob_flag;
   wire<BR_MASK_WIDTH> br_mask;
-  
   wire<1> is_mmio;
-  wire<32> diag_val; // 用于记录发生异常时的相关信息（如访问的虚拟地址），供后续异常处理使用
+  wire<32> diag_val;  // faulting virtual address for the exception handler
   wire<1> page_fault;
   wire<1> is_lrsc;
-
   StoreTag stq_snapshot;
-
-
   wire<1> cache_miss;
 };
 
 struct UncachedUnit {
   wire<1> valid;
-
   wire<1> is_load;
-
   wire<32> addr;
   wire<32> wdata;
   wire<3> func3;
-
   wire<MAX_IDX_WIDTH> idx;
 };
-struct FenceUnit {
-  wire<1> valid;
 
-  wire<1> fence;
-  wire<1> fence_i;
-  wire<1> sfence_vma;
-
-  wire<ROB_IDX_WIDTH> rob_idx;
-  wire<1> rob_flag;
-};
 struct LrScUnit {
   wire<1> reserve_valid;
   wire<32> reserve_addr;
@@ -123,93 +87,81 @@ struct LrScUnit {
   wire<1> reserve_rob_flag;
   wire<BR_MASK_WIDTH> reserve_br_mask;
 };
-struct WaitMmuSTQEntry{
+
+// Index queues hold entries in arrival order; a consumed entry in the middle only turns invalid and is
+// popped once it reaches the head, so holes still occupy window slots (this is timing-relevant).
+struct QIdx {
   wire<1> valid;
-  wire<STQ_IDX_WIDTH> stq_idx;
+  wire<MAX_IDX_WIDTH> idx;
 };
-struct WaitMmuLDQEntry{
-  wire<1> valid;
-  wire<LDQ_IDX_WIDTH> ldq_idx;
-};
-struct WaitDcacheLDQEntry{
-  wire<1> valid;
-  wire<31-LDQ_IDX_WIDTH> req_gen;
-  wire<LDQ_IDX_WIDTH> ldq_idx;
+struct QWait : QIdx {
+  wire<31 - LDQ_IDX_WIDTH> req_gen;
   wire<LSU_REPLAY_WAIT_CYCLES_WIDTH> replay_wait_cycles;
 };
-struct MMUDoneEntry{
-  wire<1> valid;
-  wire<STQ_IDX_WIDTH> stq_idx;
+
+template <class E, int N>
+struct Ring {
+  E e[N];
+  wire<clog2(N)> head;
+  wire<clog2(N) + 1> count;
+  uint32_t at(uint32_t i) const { return (head + i) % N; }
+  E &push(uint32_t idx) {
+    E &s = e[at(count)];
+    s.valid = true;
+    s.idx = idx;
+    count++;
+    return s;
+  }
+  void pop() {
+    e[head].valid = false;
+    head = (head + 1) % N;
+    if (count > 0) count--;
+  }
+  // Pop invalid entries from the head, looking at most `window` slots deep.
+  void trim(uint32_t window) {
+    const uint32_t h = head;
+    for (uint32_t i = 0; i < window && !e[(h + i) % N].valid; i++) pop();
+  }
+  void clear() {
+    count = 0;
+    for (auto &x : e) x.valid = false;
+  }
+  uint32_t window(uint32_t w) const { return count < w ? count : w; }
 };
-struct FinishEntry{
-  wire<1> valid;
-  wire<LDQ_IDX_WIDTH> ldq_idx;
-};
-struct STLFEntry{
-  wire<1> valid;
-  wire<LDQ_IDX_WIDTH> ldq_idx;
-};
-struct LsuState{
+
+struct LsuState {
   LdqEntry ldq[LDQ_SIZE];
 
   StqEntry stq[STQ_SIZE];
   wire<STQ_IDX_WIDTH> stq_head;
   wire<STQ_IDX_WIDTH> stq_commit;
   wire<1> stq_head_flag;
-  wire<STQ_IDX_WIDTH+1> stq_commit_count; // 已提交但尚未排空的store条目数量
-  wire<STQ_IDX_WIDTH+1> stq_count; // 包括分配但未提交的条目
+  wire<STQ_IDX_WIDTH + 1> stq_commit_count;  // committed, not yet drained
+  wire<STQ_IDX_WIDTH + 1> stq_count;         // including allocated-but-uncommitted
 
-  WaitMmuSTQEntry wait_mmu_stq[STQ_SIZE]; 
-  wire<STQ_IDX_WIDTH> wait_mmu_stq_head;
-  wire<STQ_IDX_WIDTH+1> wait_mmu_stq_count;
-
-  WaitMmuLDQEntry wait_mmu_ldq[LDQ_SIZE];
-  wire<LDQ_IDX_WIDTH> wait_mmu_ldq_head;
-  wire<LDQ_IDX_WIDTH+1> wait_mmu_ldq_count;
-
-  MMUDoneEntry mmu_done_stq[STQ_SIZE];
-  wire<STQ_IDX_WIDTH> mmu_done_stq_head;
-  wire<STQ_IDX_WIDTH+1> mmu_done_stq_count;
-
-  FinishEntry finish[LDQ_SIZE];
-  wire<LDQ_IDX_WIDTH> finish_head;
-  wire<LDQ_IDX_WIDTH+1> finish_count;
-
-  STLFEntry stlf_queue[LDQ_SIZE];
-  wire<LDQ_IDX_WIDTH> stlf_queue_head;
-  wire<LDQ_IDX_WIDTH+1> stlf_queue_count;
-
-
-  WaitDcacheLDQEntry wait_dcache_ldq[LDQ_SIZE];
-  wire<LDQ_IDX_WIDTH> wait_dcache_ldq_head;
-  wire<LDQ_IDX_WIDTH+1> wait_dcache_ldq_count;
+  Ring<QIdx, STQ_SIZE> wait_mmu_stq, mmu_done_stq;
+  Ring<QIdx, LDQ_SIZE> wait_mmu_ldq, finish, stlf_queue;
+  Ring<QWait, LDQ_SIZE> wait_dcache_ldq;
 
   UncachedUnit uncached_unit;
   LrScUnit lrsc_unit;
-
-  wire<31-LDQ_IDX_WIDTH> req_gen; // 用于区分不同轮次的重放，防止过期重放条目被误用
-
-  wire<1> stq_wait;
+  wire<31 - LDQ_IDX_WIDTH> req_gen;  // tags DCache requests so stale replays are dropped
 };
 
-enum class STLFResult : wire<2> {
-  Disjoint = 0,
-  Overlap = 1,
-  Retry = 2,
-};
+enum class STLFResult : wire<2> { Disjoint = 0, Overlap = 1, Retry = 2 };
+
 class RealLsu {
 public:
-  RealLsu():cur{}, nxt{}, in{}, out{}, ctx(nullptr) {};
-  RealLsu(SimContext *ctx);
+  RealLsu() : cur{}, nxt{}, in{}, out{}, ctx(nullptr) {}
+  explicit RealLsu(SimContext *ctx) : cur{}, nxt{}, in{}, out{}, ctx(ctx) {}
 
   LsuState cur;
   LsuState nxt;
-
   LsuIn in{};
   LsuOut out{};
   SimContext *ctx = nullptr;
 
-  void init();
+  void init() { cur = {}; nxt = {}; }
   void comb_cal();
   void comb_lsu2dis();
   void comb_lsu2rob();
@@ -224,39 +176,19 @@ public:
   void comb_dcache2lsu_ldq();
   void comb_lsu2dcache_stq();
   void comb_dcache2lsu_stq();
-  void comb_lsureplay();
   void comb_lsu2exe();
   void comb_stq_commit();
   void comb_flush();
   void comb_stlf();
   void comb_check();
-  void seq();
+  void seq() { cur = nxt; }
+
+  StqEntry get_stq_entry(int idx, bool flag);
+
+private:
+  uint32_t ldq_allocated_ = 0, ldq_empty_ = 0, stq_allocated_ = 0;  // start-of-cycle counts from comb_cal
 
   void handle_store_addr(const MicroOp &inst);
   void handle_store_data(const MicroOp &inst);
   void handle_load_req(const MicroOp &inst);
-
-  bool alloc_stq_entry(mask_t br_mask,uint32_t rob_idx, uint32_t rob_flag,uint32_t func3, bool slot_flag);
-  bool alloc_ldq_entry( mask_t br_mask,uint32_t rob_idx, uint32_t rob_flag,uint32_t ldq_idx);
-
-  StqEntry get_stq_entry(int idx,bool flag);
-
-  wire<STQ_IDX_WIDTH> enqueue_wait_mmu_stq(wire<STQ_IDX_WIDTH> stq_idx);
-  wire<LDQ_IDX_WIDTH> enqueue_wait_mmu_ldq(wire<LDQ_IDX_WIDTH> ldq_idx);
-  wire<STQ_IDX_WIDTH> enqueue_mmu_done_stq(wire<STQ_IDX_WIDTH> stq_idx);
-  
-  void enqueue_wait_dcache_ldq(wire<LDQ_IDX_WIDTH> ldq_idx);
-  void enqueue_finish(wire<LDQ_IDX_WIDTH> ldq_idx);
-  void enqueue_stlf(wire<LDQ_IDX_WIDTH> ldq_idx);
-
-  void dequeue_wait_mmu_stq();
-  void dequeue_wait_mmu_ldq();
-  void dequeue_mmu_done_stq();
-  void dequeue_wait_dcache_ldq();
-  void dequeue_finish();
-  void dequeue_stlf();
-
-  void activate_wait_mmu_stq(wire<STQ_IDX_WIDTH> stq_idx);
-  void activate_wait_mmu_ldq(wire<LDQ_IDX_WIDTH> ldq_idx);
-  void activate_mmu_done_stq(wire<STQ_IDX_WIDTH> stq_idx);
 };

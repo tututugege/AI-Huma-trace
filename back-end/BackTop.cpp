@@ -4,6 +4,11 @@
 #include "IO.h"
 #include "PhysMemory.h"
 #include "RealLsu.h"
+#ifdef LSU_SHADOW
+#include "LsuShadow.h"
+#else
+#define LSU(f) lsu->f()
+#endif
 #include "config.h"
 #include "diff.h"
 #include "mmio_address_map.h"
@@ -290,22 +295,22 @@ void BackTop::comb() {
   prf->comb_awake();
   prf->comb_write();
   isu->comb_ready();
-  lsu->comb_cal();
-  lsu->comb_lsu2dis();
-  lsu->comb_lsu2rob();
+  LSU(comb_cal);
+  LSU(comb_lsu2dis);
+  LSU(comb_lsu2rob);
 
   rob->comb_ready();
   rob->comb_ftq_pc_req();
   pre->comb_ftq_lookup_rob();
   rob->comb_commit();
   pre->comb_commit_info();
-  lsu->comb_stq_commit();
+  LSU(comb_stq_commit);
 
   dis->comb_alloc();
-  lsu->comb_mmio_in();
-  lsu->comb_dcache2lsu_ldq();
-  lsu->comb_dcache2lsu_stq();
-  lsu->comb_lsu2exe();
+  LSU(comb_mmio_in);
+  LSU(comb_dcache2lsu_ldq);
+  LSU(comb_dcache2lsu_stq);
+  LSU(comb_lsu2exe);
   exu->comb_to_csr();
   csr->comb_csr_read();
 
@@ -314,12 +319,12 @@ void BackTop::comb() {
 
   exu->comb_ready();
   isu->comb_issue();
-  lsu->comb_exe2lsu();
-  lsu->comb_tlb_out();
+  LSU(comb_exe2lsu);
+  LSU(comb_tlb_out);
   comb_lsu_mmu();
-  lsu->comb_tlb_in_ldq();
-  lsu->comb_tlb_in_stq();
-  lsu->comb_stlf();
+  LSU(comb_tlb_in_ldq);
+  LSU(comb_tlb_in_stq);
+  LSU(comb_stlf);
 
   prf->comb_req_ftq();
   pre->comb_ftq_lookup_prf();
@@ -386,15 +391,15 @@ void BackTop::comb() {
   }
 
   dis->comb_fire();
-  lsu->comb_dis2lsu();
+  LSU(comb_dis2lsu);
   rename->comb_fire();
   idu->comb_fire();
   // Kill flushed LSU work before driving new DCache/MMIO requests.
-  lsu->comb_flush();
-  lsu->comb_lsu2dcache_ldq();
-  lsu->comb_lsu2dcache_stq();
-  lsu->comb_mmio_out();
-  lsu->comb_check();
+  LSU(comb_flush);
+  LSU(comb_lsu2dcache_ldq);
+  LSU(comb_lsu2dcache_stq);
+  LSU(comb_mmio_out);
+  LSU(comb_check);
   isu->comb_enq();
   // Rob recovery was split out of comb_fire(); keep the original priority:
   // branch rollback happens before enqueue, and global flush overrides both.
@@ -426,7 +431,7 @@ void BackTop::seq() {
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->seq();
   }
-  lsu->seq();
+  LSU(seq);
 }
 
 // --- 辅助函数：简化 zlib 读写 POD 类型 ---

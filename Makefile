@@ -81,6 +81,12 @@ CXXSRC := $(shell find ./back-end -name "*.cpp") \
           ./main.cpp \
           ./rv_simu_mmu_v2.cpp
 
+ifdef LSU_SHADOW
+CXXSRC += ./lsu_ref/RealLsuRef.cpp ./lsu_ref/LsuShadow.cpp
+INCLUDES += -I./lsu_ref
+CXXFLAGS += -DLSU_SHADOW
+endif
+
 # Object Files
 OBJS := $(CXXSRC:%.cpp=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
