@@ -35,36 +35,20 @@
 // - 0: register-style lookup
 // - 1: SRAM-style lookup
 // New code should prefer ICACHE_LOOKUP_LATENCY (0 = register, 1..N = SRAM).
-#ifndef ICACHE_USE_SRAM_MODEL
 #define ICACHE_USE_SRAM_MODEL 0
-#endif
 // Fixed latency (cycles). Latency=1 means data available next cycle.
 // Latency=0 is treated as 1 when SRAM model is enabled.
-#ifndef ICACHE_SRAM_FIXED_LATENCY
 #define ICACHE_SRAM_FIXED_LATENCY 1
-#endif
 // Random latency enable (1=random, 0=fixed)
-#ifndef ICACHE_SRAM_RANDOM_DELAY
 #define ICACHE_SRAM_RANDOM_DELAY 0
-#endif
 // Random latency range (inclusive). Values <1 are clamped to 1.
-#ifndef ICACHE_SRAM_RANDOM_MIN
 #define ICACHE_SRAM_RANDOM_MIN 1
-#endif
-#ifndef ICACHE_SRAM_RANDOM_MAX
 #define ICACHE_SRAM_RANDOM_MAX 4
-#endif
 // Unified lookup latency interface:
 // - 0: register-style lookup (same-cycle set read path)
 // - 1..N: SRAM-style lookup with N-cycle response latency model
 // Default keeps backward compatibility with ICACHE_USE_SRAM_MODEL.
-#ifndef ICACHE_LOOKUP_LATENCY
-#if ICACHE_USE_SRAM_MODEL
-#define ICACHE_LOOKUP_LATENCY ICACHE_SRAM_FIXED_LATENCY
-#else
 #define ICACHE_LOOKUP_LATENCY 0
-#endif
-#endif
 
 namespace icache_module_n {
 // -----------------------------------------------------------------------------

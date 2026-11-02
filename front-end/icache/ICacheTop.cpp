@@ -205,13 +205,9 @@ void icache_fill_lookup_data_input(icache_module_n::ICache_lookup_in_t &dst,
 
 namespace {
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_BEGIN
 #define CONFIG_ICACHE_FOCUS_VADDR_BEGIN 0u
-#endif
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_END
 #define CONFIG_ICACHE_FOCUS_VADDR_END 0u
-#endif
 
 inline bool icache_focus_vaddr(uint32_t v_addr) {
   const uint32_t begin = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_BEGIN);
@@ -1224,12 +1220,8 @@ public:
 ICacheTop *get_icache_instance() {
   static std::unique_ptr<ICacheTop> instance = nullptr;
   if (!instance) {
-#ifdef USE_IDEAL_ICACHE
-    instance = std::make_unique<SimpleICacheTop>();
-#else
     instance = std::make_unique<
         TrueICacheTopT<icache_module_n::ICache, ExternalReadPortAdapter>>(icache);
-#endif
   }
   return instance.get();
 }

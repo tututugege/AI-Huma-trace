@@ -10,13 +10,9 @@ inline bool mem_wait_must_drain_on_refetch() {
   return true;
 }
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_BEGIN
 #define CONFIG_ICACHE_FOCUS_VADDR_BEGIN 0u
-#endif
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_END
 #define CONFIG_ICACHE_FOCUS_VADDR_END 0u
-#endif
 
 inline bool icache_focus_pc(uint32_t pc) {
   const uint32_t begin = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_BEGIN);
@@ -25,13 +21,8 @@ inline bool icache_focus_pc(uint32_t pc) {
 }
 
 inline bool icache_window_debug_active(long long cycle) {
-#if SIM_DEBUG_PRINT
-  return cycle >= static_cast<long long>(SIM_DEBUG_PRINT_CYCLE_BEGIN) &&
-         cycle <= static_cast<long long>(SIM_DEBUG_PRINT_CYCLE_END);
-#else
   (void)cycle;
   return false;
-#endif
 }
 
 inline bool icache_trace_pc(uint32_t pc, long long cycle) {
@@ -141,9 +132,7 @@ inline uint32_t icache_word_addr(uint32_t ppn, uint32_t pc) {
   return (ppn << 12) | (pc & 0xfffu);
 }
 
-#ifndef CONFIG_ICACHE_MMIO_UNCACHE_LIMIT
 #define CONFIG_ICACHE_MMIO_UNCACHE_LIMIT 0x40000000u
-#endif
 
 inline bool icache_paddr_is_uncache(uint32_t paddr) {
   return paddr < static_cast<uint32_t>(CONFIG_ICACHE_MMIO_UNCACHE_LIMIT);

@@ -98,106 +98,6 @@ using BtbPreReadCombOut = BTB_TOP::BtbPreReadCombOut;
 using BtbCombIn = BTB_TOP::BtbCombIn;
 using BtbCombOut = BTB_TOP::BtbCombOut;
 
-struct FrontRuntimeStats {
-  uint64_t cycles = 0;
-  uint64_t active_cycles = 0;
-  uint64_t reset_cycles = 0;
-  uint64_t ext_refetch_cycles = 0;
-  uint64_t delayed_refetch_cycles = 0;
-  uint64_t global_refetch_cycles = 0;
-
-  uint64_t backend_demand_cycles = 0;
-  uint64_t backend_deliver_cycles = 0;
-  uint64_t backend_bubble_cycles = 0;
-  uint64_t delivered_groups = 0;
-  uint64_t delivered_insts = 0;
-
-  uint64_t bpu_can_run_cycles = 0;
-  uint64_t bpu_stall_cycles = 0;
-  uint64_t bpu_stall_fetch_addr_full_cycles = 0;
-  uint64_t bpu_stall_ptab_full_cycles = 0;
-  uint64_t bpu_issue_cycles = 0;
-
-  uint64_t fetch_addr_read_slot0_cycles = 0;
-  uint64_t fetch_addr_read_slot1_cycles = 0;
-  uint64_t fetch_addr_write_normal_cycles = 0;
-  uint64_t fetch_addr_write_twoahead_cycles = 0;
-  uint64_t fetch_addr_write_skip_by_mini_flush_correct_cycles = 0;
-
-  uint64_t icache_req_slot0_cycles = 0;
-  uint64_t icache_req_slot1_cycles = 0;
-  uint64_t icache_resp_slot0_cycles = 0;
-  uint64_t icache_resp_slot1_cycles = 0;
-  uint64_t icache_req_fire_cycles = 0;
-  uint64_t icache_req_blocked_cycles = 0;
-  uint64_t icache_resp_fire_cycles = 0;
-  uint64_t icache_miss_event_cycles = 0;
-  uint64_t icache_miss_busy_cycles = 0;
-  uint64_t icache_outstanding_req_cycles = 0;
-
-  uint64_t inst_fifo_write_slot0_cycles = 0;
-  uint64_t inst_fifo_write_slot1_cycles = 0;
-  uint64_t ptab_write_cycles = 0;
-
-  uint64_t predecode_run_cycles = 0;
-  uint64_t predecode_block_fifo_empty_cycles = 0;
-  uint64_t predecode_block_ptab_empty_cycles = 0;
-  uint64_t predecode_block_front2back_full_cycles = 0;
-  uint64_t predecode_block_dummy_ptab_cycles = 0;
-  uint64_t checker_run_cycles = 0;
-  uint64_t checker_flush_cycles = 0;
-  uint64_t mini_flush_req_cycles = 0;
-  uint64_t mini_flush_correct_cycles = 0;
-
-  uint64_t front2back_write_cycles = 0;
-  uint64_t front2back_read_req_cycles = 0;
-  uint64_t front2back_valid_out_cycles = 0;
-
-  uint64_t bypass_fetch_to_icache_opportunity_cycles = 0;
-  uint64_t bypass_icache_to_predecode_opportunity_cycles = 0;
-  uint64_t bypass_front2back_to_output_opportunity_cycles = 0;
-  uint64_t bypass_front2back_to_output_hit_cycles = 0;
-
-  uint64_t bubble_reset_cycles = 0;
-  uint64_t bubble_refetch_cycles = 0;
-  uint64_t bubble_dummy_ptab_cycles = 0;
-  uint64_t bubble_icache_miss_cycles = 0;
-  uint64_t bubble_icache_latency_cycles = 0;
-  uint64_t bubble_icache_tlb_retry_cycles = 0;
-  uint64_t bubble_icache_tlb_fault_cycles = 0;
-  uint64_t bubble_icache_cache_backpressure_cycles = 0;
-  uint64_t bubble_icache_latency_other_cycles = 0;
-  uint64_t bubble_icache_tlb_retry_other_walk_cycles = 0;
-  uint64_t bubble_icache_tlb_retry_walk_req_blocked_cycles = 0;
-  uint64_t bubble_icache_tlb_retry_wait_walk_resp_cycles = 0;
-  uint64_t bubble_icache_tlb_retry_local_walker_cycles = 0;
-  uint64_t bubble_bpu_stall_cycles = 0;
-  uint64_t bubble_fetch_addr_empty_cycles = 0;
-  uint64_t bubble_ptab_empty_cycles = 0;
-  uint64_t bubble_inst_fifo_empty_other_cycles = 0;
-  uint64_t bubble_other_cycles = 0;
-
-  // Phase2: a mutually-exclusive bubble root-cause classifier (new scheme).
-  uint64_t bubble2_reset_cycles = 0;
-  uint64_t bubble2_recovery_backend_refetch_cycles = 0;
-  uint64_t bubble2_recovery_frontend_flush_cycles = 0;
-  uint64_t bubble2_fetch_stall_cycles = 0;
-  uint64_t bubble2_glue_or_fifo_cycles = 0;
-  uint64_t bubble2_bpu_side_cycles = 0;
-  uint64_t bubble2_other_cycles = 0;
-
-  // Phase4: recovery-credit aware bubble classifier (newest scheme).
-  uint64_t bubble3_reset_cycles = 0;
-  uint64_t bubble3_recovery_backend_refetch_cycles = 0;
-  uint64_t bubble3_recovery_frontend_flush_cycles = 0;
-  uint64_t bubble3_fetch_stall_cycles = 0;
-  uint64_t bubble3_glue_or_fifo_cycles = 0;
-  uint64_t bubble3_bpu_side_cycles = 0;
-  uint64_t bubble3_other_cycles = 0;
-
-  // Phase4: experimental cold-like tag (early window).
-  uint64_t icache_miss_event_cold_window_cycles = 0;
-};
 
 struct PendingBpuSeqTxn {
   wire1_t valid = false;
@@ -209,7 +109,6 @@ struct PendingBpuSeqTxn {
 struct PendingFrontState {
   wire1_t valid = false;
   wire32_t next_front_sim_time = 0;
-  FrontRuntimeStats next_front_stats{};
   wire1_t next_predecode_refetch = false;
   fetch_addr_t next_predecode_refetch_address = 0;
   wire1_t next_fetch_addr_fifo_full = false;
@@ -226,7 +125,6 @@ struct FrontReadData {
   wire1_t predecode_refetch_snapshot = false;
   fetch_addr_t predecode_refetch_address_snapshot = 0;
   wire32_t front_sim_time_snapshot = 0;
-  FrontRuntimeStats front_stats_snapshot{};
   fetch_address_FIFO_read_data fetch_addr_fifo_rd_snapshot{};
   instruction_FIFO_read_data fifo_rd_snapshot{};
   PTAB_read_data ptab_rd_snapshot{};

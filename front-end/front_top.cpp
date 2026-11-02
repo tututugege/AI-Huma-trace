@@ -38,17 +38,6 @@ static SimContext *front_ctx = nullptr;
 
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
 
-static FrontRuntimeStats front_stats;
-static bool falcon_window_active = false;
-static uint64_t falcon_warmup_cycles = 0;
-static bool falcon_recovery_pending = false;
-enum class FalconRecoverySrc : uint8_t {
-  NONE = 0,
-  BACKEND_REFETCH = 1,
-  FRONTEND_FLUSH = 2,
-};
-static FalconRecoverySrc falcon_recovery_src = FalconRecoverySrc::NONE;
-static constexpr uint64_t kFalconColdMissWindowCycles = 100000;
 
 struct FrontDeadlockSnapshot {
   bool valid = false;
@@ -70,51 +59,19 @@ struct FrontDeadlockSnapshot {
 
 static FrontDeadlockSnapshot front_deadlock_snapshot;
 
-#ifndef CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT
-#define CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT 1
-#endif
 
 static uint32_t sequential_next_pc(uint32_t fetch_pc,
                                    const wire1_t *inst_valid) {
-#if CONFIG_FRONT_VALID_PREFIX_SEQ_NEXT
   uint32_t valid_prefix = 0;
   while (valid_prefix < FETCH_WIDTH && inst_valid[valid_prefix]) {
     ++valid_prefix;
   }
   uint32_t next_pc = fetch_pc + valid_prefix * 4u;
-#else
-  (void)inst_valid;
-  uint32_t next_pc = fetch_pc + FETCH_WIDTH * 4u;
-#endif
   const uint32_t line_mask = ~(ICACHE_LINE_SIZE - 1u);
   if ((next_pc & line_mask) != (fetch_pc & line_mask)) {
     next_pc &= line_mask;
   }
   return next_pc;
-}
-
-static double front_stats_pct(uint64_t num, uint64_t den) {
-  if (den == 0) {
-    return 0.0;
-  }
-  return (static_cast<double>(num) * 100.0) / static_cast<double>(den);
-}
-
-static double front_stats_ratio(uint64_t num, uint64_t den) {
-  if (den == 0) {
-    return 0.0;
-  }
-  return static_cast<double>(num) / static_cast<double>(den);
-}
-
-static bool falcon_measurement_window_active() {
-  if (front_ctx == nullptr) {
-    return true;
-  }
-  if (!front_ctx->is_ckpt) {
-    return true;
-  }
-  return front_ctx->perf.perf_start;
 }
 
 static inline bool front_focus_pc(uint32_t pc) {
@@ -194,18 +151,6 @@ void front_dump_debug_state() {
       static_cast<int>(ptab_full_latch), static_cast<int>(ptab_empty_latch),
       static_cast<int>(front2back_fifo_full_latch),
       static_cast<int>(front2back_fifo_empty_latch));
-  std::printf(
-      "[DEADLOCK][FRONT][STATS] cycles=%llu active=%llu backend_demand=%llu "
-      "backend_bubble=%llu icache_retry=%llu wait_walk=%llu local_walker=%llu\n",
-      static_cast<unsigned long long>(front_stats.cycles),
-      static_cast<unsigned long long>(front_stats.active_cycles),
-      static_cast<unsigned long long>(front_stats.backend_demand_cycles),
-      static_cast<unsigned long long>(front_stats.backend_bubble_cycles),
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_cycles),
-      static_cast<unsigned long long>(
-          front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles),
-      static_cast<unsigned long long>(
-          front_stats.bubble_icache_tlb_retry_local_walker_cycles));
   if (!front_deadlock_snapshot.valid) {
     std::printf("[DEADLOCK][FRONT] no deadlock snapshot captured yet\n");
     return;
@@ -256,22 +201,6 @@ void front_dump_debug_state() {
   }
 }
 
-static void falcon_print_summary() {
-  return;
-}
-
-static void front_stats_print_summary() {
-  return;
-}
-
-struct FrontStatsAtExit {
-  ~FrontStatsAtExit() {
-    falcon_print_summary();
-    front_stats_print_summary();
-  }
-};
-
-static FrontStatsAtExit front_stats_at_exit;
 
 static BPU_TOP bpu_instance;
 
@@ -685,19 +614,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     Front2BackCombOut &front2back_fifo_final_req = req.front2back_fifo_req;
     std::memset(&out, 0, sizeof(struct front_top_out));
     uint32_t front_sim_time = rd.front_sim_time_snapshot + 1;
-    FrontRuntimeStats front_stats = rd.front_stats_snapshot;
     DEBUG_LOG_SMALL("--------front_top sim_time: %d----------------\n", front_sim_time);
-    const bool window_active = falcon_measurement_window_active();
-    if (!falcon_window_active && window_active) {
-        front_stats = {};
-        falcon_window_active = true;
-        falcon_recovery_pending = false;
-        falcon_recovery_src = FalconRecoverySrc::NONE;
-    }
-    if (!window_active) {
-        falcon_warmup_cycles++;
-    }
-    front_stats.cycles++;
     front_state_req.valid = false;
     
     // ========================================================================
@@ -772,29 +689,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         global_reset = global_ctrl_out.global_reset;
         global_refetch = global_ctrl_out.global_refetch;
         refetch_address = global_ctrl_out.refetch_address;
-        if (global_reset) {
-            falcon_recovery_pending = false;
-            falcon_recovery_src = FalconRecoverySrc::NONE;
-        } else if (global_refetch) {
-            falcon_recovery_pending = true;
-            falcon_recovery_src = in->refetch ? FalconRecoverySrc::BACKEND_REFETCH
-                                              : FalconRecoverySrc::FRONTEND_FLUSH;
-        }
-        if (global_reset) {
-            front_stats.reset_cycles++;
-        }
-        if (in->refetch) {
-            front_stats.ext_refetch_cycles++;
-        }
-        if (rd.predecode_refetch_snapshot) {
-            front_stats.delayed_refetch_cycles++;
-        }
-        if (global_refetch) {
-            front_stats.global_refetch_cycles++;
-        }
-        if (!global_reset && !global_refetch) {
-            front_stats.active_cycles++;
-        }
         
         // ========================================================================
         // 阶段 2: 确定各 FIFO 的读使能（在实际读取前先决策）
@@ -811,10 +705,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         icache_peek_ready(&icache_in, &icache_out);
         icache_ready = icache_out.icache_read_ready;
         icache_ready_2 = icache_out.icache_read_ready_2;
-#ifdef USE_IDEAL_ICACHE
-        icache_ready = true;
-        icache_ready_2 = true;
-#endif
         DEBUG_LOG_SMALL_4("icache_ready: %d, icache_ready_2: %d\n", icache_ready, icache_ready_2);
         FrontReadEnableCombOut read_enable_out{};
         FrontReadEnableCombIn read_enable_in{};
@@ -844,10 +734,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         
         // front2back_FIFO 读使能：后端请求读取
         front2back_read_enable = read_enable_out.front2back_read_enable;
-        if (front2back_read_enable) {
-            front_stats.front2back_read_req_cycles++;
-            front_stats.backend_demand_cycles++;
-        }
         
         // ========================================================================
         // 阶段 3: 执行所有 FIFO 的读操作（获取输出数据）
@@ -903,12 +789,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
             fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
             saved_fetch_addr_fifo_out_1 = fetch_addr_fifo_out;
-        }
-        if (saved_fetch_addr_fifo_out_0.read_valid) {
-            front_stats.fetch_addr_read_slot0_cycles++;
-        }
-        if (saved_fetch_addr_fifo_out_1.read_valid) {
-            front_stats.fetch_addr_read_slot1_cycles++;
         }
         
         instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
@@ -989,18 +869,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         front_bpu_control_comb(bpu_ctrl_in, bpu_ctrl_out);
         bpu_stall = bpu_ctrl_out.bpu_stall;
         bpu_can_run = bpu_ctrl_out.bpu_can_run;
-        if (bpu_can_run) {
-            front_stats.bpu_can_run_cycles++;
-        }
-        if (bpu_stall) {
-            front_stats.bpu_stall_cycles++;
-            if (rd.fetch_addr_fifo_full_latch_snapshot) {
-                front_stats.bpu_stall_fetch_addr_full_cycles++;
-            }
-            if (rd.ptab_full_latch_snapshot) {
-                front_stats.bpu_stall_ptab_full_cycles++;
-            }
-        }
         
         bpu_in = bpu_ctrl_out.bpu_in;
         bpu_seq_txn_req.valid = false;
@@ -1022,15 +890,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             bpu_seq_txn_req.inp = bpu_input;
             bpu_seq_txn_req.reset = false;
         }
-        if (bpu_output.mini_flush_req) {
-            front_stats.mini_flush_req_cycles++;
-        }
-        if (bpu_output.mini_flush_correct) {
-            front_stats.mini_flush_correct_cycles++;
-        }
         
         if (bpu_output.icache_read_valid && bpu_can_run) {
-            front_stats.bpu_issue_cycles++;
             DEBUG_LOG_SMALL("[front_top] sim_time: %d, bpu_out.fetch_address: %x\n",
                             front_sim_time, bpu_output.fetch_address);
         }
@@ -1051,12 +912,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             !saved_fetch_addr_fifo_out_0.read_valid && normal_write_enable &&
             !bpu_output.mini_flush_correct && icache_ready && !global_refetch;
         can_bypass_fetch_to_icache = false;
-        if (can_bypass_fetch_to_icache) {
-            front_stats.bypass_fetch_to_icache_opportunity_cycles++;
-        }
         if (normal_write_enable && !bpu_output.mini_flush_correct &&
             !can_bypass_fetch_to_icache) {
-            front_stats.fetch_addr_write_normal_cycles++;
             fetch_addr_fifo_in.write_enable = true;
             fetch_addr_fifo_in.fetch_address = bpu_output.fetch_address;
             DEBUG_LOG_SMALL_4("normal write enable: %x\n", bpu_output.fetch_address);
@@ -1066,21 +923,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
             fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
         } else if (normal_write_enable && bpu_output.mini_flush_correct) {
-            front_stats.fetch_addr_write_skip_by_mini_flush_correct_cycles++;
         }
-#ifdef ENABLE_2AHEAD
-        if (normal_write_enable) {
-            front_stats.fetch_addr_write_twoahead_cycles++;
-            fetch_addr_fifo_in.write_enable = true;
-            fetch_addr_fifo_in.fetch_address = bpu_output.two_ahead_target;
-            DEBUG_LOG_SMALL_4("2ahead write enable: %x\n", bpu_output.two_ahead_target);
-            fetch_address_FIFO_comb_calc(&fetch_addr_fifo_in, &fetch_addr_fifo_rd,
-                                         &fetch_addr_fifo_out, &fetch_addr_fifo_next_rd,
-                                         &fetch_addr_fifo_step_req);
-            accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
-            fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
-        }
-#endif
     }
 
     bool icache_slot0_data_valid = false;
@@ -1112,35 +955,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         icache_in.icache_read_valid_2 = false;
         icache_in.fetch_address_2 = 0;
         assert(!icache_in.icache_read_valid_2);
-        if (icache_in.icache_read_valid) {
-            front_stats.icache_req_slot0_cycles++;
-        }
-        if (icache_in.icache_read_valid_2) {
-            front_stats.icache_req_slot1_cycles++;
-        }
         
         icache_comb_calc(&icache_in, &icache_out);
-        if (icache_out.perf_req_fire) {
-            front_stats.icache_req_fire_cycles++;
-        }
-        if (icache_out.perf_req_blocked) {
-            front_stats.icache_req_blocked_cycles++;
-        }
-        if (icache_out.perf_resp_fire) {
-            front_stats.icache_resp_fire_cycles++;
-        }
-        if (icache_out.perf_miss_event) {
-            front_stats.icache_miss_event_cycles++;
-            if (front_stats.cycles <= kFalconColdMissWindowCycles) {
-                front_stats.icache_miss_event_cold_window_cycles++;
-            }
-        }
-        if (icache_out.perf_miss_busy) {
-            front_stats.icache_miss_busy_cycles++;
-        }
-        if (icache_out.perf_outstanding_req) {
-            front_stats.icache_outstanding_req_cycles++;
-        }
         
         // ========================================================================
         // 阶段 7: instruction_FIFO 写控制（写入 icache 返回的数据）
@@ -1151,16 +967,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         fifo_in.write_enable = false;
 
         icache_slot0_data_valid = icache_out.icache_read_complete;
-#ifdef USE_IDEAL_ICACHE
-        icache_slot0_data_valid &= icache_in.icache_read_valid;
-#endif
         assert(!icache_slot1_data_valid);
-        if (icache_slot0_data_valid) {
-            front_stats.icache_resp_slot0_cycles++;
-        }
-        if (icache_slot1_data_valid) {
-            front_stats.icache_resp_slot1_cycles++;
-        }
     }
 
     {
@@ -1171,7 +978,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             !global_refetch && icache_slot0_data_valid;
         can_bypass_icache_to_predecode = false;
         if (can_bypass_icache_to_predecode) {
-            front_stats.bypass_icache_to_predecode_opportunity_cycles++;
             ptab_in.reset = global_reset;
             ptab_in.refetch = global_refetch;
             ptab_in.read_enable = true;
@@ -1216,25 +1022,8 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             (predecode_source_valid && !saved_ptab_out.dummy_entry &&
              use_icache_to_predecode_bypass) ||
             (!saved_ptab_out.dummy_entry && inst_fifo_read_enable);
-        if (predecode_can_run) {
-            front_stats.predecode_run_cycles++;
-        } else {
-            if (rd.fifo_empty_latch_snapshot) {
-                front_stats.predecode_block_fifo_empty_cycles++;
-            }
-            if (rd.ptab_empty_latch_snapshot) {
-                front_stats.predecode_block_ptab_empty_cycles++;
-            }
-            if (rd.front2back_fifo_full_latch_snapshot) {
-                front_stats.predecode_block_front2back_full_cycles++;
-            }
-            if (predecode_source_valid && saved_ptab_out.dummy_entry) {
-                front_stats.predecode_block_dummy_ptab_cycles++;
-            }
-        }
         if (!inst_fifo_full_for_write && icache_slot0_data_valid && !global_reset &&
             !global_refetch && !use_icache_to_predecode_bypass) {
-            front_stats.inst_fifo_write_slot0_cycles++;
             fifo_in.write_enable = true;
             for (int i = 0; i < FETCH_WIDTH; i++) {
                 fifo_in.fetch_group[i] = icache_out.fetch_group[i];
@@ -1272,7 +1061,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         bool can_write_slot1 = !inst_fifo_full_for_write && icache_slot1_data_valid
                                && !global_reset && !global_refetch;
         if (can_write_slot1) {
-            front_stats.inst_fifo_write_slot1_cycles++;
             fifo_in.write_enable = true;
             for (int i = 0; i < FETCH_WIDTH; i++) {
                 fifo_in.fetch_group[i] = icache_out.fetch_group_2[i];
@@ -1314,9 +1102,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         bool ptab_can_write = bpu_output.PTAB_write_enable &&
                               !rd.ptab_full_latch_snapshot && !global_reset &&
                               !global_refetch;
-        if (ptab_can_write) {
-            front_stats.ptab_write_cycles++;
-        }
         
         FrontPtabWriteCombOut ptab_write_out{};
         FrontPtabWriteCombIn ptab_write_in{};
@@ -1341,7 +1126,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         memset(&checker_out, 0, sizeof(checker_out));
         
         if (predecode_can_run) {
-            front_stats.checker_run_cycles++;
             for (int i = 0; i < FETCH_WIDTH; i++) {
                 if (saved_fifo_out.pc[i] != saved_ptab_out.predict_base_pc[i]) {
                     printf("ERROR: fifo pc[%d]: %x != ptab pc[%d]: %x\n",
@@ -1364,7 +1148,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                               saved_ptab_out.predict_next_fetch_address);
             
             if (checker_out.predecode_flush_enable) {
-                front_stats.checker_flush_cycles++;
                 do_predecode_flush = true;
                 predecode_flush_address =
                     checker_out.predict_next_fetch_address_corrected;
@@ -1378,8 +1161,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             front2back_read_enable && rd.front2back_fifo_empty_latch_snapshot &&
             !saved_front2back_fifo_out.front2back_FIFO_valid && front2back_can_write;
         if (can_bypass_front2back_to_output) {
-            front_stats.bypass_front2back_to_output_opportunity_cycles++;
-            front_stats.bypass_front2back_to_output_hit_cycles++;
             use_front2back_output_bypass = true;
         }
 
@@ -1392,9 +1173,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         front2back_fifo_in.read_enable = false;
         front2back_fifo_in.write_enable =
             front2back_can_write && !can_bypass_front2back_to_output;
-        if (front2back_fifo_in.write_enable) {
-            front_stats.front2back_write_cycles++;
-        }
         
         if (front2back_can_write) {
             FrontFront2backWriteCombOut front2back_write_out{};
@@ -1474,125 +1252,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             }
         }
         
-        if (out_ptr->FIFO_valid) {
-            front_stats.front2back_valid_out_cycles++;
-            if (front2back_read_enable) {
-                front_stats.backend_deliver_cycles++;
-                front_stats.delivered_groups++;
-                if (falcon_recovery_pending) {
-                    falcon_recovery_pending = false;
-                    falcon_recovery_src = FalconRecoverySrc::NONE;
-                }
-                for (int i = 0; i < FETCH_WIDTH; i++) {
-                    if (out_ptr->inst_valid[i]) {
-                        front_stats.delivered_insts++;
-                    }
-                }
-            }
-            DEBUG_LOG_SMALL("[front_top] sim_time: %d, out->pc[0]: %x\n",
-                            front_sim_time, out_ptr->pc[0]);
-        } else if (front2back_read_enable) {
-            front_stats.backend_bubble_cycles++;
-            if (global_reset) {
-                front_stats.bubble_reset_cycles++;
-            } else if (global_refetch) {
-                front_stats.bubble_refetch_cycles++;
-            } else if (!rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
-                       saved_ptab_out.dummy_entry) {
-                front_stats.bubble_dummy_ptab_cycles++;
-            } else if (rd.fifo_empty_latch_snapshot) {
-                if (icache_out.perf_miss_busy) {
-                    front_stats.bubble_icache_miss_cycles++;
-                } else if (icache_out.perf_outstanding_req || icache_out.perf_req_blocked) {
-                    front_stats.bubble_icache_latency_cycles++;
-                    if (icache_out.perf_itlb_retry) {
-                        front_stats.bubble_icache_tlb_retry_cycles++;
-                        if (icache_out.perf_itlb_retry_other_walk) {
-                            front_stats.bubble_icache_tlb_retry_other_walk_cycles++;
-                        } else if (icache_out.perf_itlb_retry_walk_req_blocked) {
-                            front_stats.bubble_icache_tlb_retry_walk_req_blocked_cycles++;
-                        } else if (icache_out.perf_itlb_retry_wait_walk_resp) {
-                            front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles++;
-                        } else if (icache_out.perf_itlb_retry_local_walker_busy) {
-                            front_stats.bubble_icache_tlb_retry_local_walker_cycles++;
-                        }
-                    } else if (icache_out.perf_itlb_fault) {
-                        front_stats.bubble_icache_tlb_fault_cycles++;
-                    } else if (icache_out.perf_req_blocked) {
-                        front_stats.bubble_icache_cache_backpressure_cycles++;
-                    } else {
-                        front_stats.bubble_icache_latency_other_cycles++;
-                    }
-                } else if (bpu_stall) {
-                    front_stats.bubble_bpu_stall_cycles++;
-                } else if (rd.fetch_addr_fifo_empty_latch_snapshot) {
-                    front_stats.bubble_fetch_addr_empty_cycles++;
-                } else {
-                    front_stats.bubble_inst_fifo_empty_other_cycles++;
-                }
-            } else if (rd.ptab_empty_latch_snapshot) {
-                front_stats.bubble_ptab_empty_cycles++;
-            } else {
-                front_stats.bubble_other_cycles++;
-            }
-
-            if (global_reset) {
-                front_stats.bubble2_reset_cycles++;
-            } else if (global_refetch) {
-                if (in->refetch) {
-                    front_stats.bubble2_recovery_backend_refetch_cycles++;
-                } else {
-                    front_stats.bubble2_recovery_frontend_flush_cycles++;
-                }
-            } else if (!rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
-                       saved_ptab_out.dummy_entry) {
-                front_stats.bubble2_glue_or_fifo_cycles++;
-            } else if (rd.fifo_empty_latch_snapshot) {
-                if (icache_out.perf_miss_busy ||
-                    icache_out.perf_outstanding_req ||
-                    icache_out.perf_req_blocked) {
-                    front_stats.bubble2_fetch_stall_cycles++;
-                } else if (bpu_stall) {
-                    front_stats.bubble2_bpu_side_cycles++;
-                } else {
-                    front_stats.bubble2_glue_or_fifo_cycles++;
-                }
-            } else if (rd.ptab_empty_latch_snapshot) {
-                front_stats.bubble2_glue_or_fifo_cycles++;
-            } else {
-                front_stats.bubble2_other_cycles++;
-            }
-
-            if (global_reset) {
-                front_stats.bubble3_reset_cycles++;
-            } else if (falcon_recovery_pending) {
-                if (falcon_recovery_src == FalconRecoverySrc::BACKEND_REFETCH) {
-                    front_stats.bubble3_recovery_backend_refetch_cycles++;
-                } else {
-                    front_stats.bubble3_recovery_frontend_flush_cycles++;
-                }
-            } else if (!rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
-                       saved_ptab_out.dummy_entry) {
-                front_stats.bubble3_glue_or_fifo_cycles++;
-            } else if (rd.fifo_empty_latch_snapshot) {
-                if (icache_out.perf_miss_busy ||
-                    icache_out.perf_outstanding_req ||
-                    icache_out.perf_req_blocked) {
-                    front_stats.bubble3_fetch_stall_cycles++;
-                } else if (bpu_stall) {
-                    front_stats.bubble3_bpu_side_cycles++;
-                } else {
-                    front_stats.bubble3_glue_or_fifo_cycles++;
-                }
-            } else if (rd.ptab_empty_latch_snapshot) {
-                front_stats.bubble3_glue_or_fifo_cycles++;
-            } else {
-                front_stats.bubble3_other_cycles++;
-            }
-        }
-
         front_state_req.next_front_sim_time = front_sim_time;
-        front_state_req.next_front_stats = front_stats;
         fetch_addr_fifo_final_req = fetch_addr_fifo_req;
         fifo_final_req = fifo_req;
         ptab_final_req = ptab_req;
@@ -1624,7 +1284,6 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   rd.predecode_refetch_snapshot = predecode_refetch;
   rd.predecode_refetch_address_snapshot = predecode_refetch_address;
   rd.front_sim_time_snapshot = front_sim_time;
-  rd.front_stats_snapshot = front_stats;
   rd.fetch_addr_fifo_full_latch_snapshot = fetch_addr_fifo_full_latch;
   rd.fetch_addr_fifo_empty_latch_snapshot = fetch_addr_fifo_empty_latch;
   rd.fifo_full_latch_snapshot = fifo_full_latch;
@@ -1673,7 +1332,6 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
 
   if (req.front_state.valid) {
     front_sim_time = req.front_state.next_front_sim_time;
-    front_stats = req.front_state.next_front_stats;
     predecode_refetch = req.front_state.next_predecode_refetch;
     predecode_refetch_address = req.front_state.next_predecode_refetch_address;
     fetch_addr_fifo_full_latch = req.front_state.next_fetch_addr_fifo_full;

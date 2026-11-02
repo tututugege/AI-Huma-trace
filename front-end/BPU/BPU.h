@@ -926,25 +926,6 @@ public:
       out.tage_in[b].path_in = in.path_snapshot;
     }
 
-#ifdef ENABLE_2AHEAD
-    if (in.going_to_do_pred && !in.refetch) {
-      NlpTagCombOut stage1_tag_out{};
-      nlp_tag_comb(NlpTagCombIn{in.pred_base_pc}, stage1_tag_out);
-      const bool stage1_hit =
-          in.nlp_pred_base_entry_snapshot.entry_valid &&
-          (in.nlp_pred_base_entry_snapshot.entry_tag == stage1_tag_out.tag);
-      const uint8_t stage1_conf =
-          stage1_hit ? in.nlp_pred_base_entry_snapshot.entry_conf : 0;
-      out.nlp_s1_req_pc =
-          (stage1_hit && stage1_conf >= NLP_CONF_THRESHOLD)
-              ? in.nlp_pred_base_entry_snapshot.entry_target
-              : nlp_fallback_next_pc(in.pred_base_pc);
-      out.nlp_s1_re = true;
-      NlpIndexCombOut stage1_idx_out{};
-      nlp_index_comb(NlpIndexCombIn{out.nlp_s1_req_pc}, stage1_idx_out);
-      out.nlp_s1_idx = stage1_idx_out.index;
-    }
-#endif
 
     if (in.set_submodule_input) {
       if (in.going_to_do_pred) {
@@ -1152,80 +1133,10 @@ public:
     out.saved_mini_flush_correct_next = rd.saved_mini_flush_correct_snapshot;
     out.saved_mini_flush_target_next = rd.saved_mini_flush_target_snapshot;
 
-#ifdef ENABLE_2AHEAD
-    const InputPayload &inp = in.inp;
-    const fetch_addr_t next_fetch_addr_calc = in.next_fetch_addr_calc;
-    if (rd.going_to_do_pred && !inp.refetch) {
-      NlpTagCombOut stage1_tag_out{};
-      nlp_tag_comb(NlpTagCombIn{rd.pred_base_pc}, stage1_tag_out);
-      const bool stage1_hit = rd.nlp_pred_base_entry_snapshot.entry_valid &&
-                              (rd.nlp_pred_base_entry_snapshot.entry_tag ==
-                               stage1_tag_out.tag);
-      const uint8_t stage1_conf =
-          stage1_hit ? rd.nlp_pred_base_entry_snapshot.entry_conf : 0;
-      const uint32_t stage1_next_pc =
-          (stage1_hit && stage1_conf >= NLP_CONF_THRESHOLD)
-              ? rd.nlp_pred_base_entry_snapshot.entry_target
-              : nlp_fallback_next_pc(rd.pred_base_pc);
 
-      NlpTagCombOut stage2_tag_out{};
-      nlp_tag_comb(NlpTagCombIn{stage1_next_pc}, stage2_tag_out);
-      const bool stage2_hit = rd.nlp_s1_entry_snapshot.entry_valid &&
-                              (rd.nlp_s1_entry_snapshot.entry_tag == stage2_tag_out.tag);
-      const uint8_t stage2_conf =
-          stage2_hit ? rd.nlp_s1_entry_snapshot.entry_conf : 0;
-      const uint32_t stage2_target =
-          stage2_hit ? rd.nlp_s1_entry_snapshot.entry_target
-                     : nlp_fallback_next_pc(stage1_next_pc);
-      const bool s1_match = (stage1_next_pc == next_fetch_addr_calc);
-      const bool s2_usable = stage2_hit && (stage2_conf >= NLP_CONF_THRESHOLD);
-      const bool emit_two_ahead = s1_match && s2_usable;
-      out.final_2_ahead_address =
-          emit_two_ahead ? stage2_target : (next_fetch_addr_calc + (FETCH_WIDTH * 4));
-
-      const bool need_mini_flush =
-          (rd.saved_2ahead_prediction_snapshot != next_fetch_addr_calc);
-      out.out_regs.mini_flush_req =
-          need_mini_flush && out.out_regs.PTAB_write_enable;
-      out.out_regs.mini_flush_target = rd.saved_mini_flush_target_snapshot;
-      out.saved_2ahead_prediction_next = out.final_2_ahead_address;
-      out.saved_2ahead_pred_valid_next = emit_two_ahead;
-      out.saved_mini_flush_req_next = need_mini_flush;
-      out.saved_mini_flush_correct_next = !need_mini_flush;
-      out.saved_mini_flush_target_next = rd.saved_2ahead_prediction_snapshot;
-
-      const uint32_t train_pc = rd.pred_base_pc;
-      const uint32_t train_target = next_fetch_addr_calc;
-      NlpIndexCombOut train_idx_out{};
-      NlpTagCombOut train_tag_out{};
-      nlp_index_comb(NlpIndexCombIn{train_pc}, train_idx_out);
-      nlp_tag_comb(NlpTagCombIn{train_pc}, train_tag_out);
-      const ReadData::NlpEntrySnapshot &old_entry = rd.nlp_train_entry_snapshot;
-      const bool train_hit = old_entry.entry_valid && (old_entry.entry_tag == train_tag_out.tag);
-      uint8_t next_conf = NLP_CONF_INIT;
-      if (train_hit) {
-        if (old_entry.entry_target == train_target) {
-          next_conf = (old_entry.entry_conf >= NLP_CONF_MAX)
-                          ? static_cast<uint8_t>(NLP_CONF_MAX)
-                          : static_cast<uint8_t>(old_entry.entry_conf + 1);
-        } else {
-          next_conf = 0;
-        }
-      }
-      out.nlp_entry_we = true;
-      out.nlp_entry_idx = train_idx_out.index;
-      out.nlp_entry_valid_next = true;
-      out.nlp_entry_tag_next = train_tag_out.tag;
-      out.nlp_entry_target_next = train_target;
-      out.nlp_entry_conf_next = next_conf;
-    }
-#endif
-
-#ifndef ENABLE_2AHEAD
     out.out_regs.two_ahead_valid = false;
     out.out_regs.mini_flush_req = false;
     out.out_regs.mini_flush_correct = false;
-#endif
   }
 
   void bpu_hist_comb(const BpuHistCombIn &in, BpuHistCombOut &out) const {

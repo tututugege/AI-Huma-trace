@@ -6,13 +6,9 @@
 #include "PhysMemory.h"
 #include <cassert>
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_BEGIN
 #define CONFIG_ICACHE_FOCUS_VADDR_BEGIN 0u
-#endif
 
-#ifndef CONFIG_ICACHE_FOCUS_VADDR_END
 #define CONFIG_ICACHE_FOCUS_VADDR_END 0u
-#endif
 
 // icache.cpp is the front-end wrapper/orchestrator:
 // - own the external tables used by icache_module
@@ -30,11 +26,7 @@ static SimContext *icache_ctx = nullptr;
 
 namespace {
 using LookupTimingPolicy =
-#if ICACHE_LOOKUP_LATENCY == 0
     RegfileTablePolicy;
-#else
-    SramTablePolicy;
-#endif
 
 constexpr int kSetAddrBits = ICACHE_INDEX_BITS;
 constexpr int kRows = ICACHE_SET_NUM;
@@ -49,15 +41,9 @@ using ValidTable = GenericTable<kRows, kValidChunks, kValidChunkBits, LookupTimi
 GenericTableTimingConfig make_lookup_timing_config() {
   GenericTableTimingConfig cfg;
   cfg.fixed_latency = ICACHE_LOOKUP_LATENCY > 0 ? ICACHE_LOOKUP_LATENCY : 1;
-#if ICACHE_SRAM_RANDOM_DELAY
-  cfg.random_delay = true;
-  cfg.random_min = ICACHE_SRAM_RANDOM_MIN;
-  cfg.random_max = ICACHE_SRAM_RANDOM_MAX;
-#else
   cfg.random_delay = false;
   cfg.random_min = 1;
   cfg.random_max = 1;
-#endif
   return cfg;
 }
 
@@ -130,7 +116,6 @@ void update_icache_perf_counters(const struct icache_in *in,
   if (icache.perf.miss_issue_valid) {
 
   }
-#ifndef USE_IDEAL_ICACHE
   if (icache.perf.miss_penalty_valid) {
 
 
@@ -141,7 +126,6 @@ void update_icache_perf_counters(const struct icache_in *in,
 
 
   }
-#endif
 }
 } // namespace
 
