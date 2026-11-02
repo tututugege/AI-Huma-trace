@@ -290,37 +290,7 @@ public:
 
 
 
-  struct BpuPredictMainCombIn {
-    wire1_t refetch;
-    fetch_addr_t refetch_address;
-    pc_t pred_base_pc;
-    fetch_addr_t boundary_addr;
-    wire1_t pc_can_send_to_icache_snapshot;
-    wire1_t going_to_do_pred;
-    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
-    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
-    pc_t do_pred_for_this_pc[FETCH_WIDTH];
-    wire1_t ras_has_entry_snapshot;
-    target_addr_t ras_top_snapshot;
-    TypePredictor::OutputPayload type_out;
-    TAGE_TOP::OutputPayload tage_out[BPU_BANK_NUM];
-    BTB_TOP::OutputPayload btb_out[BPU_BANK_NUM];
-  };
 
-  struct BpuPredictMainCombOut {
-    OutputPayload out;
-    wire1_t final_pred_dir[FETCH_WIDTH];
-    fetch_addr_t next_fetch_addr_calc;
-    wire1_t tage_calc_pred_dir_latch_next[FETCH_WIDTH];
-    wire1_t tage_calc_altpred_latch_next[FETCH_WIDTH];
-    pcpn_t tage_calc_pcpn_latch_next[FETCH_WIDTH];
-    pcpn_t tage_calc_altpcpn_latch_next[FETCH_WIDTH];
-    tage_tag_t tage_pred_calc_tags_latch_next[FETCH_WIDTH][TN_MAX];
-    tage_idx_t tage_pred_calc_idxs_latch_next[FETCH_WIDTH][TN_MAX];
-    wire1_t tage_result_valid_latch_next[FETCH_WIDTH];
-    target_addr_t btb_pred_target_latch_next[FETCH_WIDTH];
-    wire1_t btb_result_valid_latch_next[FETCH_WIDTH];
-  };
 
   
   
@@ -702,24 +672,23 @@ public:
     }
   }
 
-  void bpu_predict_main_comb(const BpuPredictMainCombIn &in,
-                             BpuPredictMainCombOut &out) const {
-    const TypePredictor::OutputPayload &type_out = in.type_out;
-    const TAGE_TOP::OutputPayload (&tage_out)[BPU_BANK_NUM] = in.tage_out;
-    const BTB_TOP::OutputPayload (&btb_out)[BPU_BANK_NUM] = in.btb_out;
-    std::memset(&out, 0, sizeof(out));
-    out.out.icache_read_valid = in.pc_can_send_to_icache_snapshot && !in.refetch;
-    out.out.fetch_address = in.pred_base_pc;
-    out.out.out_pred_base_pc = out.out.fetch_address;
-    out.next_fetch_addr_calc = in.boundary_addr;
+  void bpu_predict_main_comb(const InputPayload &inp, const ReadData &rd,
+                             const TypePredictor::OutputPayload &type_out,
+                             const TAGE_TOP::OutputPayload (&tage_out)[BPU_BANK_NUM],
+                             const BTB_TOP::OutputPayload (&btb_out)[BPU_BANK_NUM],
+                             OutputPayload &out, UpdateRequest &req) const {
+    out.icache_read_valid = rd.pc_can_send_to_icache_snapshot && !inp.refetch;
+    out.fetch_address = rd.pred_base_pc;
+    out.out_pred_base_pc = out.fetch_address;
+    req.next_fetch_addr_calc = rd.boundary_addr;
 
     bool found_taken_branch = false;
-    if (in.going_to_do_pred) {
+    if (rd.going_to_do_pred) {
       for (int i = 0; i < FETCH_WIDTH; ++i) {
-        if (!in.do_pred_on_this_pc[i]) {
+        if (!rd.do_pred_on_this_pc[i]) {
           continue;
         }
-        const bpu_bank_sel_ext_t bank_sel = in.this_pc_bank_sel[i];
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
         if (bank_sel >= BPU_BANK_NUM) {
           continue;
         }
@@ -735,58 +704,58 @@ public:
         } else {
           pred_taken = tage_valid ? tage_out[bank_sel].pred_out : false;
         }
-        out.final_pred_dir[i] = pred_taken;
-        out.tage_calc_pred_dir_latch_next[i] = pred_taken;
-        out.tage_calc_altpred_latch_next[i] =
+        req.final_pred_dir[i] = pred_taken;
+        req.tage_calc_pred_dir_latch_next[i] = pred_taken;
+        req.tage_calc_altpred_latch_next[i] =
             tage_valid ? tage_out[bank_sel].alt_pred_out : false;
-        out.tage_calc_pcpn_latch_next[i] =
+        req.tage_calc_pcpn_latch_next[i] =
             tage_valid ? tage_out[bank_sel].pcpn_out : static_cast<pcpn_t>(0);
-        out.tage_calc_altpcpn_latch_next[i] =
+        req.tage_calc_altpcpn_latch_next[i] =
             tage_valid ? tage_out[bank_sel].altpcpn_out : static_cast<pcpn_t>(0);
-        out.tage_result_valid_latch_next[i] = tage_valid;
-        out.btb_pred_target_latch_next[i] =
-            btb_valid ? btb_out[bank_sel].pred_target : in.do_pred_for_this_pc[i] + 4;
-        out.btb_result_valid_latch_next[i] = btb_valid;
+        req.tage_result_valid_latch_next[i] = tage_valid;
+        req.btb_pred_target_latch_next[i] =
+            btb_valid ? btb_out[bank_sel].pred_target : rd.do_pred_for_this_pc[i] + 4;
+        req.btb_result_valid_latch_next[i] = btb_valid;
         for (int k = 0; k < TN_MAX; ++k) {
-          out.tage_pred_calc_tags_latch_next[i][k] =
+          req.tage_pred_calc_tags_latch_next[i][k] =
               tage_out[bank_sel].tage_tag_flat_out[k];
-          out.tage_pred_calc_idxs_latch_next[i][k] =
+          req.tage_pred_calc_idxs_latch_next[i][k] =
               tage_out[bank_sel].tage_idx_flat_out[k];
         }
-        out.out.out_sc_used[i] = tage_valid ? tage_out[bank_sel].sc_used_out : false;
-        out.out.out_sc_pred[i] = tage_valid ? tage_out[bank_sel].sc_pred_out : false;
-        out.out.out_sc_sum[i] = tage_valid ? tage_out[bank_sel].sc_sum_out : 0;
+        out.out_sc_used[i] = tage_valid ? tage_out[bank_sel].sc_used_out : false;
+        out.out_sc_pred[i] = tage_valid ? tage_out[bank_sel].sc_pred_out : false;
+        out.out_sc_sum[i] = tage_valid ? tage_out[bank_sel].sc_sum_out : 0;
         for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-          out.out.out_sc_idx[i][t] =
+          out.out_sc_idx[i][t] =
               tage_valid ? tage_out[bank_sel].sc_idx_out[t] : 0;
         }
-        out.out.out_loop_used[i] = tage_valid ? tage_out[bank_sel].loop_used_out : false;
-        out.out.out_loop_hit[i] = tage_valid ? tage_out[bank_sel].loop_hit_out : false;
-        out.out.out_loop_pred[i] = tage_valid ? tage_out[bank_sel].loop_pred_out : false;
-        out.out.out_loop_idx[i] = tage_valid ? tage_out[bank_sel].loop_idx_out : 0;
-        out.out.out_loop_tag[i] = tage_valid ? tage_out[bank_sel].loop_tag_out : 0;
+        out.out_loop_used[i] = tage_valid ? tage_out[bank_sel].loop_used_out : false;
+        out.out_loop_hit[i] = tage_valid ? tage_out[bank_sel].loop_hit_out : false;
+        out.out_loop_pred[i] = tage_valid ? tage_out[bank_sel].loop_pred_out : false;
+        out.out_loop_idx[i] = tage_valid ? tage_out[bank_sel].loop_idx_out : 0;
+        out.out_loop_tag[i] = tage_valid ? tage_out[bank_sel].loop_tag_out : 0;
 
         if (pred_taken && !found_taken_branch && btb_valid) {
           uint32_t chosen_target = btb_out[bank_sel].pred_target;
-          if (p_type == BR_RET && in.ras_has_entry_snapshot) {
-            chosen_target = in.ras_top_snapshot;
+          if (p_type == BR_RET && rd.ras_has_entry_snapshot) {
+            chosen_target = rd.ras_top_snapshot;
           }
-          out.next_fetch_addr_calc = chosen_target;
+          req.next_fetch_addr_calc = chosen_target;
           found_taken_branch = true;
         }
       }
     }
 
-    out.out.predict_next_fetch_address = out.next_fetch_addr_calc;
-    out.out.PTAB_write_enable = in.going_to_do_pred && !in.refetch;
+    out.predict_next_fetch_address = req.next_fetch_addr_calc;
+    out.PTAB_write_enable = rd.going_to_do_pred && !inp.refetch;
     for (int i = 0; i < FETCH_WIDTH; ++i) {
-      out.out.out_pred_dir[i] = out.final_pred_dir[i];
-      out.out.out_alt_pred[i] = out.tage_calc_altpred_latch_next[i];
-      out.out.out_pcpn[i] = out.tage_calc_pcpn_latch_next[i];
-      out.out.out_altpcpn[i] = out.tage_calc_altpcpn_latch_next[i];
+      out.out_pred_dir[i] = req.final_pred_dir[i];
+      out.out_alt_pred[i] = req.tage_calc_altpred_latch_next[i];
+      out.out_pcpn[i] = req.tage_calc_pcpn_latch_next[i];
+      out.out_altpcpn[i] = req.tage_calc_altpcpn_latch_next[i];
       for (int k = 0; k < TN_MAX; ++k) {
-        out.out.out_tage_tags[i][k] = out.tage_pred_calc_tags_latch_next[i][k];
-        out.out.out_tage_idxs[i][k] = out.tage_pred_calc_idxs_latch_next[i][k];
+        out.out_tage_tags[i][k] = req.tage_pred_calc_tags_latch_next[i][k];
+        out.out_tage_idxs[i][k] = req.tage_pred_calc_idxs_latch_next[i][k];
       }
     }
 
@@ -1076,51 +1045,7 @@ public:
                                    btb_out[i], req.btb_req[i]);
       }
     }
-    BpuPredictMainCombIn predict_main_in{};
-    predict_main_in.refetch = inp.refetch;
-    predict_main_in.refetch_address = inp.refetch_address;
-    predict_main_in.pred_base_pc = rd.pred_base_pc;
-    predict_main_in.boundary_addr = rd.boundary_addr;
-    predict_main_in.pc_can_send_to_icache_snapshot = rd.pc_can_send_to_icache_snapshot;
-    predict_main_in.going_to_do_pred = rd.going_to_do_pred;
-    std::memcpy(predict_main_in.do_pred_on_this_pc, rd.do_pred_on_this_pc,
-                sizeof(predict_main_in.do_pred_on_this_pc));
-    std::memcpy(predict_main_in.this_pc_bank_sel, rd.this_pc_bank_sel,
-                sizeof(predict_main_in.this_pc_bank_sel));
-    std::memcpy(predict_main_in.do_pred_for_this_pc, rd.do_pred_for_this_pc,
-                sizeof(predict_main_in.do_pred_for_this_pc));
-    predict_main_in.ras_has_entry_snapshot = rd.ras_has_entry_snapshot;
-    predict_main_in.ras_top_snapshot = rd.ras_top_snapshot;
-    predict_main_in.type_out = type_out;
-    for (int i = 0; i < BPU_BANK_NUM; ++i) {
-      predict_main_in.tage_out[i] = tage_out[i];
-      predict_main_in.btb_out[i] = btb_out[i];
-    }
-    BpuPredictMainCombOut predict_main_out{};
-    bpu_predict_main_comb(predict_main_in, predict_main_out);
-    out = predict_main_out.out;
-    req.next_fetch_addr_calc = predict_main_out.next_fetch_addr_calc;
-    for (int i = 0; i < FETCH_WIDTH; ++i) {
-      req.final_pred_dir[i] = predict_main_out.final_pred_dir[i];
-      req.tage_calc_pred_dir_latch_next[i] =
-          predict_main_out.tage_calc_pred_dir_latch_next[i];
-      req.tage_calc_altpred_latch_next[i] =
-          predict_main_out.tage_calc_altpred_latch_next[i];
-      req.tage_calc_pcpn_latch_next[i] = predict_main_out.tage_calc_pcpn_latch_next[i];
-      req.tage_calc_altpcpn_latch_next[i] =
-          predict_main_out.tage_calc_altpcpn_latch_next[i];
-      req.tage_result_valid_latch_next[i] =
-          predict_main_out.tage_result_valid_latch_next[i];
-      req.btb_pred_target_latch_next[i] = predict_main_out.btb_pred_target_latch_next[i];
-      req.btb_result_valid_latch_next[i] =
-          predict_main_out.btb_result_valid_latch_next[i];
-      for (int k = 0; k < TN_MAX; ++k) {
-        req.tage_pred_calc_tags_latch_next[i][k] =
-            predict_main_out.tage_pred_calc_tags_latch_next[i][k];
-        req.tage_pred_calc_idxs_latch_next[i][k] =
-            predict_main_out.tage_pred_calc_idxs_latch_next[i][k];
-      }
-    }
+    bpu_predict_main_comb(inp, rd, type_out, tage_out, btb_out, out, req);
 
     bpu_hist_comb(inp, rd, type_out, req);
 
