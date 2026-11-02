@@ -1,7 +1,6 @@
 #include "BPU/BPU.h"
 #include "front_IO.h"
 #include "front_module.h"
-#include "host_profile.h"
 #include "predecode.h"
 #include "predecode_checker.h"
 #include "train_IO.h"
@@ -1029,7 +1028,6 @@ static void accumulate_front2back_req(Front2BackCombOut &acc,
 // ============================================================================
 void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                      struct front_top_out &out, FrontUpdateRequest &req) {
-    FRONTEND_HOST_PROFILE_SCOPE(FrontComb);
     struct front_top_in *in = const_cast<struct front_top_in *>(&inp);
     struct front_top_out *out_ptr = &out;
     PendingBpuSeqTxn &bpu_seq_txn_req = req.bpu_seq_txn;
@@ -1112,7 +1110,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     struct fetch_address_FIFO_out saved_fetch_addr_fifo_out_1{};
 
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontReadStage);
         // ========================================================================
         // 阶段 1: 计算全局 flush/refetch 信号
         // ========================================================================
@@ -1309,7 +1306,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     bool can_bypass_fetch_to_icache = false;
     BPU_TOP::OutputPayload bpu_output{};
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontBpuStage);
         // ========================================================================
         // 阶段 4: BPU 控制逻辑
         // ========================================================================
@@ -1454,7 +1450,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     bool icache_slot0_data_valid = false;
     bool icache_slot1_data_valid = false;
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontIcacheStage);
         // ========================================================================
         // 阶段 6: icache 控制逻辑
         // ========================================================================
@@ -1552,7 +1547,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     }
 
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontPredecodeStage);
         bool inst_fifo_full_for_write = rd.fifo_full_latch_snapshot;
         bool can_bypass_icache_to_predecode =
             rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
@@ -1702,7 +1696,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     bool do_predecode_flush = false;
     uint32_t predecode_flush_address = 0;
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontF2bStage);
         bool ptab_can_write = bpu_output.PTAB_write_enable &&
                               !rd.ptab_full_latch_snapshot && !global_reset &&
                               !global_refetch;
@@ -1837,7 +1830,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     }
     
     {
-        FRONTEND_HOST_PROFILE_SCOPE(FrontRefreshStage);
         front_state_req.next_fetch_addr_fifo_full =
             (fetch_addr_fifo_rd.size >= (FETCH_ADDR_FIFO_SIZE - 1));
         front_state_req.next_fetch_addr_fifo_empty = (fetch_addr_fifo_rd.size == 0);
@@ -2014,7 +2006,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
 namespace {
 
 void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
-  FRONTEND_HOST_PROFILE_SCOPE(FrontSeqRead);
   rd.predecode_refetch_snapshot = predecode_refetch;
   rd.predecode_refetch_address_snapshot = predecode_refetch_address;
   rd.front_sim_time_snapshot = front_sim_time;
@@ -2052,7 +2043,6 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
 
 void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &req,
                      bool reset) {
-  FRONTEND_HOST_PROFILE_SCOPE(FrontSeqWrite);
   (void)inp;
   (void)reset;
   if (req.bpu_seq_txn.valid) {
@@ -2096,7 +2086,6 @@ void front_top_seq_write(const struct front_top_in &inp,
 void front_top(struct front_top_in *in, struct front_top_out *out) {
   assert(in);
   assert(out);
-  FRONTEND_HOST_PROFILE_SCOPE(FrontTop);
 
   FrontReadData rd;
   FrontUpdateRequest req;

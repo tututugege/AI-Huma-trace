@@ -1,7 +1,6 @@
 #include "../front_IO.h"
 #include "PtwMemPort.h"
 #include "include/ICacheTop.h"
-#include "host_profile.h"
 #include "include/icache_module.h"
 #include "GenericTable.h"
 #include <cassert>
@@ -256,7 +255,6 @@ void icache_peek_ready(struct icache_in *in, struct icache_out *out) {
 }
 
 void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
-  FRONTEND_HOST_PROFILE_SCOPE(IcacheComb);
   assert(in != nullptr);
   assert(out != nullptr);
   if (!in->reset) {

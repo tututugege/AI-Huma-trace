@@ -2,7 +2,6 @@
 #define BPU_TOP_H
 
 #include "../frontend.h"
-#include "../host_profile.h"
 #include "../wire_types.h"
 #include "./dir_predictor/TAGE_top.h"
 #include "./type_predictor/TypePredictor.h"
@@ -747,7 +746,6 @@ public:
   }
 
   void bpu_seq_read(const InputPayload &inp, ReadData &rd) const {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuSeqRead);
     std::memset(&rd, 0, sizeof(ReadData));
 
     rd.state_snapshot = state;
@@ -806,7 +804,6 @@ public:
 
   void bpu_pre_read_req_comb(const BpuPreReadReqCombIn &in,
                              BpuPreReadReqCombOut &out) const {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuPreReadReq);
     out = BpuPreReadReqCombOut{};
 
 #ifdef ENABLE_BPU_RAS
@@ -858,7 +855,6 @@ public:
   }
 
   void bpu_data_seq_read(const BpuPreReadReqCombOut &in, ReadData &rd) const {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuDataSeqRead);
 #ifdef ENABLE_BPU_RAS
     rd.ras_count_snapshot = in.ras_count_snapshot;
     rd.ras_has_entry_snapshot = in.ras_has_entry_snapshot;
@@ -942,7 +938,6 @@ public:
 
   void bpu_post_read_req_comb(const BpuPostReadReqCombIn &in,
                               BpuPostReadReqCombOut &out) const {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuPostReadReq);
     out = BpuPostReadReqCombOut{};
     for (int b = 0; b < BPU_BANK_NUM; b++) {
       for (int k = 0; k < FH_N_MAX; k++) {
@@ -1464,7 +1459,6 @@ public:
   }
 
   void bpu_submodule_seq_read(const BpuPostReadReqCombOut &in, ReadData &rd) const {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuSubmoduleSeqRead);
     rd.nlp_s1_req_pc_snapshot = in.nlp_s1_req_pc;
     std::memset(&rd.nlp_s1_entry_snapshot, 0, sizeof(rd.nlp_s1_entry_snapshot));
     if (in.nlp_s1_re) {
@@ -1485,7 +1479,6 @@ public:
   void bpu_core_comb_calc(const InputPayload &inp, ReadData &rd,
                           const BpuPostReadReqCombOut &post_req,
                           BpuCombOut &comb_out) {
-    FRONTEND_HOST_PROFILE_SCOPE(BpuCoreComb);
     OutputPayload &out = comb_out.out_regs;
     UpdateRequest &req = comb_out.update_req;
     std::memset(&out, 0, sizeof(OutputPayload));
@@ -1571,7 +1564,6 @@ public:
     req.type_in = post_req.type_in;
     TypePredictor::OutputPayload type_out{};
     {
-      FRONTEND_HOST_PROFILE_SCOPE(BpuTypeComb);
       type_pred_inst->type_pred_comb_calc(post_req.type_in, rd.type_rd, type_out,
                                           req.type_req);
     }
@@ -1588,14 +1580,12 @@ public:
     bind_in.type_out = type_out;
     bpu_submodule_bind_comb(bind_in, bind_out);
     {
-      FRONTEND_HOST_PROFILE_SCOPE(BpuTageComb);
       for (int i = 0; i < BPU_BANK_NUM; i++) {
         tage_inst[i]->tage_comb_calc(post_req.tage_in[i], rd.tage_rd[i], tage_out[i],
                                      req.tage_req[i]);
       }
     }
     {
-      FRONTEND_HOST_PROFILE_SCOPE(BpuBtbComb);
       for (int i = 0; i < BPU_BANK_NUM; i++) {
         btb_inst[i]->btb_comb_calc(bind_out.btb_in_with_type[i], rd.btb_rd[i],
                                    btb_out[i], req.btb_req[i]);

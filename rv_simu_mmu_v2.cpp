@@ -22,7 +22,6 @@
 #include "SimCpu.h"
 #include "config.h"
 #include "diff.h"
-#include "front-end/host_profile.h"
 #include "front_IO.h"
 #include "front_module.h"
 #include "util.h"
@@ -1063,7 +1062,6 @@ void SimCpu::restore_pc(uint32_t pc) {
 }
 
 void SimCpu::cycle() {
-  FRONTEND_HOST_PROFILE_SCOPE(SimCycle);
   ctx.perf.cycle++;
   // BackTop inputs are combinational wires. Re-drive the only intentionally
   // retained payload from an explicit top-level register before producers run.
@@ -1072,17 +1070,14 @@ void SimCpu::cycle() {
   back.in.peripheral_resp = peripheral_resp_hold;
   // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimCsrStatus);
     back.comb_csr_status();
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimClearAxiInputs);
     clear_axi_master_inputs(axi_interconnect);
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimFrontCombBeforeBack);
     front_comb_before_back();
   }
 
@@ -1091,73 +1086,59 @@ void SimCpu::cycle() {
   // before backend comb, so DCache responses from the previous DCache stage can
   // be visible to LSU in this CPU cycle.
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimAxiOutputs);
     axi_subsystem_comb_outputs(*this);
   }
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimBridgeAxiToMem);
     bridge_axi_to_mem_subsystem(*this);
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimMemCombOutputs);
     mem_subsystem.comb_outputs();
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimBackComb);
     back.comb();
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimMemCombInputs);
     mem_subsystem.comb_inputs();
   }
   peripheral_resp_hold_comb();
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimBridgeMemToAxi);
     bridge_mem_subsystem_to_axi(*this);
   }
 
   // AXI phase-2: master requests -> interconnect -> slave inputs.
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimAxiInputs);
     axi_subsystem_comb_inputs(*this);
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimBack2Front);
     back2front_comb();
   }
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldComb);
     front2back_hold_comb();
   }
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimFrontSeq);
 #ifdef CONFIG_BPU
     front.seq_write_bpu();
 #endif
     front.seq_back2front();
   }
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimFront2BackHoldSeq);
     front2back_hold_seq();
   }
   peripheral_resp_hold_seq();
 
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimBackSeq);
     back.seq();
   }
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimMemSeq);
     mem_subsystem.seq();
   }
   {
-    FRONTEND_HOST_PROFILE_SCOPE(SimAxiSeq);
     axi_subsystem_seq(*this);
     run_extra_axi_subsystem_ticks(*this);
   }
