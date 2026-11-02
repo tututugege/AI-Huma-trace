@@ -73,9 +73,11 @@ void Rob::init() {
   for (int i = 0; i < ROB_LINE_NUM; i++) {
     for (int j = 0; j < ROB_BANK_NUM; j++) {
       entry[j][i].valid = false;
-      entry_1[j][i].valid = false;
+      entry_1[j][i] = entry[j][i];  // entry_1 must equal entry from the first cycle on
     }
   }
+  std::memset(dirty_, 0, sizeof(dirty_));
+  dirty_all_ = false;
 }
 
 // 功能：复制 ROB 当前状态到本拍工作副本（*_1）。
@@ -83,11 +85,7 @@ void Rob::init() {
 // 输出更新：entry_1[][]、enq_ptr_1/deq_ptr_1、enq_flag_1/deq_flag_1。
 // 约束：仅状态镜像，不做提交/分配/恢复决策。
 void Rob::comb_begin() {
-  for (int i = 0; i < ROB_BANK_NUM; i++) {
-    for (int j = 0; j < ROB_LINE_NUM; j++) {
-      entry_1[i][j] = entry[i][j];
-    }
-  }
+  // entry_1 already equals entry: seq() copies back exactly the slots that comb_* touched.
   enq_ptr_1 = enq_ptr;
   deq_ptr_1 = deq_ptr;
   enq_flag_1 = enq_flag;
@@ -358,6 +356,7 @@ void Rob::comb_commit() {
       if (out.rob_commit->commit_entry[i].valid) {
         log_incomplete_store_commit(entry[i][deq_ptr].uop, "group", i);
         entry_1[i][deq_ptr].valid = false;
+        touch(i, deq_ptr);
       }
       if (entry_1[i][deq_ptr].valid) {
         line_drained = false;
@@ -398,6 +397,7 @@ void Rob::comb_commit() {
     }
 
     entry_1[single_idx][deq_ptr].valid = false;
+    touch(single_idx, deq_ptr);
     bool line_drained_after_single = true;
     for (int i = 0; i < ROB_BANK_NUM; i++) {
       if (entry_1[i][deq_ptr].valid) {
@@ -540,6 +540,7 @@ void Rob::comb_complete() {
 
       const wire<ROB_CPLT_MASK_WIDTH> cplt_bit =
           rob_cplt_mask_from_issue_port(i);
+      touch(bank_idx, line_idx);
       if ((entry_1[bank_idx][line_idx].uop.cplt_mask & cplt_bit) != 0) {
         std::fprintf(stderr,
                      "[ROB][DUP-CPLT] cycle=%lld port=%d rob_idx=%u line=%d bank=%d "
@@ -653,6 +654,7 @@ void Rob::comb_branch() {
     int redirect_bank = get_rob_bank(in.dec_bcast->redirect_rob_idx);
     int redirect_line = get_rob_line(in.dec_bcast->redirect_rob_idx);
     entry_1[redirect_bank][redirect_line].uop.ftq_is_last = true;
+    touch(redirect_bank, redirect_line);
 
     // 修正：明确使从重定向点到旧 Tail 的所有条目失效
     // 这可以处理多行回溯并防止“僵尸提交”
@@ -663,6 +665,7 @@ void Rob::comb_branch() {
     // 1. 清除第一行（重定向行）的剩余条目
     for (int i = start_bank; i < ROB_BANK_NUM; i++) {
       entry_1[i][ptr].valid = false;
+      touch(i, ptr);
     }
 
     // 2. 清除所有后续行，直到旧的 enq_ptr 行
@@ -677,6 +680,7 @@ void Rob::comb_branch() {
     while (ptr != current_tail_line) {
       for (int i = 0; i < ROB_BANK_NUM; i++) {
         entry_1[i][ptr].valid = false;
+        touch(i, ptr);
       }
       ptr = (ptr + 1) % ROB_LINE_NUM;
     }
@@ -694,6 +698,7 @@ void Rob::comb_fire() {
     for (int i = 0; i < DECODE_WIDTH; i++) {
       if (in.dis2rob->dis_fire[i]) {
         entry_1[i][enq_ptr].valid = true;
+        touch(i, enq_ptr);
         entry_1[i][enq_ptr].uop =
             RobStoredInst::from_dis_rob_inst(in.dis2rob->uop[i]);
         entry_1[i][enq_ptr].uop.cplt_mask = 0;
@@ -726,6 +731,7 @@ void Rob::comb_flush() {
         entry_1[i][j].valid = false;
       }
     }
+    touch_all();
 
     enq_ptr_1 = 0;
     deq_ptr_1 = 0;
@@ -735,11 +741,18 @@ void Rob::comb_flush() {
 }
 
 void Rob::seq() {
-  for (int i = 0; i < ROB_BANK_NUM; i++) {
-    for (int j = 0; j < ROB_LINE_NUM; j++) {
-      entry[i][j] = entry_1[i][j];
-    }
+  if (dirty_all_) {
+    for (int i = 0; i < ROB_BANK_NUM; i++)
+      for (int j = 0; j < ROB_LINE_NUM; j++) entry[i][j] = entry_1[i][j];
+  } else {
+    for (int w = 0; w < kDirtyWords; w++)
+      for (uint64_t m = dirty_[w]; m; m &= m - 1) {
+        const int k = w * 64 + __builtin_ctzll(m);
+        entry[k / ROB_LINE_NUM][k % ROB_LINE_NUM] = entry_1[k / ROB_LINE_NUM][k % ROB_LINE_NUM];
+      }
   }
+  std::memset(dirty_, 0, sizeof(dirty_));
+  dirty_all_ = false;
 
   deq_ptr = deq_ptr_1;
   enq_ptr = enq_ptr_1;

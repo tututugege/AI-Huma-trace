@@ -61,6 +61,15 @@ public:
   reg<1> deq_flag;
 
   RobStoredEntry entry_1[ROB_BANK_NUM][ROB_LINE_NUM];
+  // Slots of entry_1 written this cycle; seq() copies only these back (entry_1 == entry at the start of a cycle).
+  static constexpr int kDirtyWords = (ROB_BANK_NUM * ROB_LINE_NUM + 63) / 64;
+  uint64_t dirty_[kDirtyWords] = {};
+  bool dirty_all_ = false;
+  void touch(int bank, int line) {
+    const int k = bank * ROB_LINE_NUM + line;
+    dirty_[k >> 6] |= 1ull << (k & 63);
+  }
+  void touch_all() { dirty_all_ = true; }
   wire<clog2(ROB_LINE_NUM)> enq_ptr_1;
   wire<clog2(ROB_LINE_NUM)> deq_ptr_1;
   wire<1> enq_flag_1;
