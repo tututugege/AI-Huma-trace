@@ -19,6 +19,11 @@
 #else
 #define IDU(f) idu->f()
 #endif
+#ifdef CSR_SHADOW
+#include "CsrShadow.h"
+#else
+#define CSR(f) csr->f()
+#endif
 #ifdef REN_SHADOW
 #include "RenShadow.h"
 #else
@@ -148,7 +153,7 @@ void BackTop::comb_lsu_mmu() {
 }
 
 void BackTop::comb_csr_status() {
-  csr->comb_csr_status();
+  CSR(comb_csr_status);
   out.sstatus = csr_status.sstatus;
   out.mstatus = csr_status.mstatus;
   out.satp = csr_status.satp;
@@ -172,7 +177,7 @@ void BackTop::comb_begin_all() {
   prf->comb_begin();
   EXU(comb_begin);
   ROB(comb_begin);
-  csr->comb_begin();
+  CSR(comb_begin);
 }
 
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
@@ -180,7 +185,7 @@ void BackTop::comb_stage_decode_and_resources() {
   IDU(comb_branch);
   pre->comb_accept_front();
   IDU(comb_decode);
-  csr->comb_interrupt();
+  CSR(comb_interrupt);
   REN(comb_alloc);
   prf->comb_complete();
   prf->comb_awake();
@@ -209,7 +214,7 @@ void BackTop::comb_stage_memory_responses() {
   LSU(comb_dcache2lsu_stq);
   LSU(comb_lsu2exe);
   EXU(comb_to_csr);
-  csr->comb_csr_read();
+  CSR(comb_csr_read);
 }
 
 // Functional units execute; their results complete ROB entries.
@@ -238,8 +243,8 @@ void BackTop::comb_stage_operands_and_dispatch() {
 
   ISU(comb_awake);
   ISU(comb_calc_latency_next);
-  csr->comb_exception();
-  csr->comb_csr_write();
+  CSR(comb_exception);
+  CSR(comb_csr_write);
   DIS(comb_wake);
   REN(comb_rename);
 
@@ -271,7 +276,7 @@ void BackTop::comb_stage_fire_and_recover() {
   EXU(comb_pipeline);
   DIS(comb_pipeline);
   REN(comb_pipeline);
-  csr->comb_interrupt_inject();
+  CSR(comb_interrupt_inject);
 }
 
 void BackTop::comb() {
@@ -405,7 +410,7 @@ void BackTop::seq() {
   EXU(seq);
   prf->seq();
   ROB(seq);
-  csr->seq();
+  CSR(seq);
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->seq();
   }

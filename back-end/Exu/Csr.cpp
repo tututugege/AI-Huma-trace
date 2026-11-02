@@ -6,55 +6,36 @@
 #include "ref.h"
 
 namespace {
+constexpr uint32_t kSstatusMask = 0x800DE133;  // mstatus bits visible through sstatus
+constexpr uint32_t kMstatusWriteMask = 0x807FF9BB;
+constexpr uint32_t kSipMask = 0x00000333, kSieMask = 0x00000333;  // supervisor view of mip / mie
+constexpr uint32_t kMipMask = 0x00000bbb, kMieMask = 0x00000bbb;
+
+// Interrupts that can be taken now, split by the privilege level that handles them.
 struct IrqState {
-  bool m_software_interrupt = false;
-  bool m_timer_interrupt = false;
-  bool m_external_interrupt = false;
-  bool s_software_interrupt = false;
-  bool s_timer_interrupt = false;
-  bool s_external_interrupt = false;
+  bool m_sw, m_timer, m_ext;
+  bool s_sw, s_timer, s_ext;
+  bool to_m() const { return m_sw || m_timer || m_ext; }
+  bool to_s() const { return s_sw || s_timer || s_ext; }
 };
 
-inline IrqState eval_interrupts(uint32_t mstatus, uint32_t mie_reg,
-                                uint32_t mip_reg, uint32_t mideleg,
-                                uint32_t privilege) {
-  IrqState irq;
-  bool mstatus_mie = (mstatus & MSTATUS_MIE) != 0;
-  bool mstatus_sie = (mstatus & MSTATUS_SIE) != 0;
-
-  irq.m_software_interrupt = (mip_reg & MIP_MSIP) && (mie_reg & MIP_MSIP) &&
-                             !(mideleg & MIP_MSIP) &&
-                             (privilege < 3 || mstatus_mie);
-  irq.m_timer_interrupt = (mip_reg & MIP_MTIP) && (mie_reg & MIP_MTIP) &&
-                          !(mideleg & MIP_MTIP) &&
-                          (privilege < 3 || mstatus_mie);
-  irq.m_external_interrupt = (mip_reg & MIP_MEIP) && (mie_reg & MIP_MEIP) &&
-                             !(mideleg & MIP_MEIP) &&
-                             (privilege < 3 || mstatus_mie);
-
-  bool s_irq_enable = (privilege < 1 || (privilege == 1 && mstatus_sie));
-  irq.s_software_interrupt =
-      (((mip_reg & MIP_MSIP) && (mie_reg & MIP_MSIP) && (mideleg & MIP_MSIP)) ||
-       ((mip_reg & MIP_SSIP) && (mie_reg & MIP_SSIP))) &&
-      (privilege < 2 && s_irq_enable);
-  irq.s_timer_interrupt =
-      (((mip_reg & MIP_MTIP) && (mie_reg & MIP_MTIP) && (mideleg & MIP_MTIP)) ||
-       ((mip_reg & MIP_STIP) && (mie_reg & MIP_STIP))) &&
-      (privilege < 2 && s_irq_enable);
-  irq.s_external_interrupt =
-      (((mip_reg & MIP_MEIP) && (mie_reg & MIP_MEIP) && (mideleg & MIP_MEIP)) ||
-       ((mip_reg & MIP_SEIP) && (mie_reg & MIP_SEIP))) &&
-      (privilege < 2 && s_irq_enable);
-
-  return irq;
+IrqState eval_interrupts(uint32_t mstatus, uint32_t mie, uint32_t mip, uint32_t mideleg, uint32_t priv) {
+  const bool m_enable = priv < 3 || (mstatus & MSTATUS_MIE);
+  const bool s_enable = priv < 2 && (priv < 1 || (priv == 1 && (mstatus & MSTATUS_SIE)));
+  // pending and enabled, not delegated -> machine level
+  auto to_m = [&](uint32_t bit) { return (mip & bit) && (mie & bit) && !(mideleg & bit) && m_enable; };
+  // pending and enabled and delegated, or the supervisor's own pending bit -> supervisor level
+  auto to_s = [&](uint32_t m_bit, uint32_t s_bit) {
+    return (((mip & m_bit) && (mie & m_bit) && (mideleg & m_bit)) || ((mip & s_bit) && (mie & s_bit))) && s_enable;
+  };
+  return {to_m(MIP_MSIP), to_m(MIP_MTIP), to_m(MIP_MEIP),
+          to_s(MIP_MSIP, MIP_SSIP), to_s(MIP_MTIP, MIP_STIP), to_s(MIP_MEIP, MIP_SEIP)};
 }
-} // namespace
+}  // namespace
 
-void Csr::init() {
-  CSR_RegFile[csr_misa] = 0x40141103;   // U/S/M  RV32I/A/M/B
-  CSR_RegFile_1[csr_misa] = 0x40141103; // U/S/M  RV32I/A/M/B
-}
+void Csr::init() { CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103; }  // U/S/M, RV32 I/A/M/B
 
+// The working copies already equal the registered state (seq() copies them back).
 void Csr::comb_begin() {
   BEGIN_EQ(CSR_RegFile_1, CSR_RegFile);
   BEGIN_EQ(privilege_1, privilege);
@@ -72,270 +53,130 @@ void Csr::comb_csr_status() {
 }
 
 void Csr::comb_csr_read() {
-  if (wires->exe2csr.re) {
-    wires->csr2exe.rdata = CSR_RegFile[cvt_number_to_csr(wires->exe2csr.idx)];
-  }
+  if (wires->exe2csr.re) wires->csr2exe.rdata = CSR_RegFile[cvt_number_to_csr(wires->exe2csr.idx)];
 }
 
 void Csr::comb_interrupt() {
-  uint32_t mstatus = CSR_RegFile[csr_mstatus];
-  uint32_t mie_reg = CSR_RegFile[csr_mie];
-  uint32_t mip_reg = CSR_RegFile[csr_mip];
-  uint32_t mideleg = CSR_RegFile[csr_mideleg];
-  IrqState irq = eval_interrupts(mstatus, mie_reg, mip_reg, mideleg, privilege);
-  wires->csr2rob.interrupt_req =
-      irq.m_software_interrupt || irq.m_timer_interrupt ||
-      irq.m_external_interrupt || irq.s_software_interrupt ||
-      irq.s_timer_interrupt || irq.s_external_interrupt;
+  const IrqState irq = eval_interrupts(CSR_RegFile[csr_mstatus], CSR_RegFile[csr_mie], CSR_RegFile[csr_mip],
+                                       CSR_RegFile[csr_mideleg], privilege);
+  wires->csr2rob.interrupt_req = irq.to_m() || irq.to_s();
 }
 
+// External interrupt lines set/clear their mip bit; sip mirrors the supervisor-visible bits.
 void Csr::comb_interrupt_inject() {
-  if (&wires->csr_interrupt_inject_io == nullptr) {
-    return;
-  }
-
-  if (static_cast<bool>(wires->csr_interrupt_inject_io.external_irq_pending_valid)) {
-    if (static_cast<bool>(wires->csr_interrupt_inject_io.external_irq_pending)) {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_MEIP;
-    } else {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_MEIP;
-    }
-    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & 0x00000333u;
-  }
-
-  if (static_cast<bool>(
-          wires->csr_interrupt_inject_io.supervisor_external_irq_pending_valid)) {
-    if (static_cast<bool>(
-            wires->csr_interrupt_inject_io.supervisor_external_irq_pending)) {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_SEIP;
-    } else {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_SEIP;
-    }
-    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & 0x00000333u;
-  }
-
-  if (static_cast<bool>(wires->csr_interrupt_inject_io.timer_irq_pending_valid)) {
-    if (static_cast<bool>(wires->csr_interrupt_inject_io.timer_irq_pending)) {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] | MIP_MTIP;
-    } else {
-      CSR_RegFile_1[csr_mip] = CSR_RegFile_1[csr_mip] & ~MIP_MTIP;
-    }
-    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & 0x00000333u;
+  const CsrInterruptInjectIO &io = wires->csr_interrupt_inject_io;
+  const struct { bool valid, pending; uint32_t bit; } lines[] = {
+      {io.external_irq_pending_valid, io.external_irq_pending, MIP_MEIP},
+      {io.supervisor_external_irq_pending_valid, io.supervisor_external_irq_pending, MIP_SEIP},
+      {io.timer_irq_pending_valid, io.timer_irq_pending, MIP_MTIP},
+  };
+  for (const auto &l : lines) {
+    if (!l.valid) continue;
+    CSR_RegFile_1[csr_mip] = l.pending ? (CSR_RegFile_1[csr_mip] | l.bit) : (CSR_RegFile_1[csr_mip] & ~l.bit);
+    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & kSipMask;
   }
 }
 
+// Trap entry / xRET: next-cycle status, privilege, cause, tval and the redirect target. Machine traps take priority
+// over supervisor traps; a trap is delegated to S according to medeleg (interrupts: mideleg inside eval_interrupts).
 void Csr::comb_exception() {
+  const RobBroadcastIO &rb = wires->rob_bcast;
   uint32_t mstatus = CSR_RegFile[csr_mstatus];
   uint32_t sstatus = CSR_RegFile[csr_sstatus];
-  uint32_t mie_reg = CSR_RegFile[csr_mie];
-  uint32_t mip_reg = CSR_RegFile[csr_mip];
-  uint32_t mideleg = CSR_RegFile[csr_mideleg];
-  uint32_t medeleg = CSR_RegFile[csr_medeleg];
-  uint32_t mtvec = CSR_RegFile[csr_mtvec];
-  uint32_t stvec = CSR_RegFile[csr_stvec];
+  const uint32_t medeleg = CSR_RegFile[csr_medeleg];
+  const uint32_t mtvec = CSR_RegFile[csr_mtvec], stvec = CSR_RegFile[csr_stvec];
 
-  bool ecall = wires->rob_bcast.ecall;
-  bool page_fault_inst = wires->rob_bcast.page_fault_inst;
-  bool page_fault_load = wires->rob_bcast.page_fault_load;
-  bool page_fault_store = wires->rob_bcast.page_fault_store;
-  bool illegal_exceptinn = wires->rob_bcast.illegal_inst;
+  const bool ecall = rb.ecall, pf_inst = rb.page_fault_inst, pf_load = rb.page_fault_load,
+             pf_store = rb.page_fault_store, illegal = rb.illegal_inst;
+  const bool pf = pf_inst || pf_load || pf_store;
+  auto deleg = [&](int bit) { return (medeleg >> bit) & 1; };
+  const bool d_uecall = deleg(8), d_secall = deleg(9), d_pf_inst = deleg(12), d_pf_load = deleg(13),
+             d_pf_store = deleg(15), d_illegal = deleg(2);
 
-  // 异常委托位 (Exceptions)
-  bool medeleg_U_ecall = (medeleg >> 8) & 1;
-  bool medeleg_S_ecall = (medeleg >> 9) & 1;
-  // bool medeleg_M_ecall = (medeleg >> 11) & 1; // 通常机器模式 ECALL 不会委托
+  const IrqState irq = eval_interrupts(mstatus, CSR_RegFile[csr_mie], CSR_RegFile[csr_mip], CSR_RegFile[csr_mideleg], privilege);
+  const bool resp = wires->rob2csr.interrupt_resp;
+  const bool m_irq = irq.to_m() && resp, s_irq = irq.to_s() && resp;
 
-  bool medeleg_page_fault_inst = (medeleg >> 12) & 1;
-  bool medeleg_page_fault_load = (medeleg >> 13) & 1;
-  bool medeleg_page_fault_store = (medeleg >> 15) & 1;
-  bool medeleg_illegal_inst = (medeleg >> 2) & 1;
+  const bool u_ecall = ecall && privilege == 0, s_ecall = ecall && privilege == 1, m_ecall = ecall && privilege == 3;
+  const bool m_trap = m_irq || (u_ecall && !d_uecall) || (s_ecall && !d_secall) || m_ecall ||
+                      (pf_inst && !d_pf_inst) || (pf_load && !d_pf_load) || (pf_store && !d_pf_store) ||
+                      (illegal && !d_illegal);
+  const bool s_trap = s_irq || (u_ecall && d_uecall) || (s_ecall && d_secall) || (pf_inst && d_pf_inst) ||
+                      (pf_load && d_pf_load) || (pf_store && d_pf_store) || (illegal && d_illegal);
 
-  IrqState irq = eval_interrupts(mstatus, mie_reg, mip_reg, mideleg, privilege);
-  bool S_interrupt_resp = (irq.s_software_interrupt || irq.s_timer_interrupt ||
-                           irq.s_external_interrupt) &&
-                          wires->rob2csr.interrupt_resp;
-  bool M_interrupt_resp = (irq.m_software_interrupt || irq.m_timer_interrupt ||
-                           irq.m_external_interrupt) &&
-                          wires->rob2csr.interrupt_resp;
+  // Vectored mode: interrupts jump to base + 4 * cause.
+  auto trap_target = [&](uint32_t tvec, uint32_t cause) {
+    if ((tvec & 1) && (cause & (1u << 31))) return (tvec & 0xfffffffc) + 4 * (cause & 0x7fffffff);
+    return tvec;
+  };
 
-  bool MTrap =
-      M_interrupt_resp || (ecall && (privilege == 0) && !medeleg_U_ecall) ||
-      (ecall && (privilege == 1) && !medeleg_S_ecall) ||
-      (ecall && (privilege == 3)) ||
-      (page_fault_inst && !medeleg_page_fault_inst) ||
-      (page_fault_load && !medeleg_page_fault_load) ||
-      (page_fault_store && !medeleg_page_fault_store) ||
-      (illegal_exceptinn && !medeleg_illegal_inst);
-
-  bool STrap = S_interrupt_resp ||
-               (ecall && (privilege == 0) && medeleg_U_ecall) ||
-               (ecall && (privilege == 1) && medeleg_S_ecall) ||
-               (page_fault_inst && medeleg_page_fault_inst) ||
-               (page_fault_load && medeleg_page_fault_load) ||
-               (page_fault_store && medeleg_page_fault_store) ||
-               (illegal_exceptinn && medeleg_illegal_inst);
-
-  if (MTrap) {
-    CSR_RegFile_1[csr_mepc] = wires->rob_bcast.pc;
-
-    // next_mcause = interruptType;
-    uint32_t cause =
-        (irq.m_software_interrupt || irq.m_timer_interrupt ||
-         irq.m_external_interrupt)
-            ? 1U << 31
-            : 0;
-
-    cause += irq.m_software_interrupt ? 3
-             : irq.m_timer_interrupt  ? 7
-             : (irq.m_external_interrupt ||
-                (ecall && (privilege == 3) && !medeleg_U_ecall))
-                 ? 11
-             /*: illegal_exceptinn                                  ? 2*/
-             : (ecall && (privilege == 0) && !medeleg_U_ecall) ? 8
-             : (ecall && (privilege == 1) && !medeleg_S_ecall) ? 9
-             : (page_fault_inst && !medeleg_page_fault_inst)   ? 12
-             : (page_fault_load && !medeleg_page_fault_load)   ? 13
-             : (page_fault_store && !medeleg_page_fault_store) ? 15
-             : (illegal_exceptinn)                             ? 2
-                                   : 0; // 给后 31 位赋值
-
+  if (m_trap) {
+    CSR_RegFile_1[csr_mepc] = rb.pc;
+    const bool is_irq = irq.to_m();  // same selection as the hardware: the cause reports the raw interrupt state
+    uint32_t cause = is_irq ? 1u << 31 : 0;
+    cause += irq.m_sw ? 3
+             : irq.m_timer ? 7
+             : (irq.m_ext || (m_ecall && !d_uecall)) ? 11
+             : (u_ecall && !d_uecall) ? 8
+             : (s_ecall && !d_secall) ? 9
+             : (pf_inst && !d_pf_inst) ? 12
+             : (pf_load && !d_pf_load) ? 13
+             : (pf_store && !d_pf_store) ? 15
+             : illegal ? 2
+                       : 0;
     CSR_RegFile_1[csr_mcause] = cause;
+    wires->csr2front.trap_pc = trap_target(mtvec, cause);
 
-    if ((mtvec & 1) && (cause & (1u << 31))) {
-      wires->csr2front.trap_pc = CSR_RegFile[csr_mtvec] & 0xfffffffc;
-      wires->csr2front.trap_pc += 4 * (cause & 0x7fffffff);
-    } else {
-      wires->csr2front.trap_pc = CSR_RegFile[csr_mtvec];
-    }
-
-    mstatus = (mstatus & ~MSTATUS_MPP) | ((privilege & 0x3) << 11);
-    // MPIE = MIE
-    if (mstatus & MSTATUS_MIE)
-      mstatus |= MSTATUS_MPIE;
-    else
-      mstatus &= ~MSTATUS_MPIE;
-    // MIE = 0
+    mstatus = (mstatus & ~MSTATUS_MPP) | ((privilege & 0x3) << 11);  // MPP = privilege
+    mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);  // MPIE = MIE
     mstatus &= ~MSTATUS_MIE;
-
-    // 同步 sstatus (sstatus 是 mstatus 的影子)
-    uint32_t sstatus_mask = 0x800DE133;
     CSR_RegFile_1[csr_mstatus] = mstatus;
-    CSR_RegFile_1[csr_sstatus] = mstatus & sstatus_mask;
-
-    privilege_1 = RISCV_MODE_M; // 机器模式 (Machine Mode)
-
-    if (page_fault_store || page_fault_load || page_fault_inst) {
-      CSR_RegFile_1[csr_mtval] = wires->rob_bcast.trap_val;
-    } else if (illegal_exceptinn) {
-      CSR_RegFile_1[csr_mtval] = wires->rob_bcast.trap_val;
-    } else {
-      CSR_RegFile_1[csr_mtval] = 0;
-    }
-
-  } else if (STrap) {
-    CSR_RegFile_1[csr_sepc] = wires->rob_bcast.pc;
-    uint32_t cause =
-        (irq.s_software_interrupt || irq.s_timer_interrupt ||
-         irq.s_external_interrupt)
-            ? 1U << 31
-            : 0;
-
-    cause +=
-        (irq.s_external_interrupt || (ecall && (privilege == 1) && medeleg_S_ecall))
-            ? 9
-        : irq.s_timer_interrupt                          ? 5
-        : (ecall && (privilege == 0) && medeleg_U_ecall) ? 8
-        : irq.s_software_interrupt                       ? 1
-        : (page_fault_inst && medeleg_page_fault_inst)   ? 12
-        : (page_fault_load && medeleg_page_fault_load)   ? 13
-        : (page_fault_store && medeleg_page_fault_store) ? 15
-        : (illegal_exceptinn && medeleg_illegal_inst)    ? 2
-                                                         : 0; // 给后 31 位赋值
-
+    CSR_RegFile_1[csr_sstatus] = mstatus & kSstatusMask;
+    privilege_1 = RISCV_MODE_M;
+    CSR_RegFile_1[csr_mtval] = (pf || illegal) ? rb.trap_val : 0;
+  } else if (s_trap) {
+    CSR_RegFile_1[csr_sepc] = rb.pc;
+    uint32_t cause = irq.to_s() ? 1u << 31 : 0;
+    cause += (irq.s_ext || (s_ecall && d_secall)) ? 9
+             : irq.s_timer ? 5
+             : (u_ecall && d_uecall) ? 8
+             : irq.s_sw ? 1
+             : (pf_inst && d_pf_inst) ? 12
+             : (pf_load && d_pf_load) ? 13
+             : (pf_store && d_pf_store) ? 15
+             : (illegal && d_illegal) ? 2
+                                      : 0;
     CSR_RegFile_1[csr_scause] = cause;
+    wires->csr2front.trap_pc = trap_target(stvec, cause);
 
-    if ((stvec & 1) && (cause & (1u << 31))) {
-      wires->csr2front.trap_pc = CSR_RegFile[csr_stvec] & 0xfffffffc;
-      wires->csr2front.trap_pc += 4 * (cause & 0x7fffffff);
-    } else {
-      wires->csr2front.trap_pc = CSR_RegFile[csr_stvec];
-    }
-
-    // 更新 sstatus
-    // SPP = privilege
-    if (privilege == 1)
-      sstatus |= MSTATUS_SPP;
-    else
-      sstatus &= ~MSTATUS_SPP;
-
-    // SPIE = SIE
-    if (sstatus & MSTATUS_SIE)
-      sstatus |= MSTATUS_SPIE;
-    else
-      sstatus &= ~MSTATUS_SPIE;
-
-    // SIE = 0
+    sstatus = privilege == 1 ? (sstatus | MSTATUS_SPP) : (sstatus & ~MSTATUS_SPP);  // SPP = privilege
+    sstatus = (sstatus & MSTATUS_SIE) ? (sstatus | MSTATUS_SPIE) : (sstatus & ~MSTATUS_SPIE);  // SPIE = SIE
     sstatus &= ~MSTATUS_SIE;
-
-    // 写回
-    uint32_t sstatus_mask = 0x800DE133;
     CSR_RegFile_1[csr_sstatus] = sstatus;
-    CSR_RegFile_1[csr_mstatus] =
-        (CSR_RegFile[csr_mstatus] & ~sstatus_mask) | (sstatus & sstatus_mask);
-
-    privilege_1 = 1; // 监管者模式 (Supervisor Mode)
-
-    if (page_fault_store || page_fault_load || page_fault_inst ||
-        illegal_exceptinn) {
-      CSR_RegFile_1[csr_stval] = wires->rob_bcast.trap_val;
-    } else {
-      CSR_RegFile_1[csr_stval] = 0;
-    }
-
-  } else if (wires->rob_bcast.mret) {
-    // MIE = MPIE
-    if (mstatus & MSTATUS_MPIE)
-      mstatus |= MSTATUS_MIE;
-    else
-      mstatus &= ~MSTATUS_MIE;
-
-    // Privilege = MPP
+    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusMask) | (sstatus & kSstatusMask);
+    privilege_1 = 1;
+    CSR_RegFile_1[csr_stval] = (pf || illegal) ? rb.trap_val : 0;
+  } else if (rb.mret) {
+    mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);  // MIE = MPIE
     privilege_1 = GET_MPP(mstatus);
-
-    // MPIE = 1
     mstatus |= MSTATUS_MPIE;
-    // MPP = U (0)
-    mstatus &= ~MSTATUS_MPP;
-
-    // 同步 sstatus
-    uint32_t sstatus_mask = 0x800DE133;
+    mstatus &= ~MSTATUS_MPP;  // MPP = U
     CSR_RegFile_1[csr_mstatus] = mstatus;
-    CSR_RegFile_1[csr_sstatus] = mstatus & sstatus_mask;
+    CSR_RegFile_1[csr_sstatus] = mstatus & kSstatusMask;
     wires->csr2front.epc = CSR_RegFile[csr_mepc];
-  } else if (wires->rob_bcast.sret) {
-    // SIE = SPIE
-    if (sstatus & MSTATUS_SPIE)
-      sstatus |= MSTATUS_SIE;
-    else
-      sstatus &= ~MSTATUS_SIE;
-
-    // Privilege = SPP
+  } else if (rb.sret) {
+    sstatus = (sstatus & MSTATUS_SPIE) ? (sstatus | MSTATUS_SIE) : (sstatus & ~MSTATUS_SIE);  // SIE = SPIE
     privilege_1 = GET_SPP(sstatus);
-
-    // SPIE = 1
     sstatus |= MSTATUS_SPIE;
-    // SPP = U (0)
-    sstatus &= ~MSTATUS_SPP;
-
-    uint32_t sstatus_mask = 0x800DE133;
+    sstatus &= ~MSTATUS_SPP;  // SPP = U
     CSR_RegFile_1[csr_sstatus] = sstatus;
-    CSR_RegFile_1[csr_mstatus] =
-        (CSR_RegFile[csr_mstatus] & ~sstatus_mask) | (sstatus & sstatus_mask);
-
+    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusMask) | (sstatus & kSstatusMask);
     wires->csr2front.epc = CSR_RegFile[csr_sepc];
   }
 }
 
+// A CSR instruction latches its write at execute and performs it when it commits (so a squashed instruction has no
+// effect). The aliases (sie/sip/sstatus) update the machine register and the derived supervisor view.
 void Csr::comb_csr_write() {
   if (wires->exe2csr.we) {
     csr_we_1 = wires->exe2csr.we;
@@ -343,75 +184,36 @@ void Csr::comb_csr_write() {
     csr_wcmd_1 = wires->exe2csr.wcmd;
     csr_wdata_1 = wires->exe2csr.wdata;
   }
+  if (!(wires->rob2csr.commit && csr_we)) return;
 
-  if (wires->rob2csr.commit && csr_we) {
-    uint32_t old_val = CSR_RegFile[cvt_number_to_csr(csr_idx)];
+  const uint32_t old_val = CSR_RegFile[cvt_number_to_csr(csr_idx)];
+  if (csr_wcmd == CSR_S) csr_wdata = (csr_wdata | old_val);
+  else if (csr_wcmd == CSR_C) csr_wdata = (~csr_wdata & old_val);
 
-    if (csr_wcmd == CSR_S) {
-      csr_wdata = (csr_wdata | old_val);
-    } else if (csr_wcmd == CSR_C) {
-      csr_wdata = (~csr_wdata & old_val);
-    }
-
-    if (csr_idx == number_mie || csr_idx == number_sie) {
-      uint32_t mie_mask = 0x00000bbb;
-      uint32_t sie_mask = 0x00000333;
-
-      if (csr_idx == number_sie) {
-        CSR_RegFile_1[csr_mie] =
-            (CSR_RegFile[csr_mie] & ~sie_mask) | (csr_wdata & sie_mask);
-      } else {
-        CSR_RegFile_1[csr_mie] = csr_wdata & mie_mask;
-      }
-      CSR_RegFile_1[csr_sie] = CSR_RegFile_1[csr_mie] & sie_mask;
-    } else if (csr_idx == number_mip || csr_idx == number_sip) {
-      uint32_t mip_mask = 0x00000bbb;
-      uint32_t sip_mask = 0x00000333;
-
-      if (csr_idx == number_sip) {
-        CSR_RegFile_1[csr_mip] =
-            (CSR_RegFile[csr_mip] & ~sip_mask) | (csr_wdata & sip_mask);
-      } else {
-        CSR_RegFile_1[csr_mip] = csr_wdata & mip_mask;
-      }
-
-      CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & sip_mask;
-    } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
-
-      uint32_t mstatus_mask = 0x807FF9BB;
-      uint32_t sstatus_mask = 0x800DE133;
-
-      if (csr_idx == number_sstatus) {
-        CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~sstatus_mask) |
-                                     (csr_wdata & sstatus_mask);
-      } else {
-        CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~mstatus_mask) |
-                                     (csr_wdata & mstatus_mask);
-      }
-
-      CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & sstatus_mask;
-
-    } else if (csr_idx == number_satp) {
-      const uint32_t old_satp = CSR_RegFile[csr_satp];
-      CSR_RegFile_1[csr_satp] = csr_wdata;
-      if (old_satp != csr_wdata) {
-        debug_ptw_trace::record_satp_write(
-            old_satp, static_cast<uint32_t>(csr_wdata),
-            static_cast<uint8_t>(privilege));
-      }
-    } else {
-      CSR_RegFile_1[cvt_number_to_csr(csr_idx)] = csr_wdata;
-    }
-
-    csr_we_1 = false;
+  // machine register `m`, written through its supervisor alias with `s_mask` or directly with `m_mask`
+  auto write_pair = [&](int m, int s, bool via_s, uint32_t m_mask, uint32_t s_mask) {
+    CSR_RegFile_1[m] = via_s ? (CSR_RegFile[m] & ~s_mask) | (csr_wdata & s_mask) : (m == csr_mstatus ? (CSR_RegFile[m] & ~m_mask) | (csr_wdata & m_mask) : csr_wdata & m_mask);
+    CSR_RegFile_1[s] = CSR_RegFile_1[m] & s_mask;
+  };
+  if (csr_idx == number_mie || csr_idx == number_sie) {
+    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, kSieMask);
+  } else if (csr_idx == number_mip || csr_idx == number_sip) {
+    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, kSipMask);
+  } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
+    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusMask);
+  } else if (csr_idx == number_satp) {
+    const uint32_t old_satp = CSR_RegFile[csr_satp];
+    CSR_RegFile_1[csr_satp] = csr_wdata;
+    if (old_satp != csr_wdata)
+      debug_ptw_trace::record_satp_write(old_satp, static_cast<uint32_t>(csr_wdata), static_cast<uint8_t>(privilege));
+  } else {
+    CSR_RegFile_1[cvt_number_to_csr(csr_idx)] = csr_wdata;
   }
+  csr_we_1 = false;
 }
 
 void Csr::seq() {
-  for (int i = 0; i < CSR_NUM; i++) {
-    CSR_RegFile[i] = CSR_RegFile_1[i];
-  }
-
+  for (int i = 0; i < CSR_NUM; i++) CSR_RegFile[i] = CSR_RegFile_1[i];
   csr_idx = csr_idx_1;
   csr_wdata = csr_wdata_1;
   csr_wcmd = csr_wcmd_1;
