@@ -12,117 +12,50 @@
 struct DecRenIO {
   using DecRenInst = Uop;
 
-  DecRenInst uop[DECODE_WIDTH];
-  wire<1> valid[DECODE_WIDTH];
-  DecRenIO() {
-    for (auto &v : uop)
-      v = {};
-    for (auto &v : valid)
-      v = {};
-  }
+  DecRenInst uop[DECODE_WIDTH] = {};
+  wire<1> valid[DECODE_WIDTH] = {};
 };
 
 struct RenDecIO {
 
-  wire<1> ready;
-
-  RenDecIO() { ready = {}; }
+  wire<1> ready = {};
 };
 
 // IDU -> PreIduQueue consume handshake (only what PreIduQueue needs).
 struct IduConsumeIO {
-  wire<1> fire[DECODE_WIDTH];
-  IduConsumeIO() {
-    for (auto &v : fire)
-      v = {};
-  }
+  wire<1> fire[DECODE_WIDTH] = {};
 };
 
 struct PreFrontIO {
 
-  wire<1> fire[BACKEND_FETCH_WIDTH];
-  wire<1> ready;
-
-  PreFrontIO() {
-    for (auto &v : fire)
-      v = {};
-    ready = {};
-  }
+  wire<1> fire[BACKEND_FETCH_WIDTH] = {};
+  wire<1> ready = {};
 };
 
 struct FrontPreIO {
 
-  wire<32> inst[BACKEND_FETCH_WIDTH];
-  wire<32> pc[BACKEND_FETCH_WIDTH];
-  wire<1> valid[BACKEND_FETCH_WIDTH];
-  wire<1> front_stall;
-  wire<1> predict_dir[BACKEND_FETCH_WIDTH];
+  wire<32> inst[BACKEND_FETCH_WIDTH] = {};
+  wire<32> pc[BACKEND_FETCH_WIDTH] = {};
+  wire<1> valid[BACKEND_FETCH_WIDTH] = {};
+  wire<1> front_stall = {};
+  wire<1> predict_dir[BACKEND_FETCH_WIDTH] = {};
 
-  wire<1> alt_pred[BACKEND_FETCH_WIDTH];
-  pcpn_t altpcpn[BACKEND_FETCH_WIDTH];
-  pcpn_t pcpn[BACKEND_FETCH_WIDTH];
-  wire<32> predict_next_fetch_address[BACKEND_FETCH_WIDTH];
+  wire<1> alt_pred[BACKEND_FETCH_WIDTH] = {};
+  pcpn_t altpcpn[BACKEND_FETCH_WIDTH] = {};
+  pcpn_t pcpn[BACKEND_FETCH_WIDTH] = {};
+  wire<32> predict_next_fetch_address[BACKEND_FETCH_WIDTH] = {};
   tage_idx_t tage_idx[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
   tage_tag_t tage_tag[BACKEND_FETCH_WIDTH][4]; // TN_MAX = 4
-  wire<1> sc_used[BACKEND_FETCH_WIDTH];
-  wire<1> sc_pred[BACKEND_FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[BACKEND_FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[BACKEND_FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire<1> loop_used[BACKEND_FETCH_WIDTH];
-  wire<1> loop_hit[BACKEND_FETCH_WIDTH];
-  wire<1> loop_pred[BACKEND_FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[BACKEND_FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH];
-  wire<1> page_fault_inst[BACKEND_FETCH_WIDTH];
-
-  FrontPreIO() {
-    for (auto &v : inst)
-      v = {};
-    for (auto &v : pc)
-      v = {};
-    for (auto &v : valid)
-      v = {};
-    front_stall = {};
-    for (auto &v : predict_dir)
-      v = {};
-    for (auto &v : alt_pred)
-      v = {};
-    for (auto &v : altpcpn)
-      v = {};
-    for (auto &v : pcpn)
-      v = {};
-    for (auto &v : predict_next_fetch_address)
-      v = {};
-    for (auto &tage_idx_0 : tage_idx)
-      for (auto &idx : tage_idx_0)
-        idx = {};
-    for (auto &tage_tag_0 : tage_tag)
-      for (auto &tag : tage_tag_0)
-        tag = {};
-
-    for (auto &v : sc_used)
-      v = {};
-    for (auto &v : sc_pred)
-      v = {};
-    for (auto &v : sc_sum)
-      v = {};
-    for (auto &sc_idx_0 : sc_idx)
-      for (auto &idx : sc_idx_0)
-        idx = {};
-    for (auto &v : loop_used)
-      v = {};
-    for (auto &v : loop_hit)
-      v = {};
-    for (auto &v : loop_pred)
-      v = {};
-    for (auto &v : loop_idx)
-      v = {};
-    for (auto &v : loop_tag)
-      v = {};
-
-    for (auto &v : page_fault_inst)
-      v = {};
-  }
+  wire<1> sc_used[BACKEND_FETCH_WIDTH] = {};
+  wire<1> sc_pred[BACKEND_FETCH_WIDTH] = {};
+  tage_scl_meta_sum_t sc_sum[BACKEND_FETCH_WIDTH] = {};
+  tage_scl_meta_idx_t sc_idx[BACKEND_FETCH_WIDTH][BPU_SCL_META_NTABLE] = {};
+  wire<1> loop_used[BACKEND_FETCH_WIDTH] = {};
+  wire<1> loop_hit[BACKEND_FETCH_WIDTH] = {};
+  wire<1> loop_pred[BACKEND_FETCH_WIDTH] = {};
+  tage_loop_meta_idx_t loop_idx[BACKEND_FETCH_WIDTH] = {};
+  tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH] = {};
+  wire<1> page_fault_inst[BACKEND_FETCH_WIDTH] = {};
 };
 
 struct DecBroadcastIO {
@@ -144,67 +77,33 @@ struct DecBroadcastIO {
 };
 
 struct FtqPcReadReq {
-  wire<1> valid;
-  wire<FTQ_IDX_WIDTH> ftq_idx;
-  wire<FTQ_OFFSET_WIDTH> ftq_offset;
-
-  FtqPcReadReq() {
-    valid = {};
-    ftq_idx = {};
-    ftq_offset = {};
-  }
+  wire<1> valid = {};
+  wire<FTQ_IDX_WIDTH> ftq_idx = {};
+  wire<FTQ_OFFSET_WIDTH> ftq_offset = {};
 };
 
 struct FtqPcReadResp {
-  wire<1> valid;
-  wire<1> entry_valid;
-  wire<32> pc;
-  wire<1> pred_taken;
-  wire<32> next_pc;
-
-  FtqPcReadResp() {
-    valid = {};
-    entry_valid = {};
-    pc = {};
-    pred_taken = {};
-    next_pc = {};
-  }
+  wire<1> valid = {};
+  wire<1> entry_valid = {};
+  wire<32> pc = {};
+  wire<1> pred_taken = {};
+  wire<32> next_pc = {};
 };
 
 struct FtqPrfPcReqIO {
-  FtqPcReadReq req[FTQ_PRF_PC_PORT_NUM];
-
-  FtqPrfPcReqIO() {
-    for (auto &v : req)
-      v = {};
-  }
+  FtqPcReadReq req[FTQ_PRF_PC_PORT_NUM] = {};
 };
 
 struct FtqPrfPcRespIO {
-  FtqPcReadResp resp[FTQ_PRF_PC_PORT_NUM];
-
-  FtqPrfPcRespIO() {
-    for (auto &v : resp)
-      v = {};
-  }
+  FtqPcReadResp resp[FTQ_PRF_PC_PORT_NUM] = {};
 };
 
 struct FtqRobPcReqIO {
-  FtqPcReadReq req[FTQ_ROB_PC_PORT_NUM];
-
-  FtqRobPcReqIO() {
-    for (auto &v : req)
-      v = {};
-  }
+  FtqPcReadReq req[FTQ_ROB_PC_PORT_NUM] = {};
 };
 
 struct FtqRobPcRespIO {
-  FtqPcReadResp resp[FTQ_ROB_PC_PORT_NUM];
-
-  FtqRobPcRespIO() {
-    for (auto &v : resp)
-      v = {};
-  }
+  FtqPcReadResp resp[FTQ_ROB_PC_PORT_NUM] = {};
 };
 
 struct FtqCommitInfoResp {
@@ -229,12 +128,7 @@ struct FtqCommitInfoResp {
 };
 
 struct FtqCommitInfoIO {
-  FtqCommitInfoResp resp[COMMIT_WIDTH];
-
-  FtqCommitInfoIO() {
-    for (auto &v : resp)
-      v = {};
-  }
+  FtqCommitInfoResp resp[COMMIT_WIDTH] = {};
 };
 
 struct PreIssueIO {
@@ -254,105 +148,61 @@ struct RobCommitIO {
   using RobCommitInst = Uop;
 
   struct RobCommitEntry {
-    wire<1> valid;
-    RobCommitInst uop;
+    wire<1> valid = {};
+    RobCommitInst uop = {};
   };
 
-  RobCommitEntry commit_entry[COMMIT_WIDTH];
-
-  RobCommitIO() {
-    for (auto &v : commit_entry)
-      v = {};
-  }
+  RobCommitEntry commit_entry[COMMIT_WIDTH] = {};
 };
 
 struct RobDisIO {
   struct TmaMeta {
-    wire<1> head_is_memory;
-    wire<1> head_is_miss;
-    wire<1> head_not_ready;
+    wire<1> head_is_memory = {};
+    wire<1> head_is_miss = {};
+    wire<1> head_not_ready = {};
   } tma;
 
-  wire<1> ready;
-  wire<1> empty;
-  wire<1> stall;
-  wire<ROB_IDX_WIDTH> enq_idx;
-  wire<1> rob_flag;
-
-  RobDisIO() {
-    tma.head_is_memory = {};
-    tma.head_is_miss = {};
-    tma.head_not_ready = {};
-    ready = {};
-    empty = {};
-    stall = {};
-    enq_idx = {};
-    rob_flag = {};
-  }
+  wire<1> ready = {};
+  wire<1> empty = {};
+  wire<1> stall = {};
+  wire<ROB_IDX_WIDTH> enq_idx = {};
+  wire<1> rob_flag = {};
 };
 
 struct DisRobIO {
   using DisRobInst = Uop;
 
-  DisRobInst uop[DECODE_WIDTH];
-  wire<1> valid[DECODE_WIDTH];
-  wire<1> dis_fire[DECODE_WIDTH];
-
-  DisRobIO() {
-    for (auto &v : uop)
-      v = {};
-    for (auto &v : valid)
-      v = {};
-    for (auto &v : dis_fire)
-      v = {};
-  }
+  DisRobInst uop[DECODE_WIDTH] = {};
+  wire<1> valid[DECODE_WIDTH] = {};
+  wire<1> dis_fire[DECODE_WIDTH] = {};
 };
 
 struct RenDisIO {
   using RenDisInst = Uop;
 
-  RenDisInst uop[DECODE_WIDTH];
-  wire<1> valid[DECODE_WIDTH];
-
-  RenDisIO() {
-    for (auto &v : uop)
-      v = {};
-    for (auto &v : valid)
-      v = {};
-  }
+  RenDisInst uop[DECODE_WIDTH] = {};
+  wire<1> valid[DECODE_WIDTH] = {};
 };
 
 struct DisRenIO {
 
-  wire<1> ready;
-
-  DisRenIO() { ready = {}; }
+  wire<1> ready = {};
 };
 
 struct PrfAwakeIO {
 
-  WakeInfo wake[LSU_LOAD_WB_WIDTH];
-
-  PrfAwakeIO() {
-    for (auto &w : wake)
-      w = {};
-  }
+  WakeInfo wake[LSU_LOAD_WB_WIDTH] = {};
 };
 
 struct DisIssIO {
   using DisIssUop = Uop;
 
   struct DisIssReq {
-    wire<1> valid;
-    DisIssUop uop;
+    wire<1> valid = {};
+    DisIssUop uop = {};
   };
 
-  DisIssReq req[IQ_NUM][MAX_IQ_DISPATCH_WIDTH];
-  DisIssIO() {
-    for (auto &iq_req : req)
-      for (auto &r : iq_req)
-        r = {};
-  }
+  DisIssReq req[IQ_NUM][MAX_IQ_DISPATCH_WIDTH] = {};
 };
 
 struct IssDisIO {
@@ -367,136 +217,81 @@ struct IssDisIO {
 
 struct IssAwakeIO {
 
-  WakeInfo wake[MAX_WAKEUP_PORTS];
-
-  IssAwakeIO() {
-    for (auto &v : wake)
-      v = {};
-  }
+  WakeInfo wake[MAX_WAKEUP_PORTS] = {};
 };
 
 struct RobBroadcastIO {
 
-  wire<1> flush;
-  wire<1> mret;
-  wire<1> sret;
-  wire<1> ecall;
-  wire<1> exception;
-  wire<1> fence;
-  wire<1> fence_i;
+  wire<1> flush = {};
+  wire<1> mret = {};
+  wire<1> sret = {};
+  wire<1> ecall = {};
+  wire<1> exception = {};
+  wire<1> fence = {};
+  wire<1> fence_i = {};
 
-  wire<1> page_fault_inst;
-  wire<1> page_fault_load;
-  wire<1> page_fault_store;
-  wire<1> illegal_inst;
-  wire<1> interrupt;
-  wire<32> trap_val;
-  wire<32> pc;
+  wire<1> page_fault_inst = {};
+  wire<1> page_fault_load = {};
+  wire<1> page_fault_store = {};
+  wire<1> illegal_inst = {};
+  wire<1> interrupt = {};
+  wire<32> trap_val = {};
+  wire<32> pc = {};
 
-  wire<ROB_IDX_WIDTH> head_rob_idx;
-  wire<1> head_valid;
-  wire<ROB_IDX_WIDTH> head_incomplete_rob_idx;
-  wire<1> head_incomplete_valid;
-
-  RobBroadcastIO() {
-    flush = {};
-    mret = {};
-    sret = {};
-    ecall = {};
-    exception = {};
-    fence = {};
-    fence_i = {};
-    page_fault_inst = {};
-    page_fault_load = {};
-    page_fault_store = {};
-    illegal_inst = {};
-    interrupt = {};
-    trap_val = {};
-    pc = {};
-
-    head_rob_idx = {};
-    head_valid = {};
-    head_incomplete_rob_idx = {};
-    head_incomplete_valid = {};
-  }
+  wire<ROB_IDX_WIDTH> head_rob_idx = {};
+  wire<1> head_valid = {};
+  wire<ROB_IDX_WIDTH> head_incomplete_rob_idx = {};
+  wire<1> head_incomplete_valid = {};
 };
 
 struct IssPrfIO {
   using IssPrfUop = Uop;
 
   struct IssPrfEntry {
-    wire<1> valid;
-    IssPrfUop uop;
+    wire<1> valid = {};
+    IssPrfUop uop = {};
   };
 
-  IssPrfEntry iss_entry[ISSUE_WIDTH];
-
-  IssPrfIO() {
-    for (auto &v : iss_entry)
-      v = {};
-  }
+  IssPrfEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
 struct PrfExeIO {
   using PrfExeUop = Uop;
 
   struct PrfExeEntry {
-    wire<1> valid;
-    PrfExeUop uop;
+    wire<1> valid = {};
+    PrfExeUop uop = {};
   };
 
-  PrfExeEntry iss_entry[ISSUE_WIDTH];
-
-  PrfExeIO() {
-    for (auto &v : iss_entry)
-      v = {};
-  }
+  PrfExeEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
 struct ExePrfIO {
   using ExePrfWbUop = Uop;
 
   struct ExePrfEntry {
-    wire<1> valid;
-    ExePrfWbUop uop;
+    wire<1> valid = {};
+    ExePrfWbUop uop = {};
   };
 
-  ExePrfEntry entry[ISSUE_WIDTH];
-  ExePrfEntry bypass[TOTAL_FU_COUNT];
-
-  ExePrfIO() {
-    for (auto &v : entry)
-      v = {};
-
-    for (auto &v : bypass)
-      v = {};
-  }
+  ExePrfEntry entry[ISSUE_WIDTH] = {};
+  ExePrfEntry bypass[TOTAL_FU_COUNT] = {};
 };
 
 struct ExeIssIO {
 
-  wire<MAX_UOP_TYPE> fu_ready_mask[ISSUE_WIDTH];
-
-  ExeIssIO() {
-    for (auto &v : fu_ready_mask)
-      v = {};
-  }
+  wire<MAX_UOP_TYPE> fu_ready_mask[ISSUE_WIDTH] = {};
 };
 
 struct ExuRobIO {
   using ExuRobUop = Uop;
 
   struct ExuRobEntry {
-    wire<1> valid;
-    ExuRobUop uop;
+    wire<1> valid = {};
+    ExuRobUop uop = {};
   };
 
-  ExuRobEntry entry[ISSUE_WIDTH];
-
-  ExuRobIO() {
-    for (auto &v : entry)
-      v = {};
-  }
+  ExuRobEntry entry[ISSUE_WIDTH] = {};
 };
 
 struct ExuIdIO {
@@ -522,134 +317,73 @@ struct ExuIdIO {
 
 struct ExeCsrIO {
 
-  wire<1> we;
-  wire<1> re;
-  wire<12> idx;
-  wire<32> wdata;
-  wire<32> wcmd;
-
-  ExeCsrIO() {
-    we = {};
-    re = {};
-    idx = {};
-    wdata = {};
-    wcmd = {};
-  }
+  wire<1> we = {};
+  wire<1> re = {};
+  wire<12> idx = {};
+  wire<32> wdata = {};
+  wire<32> wcmd = {};
 };
 
 struct CsrExeIO {
 
-  wire<32> rdata;
-
-  CsrExeIO() { rdata = {}; }
+  wire<32> rdata = {};
 };
 
 struct CsrRobIO {
 
-  wire<1> interrupt_req;
-
-  CsrRobIO() { interrupt_req = {}; }
+  wire<1> interrupt_req = {};
 };
 
 struct CsrFrontIO {
 
-  wire<32> epc;
-  wire<32> trap_pc;
-
-  CsrFrontIO() {
-    epc = {};
-    trap_pc = {};
-  }
+  wire<32> epc = {};
+  wire<32> trap_pc = {};
 };
 
 struct CsrInterruptInjectIO {
-  wire<1> external_irq_pending_valid;
-  wire<1> external_irq_pending;
-  wire<1> supervisor_external_irq_pending_valid;
-  wire<1> supervisor_external_irq_pending;
-  wire<1> timer_irq_pending_valid;
-  wire<1> timer_irq_pending;
-
-  CsrInterruptInjectIO() {
-    external_irq_pending_valid = {};
-    external_irq_pending = {};
-    supervisor_external_irq_pending_valid = {};
-    supervisor_external_irq_pending = {};
-    timer_irq_pending_valid = {};
-    timer_irq_pending = {};
-  }
+  wire<1> external_irq_pending_valid = {};
+  wire<1> external_irq_pending = {};
+  wire<1> supervisor_external_irq_pending_valid = {};
+  wire<1> supervisor_external_irq_pending = {};
+  wire<1> timer_irq_pending_valid = {};
+  wire<1> timer_irq_pending = {};
 };
 
 struct CsrStatusIO {
 
-  wire<32> sstatus;
-  wire<32> mstatus;
-  wire<32> satp;
-  wire<2> privilege;
-
-  CsrStatusIO() {
-    sstatus = {};
-    mstatus = {};
-    satp = {};
-    privilege = {};
-  }
+  wire<32> sstatus = {};
+  wire<32> mstatus = {};
+  wire<32> satp = {};
+  wire<2> privilege = {};
 };
 
 struct RobCsrIO {
 
-  wire<1> interrupt_resp;
-  wire<1> commit;
-
-  RobCsrIO() {
-    interrupt_resp = {};
-    commit = {};
-  }
+  wire<1> interrupt_resp = {};
+  wire<1> commit = {};
 };
 
 struct PtwWalkReq {
-  wire<32> vaddr;
-  wire<32> satp;
+  wire<32> vaddr = {};
+  wire<32> satp = {};
   wire<32> access_type; // 0=Fetch, 1=Load, 2=Store
-
-  PtwWalkReq() {
-    vaddr = {};
-    satp = {};
-    access_type = {};
-  }
 };
 
 struct PtwWalkResp {
-  wire<1> fault;
-  wire<32> vaddr;
-  wire<32> leaf_pte;
-  wire<8> leaf_level; // 1: L1 leaf, 0: L0 leaf
-
-  PtwWalkResp() {
-    fault = {};
-    vaddr = {};
-    leaf_pte = {};
-    leaf_level = {};
-  }
+  wire<1> fault = {};
+  wire<32> vaddr = {};
+  wire<32> leaf_pte = {};
+  wire<8> leaf_level = {}; // 1: L1 leaf, 0: L0 leaf
 };
 
 struct PtwMemRespIO {
-  wire<1> valid;
-  wire<32> data;
-
-  PtwMemRespIO() {
-    valid = {};
-    data = {};
-  }
+  wire<1> valid = {};
+  wire<32> data = {};
 };
 
 struct PtwWalkRespIO {
-  wire<1> valid;
-  PtwWalkResp resp;
-
-  PtwWalkRespIO() {
-    valid = {};
-    resp = {};
-  }
+  wire<1> valid = {};
+  PtwWalkResp resp = {};
 };
 
 struct MemReqMeta {
@@ -667,74 +401,41 @@ struct MemRespMeta {
 
 struct MemReqIO {
 
-  wire<1> en;
-  wire<1> wen;
-  wire<32> addr;
-  wire<32> wdata;
-  wire<8> wstrb;
+  wire<1> en = {};
+  wire<1> wen = {};
+  wire<32> addr = {};
+  wire<32> wdata = {};
+  wire<8> wstrb = {};
 
-  MemReqMeta meta;
-
-  MemReqIO() {
-    en = {};
-    wen = {};
-    addr = {};
-    wdata = {};
-    wstrb = {};
-    meta = {};
-  }
+  MemReqMeta meta = {};
 };
 
 struct MemReadyIO {
 
-  wire<1> ready;
-
-  MemReadyIO() { ready = {}; }
+  wire<1> ready = {};
 };
 
 struct MemRespIO {
 
-  wire<1> wen;
-  wire<1> valid;
-  wire<32> data;
+  wire<1> wen = {};
+  wire<1> valid = {};
+  wire<32> data = {};
 
-  wire<32> addr;
-  MemRespMeta meta;
-
-  MemRespIO() {
-    wen = {};
-    valid = {};
-    data = {};
-    addr = {};
-    meta = {};
-  }
+  wire<32> addr = {};
+  MemRespMeta meta = {};
 };
 
 struct PeripheralReqIO {
-  wire<1> is_mmio;
-  wire<1> wen;
-  wire<32> mmio_addr;
-  wire<32> mmio_wdata;
-  wire<3> mmio_fun3;
-
-  PeripheralReqIO() {
-    is_mmio = {};
-    wen = {};
-    mmio_addr = {};
-    mmio_wdata = {};
-    mmio_fun3 = {};
-  }
+  wire<1> is_mmio = {};
+  wire<1> wen = {};
+  wire<32> mmio_addr = {};
+  wire<32> mmio_wdata = {};
+  wire<3> mmio_fun3 = {};
 };
 struct PeripheralRespIO {
-  wire<1> is_mmio;
-  wire<1> ready;
-  wire<32> mmio_rdata;
-
-  PeripheralRespIO() {
-    is_mmio = {};
-    ready = {};
-    mmio_rdata = {};
-  }
+  wire<1> is_mmio = {};
+  wire<1> ready = {};
+  wire<32> mmio_rdata = {};
 };
 enum class ReplayType : wire<2> {
   HIT = 0,
@@ -948,19 +649,12 @@ struct LsuExeIO {
   using LsuExeRespUop = Uop;
 
   struct LsuExeRespEntry {
-    wire<1> valid;
-    LsuExeRespUop uop;
+    wire<1> valid = {};
+    LsuExeRespUop uop = {};
   };
 
-  LsuExeRespEntry wb_req[LSU_LOAD_WB_WIDTH];
-  LsuExeRespEntry sta_wb_req[LSU_STA_COUNT];
-
-  LsuExeIO() {
-    for (auto &v : wb_req)
-      v = {};
-    for (auto &v : sta_wb_req)
-      v = {};
-  }
+  LsuExeRespEntry wb_req[LSU_LOAD_WB_WIDTH] = {};
+  LsuExeRespEntry sta_wb_req[LSU_STA_COUNT] = {};
 };
 
 struct DisLsuIO {
@@ -1008,17 +702,10 @@ struct ExeLsuIO {
   using ExeLsuReqUop = Uop;
 
   struct ExeLsuReqEntry {
-    wire<1> valid;
-    ExeLsuReqUop uop;
+    wire<1> valid = {};
+    ExeLsuReqUop uop = {};
   };
 
-  ExeLsuReqEntry agu_req[LSU_AGU_COUNT];
-  ExeLsuReqEntry sdu_req[LSU_SDU_COUNT];
-
-  ExeLsuIO() {
-    for (auto &v : agu_req)
-      v = {};
-    for (auto &v : sdu_req)
-      v = {};
-  }
+  ExeLsuReqEntry agu_req[LSU_AGU_COUNT] = {};
+  ExeLsuReqEntry sdu_req[LSU_SDU_COUNT] = {};
 };
