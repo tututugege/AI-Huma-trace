@@ -91,4 +91,7 @@ public:
     SimContext *ctx = nullptr;
 
     void dump_debug_state(FILE *out) const;
+    bool idle_quiescent() const {
+        return cur.mshr_count == 0 && !cur.axi_resp_hold_valid && nxt.mshr_count == 0;
+    }
 };

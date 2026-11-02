@@ -93,6 +93,19 @@ public:
                const axi_interconnect::AXI_LLCPerfCounters_t &perf);
 
   RealDcache  &get_dcache()  { return dcache_; }
+  bool dcache_domain_quiescent() const {
+    if (!dcache_.idle_quiescent() || !mshr_.idle_quiescent() ||
+        !wb_.idle_quiescent()) {
+      return false;
+    }
+    for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
+      if (dcache_resp_meta_cur_[i].valid || dcache_resp_meta_nxt_[i].valid ||
+          dcache_resp_pending_meta_[i].valid) {
+        return false;
+      }
+    }
+    return true;
+  }
   MSHR        &get_mshr()    { return mshr_; }
   WriteBuffer &get_wb()      { return wb_; }
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }

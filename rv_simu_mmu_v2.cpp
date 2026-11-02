@@ -31,6 +31,18 @@
 #endif
 
 namespace {
+static uint64_t g_axi_idle_checked = 0, g_axi_idle_mismatch = 0;
+static const int g_axi_idle_report = [] {
+  if (getenv("AXI_IDLE_VERIFY")) {
+    std::atexit([] {
+      std::fprintf(stderr, "axi-idle-verify: checked=%llu mismatch=%llu\n",
+                   (unsigned long long)g_axi_idle_checked,
+                   (unsigned long long)g_axi_idle_mismatch);
+    });
+  }
+  return 0;
+}();
+static const bool kAxiIdleVerify = getenv("AXI_IDLE_VERIFY") != nullptr;
 constexpr bool kDcacheFastDomainEnabled = CONFIG_DCACHE_FAST_DOMAIN != 0;
 
 void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
@@ -686,6 +698,13 @@ void axi_subsystem_seq(SimCpu &cpu) {
   cpu.axi_mmio.seq();
 }
 
+bool axi_subsystem_quiescent(SimCpu &cpu) {
+  return cpu.axi_interconnect.idle_quiescent() &&
+         cpu.axi_ddr.idle_quiescent() && cpu.axi_mmio.idle_quiescent() &&
+         (!kDcacheFastDomainEnabled ||
+          cpu.mem_subsystem.dcache_domain_quiescent());
+}
+
 void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
   if (CONFIG_AXI_SUBSYSTEM_FREQ_DIV <= 1u) {
     return;
@@ -693,7 +712,21 @@ void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
 
   AxiCpuBoundaryState cpu_boundary_state{};
   capture_axi_cpu_boundary_state(cpu, cpu_boundary_state);
+  bool detected = false;
+  AxiCpuBoundaryState at_detect{};
   for (uint32_t tick = 1; tick < CONFIG_AXI_SUBSYSTEM_FREQ_DIV; ++tick) {
+    // Once a tick has left the whole AXI/LLC/DDR/MMIO subsystem and the L1D
+    // fast domain quiescent, the remaining ticks are fixed points: their
+    // boundary contribution is already accumulated.
+    if (tick >= 2 && axi_subsystem_quiescent(cpu)) {
+      if (!kAxiIdleVerify) {
+        break;
+      }
+      if (!detected) {
+        detected = true;
+        at_detect = cpu_boundary_state;
+      }
+    }
     mask_axi_cpu_boundary_for_internal_tick(cpu);
     axi_subsystem_comb_outputs(cpu);
     if (kDcacheFastDomainEnabled) {
@@ -708,6 +741,13 @@ void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
     }
     axi_subsystem_seq(cpu);
     accumulate_axi_cpu_boundary_state(cpu, cpu_boundary_state);
+  }
+  if (kAxiIdleVerify && detected) {
+    ++g_axi_idle_checked;
+    if (!axi_subsystem_quiescent(cpu) ||
+        std::memcmp(&at_detect, &cpu_boundary_state, sizeof(at_detect)) != 0) {
+      ++g_axi_idle_mismatch;
+    }
   }
   restore_axi_cpu_boundary_state(cpu, cpu_boundary_state);
 }
