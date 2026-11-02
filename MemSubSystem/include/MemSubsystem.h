@@ -66,7 +66,6 @@ public:
   PeripheralReqIO *peripheral_req = nullptr;
   PeripheralRespIO *peripheral_resp = nullptr;
   CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
-  uint32_t    *memory         = nullptr;
 
   void init();
   void comb();

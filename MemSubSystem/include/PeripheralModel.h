@@ -30,7 +30,6 @@ public:
   static constexpr uint8_t kUartIirFifoEnabled = 0xc0u;
 
   CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
-  uint32_t *memory = nullptr;
   uint64_t timer_offset_ = 0;
   uint64_t timer_cmp_ = UINT64_MAX;
 
@@ -44,10 +43,8 @@ public:
     external_irq_delay_ = {};
   }
 
-  void bind(CsrInterruptInjectIO *csr_interrupt_inject_ptr,
-            uint32_t *memory_ptr) {
+  void bind(CsrInterruptInjectIO *csr_interrupt_inject_ptr) {
     csr_interrupt_inject = csr_interrupt_inject_ptr;
-    memory = memory_ptr;
     timer_reset();
     xps_intc_reset();
   }
@@ -79,10 +76,6 @@ public:
   }
 
   void sync_from_backing() {
-    if (memory == nullptr) {
-      return;
-    }
-
     const uint64_t timer_value =
         static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_LOW_ADDR)) |
         (static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_HIGH_ADDR)) << 32);
@@ -126,7 +119,7 @@ public:
   }
 
   uint32_t read_load(uint32_t paddr, uint8_t func3) const {
-    if (memory == nullptr || !is_modeled_mmio(paddr)) {
+    if (!is_modeled_mmio(paddr)) {
       return 0;
     }
 
@@ -177,8 +170,7 @@ public:
   }
 
   void on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3) {
-    if (csr_interrupt_inject == nullptr || memory == nullptr ||
-        !is_modeled_mmio(paddr)) {
+    if (csr_interrupt_inject == nullptr || !is_modeled_mmio(paddr)) {
       return;
     }
 

@@ -654,7 +654,6 @@ void SimCpu::init() {
 
   // 第三阶段：集中完成跨模块连线
   mem_subsystem.csr_interrupt_inject = &back.csr_interrupt_inject_io;
-  mem_subsystem.memory = p_memory;
   mem_subsystem.peripheral_req = &back.out.peripheral_req;
   mem_subsystem.peripheral_resp = &back.in.peripheral_resp;
   mem_subsystem.set_ptw_coherent_source(back.lsu);
