@@ -25,6 +25,7 @@ class Dispatch;
 class Idu;
 class Ren;
 class Isu;
+struct CPU_state;
 class Prf;
 class Exu;
 class Rob;
@@ -36,6 +37,9 @@ class BackTop : public Wires {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
   void comb_lsu_mmu();
+  void clear_stage_ios();
+  void comb_outputs();
+  void install_arch_state(const CPU_state &state, uint8_t privilege);
 
 public:
   SimContext *ctx;
