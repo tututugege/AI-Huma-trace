@@ -84,6 +84,12 @@ private:
   bool entry_dirty = false;
   bool entry_all_dirty = false;
   std::vector<uint64_t> slot_dirty;
+  std::vector<uint64_t> ready_bits;  // valid && is_ready(entry[i]) for the committed copy, refreshed in seq()
+  void refresh_ready(int i) {
+    const uint64_t bit = 1ull << (i & 63);
+    if (entry[i].valid && is_ready(entry[i])) ready_bits[i >> 6] |= bit;
+    else ready_bits[i >> 6] &= ~bit;
+  }
   void mark_slot(int i) {
     slot_dirty[i >> 6] |= 1ull << (i & 63);
     entry_dirty = true;
@@ -118,6 +124,7 @@ public:
     entry.resize(size);
     entry_1.resize(size);
     slot_dirty.assign((size + 63) / 64, 0);
+    ready_bits.assign((size + 63) / 64, 0);
     count = 0;
     count_1 = 0;
     wake_words_per_row = (size + 63) / 64;
@@ -326,11 +333,13 @@ public:
       if (entry_all_dirty) {
         entry = entry_1;
         entry_all_dirty = false;
+        for (int i = 0; i < size; i++) refresh_ready(i);
       } else {
         for (size_t k = 0; k < slot_dirty.size(); ++k) {
           for (uint64_t m = slot_dirty[k]; m; m &= m - 1) {
             const size_t i = k * 64 + __builtin_ctzll(m);
             entry[i] = entry_1[i];
+            refresh_ready(i);
           }
         }
       }
@@ -375,19 +384,8 @@ private:
 
     // 1. Gather all ready instructions
     ready_indices.clear();
-    int seen_valid = 0;
-    for (int i = 0; i < size; i++) {
-      if (!entry[i].valid) {
-        continue;
-      }
-      seen_valid++;
-      if (is_ready(entry[i])) {
-        ready_indices.push_back(i);
-      }
-      if (seen_valid >= count) {
-        break;
-      }
-    }
+    for (size_t w = 0; w < ready_bits.size(); w++)
+      for (uint64_t m = ready_bits[w]; m; m &= m - 1) ready_indices.push_back(int(w * 64) + __builtin_ctzll(m));
 
     // 2. Sort ready instructions by priority
     if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::ROB_OLDEST_FIRST) {
