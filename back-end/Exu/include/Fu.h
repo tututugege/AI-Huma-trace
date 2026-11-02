@@ -113,12 +113,6 @@ protected:
       br_taken = true;  // killed instruction: no fact, outcome unobservable
     }
 
-#if defined(CONFIG_ORACLE_STEADY_FETCH_WIDTH) && !defined(CONFIG_BPU)
-    // Oracle steady-fetch stress mode intentionally relaxes FTQ block semantics.
-    // In no-BPU builds, treat branch prediction as always-correct and avoid
-    // recovery redirects from BRU.
-    inst.mispred = false;
-#else
     // FTQ lookup
     bool pred_taken = inst->ftq_pred_taken;
     uint32_t pred_target = 0;
@@ -136,7 +130,6 @@ protected:
     } else {
       inst.mispred = true;
     }
-#endif
 
     inst.br_taken = br_taken;
     inst.diag_val = br_taken ? pc_br : (inst_pc + 4);

@@ -202,38 +202,16 @@ axi_interconnect::AXI_LLCConfig make_default_llc_config() {
 }
 
 void print_soc_config_banner() {
-#ifdef CONFIG_BPU
   constexpr int kBpuEnabled = 1;
   const char *bpu_mode = "real-bpu";
-#else
-  constexpr int kBpuEnabled = 0;
-  const char *bpu_mode = "oracle-bpu";
-#endif
 
-#if CONFIG_ICACHE_USE_AXI_MEM_PORT
   const char *compiled_icache_path = "shared-top-level-axi";
-#else
-  const char *compiled_icache_path = "local-fixed-latency";
-#endif
 
-#if CONFIG_AXI_LLC_ENABLE
   const char *llc_mode = "enabled";
   const char *llc_summary = "shared fabric uses LLC";
-#else
-  const char *llc_mode = "disabled";
-  const char *llc_summary = "shared fabric falls back to L1 I/D-cache only";
-#endif
 
-#ifdef CONFIG_BPU
   const char *runtime_icache_path =
-#if CONFIG_ICACHE_USE_AXI_MEM_PORT
       "shared-top-level-axi";
-#else
-      "local-fixed-latency";
-#endif
-#else
-  const char *runtime_icache_path = "oracle-frontend-disconnected";
-#endif
 
   std::printf("[CONFIG][SOC] bpu=%d(%s) icache_axi=%u compiled_icache=%s\n",
               kBpuEnabled, bpu_mode,
@@ -677,26 +655,26 @@ void axi_subsystem_comb_inputs_dcache_fast_tick(SimCpu &cpu) {
 }
 
 void count_dcache_fast_tick_axi_events(SimCpu &cpu) {
-  cpu.ctx.perf.l1d_fast_domain_ticks++;
+
 
   const auto &rport =
       cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
   if (cpu.axi_interconnect
           .read_req_accepted[axi_interconnect::MASTER_DCACHE_R]) {
-    cpu.ctx.perf.l1d_fast_mshr_axi_req_accepted++;
+
   }
   if (rport.resp.valid && rport.resp.ready) {
-    cpu.ctx.perf.l1d_fast_mshr_axi_resp_consumed++;
+
   }
 
   const auto &wport =
       cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
   if (cpu.axi_interconnect
           .write_req_accepted[axi_interconnect::MASTER_DCACHE_W]) {
-    cpu.ctx.perf.l1d_fast_wb_axi_req_accepted++;
+
   }
   if (wport.resp.valid && wport.resp.ready) {
-    cpu.ctx.perf.l1d_fast_wb_axi_resp_consumed++;
+
   }
 }
 
@@ -742,41 +720,41 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   const auto &ftq_info = back->ftq_commit_info.resp[commit_slot];
   if ((*inst)->type == JALR) {
     if (inst->tma.is_ret) {
-      this->ctx.perf.ret_br_num++;
+
     } else {
-      this->ctx.perf.jalr_br_num++;
+
     }
   } else if ((*inst)->type == BR) {
-    this->ctx.perf.cond_br_num++;
+
   }
 
   if (inst->mispred) {
     if ((*inst)->type == JALR) {
       if (inst->tma.is_ret) {
-        this->ctx.perf.ret_mispred_num++;
+
         const bool pred_taken = ftq_info.pred_taken;
         if (!pred_taken) {
-          this->ctx.perf.ret_dir_mispred++;
+
         } else {
-          this->ctx.perf.ret_addr_mispred++;
+
         }
       } else {
-        this->ctx.perf.jalr_mispred_num++;
+
         const bool pred_taken = ftq_info.pred_taken;
         if (!pred_taken) {
-          this->ctx.perf.jalr_dir_mispred++;
+
         } else {
-          this->ctx.perf.jalr_addr_mispred++;
+
         }
       }
     } else if ((*inst)->type == BR) {
       const bool pred_taken = ftq_info.pred_taken;
       if (pred_taken != inst->br_taken) {
-        this->ctx.perf.cond_dir_mispred++;
+
       } else {
-        this->ctx.perf.cond_addr_mispred++;
+
       }
-      this->ctx.perf.cond_mispred_num++;
+
     }
   }
 
@@ -790,11 +768,9 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
       uint32_t dma_paddr = 0;
       size_t dma_size = 0;
       while (mem_subsystem.consume_dma_write(dma_paddr, dma_size)) {
-#ifdef CONFIG_DIFFTEST
         if (ctx.enable_difftest) {
           difftest_sync_ram_from_dut(dma_paddr, dma_size);
         }
-#endif
       }
     }
   }
@@ -996,12 +972,8 @@ void SimCpu::init() {
   // back to MemSubsystem's legacy private AXI runtime.
   mem_subsystem.set_internal_axi_runtime_active(false);
   print_soc_config_banner();
-#ifdef CONFIG_BPU
   front.icache_mem_read_port =
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
-#else
-  front.icache_mem_read_port = nullptr;
-#endif
 
   // 第四阶段：统一执行各模块复位逻辑
   // 先初始化内存子系统，确保 PTW / DCache / WB 等内部状态已经完成复位。
@@ -1122,9 +1094,7 @@ void SimCpu::cycle() {
   }
 
   {
-#ifdef CONFIG_BPU
     front.seq_write_bpu();
-#endif
     front.seq_back2front();
   }
   {
@@ -1181,22 +1151,21 @@ void SimCpu::peripheral_resp_hold_seq() {
 void SimCpu::front_comb_before_back() {
   auto perf_account_front_supply = [&]() {
     if (front.in.FIFO_read_enable) {
-      ctx.perf.front2back_read_enable_cycle_total++;
+
     }
     if (front.out.FIFO_valid) {
-      ctx.perf.front2back_read_cycle_total++;
+
     }
     if (front.in.FIFO_read_enable && !front.out.FIFO_valid) {
-      ctx.perf.front2back_read_empty_cycle_total++;
+
     }
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       if (back.in.valid[j]) {
-        ctx.perf.front2back_fetched_inst_total++;
+
       }
     }
   };
 
-#ifdef CONFIG_BPU
   const bool registered_refetch = static_cast<bool>(front.back2front.refetch);
   const bool frontend_can_read = !front.back2front_stall || registered_refetch;
 
@@ -1257,77 +1226,6 @@ void SimCpu::front_comb_before_back() {
     front.comb_bpu();
     back.in.front_stall = static_cast<bool>(front.out.commit_stall);
   }
-#else
-  // Oracle 模式：每拍都执行握手，利用 1-entry pending
-  // 防止“当拍后端阻塞”丢指令。
-  front.in.FIFO_read_enable = true;
-  front.in.refetch = front.back2front.refetch;
-  front.in.itlb_flush = front.back2front.itlb_flush;
-  front.in.fence_i = front.back2front.fence_i;
-  front.in.refetch_address = front.back2front.refetch_address;
-
-  // 上一拍后端非阻塞，认为 pending 已被接收。
-  if (oracle_pending_valid && !front.back2front_stall) {
-    oracle_pending_valid = false;
-  }
-  // 重定向优先：丢弃旧 pending，立即让 oracle 同步到新 PC。
-  if (front.in.refetch) {
-    oracle_pending_valid = false;
-  }
-
-  if (!oracle_pending_valid) {
-    front.step_oracle();
-    oracle_pending_out = front.out;
-    oracle_pending_valid = true;
-  } else {
-    front.out = oracle_pending_out;
-  }
-
-#ifndef CONFIG_ORACLE_STEADY_FETCH_WIDTH
-  bool no_taken = true;
-#endif
-  for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-#ifdef CONFIG_ORACLE_STEADY_FETCH_WIDTH
-    back.in.valid[j] = front.out.FIFO_valid && front.out.inst_valid[j];
-#else
-    back.in.valid[j] =
-        no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
-#endif
-    back.in.pc[j] = front.out.pc[j];
-    back.in.predict_next_fetch_address[j] =
-        front.out.predict_next_fetch_address;
-    back.in.page_fault_inst[j] = front.out.page_fault_inst[j];
-    back.in.inst[j] = front.out.instructions[j];
-    back.in.predict_dir[j] = front.out.predict_dir[j];
-    back.in.alt_pred[j] = front.out.alt_pred[j];
-    back.in.altpcpn[j] = front.out.altpcpn[j];
-    back.in.pcpn[j] = front.out.pcpn[j];
-    back.in.sc_used[j] = front.out.sc_used[j];
-    back.in.sc_pred[j] = front.out.sc_pred[j];
-    back.in.sc_sum[j] = front.out.sc_sum[j];
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      back.in.sc_idx[j][t] = front.out.sc_idx[j][t];
-    }
-    back.in.loop_used[j] = front.out.loop_used[j];
-    back.in.loop_hit[j] = front.out.loop_hit[j];
-    back.in.loop_pred[j] = front.out.loop_pred[j];
-    back.in.loop_idx[j] = front.out.loop_idx[j];
-    back.in.loop_tag[j] = front.out.loop_tag[j];
-    for (int k = 0; k < 4; k++) {
-      back.in.tage_idx[j][k] = front.out.tage_idx[j][k];
-      back.in.tage_tag[j][k] = front.out.tage_tag[j][k];
-    }
-#ifndef CONFIG_ORACLE_STEADY_FETCH_WIDTH
-    if (back.in.valid[j] && front.out.predict_dir[j]) {
-      no_taken = false;
-    }
-#endif
-  }
-  // Oracle mode has no real front-end update queue; keep ROB retire path
-  // independent from front-end stall semantics.
-  back.in.front_stall = false;
-  perf_account_front_supply();
-#endif
 }
 
 bool SimCpu::ready_to_exit() const {

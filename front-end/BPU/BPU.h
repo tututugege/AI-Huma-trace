@@ -791,28 +791,20 @@ public:
     rd.Arch_ras_count_snapshot = Arch_ras_count;
     std::memcpy(rd.Spec_ras_stack_snapshot, Spec_ras_stack, sizeof(rd.Spec_ras_stack_snapshot));
     rd.Spec_ras_count_snapshot = Spec_ras_count;
-#ifdef ENABLE_BPU_RAS
     rd.ras_count_snapshot = 0;
     rd.ras_has_entry_snapshot = false;
     rd.ras_top_snapshot = 0;
-#else
-    rd.ras_count_snapshot = 0;
-    rd.ras_has_entry_snapshot = false;
-    rd.ras_top_snapshot = 0;
-#endif
   }
 
   void bpu_pre_read_req_comb(const BpuPreReadReqCombIn &in,
                              BpuPreReadReqCombOut &out) const {
     out = BpuPreReadReqCombOut{};
 
-#ifdef ENABLE_BPU_RAS
     out.use_arch_ras_snapshot = in.refetch;
     out.ras_count_snapshot =
         out.use_arch_ras_snapshot ? in.Arch_ras_count_snapshot : in.Spec_ras_count_snapshot;
     out.ras_has_entry_snapshot = (out.ras_count_snapshot > 0);
     out.ras_top_index = out.ras_has_entry_snapshot ? (out.ras_count_snapshot - 1) : 0;
-#endif
 
     out.pred_base_pc = in.refetch ? in.refetch_address : in.pc_reg_snapshot;
 
@@ -855,7 +847,6 @@ public:
   }
 
   void bpu_data_seq_read(const BpuPreReadReqCombOut &in, ReadData &rd) const {
-#ifdef ENABLE_BPU_RAS
     rd.ras_count_snapshot = in.ras_count_snapshot;
     rd.ras_has_entry_snapshot = in.ras_has_entry_snapshot;
     if (in.ras_has_entry_snapshot) {
@@ -865,11 +856,6 @@ public:
     } else {
       rd.ras_top_snapshot = 0;
     }
-#else
-    rd.ras_count_snapshot = 0;
-    rd.ras_has_entry_snapshot = false;
-    rd.ras_top_snapshot = 0;
-#endif
 
     rd.pred_base_pc = in.pred_base_pc;
     rd.boundary_addr = in.boundary_addr;
@@ -1306,7 +1292,6 @@ public:
       std::memcpy(out.Spec_FH_next, spec_fh_tmp, sizeof(out.Spec_FH_next));
       out.Spec_PATH_next = spec_path_tmp;
 
-#ifdef ENABLE_BPU_RAS
       target_addr_t spec_ras_stack_tmp[RAS_DEPTH];
       ras_count_t spec_ras_count_tmp = out.Spec_ras_count_next;
       std::memcpy(spec_ras_stack_tmp, out.Spec_ras_stack_next, sizeof(spec_ras_stack_tmp));
@@ -1333,7 +1318,6 @@ public:
       }
       std::memcpy(out.Spec_ras_stack_next, spec_ras_stack_tmp, sizeof(out.Spec_ras_stack_next));
       out.Spec_ras_count_next = spec_ras_count_tmp;
-#endif
     }
 
     {
@@ -1376,7 +1360,6 @@ public:
       }
     }
 
-#ifdef ENABLE_BPU_RAS
     {
       target_addr_t arch_ras_stack_tmp[RAS_DEPTH];
       ras_count_t arch_ras_count_tmp = out.Arch_ras_count_next;
@@ -1396,7 +1379,6 @@ public:
                   sizeof(out.Arch_ras_stack_next));
       out.Arch_ras_count_next = arch_ras_count_tmp;
     }
-#endif
   }
 
   void bpu_queue_comb(const BpuQueueCombIn &in, BpuQueueCombOut &out) const {
@@ -1776,11 +1758,9 @@ public:
       std::memcpy(req.Spec_GHR_next, req.Arch_GHR_next, sizeof(req.Spec_GHR_next));
       std::memcpy(req.Spec_FH_next, req.Arch_FH_next, sizeof(req.Spec_FH_next));
       req.Spec_PATH_next = req.Arch_PATH_next;
-#ifdef ENABLE_BPU_RAS
       std::memcpy(req.Spec_ras_stack_next, req.Arch_ras_stack_next,
                   sizeof(req.Spec_ras_stack_next));
       req.Spec_ras_count_next = req.Arch_ras_count_next;
-#endif
     } else if (req.going_to_do_pred) {
       req.pc_reg_next = req.next_fetch_addr_calc;
       req.pc_can_send_to_icache_next = true;
@@ -2020,19 +2000,11 @@ public:
                 sizeof(post_read_in.in_upd_valid));
     std::memcpy(post_read_in.in_actual_br_type, inp.in_actual_br_type,
                 sizeof(post_read_in.in_actual_br_type));
-#ifdef SPECULATIVE_ON
     std::memcpy(post_read_in.ghr_snapshot, rd.Spec_GHR_snapshot,
                 sizeof(post_read_in.ghr_snapshot));
     std::memcpy(post_read_in.fh_snapshot, rd.Spec_FH_snapshot,
                 sizeof(post_read_in.fh_snapshot));
     post_read_in.path_snapshot = rd.Spec_PATH_snapshot;
-#else
-    std::memcpy(post_read_in.ghr_snapshot, rd.Arch_GHR_snapshot,
-                sizeof(post_read_in.ghr_snapshot));
-    std::memcpy(post_read_in.fh_snapshot, rd.Arch_FH_snapshot,
-                sizeof(post_read_in.fh_snapshot));
-    post_read_in.path_snapshot = rd.Arch_PATH_snapshot;
-#endif
     post_read_in.pred_base_pc = rd.pred_base_pc;
     post_read_in.going_to_do_pred = rd.going_to_do_pred;
     post_read_in.set_submodule_input = rd.set_submodule_input;

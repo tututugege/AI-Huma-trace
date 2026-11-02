@@ -129,11 +129,6 @@ bool handle_pending_sigint() {
     return false;
   }
 
-#if defined(LOG_ENABLE) && defined(LOG_LSU_MEM_ENABLE)
-  std::cout << "[sim] SIGINT observed at cycle " << std::dec << sim_time
-            << ", printing debug dump." << std::endl;
-  // deadlock_debug::dump_all();
-#endif
   cpu.ctx.perf.perf_print();
   return true;
 }
@@ -389,12 +384,10 @@ int main(int argc, char *argv[]) {
       std::cout << "[Boot] direct OpenSBI from SD boot blob" << std::endl;
       cpu.back.load_sd_boot_blob(config.sdcard_image_file);
     }
-#ifdef CONFIG_DIFFTEST
     difftest_configure_run_assets(
         config.sdcard_image_file.empty() ? nullptr
                                          : config.sdcard_image_file.c_str());
     difftest_init_run_state();
-#endif
   } else if (config.mode == SimConfig::CKPT) {
     std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
@@ -402,17 +395,11 @@ int main(int argc, char *argv[]) {
       std::cout << "[SD] " << config.sdcard_image_file << std::endl;
       cpu.mem_subsystem.load_sdcard_image(config.sdcard_image_file);
     }
-#ifdef CONFIG_DIFFTEST
     difftest_configure_run_assets(
         config.sdcard_image_file.empty() ? nullptr
                                          : config.sdcard_image_file.c_str());
-#endif
     cpu.back.restore_checkpoint(config.target_file);
     cpu.sync_mmio_devices_from_backing();
-#ifndef CONFIG_BPU
-    std::cout << "[Oracle] Synced to checkpoint snapshot in Step 0."
-              << std::endl;
-#endif
 
     const uint64_t ckpt_interval = cpu.back.ckpt_interval_inst_count;
     if (ckpt_interval == 0) {
@@ -485,10 +472,6 @@ int main(int argc, char *argv[]) {
     std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
     cpu.back.restore_from_ref();
     cpu.sync_mmio_devices_from_backing();
-#ifndef CONFIG_BPU
-    std::cout << "[Oracle] Re-synced with ref snapshot together with DUT."
-              << std::endl;
-#endif
     cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
 
     cpu.ctx.is_ckpt = true;
@@ -540,12 +523,10 @@ int main(int argc, char *argv[]) {
     std::cout << "[Step 1] Fast-forwarding (Simple CPU) for "
               << config.fast_forward_count << " cycles..." << std::endl;
 
-#ifdef CONFIG_DIFFTEST
     difftest_configure_run_assets(
         config.sdcard_image_file.empty() ? nullptr
                                          : config.sdcard_image_file.c_str());
     difftest_init_run_state();
-#endif
     difftest_ref_set_uart_print(true);
     difftest_ref_set_ref_only(true);
     difftest_ref_set_device_effects(true);
@@ -574,10 +555,6 @@ int main(int argc, char *argv[]) {
     if (cpu.ctx.exit_reason == ExitReason::NONE) {
       cpu.back.restore_from_ref();
       cpu.sync_mmio_devices_from_backing();
-#ifndef CONFIG_BPU
-      std::cout << "[Oracle] Synced with ref snapshot before switching to O3."
-                << std::endl;
-#endif
       cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
 
       std::cout << "[Step 2] Run O3 CPU ... " << endl;

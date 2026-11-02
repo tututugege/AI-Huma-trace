@@ -1,8 +1,6 @@
 #include "MSHR.h"
 #include "PhysMemory.h"
-#if !BSD_CONFIG
 #include "types.h"
-#endif
 
 #include <cassert>
 #include <cstdio>
@@ -75,9 +73,7 @@ void MSHR::comb_outputs_dcache()
         out.mshr2dcache->fill_req.id = nxt.axi_resp_hold_id;
         out.mshr2dcache->fill_req.addr = e.addr;
         out.mshr2dcache->fill_req.dirty = e.merged_store_dirty;
-#if !BSD_CONFIG
         out.mshr2dcache->fill_req.lsu_origin = e.lsu_origin;
-#endif
         std::memcpy(out.mshr2dcache->fill_req.data, nxt.axi_resp_hold_data, DCACHE_WORD_NUM * sizeof(uint32_t));
         for (int w = 0; w < DCACHE_WORD_NUM; w++) {
             if (e.merged_store_strb[w] != 0) {
@@ -91,9 +87,7 @@ void MSHR::comb_outputs_dcache()
         out.mshr2dcache->fill_req.valid = false;
         out.mshr2dcache->fill_req.id = 0;
         out.mshr2dcache->fill_req.dirty = false;
-#if !BSD_CONFIG
         out.mshr2dcache->fill_req.lsu_origin = false;
-#endif
         out.mshr2dcache->fill_req.way_idx = 0;
         out.mshr2dcache->fill_req.addr = 0;
         std::memset(out.mshr2dcache->fill_req.data, 0, sizeof(out.mshr2dcache->fill_req.data));
@@ -133,7 +127,6 @@ void MSHR::comb_inputs_dcache()
             nxt.mshr_entries[hold_id].issued;
         if (matches_hold && matches_entry) {
             const bool entry_was_valid = nxt.mshr_entries[hold_id].valid;
-#if !BSD_CONFIG
             if (ctx != nullptr &&
                 hold_id < DCACHE_MSHR_ENTRIES) {
                 const MSHREntry &e = nxt.mshr_entries[hold_id];
@@ -144,16 +137,13 @@ void MSHR::comb_inputs_dcache()
 
                 }
             }
-#endif
             nxt.mshr_entries[hold_id].valid = false;
             nxt.mshr_entries[hold_id].issued = false;
             clear_store_merge(nxt.mshr_entries[hold_id]);
-#if !BSD_CONFIG
             nxt.mshr_entries[hold_id].alloc_cycle = 0;
             nxt.mshr_entries[hold_id].axi_read_start_cycle = 0;
             nxt.mshr_entries[hold_id].axi_read_active = false;
             nxt.mshr_entries[hold_id].lsu_origin = false;
-#endif
             if (entry_was_valid && nxt.mshr_count > 0) {
                 nxt.mshr_count = nxt.mshr_count - 1;
             }
@@ -181,7 +171,6 @@ void MSHR::comb_inputs_dcache()
                         nxt.mshr_entries[j].issued = false;
                         nxt.mshr_entries[j].addr = line_addr;
                         clear_store_merge(nxt.mshr_entries[j]);
-#if !BSD_CONFIG
                         nxt.mshr_entries[j].alloc_cycle =
                             ctx == nullptr ? 0 : ctx->perf.cycle;
                         nxt.mshr_entries[j].axi_read_start_cycle = 0;
@@ -192,7 +181,6 @@ void MSHR::comb_inputs_dcache()
                             in.dcache2mshr->mshr_req[i].lsu_origin) {
 
                         }
-#endif
                         nxt.mshr_count = nxt.mshr_count + 1;
                         break;
                     }
@@ -221,11 +209,9 @@ void MSHR::comb_inputs_axi()
             MSHREntry &ne = nxt.mshr_entries[accepted_id];
             if (ne.valid && !ne.issued) {
                 nxt.mshr_entries[accepted_id].issued = true;
-#if !BSD_CONFIG
                 nxt.mshr_entries[accepted_id].axi_read_active = true;
                 nxt.mshr_entries[accepted_id].axi_read_start_cycle =
                     ctx == nullptr ? 0 : ctx->perf.cycle;
-#endif
             }
             if (out.axi_out->req_valid &&
                 out.axi_out->req_id == accepted_id) {
@@ -237,9 +223,7 @@ void MSHR::comb_inputs_axi()
         }
         else
         {
-#if !BSD_CONFIG
             Assert(false && "Invalid MSHR accepted request ID");
-#endif
         }
     }
 
@@ -259,7 +243,6 @@ void MSHR::comb_inputs_axi()
                 std::memcpy(nxt.axi_resp_hold_data, in.axi_in->resp_data,
                             DCACHE_WORD_NUM * sizeof(uint32_t));
                 axi_resp_accepted_this_cycle = true;
-#if !BSD_CONFIG
                 if (ctx != nullptr) {
                     const MSHREntry &e = nxt.mshr_entries[resp_id];
                     if (e.lsu_origin && e.axi_read_active &&
@@ -271,12 +254,8 @@ void MSHR::comb_inputs_axi()
                     nxt.mshr_entries[resp_id].axi_read_active = false;
                     nxt.mshr_entries[resp_id].axi_read_start_cycle = 0;
                 }
-#endif
             }
             else {
-#if BSD_CONFIG
-                Assert(false && "Invalid AXI response ID");
-#endif
             }
         }
     }

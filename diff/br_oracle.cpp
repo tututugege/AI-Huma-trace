@@ -176,11 +176,7 @@ void init_oracle_ckpt(CPU_state ckpt_state, uint8_t privilege) {
 void get_oracle(struct front_top_in &in, struct front_top_out &out) {
   int i;
   static bool stall = false;
-#ifdef CONFIG_ORACLE_STEADY_FETCH_WIDTH
   constexpr bool kOracleSteadyFetchWidth = true;
-#else
-  constexpr bool kOracleSteadyFetchWidth = false;
-#endif
 
   // Oracle front-end has no BPU update queue. Backend commit must never be
   // back-pressured by a stale/uninitialized commit_stall in this mode.

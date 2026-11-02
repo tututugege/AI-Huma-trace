@@ -527,13 +527,8 @@ void BackTop::load_image(const std::string &filename) {
   pmem_write(0xc, 0x00028067);
   seed_uart_io_words();
 
-#ifdef CONFIG_DIFFTEST
   init_difftest(size);
-#endif
 
-#ifndef CONFIG_BPU
-  init_oracle(size);
-#endif
 }
 
 void BackTop::load_flash_image(const std::string &filename) {
@@ -664,11 +659,6 @@ void BackTop::restore_from_ref() {
   out.flush = true;
   out.redirect_pc = state.pc;
 
-#ifndef CONFIG_BPU
-  // FAST 模式从 ref 切换到 O3+oracle 时，oracle 也必须恢复到同一状态，
-  // 否则首拍 refetch 会因为 PC 不一致触发断言。
-  init_oracle_ckpt(state, privilege);
-#endif
 }
 
 void BackTop::restore_checkpoint(const std::string &filename) {
@@ -860,9 +850,6 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   std::cout << "Checkpoint restored from " << final_name << std::endl;
 
   init_diff_ckpt(state, restored_privilege);
-#ifndef CONFIG_BPU
-  init_oracle_ckpt(state, restored_privilege);
-#endif
 
   // Ensure the pipeline starts with a refetch from the restored PC
   out.flush = true;

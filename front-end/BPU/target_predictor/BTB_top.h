@@ -791,9 +791,7 @@ public:
       const bool writes_btb =
           (inp.upd_br_type_in == BR_DIRECT || inp.upd_br_type_in == BR_CALL ||
            inp.upd_br_type_in == BR_RET || inp.upd_br_type_in == BR_JAL
-#if ENABLE_INDIRECT_BTB_TRAIN
            || inp.upd_br_type_in == BR_IDIRECT
-#endif
           );
 
       if (inp.upd_actual_dir && writes_btb) {
@@ -1158,42 +1156,29 @@ private:
 
   static void btb_get_idx_comb(const BtbGetIdxCombIn &in, BtbGetIdxCombOut &out) {
     out = BtbGetIdxCombOut{};
-#if ENABLE_BTB_ALIAS_HASH
     constexpr int kBtbIdxWidth = calc_index_width(BTB_IDX_MASK);
     const uint32_t pc_word = in.pc >> 2;
     out.idx = hash_index_value(pc_word, BTB_IDX_MASK, kBtbIdxWidth, 0x9e3779b9u);
-#else
-    out.idx = (in.pc >> 2) & BTB_IDX_MASK;
-#endif
   }
 
   static void btb_get_type_idx_comb(const BtbGetTypeIdxCombIn &in,
                                     BtbGetTypeIdxCombOut &out) {
     out = BtbGetTypeIdxCombOut{};
-#if ENABLE_BTB_ALIAS_HASH
     constexpr int kTypeIdxWidth = calc_index_width(BTB_TYPE_IDX_MASK);
     const uint32_t pc_word = in.pc >> 2;
     out.idx =
         hash_index_value(pc_word, BTB_TYPE_IDX_MASK, kTypeIdxWidth, 0x7f4a7c15u);
-#else
-    out.idx = (in.pc >> 2) & BTB_TYPE_IDX_MASK;
-#endif
   }
 
   static void bht_get_idx_comb(const BhtGetIdxCombIn &in, BhtGetIdxCombOut &out) {
     out = BhtGetIdxCombOut{};
-#if ENABLE_BTB_ALIAS_HASH
     constexpr int kBhtIdxWidth = calc_index_width(BHT_IDX_MASK);
     const uint32_t pc_word = in.pc >> 2;
     out.idx = hash_index_value(pc_word, BHT_IDX_MASK, kBhtIdxWidth, 0x6a5d39e1u);
-#else
-    out.idx = (in.pc >> 2) & BHT_IDX_MASK;
-#endif
   }
 
   static void tc_get_idx_comb(const TcGetIdxCombIn &in, TcGetIdxCombOut &out) {
     out = TcGetIdxCombOut{};
-#if ENABLE_BTB_ALIAS_HASH
     constexpr int kTcIdxWidth = calc_index_width(TC_ENTRY_MASK);
     const uint32_t pc_word = in.pc >> 2;
     const uint32_t hist_mix =
@@ -1201,28 +1186,20 @@ private:
     out.idx = hash_index_value(pc_word ^ hist_mix ^ (in.bht_value >> 19), TC_ENTRY_MASK,
                                kTcIdxWidth,
                                0x51ed270bu);
-#else
-    out.idx = (in.bht_value ^ in.pc) & TC_ENTRY_MASK;
-#endif
   }
 
   static void tc_get_tag_comb(const TcGetTagCombIn &in, TcGetTagCombOut &out) {
     out = TcGetTagCombOut{};
-#if ENABLE_BTB_ALIAS_HASH
     constexpr int kTcTagWidth = calc_index_width(TC_TAG_MASK);
     const uint32_t pc_word = in.pc >> 2;
     out.tag =
         hash_index_value(pc_word, TC_TAG_MASK, kTcTagWidth, 0x3c6ef372u);
-#else
-    out.tag = (in.pc >> 2) & TC_TAG_MASK;
-#endif
   }
 
   // [Comb] Logic
   static void bht_next_state_comb(const BhtNextStateCombIn &in,
                                   BhtNextStateCombOut &out) {
     out = BhtNextStateCombOut{};
-#if ENABLE_TC_TARGET_SIGNATURE
     if (in.br_type == BR_IDIRECT) {
       uint32_t target_word = in.actual_target >> 2;
       uint32_t target_folded = target_word ^ (target_word >> 11) ^ (target_word >> 19);
@@ -1231,7 +1208,6 @@ private:
       out.next_bht = hist_folded ^ target_folded ^ 0x9e3779b9u;
       return;
     }
-#endif
     out.next_bht = (in.current_bht << 1) | (in.pc_dir ? 1 : 0);
   }
 
@@ -1316,10 +1292,8 @@ private:
         out.pred_target = tc_pre_target;
       } else if (tc_hit) {
         out.pred_target = tc_target;
-#if ENABLE_INDIRECT_BTB_FALLBACK
       } else if (in.hit_info.hit) {
         out.pred_target = in.set_data.bta[in.hit_info.hit_way];
-#endif
       } else {
         out.pred_target = in.pc + 4;
       }

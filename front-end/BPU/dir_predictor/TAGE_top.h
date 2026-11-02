@@ -368,9 +368,6 @@ public:
     tage_reset_ctr_t reset_cnt_reg;
     // int8_t use_alt_ctr_reg;
     tage_use_alt_ctr_t use_alt_ctr_reg;
-#if ENABLE_TAGE_SC_L
-    tage_scl_theta_t scl_theta_reg;
-#endif
     // input latches
     wire1_t do_pred_latch;
     wire1_t do_upd_latch;
@@ -684,26 +681,7 @@ private:
   tage_useful_t useful_table[TN_MAX][TN_ENTRY_NUM];
   tage_sc_ctr_t sc_ctr_table[TAGE_SC_ENTRY_NUM];
 
-#if ENABLE_TAGE_SC_L
-  // Strong SC-L tables (multi-table signed counters) + adaptive threshold.
-  // int8_t scl_table[BPU_SCL_META_NTABLE][TAGE_SC_L_ENTRY_NUM];
-  tage_scl_ctr_t scl_table[BPU_SCL_META_NTABLE][TAGE_SC_L_ENTRY_NUM];
-  // int16_t scl_theta;
-  tage_scl_theta_t scl_theta;
-#endif
 
-#if ENABLE_TAGE_LOOP_PRED
-  struct LoopEntry {
-    wire1_t valid;
-    tage_loop_tag_t tag;
-    tage_loop_iter_t iter_count;
-    tage_loop_iter_t iter_limit;
-    tage_loop_conf_t conf;
-    tage_loop_age_t age;
-    wire1_t dir;
-  };
-  LoopEntry loop_table[TAGE_LOOP_ENTRY_NUM];
-#endif
 
   // FH constants
   const uint32_t ghr_length[TN_MAX] = {8, 13, 32, 119};
@@ -767,14 +745,6 @@ public:
     memset(cnt_table, 0, sizeof(cnt_table));
     memset(useful_table, 0, sizeof(useful_table));
     std::memset(sc_ctr_table, 1, sizeof(sc_ctr_table));
-#if ENABLE_TAGE_SC_L
-    std::memset(scl_table, (1u << (TAGE_SC_L_CTR_BITS - 1)), sizeof(scl_table));
-    // scl_theta = static_cast<int16_t>(TAGE_SC_L_THETA_INIT);
-    scl_theta = static_cast<tage_scl_theta_t>(TAGE_SC_L_THETA_INIT);
-#endif
-#if ENABLE_TAGE_LOOP_PRED
-    std::memset(loop_table, 0, sizeof(loop_table));
-#endif
 
     state = S_IDLE;
     do_pred_latch = false;
@@ -857,33 +827,6 @@ public:
     out.pred_read_valid = true;
     out.pred_idx_tag = pred_index_out.index_tag;
     out.pred_sc_idx = tage_sc_idx_from_pc(in.inp.pc_pred_in);
-#if ENABLE_TAGE_SC_L
-    static constexpr int kSclIdxBits = ceil_log2_u32(TAGE_SC_L_ENTRY_NUM);
-    static constexpr uint32_t kSclMask = TAGE_SC_L_ENTRY_NUM - 1;
-    static constexpr int kHistLen[BPU_SCL_META_NTABLE] = {0, 4, 8, 16, 32, 64, 128, 256};
-    static constexpr int kPathHistLen[BPU_SCL_META_NTABLE] = {0, 4, 8, 12, 16, 20, 24, 28};
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      const uint32_t folded =
-          scl_fold_ghr_idx(in.inp.ghr_in, kHistLen[t], kSclIdxBits);
-      uint32_t mix = (in.inp.pc_pred_in >> 2);
-      mix ^= (mix >> 11);
-      mix ^= (mix >> 19);
-      mix ^= folded;
-      mix ^= (folded << 1);
-#if ENABLE_TAGE_SC_PATH
-      const uint32_t path_folded =
-          scl_fold_path_idx(in.inp.path_in, kPathHistLen[t], kSclIdxBits);
-      mix ^= path_folded;
-      mix ^= (path_folded << 2);
-      mix ^= (path_folded >> 1);
-#endif
-      out.pred_scl_idx[t] = static_cast<tage_scl_meta_idx_t>(mix & kSclMask);
-    }
-#endif
-#if ENABLE_TAGE_LOOP_PRED
-    out.pred_loop_idx = static_cast<tage_loop_meta_idx_t>(loop_idx_from_pc(in.inp.pc_pred_in));
-    out.pred_loop_tag = static_cast<tage_loop_meta_tag_t>(loop_tag_from_pc(in.inp.pc_pred_in));
-#endif
   }
 
   void tage_upd_read_req_comb(const TageUpdReadReqCombIn &in,
@@ -900,16 +843,6 @@ public:
     for (int i = 0; i < TN_MAX; ++i) {
       out.upd_tage_idx_flat[i] = in.inp.tage_idx_flat_in[i];
     }
-#if ENABLE_TAGE_SC_L
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      out.upd_scl_idx[t] = in.inp.sc_idx_in[t];
-    }
-#endif
-#if ENABLE_TAGE_LOOP_PRED
-    out.upd_loop_read_valid = true;
-    out.upd_loop_idx = in.inp.loop_idx_in;
-    out.upd_loop_tag = in.inp.loop_tag_in;
-#endif
 
     const uint32_t u_cnt = in.state_in.reset_cnt_reg & 0x7ff;
     if (u_cnt == 0) {
@@ -979,103 +912,18 @@ public:
         out.tage_tag_flat_out[i] = pred_sel_out.pred_res.index_info.tag[i];
         out.tage_idx_flat_out[i] = pred_sel_out.pred_res.index_info.tage_index[i];
       }
-#if ENABLE_TAGE_SC_L
-      // Compute SC-L indices and sum; override decision can be tuned later.
-      static constexpr int kSclIdxBits = ceil_log2_u32(TAGE_SC_L_ENTRY_NUM);
-      static constexpr uint32_t kSclMask = TAGE_SC_L_ENTRY_NUM - 1;
-      static constexpr int kHistLen[BPU_SCL_META_NTABLE] = {0, 4, 8, 16, 32, 64, 128, 256};
-      static constexpr int kPathHistLen[BPU_SCL_META_NTABLE] = {0, 4, 8, 12, 16, 20, 24, 28};
-      // int16_t sum = 0;
-      wire16_t sum_raw = 0;
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        const uint32_t folded = scl_fold_ghr_idx(rd.state_in.GHR, kHistLen[t], kSclIdxBits);
-        uint32_t mix = (inp.pc_pred_in >> 2);
-        mix ^= (mix >> 11);
-        mix ^= (mix >> 19);
-        mix ^= folded;
-        mix ^= (folded << 1);
-#if ENABLE_TAGE_SC_PATH
-        const uint32_t path_folded = scl_fold_path_idx(inp.path_in, kPathHistLen[t], kSclIdxBits);
-        mix ^= path_folded;
-        mix ^= (path_folded << 2);
-        mix ^= (path_folded >> 1);
-#endif
-        const uint32_t idx = mix & kSclMask;
-        out.sc_idx_out[t] = static_cast<tage_scl_meta_idx_t>(idx);
-        sum_raw =
-            static_cast<wire16_t>(sum_raw + static_cast<wire16_t>(rd.pred_scl_ctr[t]));
-      }
-      // out.sc_sum_out = sum;
-      out.sc_sum_out = sum_raw;
-      static constexpr wire16_t kSclCtrBias =
-        static_cast<wire16_t>(1u << (TAGE_SC_L_CTR_BITS - 1));
-      static constexpr wire16_t kSclSumBias =
-        static_cast<wire16_t>(BPU_SCL_META_NTABLE * kSclCtrBias);
-      // out.sc_pred_out = (sum >= 0);
-      out.sc_pred_out = (sum_raw >= kSclSumBias);
-      out.sc_used_out = false;
-      if (pred_sel_out.pred_res.pcpn < TN_MAX) {
-        const uint8_t provider_cnt = rd.pred_read_data.cnt[pred_sel_out.pred_res.pcpn];
-        const bool provider_pred = (provider_cnt >= 4);
-        const bool provider_weak =
-            (provider_cnt >= TAGE_PROVIDER_WEAK_LOW) &&
-            (provider_cnt <= TAGE_PROVIDER_WEAK_HIGH);
-        const bool sc_disagree = (out.sc_pred_out != provider_pred);
-        // const bool margin_ok = (scl_abs16(sum) >= (scl_theta + TAGE_SC_L_OVERRIDE_MARGIN));
-        const wire16_t abs_sum = abs_diff_u16(sum_raw, kSclSumBias);
-        const bool margin_ok =
-            (abs_sum >= static_cast<wire16_t>(rd.state_in.scl_theta_reg +
-                                              TAGE_SC_L_OVERRIDE_MARGIN));
-        if (provider_weak && sc_disagree && margin_ok) {
-          out.sc_used_out = true;
-          out.pred_out = out.sc_pred_out;
-        }
-      }
-#else
       out.sc_used_out = false;
       out.sc_pred_out = false;
       out.sc_sum_out = 0;
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
         out.sc_idx_out[t] = 0;
       }
-#endif
 
-#if ENABLE_TAGE_LOOP_PRED
-      {
-        const bool hit = rd.pred_loop_entry_valid &&
-                         (rd.pred_loop_entry_tag == rd.pred_loop_tag);
-        out.loop_hit_out = hit;
-        out.loop_idx_out = rd.pred_loop_idx;
-        out.loop_tag_out = rd.pred_loop_tag;
-        out.loop_used_out = false;
-        out.loop_pred_out = false;
-        if (hit && rd.pred_loop_entry_conf >= TAGE_LOOP_CONF_THRESHOLD) {
-          const bool exit_now = (rd.pred_loop_entry_iter_limit != 0) &&
-                                ((rd.pred_loop_entry_iter_count + 1) ==
-                                 rd.pred_loop_entry_iter_limit);
-          const bool lp = exit_now ? !static_cast<bool>(rd.pred_loop_entry_dir)
-                                   : static_cast<bool>(rd.pred_loop_entry_dir);
-          out.loop_pred_out = lp;
-          // Conservative override: only when TAGE is weak (provider weak).
-          if (pred_sel_out.pred_res.pcpn < TN_MAX) {
-            const uint8_t provider_cnt = rd.pred_read_data.cnt[pred_sel_out.pred_res.pcpn];
-            const bool provider_weak =
-                (provider_cnt >= TAGE_PROVIDER_WEAK_LOW) &&
-                (provider_cnt <= TAGE_PROVIDER_WEAK_HIGH);
-            if (provider_weak) {
-              out.loop_used_out = true;
-              out.pred_out = lp;
-            }
-          }
-        }
-      }
-#else
       out.loop_used_out = false;
       out.loop_hit_out = false;
       out.loop_pred_out = false;
       out.loop_idx_out = 0;
       out.loop_tag_out = 0;
-#endif
       out.tage_pred_out_valid = true;
     }
 
@@ -1165,110 +1013,7 @@ public:
         }
       }
 
-#if ENABLE_TAGE_SC_L
-      if (inp.sc_used_in) {
-        static constexpr uint32_t kSclMask = TAGE_SC_L_ENTRY_NUM - 1;
-        const tage_scl_ctr_t kCtrMax =
-            static_cast<tage_scl_ctr_t>((1u << TAGE_SC_L_CTR_BITS) - 1u);
-        const tage_scl_ctr_t kCtrMin = static_cast<tage_scl_ctr_t>(0u);
-        const bool real_dir = inp.real_dir;
-        const bool sc_pred = inp.sc_pred_in;
-        const wire16_t sum_raw = inp.sc_sum_in;
-        static constexpr wire16_t kSclCtrBias =
-            static_cast<wire16_t>(1u << (TAGE_SC_L_CTR_BITS - 1));
-        static constexpr wire16_t kSclSumBias =
-            static_cast<wire16_t>(BPU_SCL_META_NTABLE * kSclCtrBias);
-        const wire16_t abs_sum = abs_diff_u16(sum_raw, kSclSumBias);
-        tage_scl_theta_t next_theta = rd.state_in.scl_theta_reg;
-        const bool low_margin = (abs_sum < rd.state_in.scl_theta_reg);
-        const bool sc_wrong = (sc_pred != real_dir);
-        const bool train = sc_wrong || low_margin;
-        if (train) {
-          for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            tage_scl_ctr_t cur = rd.upd_scl_ctr[t];
-            cur = real_dir ? sat_inc_scl(cur, kCtrMax) : sat_dec_scl(cur, kCtrMin);
-            req.scl_we_commit[t] = true;
-            req.scl_wr_idx[t] =
-                static_cast<tage_scl_meta_idx_t>(inp.sc_idx_in[t] & kSclMask);
-            req.scl_wdata_commit[t] = cur;
-          }
-        }
-        if (sc_wrong && (abs_sum >= rd.state_in.scl_theta_reg)) {
-          if (next_theta < TAGE_SC_L_THETA_MAX) {
-            next_theta = static_cast<tage_scl_theta_t>(next_theta + 1);
-          }
-        } else if (!sc_wrong && low_margin) {
-          if (next_theta > TAGE_SC_L_THETA_MIN) {
-            next_theta = static_cast<tage_scl_theta_t>(next_theta - 1);
-          }
-        }
-        if (next_theta != rd.state_in.scl_theta_reg) {
-          req.scl_theta_we_commit = true;
-          req.scl_theta_wdata_commit = next_theta;
-        }
-      }
-#endif
 
-#if ENABLE_TAGE_LOOP_PRED
-      {
-        const tage_loop_tag_t ltag =
-            static_cast<tage_loop_tag_t>(rd.upd_loop_tag) &
-            static_cast<tage_loop_tag_t>((1u << TAGE_LOOP_TAG_BITS) - 1u);
-        LoopEntry next_loop{};
-        next_loop.valid = rd.upd_loop_entry_valid;
-        next_loop.tag = rd.upd_loop_entry_tag;
-        next_loop.iter_count = rd.upd_loop_entry_iter_count;
-        next_loop.iter_limit = rd.upd_loop_entry_iter_limit;
-        next_loop.conf = rd.upd_loop_entry_conf;
-        next_loop.age = rd.upd_loop_entry_age;
-        next_loop.dir = rd.upd_loop_entry_dir;
-        const tage_loop_conf_t conf_max =
-            static_cast<tage_loop_conf_t>((1u << TAGE_LOOP_CONF_BITS) - 1u);
-        const tage_loop_age_t age_max =
-            static_cast<tage_loop_age_t>((1u << TAGE_LOOP_AGE_BITS) - 1u);
-        const tage_loop_iter_t iter_max =
-            static_cast<tage_loop_iter_t>((1u << TAGE_LOOP_ITER_BITS) - 1u);
-
-        if (!next_loop.valid || next_loop.tag != ltag) {
-          next_loop.valid = true;
-          next_loop.tag = ltag;
-          next_loop.iter_count = 0;
-          next_loop.iter_limit = 0;
-          next_loop.conf = 0;
-          next_loop.age = age_max;
-          next_loop.dir = true;
-        }
-
-        if (next_loop.valid && next_loop.tag == ltag) {
-          const bool real_dir = inp.real_dir;
-          if (real_dir == static_cast<bool>(next_loop.dir)) {
-            next_loop.iter_count = loop_sat_inc(next_loop.iter_count, iter_max);
-          } else {
-            if (next_loop.iter_limit != 0 && next_loop.iter_count == next_loop.iter_limit) {
-              next_loop.conf = static_cast<tage_loop_conf_t>(
-                  (next_loop.conf >= conf_max) ? conf_max : (next_loop.conf + 1));
-              next_loop.age = age_max;
-            } else {
-              next_loop.conf = static_cast<tage_loop_conf_t>(
-                  next_loop.conf ? (next_loop.conf - 1) : 0);
-              next_loop.iter_limit =
-                  (next_loop.iter_count == 0) ? 0 : next_loop.iter_count;
-            }
-            next_loop.iter_count = 0;
-          }
-        }
-
-        req.loop_we_commit = true;
-        req.loop_wr_idx = rd.upd_loop_idx;
-        req.loop_valid_commit = next_loop.valid;
-        req.loop_tag_commit = static_cast<tage_loop_meta_tag_t>(next_loop.tag);
-        req.loop_iter_count_commit = next_loop.iter_count;
-        req.loop_iter_limit_commit = next_loop.iter_limit;
-        req.loop_conf_commit = next_loop.conf;
-        req.loop_age_commit = next_loop.age;
-        req.loop_dir_commit = next_loop.dir;
-      }
-#endif
       out.tage_update_done = true;
     }
 
@@ -1295,9 +1040,6 @@ public:
     }
     rd.state_in.reset_cnt_reg = reset_cnt_reg;
     rd.state_in.use_alt_ctr_reg = use_alt_ctr_reg;
-#if ENABLE_TAGE_SC_L
-    rd.state_in.scl_theta_reg = scl_theta;
-#endif
     rd.state_in.do_pred_latch = do_pred_latch;
     rd.state_in.do_upd_latch = do_upd_latch;
     rd.state_in.upd_real_dir_latch = upd_real_dir_latch;
@@ -1374,25 +1116,6 @@ public:
         rd.pred_read_data.useful[i] = useful_table[i][mem_idx];
       }
       rd.pred_sc_ctr = sc_ctr_table[in.pred_req.pred_sc_idx];
-#if ENABLE_TAGE_SC_L
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        const uint32_t idx = static_cast<uint32_t>(in.pred_req.pred_scl_idx[t]) &
-                             (TAGE_SC_L_ENTRY_NUM - 1);
-        rd.pred_scl_ctr[t] = scl_table[t][idx];
-      }
-#endif
-#if ENABLE_TAGE_LOOP_PRED
-      rd.pred_loop_idx = in.pred_req.pred_loop_idx;
-      rd.pred_loop_tag = in.pred_req.pred_loop_tag;
-      const LoopEntry &pred_loop_entry = loop_table[rd.pred_loop_idx];
-      rd.pred_loop_entry_valid = pred_loop_entry.valid;
-      rd.pred_loop_entry_tag = pred_loop_entry.tag;
-      rd.pred_loop_entry_iter_count = pred_loop_entry.iter_count;
-      rd.pred_loop_entry_iter_limit = pred_loop_entry.iter_limit;
-      rd.pred_loop_entry_conf = pred_loop_entry.conf;
-      rd.pred_loop_entry_age = pred_loop_entry.age;
-      rd.pred_loop_entry_dir = pred_loop_entry.dir;
-#endif
     }
 
     rd.upd_read_valid = in.upd_req.upd_read_valid;
@@ -1414,27 +1137,6 @@ public:
           rd.upd_reset_row_data[i] = useful_table[i][rd.upd_reset_row_idx];
         }
       }
-#if ENABLE_TAGE_SC_L
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        const uint32_t idx = static_cast<uint32_t>(in.upd_req.upd_scl_idx[t]) &
-                             (TAGE_SC_L_ENTRY_NUM - 1);
-        rd.upd_scl_ctr[t] = scl_table[t][idx];
-      }
-#endif
-#if ENABLE_TAGE_LOOP_PRED
-      if (in.upd_req.upd_loop_read_valid) {
-        rd.upd_loop_idx = in.upd_req.upd_loop_idx;
-        rd.upd_loop_tag = in.upd_req.upd_loop_tag;
-        const LoopEntry &upd_loop_entry = loop_table[rd.upd_loop_idx];
-        rd.upd_loop_entry_valid = upd_loop_entry.valid;
-        rd.upd_loop_entry_tag = upd_loop_entry.tag;
-        rd.upd_loop_entry_iter_count = upd_loop_entry.iter_count;
-        rd.upd_loop_entry_iter_limit = upd_loop_entry.iter_limit;
-        rd.upd_loop_entry_conf = upd_loop_entry.conf;
-        rd.upd_loop_entry_age = upd_loop_entry.age;
-        rd.upd_loop_entry_dir = upd_loop_entry.dir;
-      }
-#endif
     }
 
     rd.useful_reset_row_data_valid = in.useful_reset_req.useful_reset_row_data_valid;
@@ -1469,11 +1171,7 @@ public:
     rd.new_read_valid = true;
     rd.new_read_data = rd.mem.table_r;
 
-#ifdef SRAM_DELAY_ENABLE
-    rd.mem.table_read_data_valid = false;
-#else
     rd.mem.table_read_data_valid = true;
-#endif
   }
 
   void tage_comb_calc(const InputPayload &inp, ReadData &rd,
@@ -1556,34 +1254,7 @@ public:
       }
     }
 
-#if ENABLE_TAGE_SC_L
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      if (!req.scl_we_commit[t]) {
-        continue;
-      }
-      const uint32_t idx =
-          static_cast<uint32_t>(req.scl_wr_idx[t]) & (TAGE_SC_L_ENTRY_NUM - 1);
-      scl_table[t][idx] = req.scl_wdata_commit[t];
-    }
-    if (req.scl_theta_we_commit) {
-      scl_theta = req.scl_theta_wdata_commit;
-    }
-#endif
 
-#if ENABLE_TAGE_LOOP_PRED
-    if (req.loop_we_commit) {
-      const uint32_t lidx =
-          static_cast<uint32_t>(req.loop_wr_idx) & (TAGE_LOOP_ENTRY_NUM - 1);
-      LoopEntry &le = loop_table[lidx];
-      le.valid = req.loop_valid_commit;
-      le.tag = req.loop_tag_commit;
-      le.iter_count = req.loop_iter_count_commit;
-      le.iter_limit = req.loop_iter_limit_commit;
-      le.conf = req.loop_conf_commit;
-      le.age = req.loop_age_commit;
-      le.dir = req.loop_dir_commit;
-    }
-#endif
 
     sram_delay_active = req.sram_delay_active_next;
     sram_delay_counter = req.sram_delay_counter_next;
@@ -1666,7 +1337,6 @@ private:
       const bool provider_weak_sc =
           (provider_cnt >= TAGE_SC_PROVIDER_WEAK_LOW) &&
           (provider_cnt <= TAGE_SC_PROVIDER_WEAK_HIGH);
-#if ENABLE_TAGE_USE_ALT_ON_NA
       const bool provider_weak = (provider_cnt >= TAGE_PROVIDER_WEAK_LOW) &&
                                  (provider_cnt <= TAGE_PROVIDER_WEAK_HIGH);
       const bool useful_low =
@@ -1678,24 +1348,6 @@ private:
             (in.use_alt_ctr <= static_cast<tage_use_alt_ctr_t>(TAGE_USE_ALT_CTR_USE_ALT_THRESHOLD));
         res.pred = prefer_alt ? res.alt_pred : provider_pred;
       }
-#endif
-#if ENABLE_TAGE_SC_LITE
-      bool sc_can_override = (provider_pred != res.alt_pred);
-#if TAGE_SC_USE_WEAK_ONLY
-      sc_can_override = sc_can_override && provider_weak_sc;
-#endif
-      if (sc_can_override) {
-#if TAGE_SC_STRONG_ONLY_OVERRIDE
-        if (in.sc_ctr == 0) {
-          res.pred = res.alt_pred;
-        } else if (in.sc_ctr == 3) {
-          res.pred = provider_pred;
-        }
-#else
-        res.pred = (in.sc_ctr >= 2) ? provider_pred : res.alt_pred;
-#endif
-      }
-#endif
     }
   }
 
@@ -1749,7 +1401,6 @@ private:
       req.cnt_we[pcpn] = true;
       req.cnt_wdata[pcpn] = new_cnt;
 
-#if ENABLE_TAGE_USE_ALT_ON_NA
       const bool provider_weak = (read_vals.cnt[pcpn] >= TAGE_PROVIDER_WEAK_LOW) &&
                                  (read_vals.cnt[pcpn] <= TAGE_PROVIDER_WEAK_HIGH);
       const bool useful_low =
@@ -1776,7 +1427,6 @@ private:
           req.use_alt_ctr_wdata = next_ctr;
         }
       }
-#endif
     } else {
       int new_base = read_vals.base_cnt;
       if (real_dir == true) {
@@ -1834,30 +1484,6 @@ private:
       }
     }
 
-#if ENABLE_TAGE_SC_LITE
-    if (pcpn < TN_MAX) {
-      const uint8_t provider_cnt = read_vals.cnt[pcpn];
-      const bool provider_pred_raw = (provider_cnt >= 4);
-      const bool alt_pred_raw = pred_res.alt_pred;
-      const bool provider_used = !(in.sc_used || in.loop_used);
-      bool sc_train_en = provider_used && (provider_pred_raw != alt_pred_raw);
-#if TAGE_SC_USE_WEAK_ONLY
-      const bool provider_weak =
-          (provider_cnt >= TAGE_SC_PROVIDER_WEAK_LOW) &&
-          (provider_cnt <= TAGE_SC_PROVIDER_WEAK_HIGH);
-      sc_train_en = sc_train_en && provider_weak;
-#endif
-      if (sc_train_en) {
-        const bool provider_correct = (provider_pred_raw == real_dir);
-        const bool alt_correct = (alt_pred_raw == real_dir);
-        if (provider_correct ^ alt_correct) {
-          req.sc_we = true;
-          req.sc_wdata = provider_correct ? sat_inc_2bit_value(sc_ctr)
-                                          : sat_dec_2bit_value(sc_ctr);
-        }
-      }
-    }
-#endif
 
     // 3. Reset Logic
     uint32_t u_cnt = current_reset_cnt &

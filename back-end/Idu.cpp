@@ -8,9 +8,7 @@
 #include <cstdlib>
 
 // 中间信号
-#ifdef CONFIG_BPU
 static wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH]; // 分配的新 Tag
-#endif
 
 void Idu::init() {
   for (int i = 0; i < MAX_BR_NUM; i++) {
@@ -51,41 +49,6 @@ void Idu::comb_begin() {
  * 约束: 每拍最多分配 max_br_per_cycle 个分支 Tag, Tag 不足时后续槽位 valid 置 0。
  */
 void Idu::comb_decode() {
-#ifndef CONFIG_BPU
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.dec2ren->valid[i] = false;
-    out.dec2ren->uop[i] = {};
-  }
-
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    const InstructionBufferEntry &entry = in.issue->entries[i];
-    if (!entry.valid)
-      continue;
-
-    out.dec2ren->valid[i] = true;
-    auto &decoded = out.dec2ren->uop[i];
-    decoded = {};
-    decoded.id = entry.uop_id;
-    if (entry.page_fault_inst) {
-      decoded.diag_val = entry.inst;
-      decoded.page_fault_inst = true;
-      decoded.type = encode_inst_type(NOP);
-      decoded.src1_en = false;
-      decoded.src2_en = false;
-      decoded.dest_en = false;
-      decoded.dbg.instruction = entry.inst;
-    } else {
-      decode(decoded, entry.inst);
-    }
-    decoded.dbg.pc = entry.pc;
-    decoded.ftq_idx = entry.ftq_idx;
-    decoded.ftq_offset = entry.ftq_offset;
-    decoded.ftq_is_last = entry.ftq_is_last;
-    decoded.br_id = 0;
-    decoded.br_mask = 0;
-  }
-  return;
-#else
   wire<1> alloc_valid[DECODE_WIDTH];
   int alloc_num = 0;
   for (int i = 0; i < MAX_BR_NUM && alloc_num < max_br_per_cycle; i++) {
@@ -169,7 +132,6 @@ void Idu::comb_decode() {
       out.dec2ren->uop[i].br_mask = 0;
     }
   }
-#endif
 }
 
 /*
@@ -257,13 +219,10 @@ void Idu::comb_fire() {
 
   // 4. 正常发射路径：所有成功握手的槽位都要通知 PreIduQueue 出队；
   // 分支 tag 的推进仅在启用 BPU 时生效。
-#ifdef CONFIG_BPU
   int br_num = 0;
-#endif
   for (int i = 0; i < DECODE_WIDTH; i++) {
     wire<1> fire = out.dec2ren->valid[i] && in.ren2dec->ready;
     out.idu_consume->fire[i] = fire;
-#ifdef CONFIG_BPU
     if (fire && is_branch(out.dec2ren->uop[i]->type)) {
       wire<BR_TAG_WIDTH> new_tag = alloc_tag[br_num];
       tag_vec_1[new_tag] = false;
@@ -271,7 +230,6 @@ void Idu::comb_fire() {
       br_mask_cp_1[new_tag] = now_br_mask_1;
       br_num++;
     }
-#endif
   }
 }
 

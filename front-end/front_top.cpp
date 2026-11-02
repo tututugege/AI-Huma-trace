@@ -257,359 +257,11 @@ void front_dump_debug_state() {
 }
 
 static void falcon_print_summary() {
-#if !FRONTEND_ENABLE_FALCON_STATS
   return;
-#else
-  if (front_stats.cycles == 0) {
-    return;
-  }
-
-  const uint64_t bubble_total = front_stats.backend_bubble_cycles;
-  const uint64_t demand_total = front_stats.backend_demand_cycles;
-  const uint64_t active_total = front_stats.active_cycles;
-  const uint64_t req_fire_total = front_stats.icache_req_fire_cycles;
-  const uint64_t miss_total = front_stats.icache_miss_event_cycles;
-  const uint64_t icache_latency_total = front_stats.bubble_icache_latency_cycles;
-  const uint64_t itlb_retry_total = front_stats.bubble_icache_tlb_retry_cycles;
-
-  std::printf("\n=== FALCON Front-end Report ===\n");
-  std::printf(
-      "config: true_icache=%d ideal_dual_req=%d two_ahead=%d\n",
-#ifdef USE_TRUE_ICACHE
-      1,
-#else
-      0,
-#endif
-      FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE,
-#ifdef ENABLE_2AHEAD
-      1
-#else
-      0
-#endif
-  );
-
-  std::printf(
-      "window: is_ckpt=%d perf_start=%d warmup_cycles=%llu measured_cycles=%llu aligned_with_tma=%d\n",
-      (front_ctx != nullptr && front_ctx->is_ckpt) ? 1 : 0,
-      (front_ctx != nullptr && front_ctx->perf.perf_start) ? 1 : 0,
-      static_cast<unsigned long long>(falcon_warmup_cycles),
-      static_cast<unsigned long long>(front_stats.cycles),
-      falcon_measurement_window_active() ? 1 : 0);
-
-  std::printf(
-      "cycles: total=%llu active=%llu reset=%llu refetch(ext=%llu delayed=%llu global=%llu)\n",
-      static_cast<unsigned long long>(front_stats.cycles),
-      static_cast<unsigned long long>(front_stats.active_cycles),
-      static_cast<unsigned long long>(front_stats.reset_cycles),
-      static_cast<unsigned long long>(front_stats.ext_refetch_cycles),
-      static_cast<unsigned long long>(front_stats.delayed_refetch_cycles),
-      static_cast<unsigned long long>(front_stats.global_refetch_cycles));
-
-  std::printf(
-      "throughput: demand=%llu deliver=%llu bubble=%llu bubble_pct=%.2f%% groups=%llu insts=%llu inst/cycle=%.6f inst/active=%.6f inst/demand=%.6f\n",
-      static_cast<unsigned long long>(front_stats.backend_demand_cycles),
-      static_cast<unsigned long long>(front_stats.backend_deliver_cycles),
-      static_cast<unsigned long long>(front_stats.backend_bubble_cycles),
-      front_stats_pct(front_stats.backend_bubble_cycles, demand_total),
-      static_cast<unsigned long long>(front_stats.delivered_groups),
-      static_cast<unsigned long long>(front_stats.delivered_insts),
-      front_stats_ratio(front_stats.delivered_insts, front_stats.cycles),
-      front_stats_ratio(front_stats.delivered_insts, active_total),
-      front_stats_ratio(front_stats.delivered_insts, demand_total));
-
-  std::printf(
-      "bubble_root_share(on demand bubbles): reset=%llu(%.2f%%) refetch=%llu(%.2f%%) icache_miss=%llu(%.2f%%) icache_latency=%llu(%.2f%%) bpu_stall=%llu(%.2f%%) fetch_addr_empty=%llu(%.2f%%) ptab_empty=%llu(%.2f%%) dummy_ptab=%llu(%.2f%%) inst_fifo_other=%llu(%.2f%%) other=%llu(%.2f%%)\n",
-      static_cast<unsigned long long>(front_stats.bubble_reset_cycles),
-      front_stats_pct(front_stats.bubble_reset_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_refetch_cycles),
-      front_stats_pct(front_stats.bubble_refetch_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_miss_cycles),
-      front_stats_pct(front_stats.bubble_icache_miss_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_latency_cycles),
-      front_stats_pct(front_stats.bubble_icache_latency_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_bpu_stall_cycles),
-      front_stats_pct(front_stats.bubble_bpu_stall_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_fetch_addr_empty_cycles),
-      front_stats_pct(front_stats.bubble_fetch_addr_empty_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_ptab_empty_cycles),
-      front_stats_pct(front_stats.bubble_ptab_empty_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_dummy_ptab_cycles),
-      front_stats_pct(front_stats.bubble_dummy_ptab_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_inst_fifo_empty_other_cycles),
-      front_stats_pct(front_stats.bubble_inst_fifo_empty_other_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble_other_cycles),
-      front_stats_pct(front_stats.bubble_other_cycles, bubble_total));
-
-  const uint64_t bubble2_sum =
-      front_stats.bubble2_reset_cycles +
-      front_stats.bubble2_recovery_backend_refetch_cycles +
-      front_stats.bubble2_recovery_frontend_flush_cycles +
-      front_stats.bubble2_fetch_stall_cycles +
-      front_stats.bubble2_glue_or_fifo_cycles +
-      front_stats.bubble2_bpu_side_cycles + front_stats.bubble2_other_cycles;
-  const long long bubble2_delta =
-      static_cast<long long>(bubble_total) - static_cast<long long>(bubble2_sum);
-
-  std::printf(
-      "bubble_root2_conservation(on demand bubbles): bubble=%llu sum=%llu delta=%lld\n",
-      static_cast<unsigned long long>(bubble_total),
-      static_cast<unsigned long long>(bubble2_sum),
-      static_cast<long long>(bubble2_delta));
-
-  std::printf(
-      "bubble_root2_share(on demand bubbles): reset=%llu(%.2f%%) recovery_backend_refetch=%llu(%.2f%%) recovery_frontend_flush=%llu(%.2f%%) fetch_stall=%llu(%.2f%%) glue_or_fifo=%llu(%.2f%%) bpu_side=%llu(%.2f%%) other=%llu(%.2f%%)\n",
-      static_cast<unsigned long long>(front_stats.bubble2_reset_cycles),
-      front_stats_pct(front_stats.bubble2_reset_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_recovery_backend_refetch_cycles),
-      front_stats_pct(front_stats.bubble2_recovery_backend_refetch_cycles,
-                      bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_recovery_frontend_flush_cycles),
-      front_stats_pct(front_stats.bubble2_recovery_frontend_flush_cycles,
-                      bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_fetch_stall_cycles),
-      front_stats_pct(front_stats.bubble2_fetch_stall_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_glue_or_fifo_cycles),
-      front_stats_pct(front_stats.bubble2_glue_or_fifo_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_bpu_side_cycles),
-      front_stats_pct(front_stats.bubble2_bpu_side_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble2_other_cycles),
-      front_stats_pct(front_stats.bubble2_other_cycles, bubble_total));
-
-  const uint64_t bubble3_sum =
-      front_stats.bubble3_reset_cycles +
-      front_stats.bubble3_recovery_backend_refetch_cycles +
-      front_stats.bubble3_recovery_frontend_flush_cycles +
-      front_stats.bubble3_fetch_stall_cycles +
-      front_stats.bubble3_glue_or_fifo_cycles +
-      front_stats.bubble3_bpu_side_cycles + front_stats.bubble3_other_cycles;
-  const long long bubble3_delta =
-      static_cast<long long>(bubble_total) - static_cast<long long>(bubble3_sum);
-
-  std::printf(
-      "bubble_root3_conservation(on demand bubbles): bubble=%llu sum=%llu delta=%lld\n",
-      static_cast<unsigned long long>(bubble_total),
-      static_cast<unsigned long long>(bubble3_sum),
-      static_cast<long long>(bubble3_delta));
-
-  std::printf(
-      "bubble_root3_share(on demand bubbles): reset=%llu(%.2f%%) recovery_backend_refetch=%llu(%.2f%%) recovery_frontend_flush=%llu(%.2f%%) fetch_stall=%llu(%.2f%%) glue_or_fifo=%llu(%.2f%%) bpu_side=%llu(%.2f%%) other=%llu(%.2f%%)\n",
-      static_cast<unsigned long long>(front_stats.bubble3_reset_cycles),
-      front_stats_pct(front_stats.bubble3_reset_cycles, bubble_total),
-      static_cast<unsigned long long>(
-          front_stats.bubble3_recovery_backend_refetch_cycles),
-      front_stats_pct(front_stats.bubble3_recovery_backend_refetch_cycles,
-                      bubble_total),
-      static_cast<unsigned long long>(
-          front_stats.bubble3_recovery_frontend_flush_cycles),
-      front_stats_pct(front_stats.bubble3_recovery_frontend_flush_cycles,
-                      bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble3_fetch_stall_cycles),
-      front_stats_pct(front_stats.bubble3_fetch_stall_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble3_glue_or_fifo_cycles),
-      front_stats_pct(front_stats.bubble3_glue_or_fifo_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble3_bpu_side_cycles),
-      front_stats_pct(front_stats.bubble3_bpu_side_cycles, bubble_total),
-      static_cast<unsigned long long>(front_stats.bubble3_other_cycles),
-      front_stats_pct(front_stats.bubble3_other_cycles, bubble_total));
-
-  std::printf(
-      "bpu_stage: can_run=%llu stall=%llu stall_pct(active)=%.2f%% stall_fetch_addr_full=%llu stall_ptab_full=%llu issue=%llu issue_pct(active)=%.2f%%\n",
-      static_cast<unsigned long long>(front_stats.bpu_can_run_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_stall_cycles),
-      front_stats_pct(front_stats.bpu_stall_cycles, active_total),
-      static_cast<unsigned long long>(front_stats.bpu_stall_fetch_addr_full_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_stall_ptab_full_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_issue_cycles),
-      front_stats_pct(front_stats.bpu_issue_cycles, active_total));
-
-  std::printf(
-      "icache_stage: req_seen=%llu req_fire=%llu req_blocked=%llu resp=%llu outstanding=%llu miss_event=%llu miss_rate(req_fire)=%.4f%% miss_busy=%llu miss_busy_pct(active)=%.2f%%\n",
-      static_cast<unsigned long long>(front_stats.icache_req_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.icache_req_fire_cycles),
-      static_cast<unsigned long long>(front_stats.icache_req_blocked_cycles),
-      static_cast<unsigned long long>(front_stats.icache_resp_fire_cycles),
-      static_cast<unsigned long long>(front_stats.icache_outstanding_req_cycles),
-      static_cast<unsigned long long>(front_stats.icache_miss_event_cycles),
-      front_stats_pct(miss_total, req_fire_total),
-      static_cast<unsigned long long>(front_stats.icache_miss_busy_cycles),
-      front_stats_pct(front_stats.icache_miss_busy_cycles, active_total));
-
-  std::printf(
-      "icache_cold_like: window_cycles=%llu miss_event_in_window=%llu miss_event_pct(req_fire)=%.4f%%\n",
-      static_cast<unsigned long long>(kFalconColdMissWindowCycles),
-      static_cast<unsigned long long>(front_stats.icache_miss_event_cold_window_cycles),
-      front_stats_pct(front_stats.icache_miss_event_cold_window_cycles,
-                      req_fire_total));
-
-  std::printf(
-      "icache_latency_detail(on icache_latency bubbles): tlb_retry=%llu(%.2f%%) tlb_fault=%llu(%.2f%%) cache_backpressure=%llu(%.2f%%) other=%llu(%.2f%%)\n",
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_retry_cycles, icache_latency_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_fault_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_fault_cycles, icache_latency_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_cache_backpressure_cycles),
-      front_stats_pct(front_stats.bubble_icache_cache_backpressure_cycles, icache_latency_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_latency_other_cycles),
-      front_stats_pct(front_stats.bubble_icache_latency_other_cycles, icache_latency_total));
-
-  const char *icache_latency_top1_name = "tlb_retry";
-  uint64_t icache_latency_top1_cycles = front_stats.bubble_icache_tlb_retry_cycles;
-  if (front_stats.bubble_icache_tlb_fault_cycles > icache_latency_top1_cycles) {
-    icache_latency_top1_name = "tlb_fault";
-    icache_latency_top1_cycles = front_stats.bubble_icache_tlb_fault_cycles;
-  }
-  if (front_stats.bubble_icache_cache_backpressure_cycles >
-      icache_latency_top1_cycles) {
-    icache_latency_top1_name = "cache_backpressure";
-    icache_latency_top1_cycles = front_stats.bubble_icache_cache_backpressure_cycles;
-  }
-  if (front_stats.bubble_icache_latency_other_cycles > icache_latency_top1_cycles) {
-    icache_latency_top1_name = "other";
-    icache_latency_top1_cycles = front_stats.bubble_icache_latency_other_cycles;
-  }
-  std::printf(
-      "icache_latency_top1: reason=%s cycles=%llu share_in_icache_latency=%.2f%%\n",
-      icache_latency_top1_name,
-      static_cast<unsigned long long>(icache_latency_top1_cycles),
-      front_stats_pct(icache_latency_top1_cycles, icache_latency_total));
-
-  std::printf(
-      "itlb_retry_detail(on tlb_retry bubbles): other_walk_active=%llu(%.2f%%) walk_req_blocked=%llu(%.2f%%) wait_walk_resp=%llu(%.2f%%) local_walker_busy=%llu(%.2f%%)\n",
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_other_walk_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_retry_other_walk_cycles, itlb_retry_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_walk_req_blocked_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_retry_walk_req_blocked_cycles, itlb_retry_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles, itlb_retry_total),
-      static_cast<unsigned long long>(front_stats.bubble_icache_tlb_retry_local_walker_cycles),
-      front_stats_pct(front_stats.bubble_icache_tlb_retry_local_walker_cycles, itlb_retry_total));
-
-  const char *itlb_retry_top1_name = "other_walk_active";
-  uint64_t itlb_retry_top1_cycles =
-      front_stats.bubble_icache_tlb_retry_other_walk_cycles;
-  if (front_stats.bubble_icache_tlb_retry_walk_req_blocked_cycles >
-      itlb_retry_top1_cycles) {
-    itlb_retry_top1_name = "walk_req_blocked";
-    itlb_retry_top1_cycles =
-        front_stats.bubble_icache_tlb_retry_walk_req_blocked_cycles;
-  }
-  if (front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles >
-      itlb_retry_top1_cycles) {
-    itlb_retry_top1_name = "wait_walk_resp";
-    itlb_retry_top1_cycles =
-        front_stats.bubble_icache_tlb_retry_wait_walk_resp_cycles;
-  }
-  if (front_stats.bubble_icache_tlb_retry_local_walker_cycles >
-      itlb_retry_top1_cycles) {
-    itlb_retry_top1_name = "local_walker_busy";
-    itlb_retry_top1_cycles = front_stats.bubble_icache_tlb_retry_local_walker_cycles;
-  }
-  std::printf(
-      "itlb_retry_top1: reason=%s cycles=%llu share_in_itlb_retry=%.2f%%\n",
-      itlb_retry_top1_name,
-      static_cast<unsigned long long>(itlb_retry_top1_cycles),
-      front_stats_pct(itlb_retry_top1_cycles, itlb_retry_total));
-
-  if (front_ctx != nullptr) {
-    const auto &perf = front_ctx->perf;
-    std::printf(
-        "shared_ptw_itlb_stats: req=%llu grant=%llu resp=%llu blocked=%llu wait=%llu grant_rate=%.2f%% blocked_per_req=%.2f%%\n",
-        static_cast<unsigned long long>(perf.ptw_itlb_req),
-        static_cast<unsigned long long>(perf.ptw_itlb_grant),
-        static_cast<unsigned long long>(perf.ptw_itlb_resp),
-        static_cast<unsigned long long>(perf.ptw_itlb_blocked),
-        static_cast<unsigned long long>(perf.ptw_itlb_wait_cycle),
-        front_stats_pct(perf.ptw_itlb_grant, perf.ptw_itlb_req),
-        front_stats_pct(perf.ptw_itlb_blocked, perf.ptw_itlb_req));
-  }
-
-  std::printf(
-      "predecode_stage: run=%llu block_fifo_empty=%llu block_ptab_empty=%llu block_f2b_full=%llu block_dummy_ptab=%llu checker_run=%llu checker_flush=%llu\n",
-      static_cast<unsigned long long>(front_stats.predecode_run_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_fifo_empty_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_ptab_empty_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_front2back_full_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_dummy_ptab_cycles),
-      static_cast<unsigned long long>(front_stats.checker_run_cycles),
-      static_cast<unsigned long long>(front_stats.checker_flush_cycles));
-
-  std::printf(
-      "queue_flow: fetch_addr_rd0=%llu wr_normal=%llu inst_fifo_wr0=%llu ptab_wr=%llu f2b_write=%llu f2b_valid_out=%llu bypass_f2i=%llu bypass_i2p=%llu bypass_f2o=%llu/%llu\n",
-      static_cast<unsigned long long>(front_stats.fetch_addr_read_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.fetch_addr_write_normal_cycles),
-      static_cast<unsigned long long>(front_stats.inst_fifo_write_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.ptab_write_cycles),
-      static_cast<unsigned long long>(front_stats.front2back_write_cycles),
-      static_cast<unsigned long long>(front_stats.front2back_valid_out_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_fetch_to_icache_opportunity_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_icache_to_predecode_opportunity_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_front2back_to_output_hit_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_front2back_to_output_opportunity_cycles));
-
-  std::printf("=== End FALCON Report ===\n");
-#endif
 }
 
 static void front_stats_print_summary() {
-#if !FRONTEND_ENABLE_RUNTIME_STATS_SUMMARY
   return;
-#else
-  if (front_stats.cycles == 0) {
-    return;
-  }
-  std::printf(
-      "\n[FRONT-STATS] cycles=%llu reset=%llu ext_refetch=%llu delayed_refetch=%llu global_refetch=%llu\n",
-      static_cast<unsigned long long>(front_stats.cycles),
-      static_cast<unsigned long long>(front_stats.reset_cycles),
-      static_cast<unsigned long long>(front_stats.ext_refetch_cycles),
-      static_cast<unsigned long long>(front_stats.delayed_refetch_cycles),
-      static_cast<unsigned long long>(front_stats.global_refetch_cycles));
-  std::printf(
-      "[FRONT-STATS] bpu can_run=%llu stall=%llu stall_fetch_addr_full=%llu stall_ptab_full=%llu issue=%llu\n",
-      static_cast<unsigned long long>(front_stats.bpu_can_run_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_stall_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_stall_fetch_addr_full_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_stall_ptab_full_cycles),
-      static_cast<unsigned long long>(front_stats.bpu_issue_cycles));
-  std::printf(
-      "[FRONT-STATS] fetch_addr rd0=%llu rd1=%llu wr_normal=%llu wr_2ahead=%llu skip_mini_flush_correct=%llu\n",
-      static_cast<unsigned long long>(front_stats.fetch_addr_read_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.fetch_addr_read_slot1_cycles),
-      static_cast<unsigned long long>(front_stats.fetch_addr_write_normal_cycles),
-      static_cast<unsigned long long>(front_stats.fetch_addr_write_twoahead_cycles),
-      static_cast<unsigned long long>(front_stats.fetch_addr_write_skip_by_mini_flush_correct_cycles));
-  std::printf(
-      "[FRONT-STATS] icache req0=%llu req1=%llu resp0=%llu resp1=%llu inst_fifo_wr0=%llu inst_fifo_wr1=%llu ptab_wr=%llu\n",
-      static_cast<unsigned long long>(front_stats.icache_req_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.icache_req_slot1_cycles),
-      static_cast<unsigned long long>(front_stats.icache_resp_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.icache_resp_slot1_cycles),
-      static_cast<unsigned long long>(front_stats.inst_fifo_write_slot0_cycles),
-      static_cast<unsigned long long>(front_stats.inst_fifo_write_slot1_cycles),
-      static_cast<unsigned long long>(front_stats.ptab_write_cycles));
-  std::printf(
-      "[FRONT-STATS] predecode run=%llu block_fifo_empty=%llu block_ptab_empty=%llu block_f2b_full=%llu block_ptab_dummy=%llu checker_run=%llu checker_flush=%llu mini_req=%llu mini_correct=%llu\n",
-      static_cast<unsigned long long>(front_stats.predecode_run_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_fifo_empty_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_ptab_empty_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_front2back_full_cycles),
-      static_cast<unsigned long long>(front_stats.predecode_block_dummy_ptab_cycles),
-      static_cast<unsigned long long>(front_stats.checker_run_cycles),
-      static_cast<unsigned long long>(front_stats.checker_flush_cycles),
-      static_cast<unsigned long long>(front_stats.mini_flush_req_cycles),
-      static_cast<unsigned long long>(front_stats.mini_flush_correct_cycles));
-  std::printf(
-      "[FRONT-STATS] front2back write=%llu read_req=%llu valid_out=%llu\n",
-      static_cast<unsigned long long>(front_stats.front2back_write_cycles),
-      static_cast<unsigned long long>(front_stats.front2back_read_req_cycles),
-      static_cast<unsigned long long>(front_stats.front2back_valid_out_cycles));
-  std::printf(
-      "[FRONT-STATS] bypass_opp fetch_to_icache=%llu icache_to_predecode=%llu f2b_to_output=%llu f2b_hit=%llu\n",
-      static_cast<unsigned long long>(front_stats.bypass_fetch_to_icache_opportunity_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_icache_to_predecode_opportunity_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_front2back_to_output_opportunity_cycles),
-      static_cast<unsigned long long>(front_stats.bypass_front2back_to_output_hit_cycles));
-#endif
 }
 
 struct FrontStatsAtExit {
@@ -652,11 +304,6 @@ static void front_read_enable_comb(const FrontReadEnableCombIn &input,
     output.fetch_addr_fifo_read_enable_slot0 =
         icache_ready && !input.fetch_addr_fifo_empty_latch_snapshot && !global_reset &&
         !global_refetch;
-#if FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE
-    const wire1_t icache_ready_2 = input.icache_ready_2;
-    output.fetch_addr_fifo_read_enable_slot1_candidate =
-        output.fetch_addr_fifo_read_enable_slot0 && icache_ready_2;
-#endif
     output.predecode_can_run_old =
         !input.fifo_empty_latch_snapshot && !input.ptab_empty_latch_snapshot &&
         !input.front2back_fifo_full_latch_snapshot && !global_reset &&
@@ -1155,7 +802,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         
         // fetch_address_FIFO 读使能：icache 准备好接收 且 FIFO 非空
         // 需要先获取 icache 的 ready 状态
-#ifdef USE_TRUE_ICACHE
         icache_in.reset = global_reset;
         icache_in.refetch = global_refetch;
         icache_in.itlb_flush = in->itlb_flush;
@@ -1163,7 +809,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         icache_in.invalidate_req = false;
         icache_in.csr_status = in->csr_status;
         icache_peek_ready(&icache_in, &icache_out);
-#endif
         icache_ready = icache_out.icache_read_ready;
         icache_ready_2 = icache_out.icache_read_ready_2;
 #ifdef USE_IDEAL_ICACHE
@@ -1189,9 +834,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             read_enable_out.fetch_addr_fifo_read_enable_slot0;
         fetch_addr_fifo_read_enable_slot1_candidate =
             read_enable_out.fetch_addr_fifo_read_enable_slot1_candidate;
-#ifdef USE_TRUE_ICACHE
         assert(!fetch_addr_fifo_read_enable_slot1_candidate);
-#endif
         
         // instruction_FIFO 和 PTAB 读使能：predecode checker 可以工作
         bool predecode_can_run_old = read_enable_out.predecode_can_run_old;
@@ -1250,10 +893,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         saved_fetch_addr_fifo_out_0 = fetch_addr_fifo_out;
 
         bool fetch_addr_fifo_read_enable_slot1 = false;
-#if FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE
-        fetch_addr_fifo_read_enable_slot1 =
-            fetch_addr_fifo_read_enable_slot1_candidate && !fetch_addr_fifo_out.empty;
-#endif
         if (fetch_addr_fifo_read_enable_slot1) {
             fetch_addr_fifo_in.read_enable = true;
             fetch_addr_fifo_in.write_enable = false;
@@ -1412,9 +1051,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         can_bypass_fetch_to_icache =
             !saved_fetch_addr_fifo_out_0.read_valid && normal_write_enable &&
             !bpu_output.mini_flush_correct && icache_ready && !global_refetch;
-#if !FRONTEND_ENABLE_FETCH_TO_ICACHE_BYPASS
         can_bypass_fetch_to_icache = false;
-#endif
         if (can_bypass_fetch_to_icache) {
             front_stats.bypass_fetch_to_icache_opportunity_cycles++;
         }
@@ -1473,22 +1110,9 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             icache_in.icache_read_valid = false;
             icache_in.fetch_address = 0;
         }
-#if FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE
-        if (saved_fetch_addr_fifo_out_1.read_valid) {
-            icache_in.icache_read_valid_2 = true;
-            icache_in.fetch_address_2 = saved_fetch_addr_fifo_out_1.fetch_address;
-            DEBUG_LOG_SMALL_4("icache_in.fetch_address_2: %x\n", icache_in.fetch_address_2);
-        } else {
-            icache_in.icache_read_valid_2 = false;
-            icache_in.fetch_address_2 = 0;
-        }
-#else
         icache_in.icache_read_valid_2 = false;
         icache_in.fetch_address_2 = 0;
-#endif
-#ifdef USE_TRUE_ICACHE
         assert(!icache_in.icache_read_valid_2);
-#endif
         if (icache_in.icache_read_valid) {
             front_stats.icache_req_slot0_cycles++;
         }
@@ -1531,13 +1155,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
 #ifdef USE_IDEAL_ICACHE
         icache_slot0_data_valid &= icache_in.icache_read_valid;
 #endif
-#if FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE
-        icache_slot1_data_valid =
-            icache_out.icache_read_complete_2 && icache_in.icache_read_valid_2;
-#endif
-#ifdef USE_TRUE_ICACHE
         assert(!icache_slot1_data_valid);
-#endif
         if (icache_slot0_data_valid) {
             front_stats.icache_resp_slot0_cycles++;
         }
@@ -1552,9 +1170,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
             !rd.front2back_fifo_full_latch_snapshot && !global_reset &&
             !global_refetch && icache_slot0_data_valid;
-#if !FRONTEND_ENABLE_ICACHE_TO_PREDECODE_BYPASS
         can_bypass_icache_to_predecode = false;
-#endif
         if (can_bypass_icache_to_predecode) {
             front_stats.bypass_icache_to_predecode_opportunity_cycles++;
             ptab_in.reset = global_reset;

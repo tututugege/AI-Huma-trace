@@ -42,11 +42,9 @@ void FrontTop::init() {
   Assert(ctx != nullptr && "FrontTop::init requires bound SimContext");
   Assert(in.csr_status != nullptr && "FrontTop::init requires bound csr_status");
   in.FIFO_read_enable = true;
-#ifdef CONFIG_BPU
   in.reset = true;
   step_bpu();
   in.reset = false;
-#endif
 }
 
 void FrontTop::seq_read_bpu() {

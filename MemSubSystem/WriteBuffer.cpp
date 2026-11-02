@@ -1,9 +1,7 @@
 #include "WriteBuffer.h"
 #include "PhysMemory.h"
 #include "config.h"
-#if !BSD_CONFIG
 #include "types.h"
-#endif
 #include <cassert>
 #include <cstring>
 
@@ -135,15 +133,12 @@ void WriteBuffer::comb_inputs_axi(){
                         sizeof(out.axi_out->req_wdata));
         }
         nxt.send = 1; // request has been accepted, wait for response before sending next
-#if !BSD_CONFIG
         nxt.axi_write_active = true;
         nxt.axi_write_lsu_origin =
             cur.count > 0 ? cur.write_buffer[cur.head].lsu_origin : false;
         nxt.axi_write_start_cycle = ctx == nullptr ? 0 : ctx->perf.cycle;
-#endif
     }
     if (resp_valid) {
-#if !BSD_CONFIG
         if (ctx != nullptr) {
             const bool lsu_origin =
                 cur.axi_write_active ? cur.axi_write_lsu_origin
@@ -158,22 +153,17 @@ void WriteBuffer::comb_inputs_axi(){
 
             }
         }
-#endif
         if (nxt.count > 0) {
             nxt.count = nxt.count - 1;
             nxt.head = (nxt.head + 1) % DCACHE_WB_ENTRIES;
         }
         else{
-#if !BSD_CONFIG
             assert(false && "WriteBuffer underflow: received AXI response when buffer is empty");
-#endif
         }
         nxt.send = 0; // allow sending (or retrying) the head entry
-#if !BSD_CONFIG
         nxt.axi_write_active = false;
         nxt.axi_write_lsu_origin = false;
         nxt.axi_write_start_cycle = 0;
-#endif
     }
 }
 
@@ -183,15 +173,11 @@ void WriteBuffer::comb_inputs_dcache() {
         if(nxt.count < DCACHE_WB_ENTRIES){
             WriteBufferEntry &e = nxt.write_buffer[(nxt.head + nxt.count) % DCACHE_WB_ENTRIES];
             e.addr     = in.dcache2wb->dirty_info.addr;
-#if !BSD_CONFIG
             e.lsu_origin = in.dcache2wb->dirty_info.lsu_origin;
-#endif
             std::memcpy(e.data, in.dcache2wb->dirty_info.data, DCACHE_WORD_NUM * sizeof(uint32_t));
         }
         else{
-            #if !BSD_CONFIG
                 assert(false && "WriteBuffer overflow: MSHR is producing evictions faster than WriteBuffer can drain them");
-            #endif
         }
     }
     if(in.dcache2wb->dirty_info.valid && nxt.count < DCACHE_WB_ENTRIES){

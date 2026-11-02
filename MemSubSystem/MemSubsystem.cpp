@@ -27,9 +27,7 @@ using MmioImpl = mmio::MMIO_Bus_AXI4;
 } // namespace
 #else
 #define AXI_KIT_HEADERS_AVAILABLE 0
-#if CONFIG_ICACHE_USE_AXI_MEM_PORT
 #error "CONFIG_ICACHE_USE_AXI_MEM_PORT requires axi-interconnect-kit"
-#endif
 #endif
 
 #if AXI_KIT_HEADERS_AVAILABLE && CONFIG_ICACHE_USE_AXI_MEM_PORT
@@ -500,11 +498,9 @@ void MemSubsystem::init() {
   mshr_.out.axi_out = &mshr_axi_out; // MSHR output → AXI read/write ports
   wb_.in.axi_in = &wb_axi_in;        // WB comb input ← AXI read/write ports (for write response handling)
   wb_.out.axi_out = &wb_axi_out;     // WB output → AXI read/write ports (for write issuance)
-#if !BSD_CONFIG
   dcache_.bind_context(ctx);
   mshr_.bind_context(ctx);
   mem_route_block.bind_context(ctx);
-#endif
 
   // Internal WriteBuffer ↔ DCache wires.
   dcache_.in.wb2dcache = &wb_dcache_io_;  // WB output → DCache input
@@ -540,9 +536,7 @@ void MemSubsystem::init() {
   mem_route_block.out.ptw_grant = &ptw_grant;   // MemRouteBlock output → PTW grant signals
   mem_route_block.out.wakeup = &wakeup;         // MemRouteBlock output → LSU wakeup signals
 
-#if !BSD_CONFIG
   wb_.bind_context(ctx);
-#endif
 
   // ── Initialise sub-modules ─────────────────────────────────────────────────
   mshr_.init();
@@ -803,14 +797,12 @@ void MemSubsystem::capture_dcache_raw_response() {
     dcache_resp_pending_meta_[meta_idx] = meta;
   }
   if (dcache_resp_raw_.mshr_fill) {
-#if !BSD_CONFIG
     if (ctx != nullptr) {
 
       if (dcache_resp_pending_.mshr_fill) {
 
       }
     }
-#endif
     dcache_resp_pending_.mshr_fill = true;
     dcache_resp_pending_.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
   }
@@ -833,11 +825,9 @@ void MemSubsystem::forward_pending_response_from_fill() {
     const AddrFields f = decode(meta.addr);
     resp.data = fill.data[f.word_off];
     resp.replay = ReplayType::HIT;
-#if !BSD_CONFIG
     if (ctx != nullptr) {
 
     }
-#endif
   }
 
   for (int i = 0; i < LSU_STA_COUNT; i++) {
@@ -853,11 +843,9 @@ void MemSubsystem::forward_pending_response_from_fill() {
     apply_strobe(fill.data[f.word_off], meta.data, meta.strb);
     fill.dirty = true;
     resp.replay = ReplayType::HIT;
-#if !BSD_CONFIG
     if (ctx != nullptr) {
 
     }
-#endif
   }
 }
 

@@ -320,17 +320,13 @@ void Ren::comb_fire() {
       }
       if (!interrupt_nop) { 
         ctx->run_commit_inst(&commit_entry, i);
-#ifdef CONFIG_DIFFTEST
         ctx->run_difftest_inst(&commit_entry);
-#endif
       }
     }
   }
-#ifdef CONFIG_DIFFTEST
   if (in.rob_bcast->interrupt) {
     ctx->run_difftest_interrupt();
   }
-#endif
 
   // 在 comb_fire 直接决定下一拍 freelist/RAT 状态。
   if (in.rob_bcast->flush) {
@@ -341,9 +337,7 @@ void Ren::comb_fire() {
   } else if (in.dec_bcast->mispred) { // flush/mispred 不会同时发生
     const auto br_idx = in.dec_bcast->br_id;
     Assert(br_idx < MAX_BR_NUM && "Ren: mispred br_id out of range");
-#ifdef CONFIG_BPU
     Assert(br_idx != 0 && "Ren: mispred br_id should not be zero");
-#endif
     for (int i = 0; i < ARF_NUM + 1; i++) {
       spec_RAT_1[i] = RAT_checkpoint[br_idx][i];
     }

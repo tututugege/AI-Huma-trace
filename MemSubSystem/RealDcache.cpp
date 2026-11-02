@@ -1,7 +1,5 @@
 #include "RealDcache.h"
-#if !BSD_CONFIG
 #include "types.h"
-#endif
 #include <cassert>
 #include <cstring>
 #include <MemUtils.h>
@@ -12,7 +10,6 @@ static bool dcache_req_id_is_lsu(uint32_t req_id) {
 }
 } // namespace
 
-#if !BSD_CONFIG
 namespace {
 enum class L1DReplayReason {
     Conflict,
@@ -46,8 +43,6 @@ static void count_l1d_fillout_bank_conflict(SimContext *ctx, uint64_t count) {
     }
 }
 } // namespace
-#else
-#endif
 
 void RealDcache::init() {
     init_dcache();
@@ -134,9 +129,7 @@ void RealDcache::stage1_comb() {
             s1s2_nxt.fill_write.valid = true;
             s1s2_nxt.fill_write.id = in.mshr2dcache->fill_req.id;
             s1s2_nxt.fill_write.dirty = in.mshr2dcache->fill_req.dirty;
-#if !BSD_CONFIG
             s1s2_nxt.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
-#endif
             s1s2_nxt.fill_write.set_idx = fill_f.set_idx;
             s1s2_nxt.fill_write.tag = fill_f.tag;
             memcpy(s1s2_nxt.fill_write.data,
@@ -200,9 +193,7 @@ void RealDcache::stage1_comb() {
             slot.valid = false;
             slot.replayed = false;
             slot.bank_conflict = false;
-#if !BSD_CONFIG
             slot.perf_replay = false;
-#endif
             out.dcache2wb->bypass_req[i].valid = false;
         }
         else{
@@ -225,9 +216,7 @@ void RealDcache::stage1_comb() {
             slot.req_id   = req_id;
             slot.replayed  = !bank_granted;
             slot.bank_conflict = !bank_granted;
-#if !BSD_CONFIG
             slot.perf_replay = use_hidden_retry ? true : lsu_req.replay;
-#endif
             if (use_hidden_retry) {
 
             }
@@ -290,9 +279,7 @@ void RealDcache::stage1_comb() {
             slot.valid = false;
             slot.replayed = false;
             slot.bank_conflict = false;
-#if !BSD_CONFIG
             slot.perf_replay = false;
-#endif
             out.dcache2wb->merge_req[i].valid = false;
         }
         else{
@@ -311,9 +298,7 @@ void RealDcache::stage1_comb() {
             slot.req_id   = req_id;
             slot.replayed = !bank_granted;
             slot.bank_conflict = !bank_granted;
-#if !BSD_CONFIG
             slot.perf_replay = use_hidden_retry ? true : lsu_req.replay;
-#endif
             if (use_hidden_retry) {
 
             }
@@ -368,18 +353,14 @@ void RealDcache::stage2_comb() {
         if(in.fillin->valid_snap[select_way] && in.fillin->dirty_snap[select_way]){
             if(in.wb2dcache->free>0){
                 out.dcache2wb->dirty_info.valid = true;
-#if !BSD_CONFIG
                 out.dcache2wb->dirty_info.lsu_origin =
                     s1s2_cur.fill_write.lsu_origin;
-#endif
                 out.dcache2wb->dirty_info.addr = get_addr(s1s2_cur.fill_write.set_idx, in.fillin->tag_snap[select_way], 0);
                 memcpy(out.dcache2wb->dirty_info.data, in.fillin->data_snap[select_way], DCACHE_WORD_NUM * sizeof(uint32_t));
 
                 out.fill_write->valid = true;
                 out.fill_write->dirty = s1s2_cur.fill_write.dirty;
-#if !BSD_CONFIG
                 out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
-#endif
                 out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
                 out.fill_write->tag = s1s2_cur.fill_write.tag;
                 out.fill_write->way_idx = select_way;
@@ -395,9 +376,7 @@ void RealDcache::stage2_comb() {
         else{
             out.fill_write->valid = true;
             out.fill_write->dirty = s1s2_cur.fill_write.dirty;
-#if !BSD_CONFIG
             out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
-#endif
             out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
             out.fill_write->tag = s1s2_cur.fill_write.tag;
             out.fill_write->way_idx = select_way;
@@ -489,10 +468,8 @@ void RealDcache::stage2_comb() {
                 else { // The only free MSHR entry is being allocated by the other load port in the same cycle, so can't accept this new miss
                     out.dcache2mshr->mshr_req[i].valid = true;
                     out.dcache2mshr->mshr_req[i].addr = slot.addr;
-#if !BSD_CONFIG
                     out.dcache2mshr->mshr_req[i].lsu_origin =
                         l1d_perf_is_lsu_req(slot.req_id);
-#endif
 
                     resp.valid = true;
                     resp.replay = ReplayType::MSHR_HIT;
@@ -604,10 +581,8 @@ void RealDcache::stage2_comb() {
                 out.dcache2mshr->mshr_req[iidx].is_store = true;
                 out.dcache2mshr->mshr_req[iidx].data = slot.data;
                 out.dcache2mshr->mshr_req[iidx].strb = slot.strb;
-#if !BSD_CONFIG
                 out.dcache2mshr->mshr_req[iidx].lsu_origin =
                     l1d_perf_is_lsu_req(slot.req_id);
-#endif
                 resp.valid = true;
                 resp.replay = ReplayType::HIT;
                 resp.req_id = slot.req_id;
@@ -626,10 +601,8 @@ void RealDcache::stage2_comb() {
                     out.dcache2mshr->mshr_req[iidx].is_store = true;
                     out.dcache2mshr->mshr_req[iidx].data = slot.data;
                     out.dcache2mshr->mshr_req[iidx].strb = slot.strb;
-#if !BSD_CONFIG
                     out.dcache2mshr->mshr_req[iidx].lsu_origin =
                         l1d_perf_is_lsu_req(slot.req_id);
-#endif
 
                     resp.valid = true;
                     resp.replay = ReplayType::HIT;

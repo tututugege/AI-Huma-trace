@@ -9,9 +9,7 @@
 #include <cstring>
 #include "IO.h"
 
-#if !BSD_CONFIG
 class SimContext;
-#endif
 
 struct MSHREntry {
     reg<1> valid;
@@ -20,12 +18,10 @@ struct MSHREntry {
     reg<1> merged_store_dirty;
     reg<32> merged_store_data[DCACHE_WORD_NUM];
     reg<8> merged_store_strb[DCACHE_WORD_NUM];
-#if !BSD_CONFIG
     uint64_t alloc_cycle;
     uint64_t axi_read_start_cycle;
     bool axi_read_active;
     bool lsu_origin;
-#endif
 };
 
 
@@ -79,9 +75,7 @@ class MSHR {
 public:
     MSHR() = default;
     void init();
-#if !BSD_CONFIG
     void bind_context(SimContext *c) { ctx = c; }
-#endif
 
     void comb_outputs_axi();
     void comb_outputs_dcache();
@@ -94,9 +88,7 @@ public:
 
     MSHR_STATE cur,nxt;
     bool axi_resp_accepted_this_cycle = false;
-#if !BSD_CONFIG
     SimContext *ctx = nullptr;
-#endif
 
     void dump_debug_state(FILE *out) const;
 };

@@ -1,6 +1,5 @@
 #include "PhysMemory.h"
 #include "MemRouteBlock.h"
-#if !BSD_CONFIG
 #include "types.h"
 
 namespace {
@@ -9,7 +8,6 @@ static bool owner_is_ptw(Owner owner) {
          owner == Owner::PTW_WALK;
 }
 } // namespace
-#endif
 
 void MemRouteBlock::init() {
   cur = {};
@@ -42,11 +40,9 @@ void MemRouteBlock::comb_response() {
 
     Owner owner = cur.issued_tags.owner;
     ReplayType replay = in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].replay;
-#if !BSD_CONFIG
     if (ctx != nullptr && owner_is_ptw(owner) && replay != ReplayType::HIT) {
 
     }
-#endif
     if (replay == ReplayType::HIT) {
       if (owner == Owner::ICACHE) {
         out.icache_resp->resp_valid = true;
@@ -123,9 +119,7 @@ void MemRouteBlock::comb_request() {
     out.dcache_req->req_ports.load_ports[LSU_LDU_COUNT - 1].valid = true;
     out.dcache_req->req_ports.load_ports[LSU_LDU_COUNT - 1].addr = ptw_addr;
     out.dcache_req->req_ports.load_ports[LSU_LDU_COUNT - 1].req_id = cur.next_req_id;
-#if !BSD_CONFIG
     out.dcache_req->req_ports.load_ports[LSU_LDU_COUNT - 1].replay = false;
-#endif
     out.dcache_req->icache_req = (ptw_owner == Owner::ICACHE) ? LSU_LDU_COUNT - 1 : LSU_LDU_COUNT; // Inject into port 0
 
     nxt.lsu_replay_valid = in.lsu_req->load_ports[LSU_LDU_COUNT - 1].valid;
