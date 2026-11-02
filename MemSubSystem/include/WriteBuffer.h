@@ -8,7 +8,6 @@ class SimContext;
 
 struct WriteBufferEntry {
     reg<32> addr;
-    reg<32> data[DCACHE_WORD_NUM];
     bool lsu_origin;
 };
 
@@ -49,7 +48,6 @@ struct WbAxiOut {
     wire<8>  req_total_size = 0;
     wire<8>  req_id         = 0;
     wire<64> req_wstrb      = 0;
-    wire<32> req_wdata[DCACHE_WORD_NUM] = {};
     wire<1>  resp_ready     = false;  // ready to accept B response
 
     void clear() {
@@ -59,7 +57,6 @@ struct WbAxiOut {
         req_id = 0;
         req_wstrb = 0;
         resp_ready = false;
-        memset(req_wdata, 0, sizeof(req_wdata));
     }
 };
 

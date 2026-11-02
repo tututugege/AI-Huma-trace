@@ -16,8 +16,6 @@ struct MSHREntry {
     reg<1> issued;
     reg<32> addr;
     reg<1> merged_store_dirty;
-    reg<32> merged_store_data[DCACHE_WORD_NUM];
-    reg<8> merged_store_strb[DCACHE_WORD_NUM];
     uint64_t alloc_cycle;
     uint64_t axi_read_start_cycle;
     bool axi_read_active;
@@ -32,7 +30,6 @@ struct MSHR_STATE{
     // immediate consumption. This register is intentionally bounded to one slot.
     reg<1> axi_resp_hold_valid;
     reg<8> axi_resp_hold_id;
-    reg<32> axi_resp_hold_data[DCACHE_WORD_NUM];
 
     // reg<1> find_hit[LSU_LDU_COUNT + LSU_STA_COUNT]; // combinational hit result for each load/store slot
     MSHREntry mshr_entries[DCACHE_MSHR_ENTRIES];
@@ -43,7 +40,6 @@ struct MshrAxiIn {
     wire<1>     req_accepted = false; // true AR handshake committed in IC seq
     wire<8>     req_accepted_id = 0; // accepted request ID from IC
     wire<1>     resp_valid = false;   // R data available from IC
-    wire<32>    resp_data[DCACHE_WORD_NUM] = {};
     wire<8>     resp_id    = 0;       // transaction ID echoed back
 };
 

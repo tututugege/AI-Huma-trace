@@ -494,7 +494,6 @@ struct LoadReq {
 struct StoreReq {
   wire<1> valid;
   wire<32> addr;
-  wire<32> data;
   wire<8> strb;
   wire<32> req_id;
   wire<1> replay;

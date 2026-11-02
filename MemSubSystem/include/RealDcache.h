@@ -31,7 +31,6 @@ struct S1S2Reg {
     struct StoreSlot {
         reg<1>     valid    = false;
         reg<32>    addr     = 0;
-        reg<32>    data     = 0; // word to write
         reg<8>     strb     = 0; // byte-enable
         reg<32>    req_id   = 0;
         reg<1>     replayed  = false; // whether this store has been replayed due to MSHR full or conflict, used to avoid accepting new requests for the same store and causing starvation when there are multiple back-to-back misses
@@ -74,9 +73,6 @@ public:
 private:
     struct FillReqMerge {
         wire<1> valid = false;
-        wire<DCACHE_OFFSET_BITS> word_off = 0;
-        wire<32> data = 0;
-        wire<8> strb = 0;
     };
     struct BankRetryLoad {
         reg<1> valid = false;
@@ -86,7 +82,6 @@ private:
     struct BankRetryStore {
         reg<1> valid = false;
         reg<32> addr = 0;
-        reg<32> data = 0;
         reg<8> strb = 0;
         reg<32> req_id = 0;
     };

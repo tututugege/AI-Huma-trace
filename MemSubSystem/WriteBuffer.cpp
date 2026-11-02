@@ -50,23 +50,16 @@ void WriteBuffer::comb_outputs_dcache() {
     out.wb2dcache->free = DCACHE_WB_ENTRIES - nxt.count;
 
     // reg<1> bypassvalid[LSU_LDU_COUNT];
-    // reg<32> bypassdata[LSU_LDU_COUNT];
     for(int i=0;i<LSU_LDU_COUNT;i++){
         bool bypassvalid = false;
-        uint32_t bypassdata = 0;
         if(in.dcache2wb->bypass_req[i].valid){
             int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
                                        in.dcache2wb->bypass_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
                 bypassvalid = true;
-                bypassdata =
-                    nxt.write_buffer[wb_idx]
-                        .data[decode(in.dcache2wb->bypass_req[i].addr)
-                                  .word_off];
             }
         }
         out.wb2dcache->bypass_resp[i].valid = bypassvalid;
-        out.wb2dcache->bypass_resp[i].data = bypassdata;
     }
 
     // reg<1> mergevalid[LSU_STA_COUNT];
@@ -83,12 +76,6 @@ void WriteBuffer::comb_outputs_dcache() {
                 }
                 else{
                     mergevalid = true;
-                    WriteBufferEntry &e = nxt.write_buffer[wb_idx];
-                    uint32_t word_off =
-                        decode(in.dcache2wb->merge_req[i].addr).word_off;
-                    uint32_t strb = in.dcache2wb->merge_req[i].strb;
-                    apply_strobe(e.data[word_off],
-                                 in.dcache2wb->merge_req[i].data, strb);
                 }
             }
         }
@@ -111,9 +98,6 @@ void WriteBuffer::comb_outputs_axi() {
     out.axi_out->req_total_size = DCACHE_LINE_SIZE - 1;
     out.axi_out->req_id = 0;
     out.axi_out->req_wstrb = full_line_wstrb_mask();
-    for (int w = 0; w < DCACHE_WORD_NUM; w++) {
-        out.axi_out->req_wdata[w] = head_e.data[w];
-    }
 
 }
 
@@ -129,8 +113,6 @@ void WriteBuffer::comb_inputs_axi(){
             out.axi_out->req_total_size = 0;
             out.axi_out->req_id = 0;
             out.axi_out->req_wstrb = 0;
-            std::memset(out.axi_out->req_wdata, 0,
-                        sizeof(out.axi_out->req_wdata));
         }
         nxt.send = 1; // request has been accepted, wait for response before sending next
         nxt.axi_write_active = true;
@@ -174,7 +156,6 @@ void WriteBuffer::comb_inputs_dcache() {
             WriteBufferEntry &e = nxt.write_buffer[(nxt.head + nxt.count) % DCACHE_WB_ENTRIES];
             e.addr     = in.dcache2wb->dirty_info.addr;
             e.lsu_origin = in.dcache2wb->dirty_info.lsu_origin;
-            std::memcpy(e.data, in.dcache2wb->dirty_info.data, DCACHE_WORD_NUM * sizeof(uint32_t));
         }
         else{
                 assert(false && "WriteBuffer overflow: MSHR is producing evictions faster than WriteBuffer can drain them");

@@ -19,17 +19,12 @@ int find_entry_idx(const MSHR_STATE &state, uint32_t line_addr) {
 
 void clear_store_merge(MSHREntry &entry) {
     entry.merged_store_dirty = false;
-    std::memset(entry.merged_store_data, 0, sizeof(entry.merged_store_data));
-    std::memset(entry.merged_store_strb, 0, sizeof(entry.merged_store_strb));
 }
 
 void merge_store_into_entry(MSHREntry &entry, const MSHRReq &req) {
     if (!req.is_store) {
         return;
     }
-    const AddrFields f = decode(req.addr);
-    apply_strobe(entry.merged_store_data[f.word_off], req.data, req.strb);
-    entry.merged_store_strb[f.word_off] |= req.strb;
     entry.merged_store_dirty = true;
 }
 } // namespace
@@ -74,14 +69,6 @@ void MSHR::comb_outputs_dcache()
         out.mshr2dcache->fill_req.addr = e.addr;
         out.mshr2dcache->fill_req.dirty = e.merged_store_dirty;
         out.mshr2dcache->fill_req.lsu_origin = e.lsu_origin;
-        std::memcpy(out.mshr2dcache->fill_req.data, nxt.axi_resp_hold_data, DCACHE_WORD_NUM * sizeof(uint32_t));
-        for (int w = 0; w < DCACHE_WORD_NUM; w++) {
-            if (e.merged_store_strb[w] != 0) {
-                apply_strobe(out.mshr2dcache->fill_req.data[w],
-                             e.merged_store_data[w],
-                             e.merged_store_strb[w]);
-            }
-        }
     }
     else{
         out.mshr2dcache->fill_req.valid = false;
@@ -90,7 +77,6 @@ void MSHR::comb_outputs_dcache()
         out.mshr2dcache->fill_req.lsu_origin = false;
         out.mshr2dcache->fill_req.way_idx = 0;
         out.mshr2dcache->fill_req.addr = 0;
-        std::memset(out.mshr2dcache->fill_req.data, 0, sizeof(out.mshr2dcache->fill_req.data));
     }
 }
 void MSHR::comb_outputs_axi()
@@ -150,8 +136,6 @@ void MSHR::comb_inputs_dcache()
             if (nxt.axi_resp_hold_valid && nxt.axi_resp_hold_id == hold_id) {
                 nxt.axi_resp_hold_valid = false;
                 nxt.axi_resp_hold_id = 0;
-                std::memset(nxt.axi_resp_hold_data, 0,
-                            sizeof(nxt.axi_resp_hold_data));
             }
         }
     }
@@ -240,8 +224,6 @@ void MSHR::comb_inputs_axi()
             if (resp_matches_entry) {
                 nxt.axi_resp_hold_valid = true;
                 nxt.axi_resp_hold_id = resp_id;
-                std::memcpy(nxt.axi_resp_hold_data, in.axi_in->resp_data,
-                            DCACHE_WORD_NUM * sizeof(uint32_t));
                 axi_resp_accepted_this_cycle = true;
                 if (ctx != nullptr) {
                     const MSHREntry &e = nxt.mshr_entries[resp_id];

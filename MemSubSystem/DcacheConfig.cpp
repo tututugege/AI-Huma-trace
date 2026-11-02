@@ -127,19 +127,8 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 }
 
 
-void apply_strobe(uint32_t &dst, uint32_t src, uint8_t strb)
-{
-    for (int b = 0; b < 4; b++)
-    {
-        if (strb & (1u << b))
-        {
-            uint32_t mask = 0xFFu << (b * 8);
-            dst = (dst & ~mask) | (src & mask);
-        }
-    }
-}
 
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, const uint32_t data[DCACHE_WORD_NUM])
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag)
 {
     check_data_bank_access(set_idx, "write", "fill_line");
 
@@ -157,7 +146,6 @@ void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, const uint3
     dirty_array[set_idx][target_way] = false;
     tag_array[set_idx][target_way] = tag;
     plru_tree_touch(set_idx, target_way);
-    (void)data;
 }
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2){
@@ -177,9 +165,6 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memcpy(resp[i].valid, valid_array[req.set_idx], sizeof(valid_array[req.set_idx]));
         memcpy(resp[i].tag, tag_array[req.set_idx], sizeof(tag_array[req.set_idx]));
         memcpy(resp[i].dirty, dirty_array[req.set_idx], sizeof(dirty_array[req.set_idx]));
-        for (int w = 0; w < DCACHE_WAYS_NUM; w++) {
-            resp[i].data[w] = 0;
-        }
     }
 
     if(fillout.valid){
@@ -187,17 +172,6 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memcpy(fillin.valid_snap,valid_array[fillout.set_idx], sizeof(valid_array[fillout.set_idx]));
         memcpy(fillin.tag_snap,tag_array[fillout.set_idx], sizeof(tag_array[fillout.set_idx]));
         memcpy(fillin.dirty_snap,dirty_array[fillout.set_idx], sizeof(dirty_array[fillout.set_idx]));
-        // The victim line that may be written back carries the functional memory content (pmem):
-        // stores are already reflected there (updated at ROB commit), so every data path below the
-        // core transports correct data although the L1D itself stores none.
-        for (int w = 0; w < DCACHE_WAYS_NUM; w++) {
-            for (int off = 0; off < DCACHE_WORD_NUM; off++) {
-                fillin.data_snap[w][off] =
-                    valid_array[fillout.set_idx][w]
-                        ? pmem_read(get_addr(fillout.set_idx, tag_array[fillout.set_idx][w], off))
-                        : 0;
-            }
-        }
         memcpy(fillin.plru_tree_state,plru_tree_state[fillout.set_idx], sizeof(plru_tree_state[fillout.set_idx]));
     }
     else{
@@ -226,7 +200,7 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
                 break;
             }
         }
-        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag, fillwrite.data);
+        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag);
         if (fillwrite.dirty) {
             dirty_array[fillwrite.set_idx][target_way] = true;
         }

@@ -206,11 +206,6 @@ void bridge_axi_to_mem_subsystem(SimCpu &cpu) {
   cpu.mem_subsystem.mshr_axi_in.req_accepted_id = rport.req.accepted_id;
   cpu.mem_subsystem.mshr_axi_in.resp_valid = rport.resp.valid;
   cpu.mem_subsystem.mshr_axi_in.resp_id = rport.resp.id;
-  for (int i = 0; i < DCACHE_WORD_NUM &&
-                  i < axi_interconnect::MAX_READ_TRANSACTION_WORDS;
-       i++) {
-    cpu.mem_subsystem.mshr_axi_in.resp_data[i] = rport.resp.data[i];
-  }
   const auto &wport =
       cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
   cpu.mem_subsystem.wb_axi_in.req_ready = wport.req.ready;
@@ -248,11 +243,6 @@ void bridge_dcache_axi_to_mem_subsystem(SimCpu &cpu) {
   cpu.mem_subsystem.mshr_axi_in.req_accepted_id = rport.req.accepted_id;
   cpu.mem_subsystem.mshr_axi_in.resp_valid = rport.resp.valid;
   cpu.mem_subsystem.mshr_axi_in.resp_id = rport.resp.id;
-  for (int i = 0; i < DCACHE_WORD_NUM &&
-                  i < axi_interconnect::MAX_READ_TRANSACTION_WORDS;
-       i++) {
-    cpu.mem_subsystem.mshr_axi_in.resp_data[i] = rport.resp.data[i];
-  }
 
   const auto &wport =
       cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
@@ -281,10 +271,6 @@ void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
   wport.req.bypass = false;
   for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) {
     wport.req.wdata[i] = 0;
-  }
-  for (int i = 0;
-       i < DCACHE_WORD_NUM && i < axi_interconnect::CACHELINE_WORDS; i++) {
-    wport.req.wdata[i] = cpu.mem_subsystem.wb_axi_out.req_wdata[i];
   }
   wport.resp.ready = cpu.mem_subsystem.wb_axi_out.resp_ready;
 
@@ -338,10 +324,6 @@ void bridge_dcache_mem_subsystem_to_axi(SimCpu &cpu) {
   wport.req.bypass = false;
   for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) {
     wport.req.wdata[i] = 0;
-  }
-  for (int i = 0;
-       i < DCACHE_WORD_NUM && i < axi_interconnect::CACHELINE_WORDS; i++) {
-    wport.req.wdata[i] = cpu.mem_subsystem.wb_axi_out.req_wdata[i];
   }
   wport.resp.ready = cpu.mem_subsystem.wb_axi_out.resp_ready;
 }

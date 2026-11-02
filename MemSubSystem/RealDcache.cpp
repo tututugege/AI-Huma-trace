@@ -132,18 +132,12 @@ void RealDcache::stage1_comb() {
             s1s2_nxt.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
             s1s2_nxt.fill_write.set_idx = fill_f.set_idx;
             s1s2_nxt.fill_write.tag = fill_f.tag;
-            memcpy(s1s2_nxt.fill_write.data,
-                in.mshr2dcache->fill_req.data,
-                sizeof(s1s2_nxt.fill_write.data));
         }
     }
 
     if (s1s2_nxt.fill_write.valid) {
         for (int i = 0; i < LSU_STA_COUNT; i++) {
             if (!fill_req_merge_wires[i].valid) continue;
-            apply_strobe(s1s2_nxt.fill_write.data[fill_req_merge_wires[i].word_off],
-                         fill_req_merge_wires[i].data,
-                         fill_req_merge_wires[i].strb);
             s1s2_nxt.fill_write.dirty = true;
         }
     }
@@ -253,10 +247,6 @@ void RealDcache::stage1_comb() {
             lsu_req.valid ? lsu_req.addr
                           : (use_pending_retry ? pending_retry.addr
                                                : new_retry.addr);
-        const uint32_t req_data =
-            lsu_req.valid ? lsu_req.data
-                          : (use_pending_retry ? pending_retry.data
-                                               : new_retry.data);
         const uint8_t req_strb =
             lsu_req.valid ? lsu_req.strb
                           : (use_pending_retry ? pending_retry.strb
@@ -293,7 +283,6 @@ void RealDcache::stage1_comb() {
             // }
             slot.valid    = true;
             slot.addr     = req_addr;
-            slot.data     = req_data;
             slot.strb     = req_strb;
             slot.req_id   = req_id;
             slot.replayed = !bank_granted;
@@ -311,8 +300,6 @@ void RealDcache::stage1_comb() {
             out.dcachereadreq[idx]->word_off = f.word_off;
             out.dcache2wb->merge_req[i].valid = true;
             out.dcache2wb->merge_req[i].addr = req_addr;
-            out.dcache2wb->merge_req[i].data = req_data;
-            out.dcache2wb->merge_req[i].strb = req_strb;
 
             out.dcache2mshr->find_req[idx].valid = true;
             out.dcache2mshr->find_req[idx].set_idx = f.set_idx;
@@ -356,7 +343,6 @@ void RealDcache::stage2_comb() {
                 out.dcache2wb->dirty_info.lsu_origin =
                     s1s2_cur.fill_write.lsu_origin;
                 out.dcache2wb->dirty_info.addr = get_addr(s1s2_cur.fill_write.set_idx, in.fillin->tag_snap[select_way], 0);
-                memcpy(out.dcache2wb->dirty_info.data, in.fillin->data_snap[select_way], DCACHE_WORD_NUM * sizeof(uint32_t));
 
                 out.fill_write->valid = true;
                 out.fill_write->dirty = s1s2_cur.fill_write.dirty;
@@ -364,7 +350,6 @@ void RealDcache::stage2_comb() {
                 out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
                 out.fill_write->tag = s1s2_cur.fill_write.tag;
                 out.fill_write->way_idx = select_way;
-                memcpy(out.fill_write->data, s1s2_cur.fill_write.data, sizeof(out.fill_write->data));
                 out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the writeback to be issued in parallel with the fill, improving performance when the evicted line is dirty.
                 out.dcache2mshr->fill_resp.id = s1s2_cur.fill_write.id;
             }
@@ -380,7 +365,6 @@ void RealDcache::stage2_comb() {
             out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
             out.fill_write->tag = s1s2_cur.fill_write.tag;
             out.fill_write->way_idx = select_way;
-            memcpy(out.fill_write->data, s1s2_cur.fill_write.data, sizeof(out.fill_write->data));
             out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the fill to complete and the line to be allocated in cache without waiting for an unnecessary writeback to drain when the evicted line is clean.
             out.dcache2mshr->fill_resp.id = s1s2_cur.fill_write.id;
         }
@@ -496,7 +480,6 @@ void RealDcache::stage2_comb() {
                 !bank_retry_cur.stores[i].valid) {
                 bank_retry_issue_wires.stores[i].valid = true;
                 bank_retry_issue_wires.stores[i].addr = slot.addr;
-                bank_retry_issue_wires.stores[i].data = slot.data;
                 bank_retry_issue_wires.stores[i].strb = slot.strb;
                 bank_retry_issue_wires.stores[i].req_id = slot.req_id;
 
@@ -517,13 +500,9 @@ void RealDcache::stage2_comb() {
                 s1s2_cur.fill_write.tag == fill_req_f.tag;
 
             if (fill_req_already_in_s2 && out.fill_write->valid) {
-                apply_strobe(out.fill_write->data[f.word_off], slot.data, slot.strb);
                 out.fill_write->dirty = true;
             } else {
                 fill_req_merge_wires[i].valid = true;
-                fill_req_merge_wires[i].word_off = f.word_off;
-                fill_req_merge_wires[i].data = slot.data;
-                fill_req_merge_wires[i].strb = slot.strb;
             }
 
             resp.valid  = true;
@@ -554,9 +533,7 @@ void RealDcache::stage2_comb() {
                     true,
                     f.set_idx,
                     hit_way,
-                    f.word_off,
-                    slot.data,
-                    slot.strb
+                    f.word_off
                 };
                 *out.lru_updates[LSU_LDU_COUNT + i] = {true, f.set_idx, hit_way};
             }
@@ -577,8 +554,6 @@ void RealDcache::stage2_comb() {
                 out.dcache2mshr->mshr_req[iidx].valid = true;
                 out.dcache2mshr->mshr_req[iidx].addr = slot.addr;
                 out.dcache2mshr->mshr_req[iidx].is_store = true;
-                out.dcache2mshr->mshr_req[iidx].data = slot.data;
-                out.dcache2mshr->mshr_req[iidx].strb = slot.strb;
                 out.dcache2mshr->mshr_req[iidx].lsu_origin =
                     l1d_perf_is_lsu_req(slot.req_id);
                 resp.valid = true;
@@ -597,8 +572,6 @@ void RealDcache::stage2_comb() {
                     out.dcache2mshr->mshr_req[iidx].valid = true;
                     out.dcache2mshr->mshr_req[iidx].addr = slot.addr;
                     out.dcache2mshr->mshr_req[iidx].is_store = true;
-                    out.dcache2mshr->mshr_req[iidx].data = slot.data;
-                    out.dcache2mshr->mshr_req[iidx].strb = slot.strb;
                     out.dcache2mshr->mshr_req[iidx].lsu_origin =
                         l1d_perf_is_lsu_req(slot.req_id);
 

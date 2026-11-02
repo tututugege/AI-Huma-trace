@@ -757,8 +757,6 @@ void MemSubsystem::record_dcache_stage1_metadata() {
     dcache_resp_meta_nxt_[idx].valid = true;
     dcache_resp_meta_nxt_[idx].is_store = true;
     dcache_resp_meta_nxt_[idx].addr = store.addr;
-    dcache_resp_meta_nxt_[idx].data = store.data;
-    dcache_resp_meta_nxt_[idx].strb = store.strb;
   }
 }
 
@@ -828,8 +826,6 @@ void MemSubsystem::forward_pending_response_from_fill() {
         !cache_line_match(meta.addr, fill.addr)) {
       continue;
     }
-    const AddrFields f = decode(meta.addr);
-    apply_strobe(fill.data[f.word_off], meta.data, meta.strb);
     fill.dirty = true;
     resp.replay = ReplayType::HIT;
     if (ctx != nullptr) {

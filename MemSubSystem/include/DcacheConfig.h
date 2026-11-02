@@ -5,7 +5,6 @@
 #include "config.h"
 
 extern uint32_t tag_array  [DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
-extern uint32_t data_array [DCACHE_SETS_NUM][DCACHE_WAYS_NUM][DCACHE_WORD_NUM];
 extern wire<1>  valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
 extern wire<1>  dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
 
@@ -32,8 +31,6 @@ struct MSHRReq{
     wire<1> valid;
     wire<32> addr;
     wire<1> is_store;
-    wire<32> data;
-    wire<8> strb;
     wire<1> lsu_origin;
 };
 
@@ -44,8 +41,6 @@ struct MSHR_FILLReq{
     wire<1> lsu_origin;
     wire<DCACHE_WAY_BITS> way_idx;
     wire<32> addr;
-    wire<32> data[DCACHE_WORD_NUM];
-
 };
 struct MSHR_FILLResp{
     wire<1> done;
@@ -77,14 +72,11 @@ struct BypassReq {
 
 struct BypassResp {
     wire<1> valid;
-    wire<32> data;
 };
 
 struct MergeReq {
     wire<1> valid;
     wire<32> addr;
-    wire<32> data;
-    wire<8> strb;
 };
 
 struct MergeResp {
@@ -96,7 +88,6 @@ struct DirtyInfo {
     wire<1> valid;
     wire<1> lsu_origin;
     wire<32> addr;
-    wire<32> data[DCACHE_WORD_NUM];
 };
 
 struct DcacheWBIO{
@@ -124,8 +115,6 @@ struct PendingWrite {
     wire<DCACHE_SET_BITS> set_idx  = 0;
     wire<DCACHE_WAY_BITS> way_idx  = 0;
     wire<DCACHE_OFFSET_BITS> word_off = 0;
-    wire<32> data     = 0;
-    wire<8>  strb     = 0;   // byte-enable (4 bits used for a 32-bit word)
 };
 struct FILLWrite {
     wire<1>     valid    = false;
@@ -135,7 +124,6 @@ struct FILLWrite {
     wire<DCACHE_SET_BITS> set_idx  = 0;
     wire<DCACHE_TAG_BITS> tag      = 0;
     wire<DCACHE_WAY_BITS> way_idx  = 0;
-    wire<32> data[DCACHE_WORD_NUM] = {};
 };
 
 struct LruUpdate {
@@ -155,15 +143,11 @@ struct DcacheLineReadResp {
     wire<1> valid[DCACHE_WAYS_NUM];
     wire<DCACHE_TAG_BITS> tag[DCACHE_WAYS_NUM];
     wire<1> dirty[DCACHE_WAYS_NUM];
-    // Normal LSU reads return only the requested word from each way. Fill
-    // victim snapshots below still carry the full line for dirty writeback.
-    wire<32> data[DCACHE_WAYS_NUM];
 };
 struct FillIn {
     wire<1> valid_snap[DCACHE_WAYS_NUM];
     wire<1> dirty_snap[DCACHE_WAYS_NUM];
     wire<DCACHE_TAG_BITS> tag_snap [DCACHE_WAYS_NUM];
-    wire<32> data_snap [DCACHE_WAYS_NUM][DCACHE_WORD_NUM];
     wire<1> plru_tree_state[DCACHE_PLRU_TREE_BITS];
 };
 
@@ -208,8 +192,7 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 void plru_tree_touch(uint32_t set_idx, uint32_t way);
 
 
-void write_dcache_line(uint32_t set_idx, uint32_t way,uint32_t tag, const uint32_t data[DCACHE_WORD_NUM]);
-void apply_strobe(uint32_t &dst, uint32_t src, uint8_t strb);
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2);
 

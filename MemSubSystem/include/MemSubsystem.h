@@ -131,8 +131,6 @@ private:
     bool valid = false;
     bool is_store = false;
     uint32_t addr = 0;
-    uint32_t data = 0;
-    uint8_t strb = 0;
   };
   DcacheRespMeta dcache_resp_meta_cur_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   DcacheRespMeta dcache_resp_meta_nxt_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
