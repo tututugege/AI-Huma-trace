@@ -194,106 +194,6 @@ public:
     wire<1> walk_client_flush = false;
   };
 
-  static constexpr int kAsidBits = 9;
-  static constexpr int kVpnPartBits = 10;
-  static constexpr int kVpnBits = 20;
-  static constexpr int kPpnBits = 22;
-  static constexpr int kPermBits = 8;
-  static constexpr int kResultBits = 2;
-  static constexpr int kRetryBits = 3;
-  static constexpr int kTraceSourceBits = 3;
-  static constexpr int kPackedEntryWidth =
-      1 + 1 + kAsidBits + 1 + kVpnPartBits + kVpnPartBits + kPpnBits +
-      kPermBits;
-  static constexpr int kPackedLookupRespWidth = 1 + kPackedEntryWidth;
-  static constexpr int kPackedWalkRegsWidth =
-      1 + 1 + 32 + 2 + 32 + 2 + 1 + 1;
-  static constexpr int kPackedWalkPortInWidth =
-      1 + 1 + 1 + kVpnBits + (kPpnBits + kPermBits) + 1;
-  static constexpr int kPackedWalkReqWidth = 1 + 32 + 32 + 2;
-  static constexpr int kLookupReqWidth =
-      1 + kVpnPartBits + kVpnPartBits + kAsidBits;
-  static constexpr int kLookupRespWidth = kPackedLookupRespWidth;
-
-  static constexpr int slot_width(int entries) {
-    return entries <= 1 ? 0 : clog2(static_cast<uint64_t>(entries));
-  }
-  static constexpr int packed_refill_width(int entries) {
-    return 1 + kPackedEntryWidth + 2 * slot_width(entries);
-  }
-  static constexpr int lookup_req_width() { return kLookupReqWidth; }
-  static constexpr int lookup_resp_width() { return kLookupRespWidth; }
-  static constexpr int core_pi_width(int entries) {
-    return 1 + 32 + 2 + 32 + 2 + 1 + 1 + 1 + 2 +
-           kPackedLookupRespWidth + kPackedWalkRegsWidth +
-           packed_refill_width(entries) + slot_width(entries) +
-           kPackedWalkPortInWidth;
-  }
-  static constexpr int core_po_width(int entries) {
-    return 1 + kResultBits + 32 + kRetryBits + kPackedWalkRegsWidth +
-           packed_refill_width(entries) + kPackedWalkReqWidth + 1 +
-           kTraceSourceBits + 8 + 8;
-  }
-  static constexpr int top_common_pi_width(int entries) {
-    return 1 + 1 + 32 + 2 + 1 + 1 + 1 + 2 + kPackedWalkRegsWidth +
-           packed_refill_width(entries) + slot_width(entries) +
-           kPackedWalkPortInWidth;
-  }
-  static constexpr int top_port_pi_width() {
-    return 1 + 32 + kPackedLookupRespWidth;
-  }
-  static constexpr int top_pi_width(int entries, int ports) {
-    return top_common_pi_width(entries) + ports * top_port_pi_width();
-  }
-  static constexpr int top_common_po_width(int entries) {
-    return 1 + kPackedWalkRegsWidth + packed_refill_width(entries) +
-           kPackedWalkReqWidth + 1 + 1;
-  }
-  static constexpr int top_port_po_width() {
-    return 1 + kResultBits + 32 + kRetryBits + kTraceSourceBits + 8 + 8;
-  }
-  static constexpr int top_po_width(int entries, int ports) {
-    return top_common_po_width(entries) + ports * top_port_po_width();
-  }
-
-  static constexpr int kItlbSlotBits =
-      ITLB_ENTRIES <= 1 ? 0 : clog2(static_cast<uint64_t>(ITLB_ENTRIES));
-  static constexpr int kDtlbSlotBits =
-      DTLB_ENTRIES <= 1 ? 0 : clog2(static_cast<uint64_t>(DTLB_ENTRIES));
-  static constexpr int kItlbPackedRefillWidth =
-      1 + kPackedEntryWidth + 2 * kItlbSlotBits;
-  static constexpr int kDtlbPackedRefillWidth =
-      1 + kPackedEntryWidth + 2 * kDtlbSlotBits;
-
-  static constexpr int ITLB_LOOKUP_REQ_WIDTH = kLookupReqWidth;
-  static constexpr int ITLB_LOOKUP_RESP_WIDTH = kLookupRespWidth;
-  static constexpr int kTopPortPiWidth = 1 + 32 + kPackedLookupRespWidth;
-  static constexpr int kTopPortPoWidth =
-      1 + kResultBits + 32 + kRetryBits + kTraceSourceBits + 8 + 8;
-  static constexpr int kItlbTopCommonPiWidth =
-      1 + 1 + 32 + 2 + 1 + 1 + 1 + 2 + kPackedWalkRegsWidth +
-      kItlbPackedRefillWidth + kItlbSlotBits + kPackedWalkPortInWidth;
-  static constexpr int kItlbTopCommonPoWidth =
-      1 + kPackedWalkRegsWidth + kItlbPackedRefillWidth +
-      kPackedWalkReqWidth + 1 + 1;
-  static constexpr int ITLB_TOP_PI_WIDTH =
-      kItlbTopCommonPiWidth + kItlbTopPortCount * kTopPortPiWidth;
-  static constexpr int ITLB_TOP_PO_WIDTH =
-      kItlbTopCommonPoWidth + kItlbTopPortCount * kTopPortPoWidth;
-
-  static constexpr int DTLB_LOOKUP_REQ_WIDTH = kLookupReqWidth;
-  static constexpr int DTLB_LOOKUP_RESP_WIDTH = kLookupRespWidth;
-  static constexpr int kDtlbTopCommonPiWidth =
-      1 + 1 + 32 + 2 + 1 + 1 + 1 + 2 + kPackedWalkRegsWidth +
-      kDtlbPackedRefillWidth + kDtlbSlotBits + kPackedWalkPortInWidth;
-  static constexpr int kDtlbTopCommonPoWidth =
-      1 + kPackedWalkRegsWidth + kDtlbPackedRefillWidth +
-      kPackedWalkReqWidth + 1 + 1;
-  static constexpr int DTLB_TOP_PI_WIDTH =
-      kDtlbTopCommonPiWidth + kDtlbTopPortCount * kTopPortPiWidth;
-  static constexpr int DTLB_TOP_PO_WIDTH =
-      kDtlbTopCommonPoWidth + kDtlbTopPortCount * kTopPortPoWidth;
-
   TlbMmu(SimContext *ctx, PtwMemPort *port = nullptr,
          int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
 
@@ -325,9 +225,6 @@ public:
                                         int entry_count);
   static CoreOutput core_comb(const CoreInput &in);
   static TopOutput top_comb(const TopInput &in, int entries);
-  static void tlb_core_io_generator(const bool *pi, bool *po, int entries);
-  static void itlb_top_io_generator(const bool *pi, bool *po);
-  static void dtlb_top_io_generator(const bool *pi, bool *po);
 
 private:
   struct TraceEntry {
@@ -398,8 +295,6 @@ private:
                                            CsrStatusIO *status);
   TopInput build_top_common_input(const CsrStatusIO *status) const;
   TopOutput run_top_via_io_generator(const TopInput &in) const;
-  TopOutput run_top_via_generator_bits(const TopInput &in) const;
-  bool try_bare_top(const TopInput &in, int port_count, TopOutput &out) const;
   void apply_top_output(const TopOutput &out);
   void run_control_via_top(bool flush, bool cancel);
   bool consume_completed_walk_refill(bool consume_fault);
