@@ -19,6 +19,11 @@
 #else
 #define IDU(f) idu->f()
 #endif
+#ifdef PRE_SHADOW
+#include "PreShadow.h"
+#else
+#define PRE(f) pre->f()
+#endif
 #ifdef CSR_SHADOW
 #include "CsrShadow.h"
 #else
@@ -169,7 +174,7 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 
 // Working copies and default outputs of every module.
 void BackTop::comb_begin_all() {
-  pre->comb_begin();
+  PRE(comb_begin);
   IDU(comb_begin);
   REN(comb_begin);
   DIS(comb_begin);
@@ -183,7 +188,7 @@ void BackTop::comb_begin_all() {
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_stage_decode_and_resources() {
   IDU(comb_branch);
-  pre->comb_accept_front();
+  PRE(comb_accept_front);
   IDU(comb_decode);
   CSR(comb_interrupt);
   REN(comb_alloc);
@@ -200,9 +205,9 @@ void BackTop::comb_stage_decode_and_resources() {
 void BackTop::comb_stage_commit() {
   ROB(comb_ready);
   ROB(comb_ftq_pc_req);
-  pre->comb_ftq_lookup_rob();
+  PRE(comb_ftq_lookup_rob);
   ROB(comb_commit);
-  pre->comb_commit_info();
+  PRE(comb_commit_info);
   LSU(comb_stq_commit);
 }
 
@@ -238,7 +243,7 @@ void BackTop::comb_stage_issue_and_translate() {
 // Register reads, next-cycle wakeups, exceptions, rename and dispatch of the instructions leaving decode.
 void BackTop::comb_stage_operands_and_dispatch() {
   prf->comb_req_ftq();
-  pre->comb_ftq_lookup_prf();
+  PRE(comb_ftq_lookup_prf);
   prf->comb_read();
 
   ISU(comb_awake);
@@ -271,7 +276,7 @@ void BackTop::comb_stage_fire_and_recover() {
   ROB(comb_flush);
   ISU(comb_flush);
 
-  pre->comb_fire();
+  PRE(comb_fire);
   prf->comb_pipeline();
   EXU(comb_pipeline);
   DIS(comb_pipeline);
@@ -402,7 +407,7 @@ void BackTop::comb() {
 void BackTop::seq() {
   // rename -> isu/stq/rob
   // exu -> prf
-  pre->seq();
+  PRE(seq);
   REN(seq);
   DIS(seq);
   IDU(seq);

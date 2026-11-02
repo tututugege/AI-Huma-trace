@@ -23,6 +23,7 @@ public:
   void comb_commit_info();
   void seq();
 
+  friend struct PreShadow;  // lockstep verification (PRE_SHADOW builds)
 private:
   SimContext *ctx = nullptr;
 

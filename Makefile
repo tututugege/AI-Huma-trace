@@ -117,6 +117,12 @@ INCLUDES += -I./isu_ref
 CXXFLAGS += -DISU_SHADOW
 endif
 
+ifdef PRE_SHADOW
+CXXSRC += ./pre_ref/PreIduQueueRef.cpp ./pre_ref/PreShadow.cpp
+INCLUDES += -I./pre_ref
+CXXFLAGS += -DPRE_SHADOW
+endif
+
 ifdef CSR_SHADOW
 CXXSRC += ./csr_ref/CsrRef.cpp ./csr_ref/CsrShadow.cpp
 INCLUDES += -I./csr_ref
