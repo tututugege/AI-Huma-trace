@@ -11,7 +11,8 @@
 #include <memory>
 
 namespace tbhook {
-bool inject = std::getenv("TB_INJECT") != nullptr;
+// P3: the value datapath is gone, facts are mandatory (TB_NO_INJECT only for debugging old builds).
+bool inject = std::getenv("TB_NO_INJECT") == nullptr;
 bool poison = std::getenv("TB_POISON") != nullptr;
 bool enabled = std::getenv("TB_CHECK") != nullptr || inject;
 uint64_t inject_miss = 0;

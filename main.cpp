@@ -1,3 +1,4 @@
+#include "trace_hook.h"
 #include "SimCpu.h"
 #include "PhysMemory.h"
 #include "RISCV.h"
@@ -355,6 +356,9 @@ int main(int argc, char *argv[]) {
             << " assertion_delay=" << config.irq_delay_min << ".."
             << config.irq_delay_max << " cycles" << std::endl;
   cpu.init();
+  if (tbhook::inject) {
+    config.disable_difftest = true;  // the model no longer computes architectural values
+  }
   if (config.disable_difftest) {
     cpu.ctx.enable_difftest = false;
   }
