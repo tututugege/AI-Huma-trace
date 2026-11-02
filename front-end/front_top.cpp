@@ -193,25 +193,8 @@ static void front_ptab_write_comb(const FrontPtabWriteCombIn &input,
     for (int i = 0; i < FETCH_WIDTH; i++) {
         output.ptab_in.predict_dir[i] = bpu_output.out_pred_dir[i];
         output.ptab_in.predict_base_pc[i] = bpu_output.out_pred_base_pc + (i * 4);
-        output.ptab_in.alt_pred[i] = bpu_output.out_alt_pred[i];
-        output.ptab_in.altpcpn[i] = bpu_output.out_altpcpn[i];
-        output.ptab_in.pcpn[i] = bpu_output.out_pcpn[i];
-        for (int j = 0; j < 4; j++) {
-            output.ptab_in.tage_idx[i][j] = bpu_output.out_tage_idxs[i][j];
-            output.ptab_in.tage_tag[i][j] = bpu_output.out_tage_tags[i][j];
-        }
-        output.ptab_in.sc_used[i] = bpu_output.out_sc_used[i];
-        output.ptab_in.sc_pred[i] = bpu_output.out_sc_pred[i];
-        output.ptab_in.sc_sum[i] = bpu_output.out_sc_sum[i];
-        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            output.ptab_in.sc_idx[i][t] = bpu_output.out_sc_idx[i][t];
-        }
-        output.ptab_in.loop_used[i] = bpu_output.out_loop_used[i];
-        output.ptab_in.loop_hit[i] = bpu_output.out_loop_hit[i];
-        output.ptab_in.loop_pred[i] = bpu_output.out_loop_pred[i];
-        output.ptab_in.loop_idx[i] = bpu_output.out_loop_idx[i];
-        output.ptab_in.loop_tag[i] = bpu_output.out_loop_tag[i];
     }
+    output.ptab_in.meta = bpu_output.meta;
     output.ptab_in.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
 }
 
@@ -238,9 +221,6 @@ static void front_front2back_write_comb(const FrontFront2backWriteCombIn &input,
     const wire1_t use_front2back_output_bypass =
         input.use_front2back_output_bypass;
     std::memset(&output, 0, sizeof(output));
-    constexpr uint32_t kPcpnMask = (1u << pcpn_t_BITS) - 1u;
-    constexpr uint32_t kTageIdxMask = (1u << tage_idx_t_BITS) - 1u;
-    constexpr uint32_t kTageTagMask = (1u << tage_tag_t_BITS) - 1u;
     for (int i = 0; i < FETCH_WIDTH; i++) {
         output.front2back_fifo_in.fetch_group[i] = fifo_out.instructions[i];
         output.front2back_fifo_in.page_fault_inst[i] = fifo_out.page_fault_inst[i];
@@ -248,28 +228,6 @@ static void front_front2back_write_comb(const FrontFront2backWriteCombIn &input,
         output.front2back_fifo_in.predict_dir_corrected[i] =
             checker_out.predict_dir_corrected[i];
         output.front2back_fifo_in.predict_base_pc[i] = ptab_out.predict_base_pc[i];
-        output.front2back_fifo_in.alt_pred[i] = ptab_out.alt_pred[i];
-        output.front2back_fifo_in.altpcpn[i] =
-            static_cast<uint8_t>(ptab_out.altpcpn[i] & kPcpnMask);
-        output.front2back_fifo_in.pcpn[i] =
-            static_cast<uint8_t>(ptab_out.pcpn[i] & kPcpnMask);
-        for (int j = 0; j < 4; j++) {
-            output.front2back_fifo_in.tage_idx[i][j] =
-                ptab_out.tage_idx[i][j] & kTageIdxMask;
-            output.front2back_fifo_in.tage_tag[i][j] =
-                ptab_out.tage_tag[i][j] & kTageTagMask;
-        }
-        output.front2back_fifo_in.sc_used[i] = ptab_out.sc_used[i];
-        output.front2back_fifo_in.sc_pred[i] = ptab_out.sc_pred[i];
-        output.front2back_fifo_in.sc_sum[i] = ptab_out.sc_sum[i];
-        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            output.front2back_fifo_in.sc_idx[i][t] = ptab_out.sc_idx[i][t];
-        }
-        output.front2back_fifo_in.loop_used[i] = ptab_out.loop_used[i];
-        output.front2back_fifo_in.loop_hit[i] = ptab_out.loop_hit[i];
-        output.front2back_fifo_in.loop_pred[i] = ptab_out.loop_pred[i];
-        output.front2back_fifo_in.loop_idx[i] = ptab_out.loop_idx[i];
-        output.front2back_fifo_in.loop_tag[i] = ptab_out.loop_tag[i];
         if (use_front2back_output_bypass) {
             output.bypass_front2back_fifo_out.fetch_group[i] = fifo_out.instructions[i];
             output.bypass_front2back_fifo_out.page_fault_inst[i] =
@@ -279,25 +237,12 @@ static void front_front2back_write_comb(const FrontFront2backWriteCombIn &input,
                 checker_out.predict_dir_corrected[i];
             output.bypass_front2back_fifo_out.predict_base_pc[i] =
                 ptab_out.predict_base_pc[i];
-            output.bypass_front2back_fifo_out.alt_pred[i] = ptab_out.alt_pred[i];
-            output.bypass_front2back_fifo_out.altpcpn[i] = ptab_out.altpcpn[i];
-            output.bypass_front2back_fifo_out.pcpn[i] = ptab_out.pcpn[i];
-            for (int j = 0; j < 4; j++) {
-                output.bypass_front2back_fifo_out.tage_idx[i][j] = ptab_out.tage_idx[i][j];
-                output.bypass_front2back_fifo_out.tage_tag[i][j] = ptab_out.tage_tag[i][j];
-            }
-            output.bypass_front2back_fifo_out.sc_used[i] = ptab_out.sc_used[i];
-            output.bypass_front2back_fifo_out.sc_pred[i] = ptab_out.sc_pred[i];
-            output.bypass_front2back_fifo_out.sc_sum[i] = ptab_out.sc_sum[i];
-            for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-                output.bypass_front2back_fifo_out.sc_idx[i][t] = ptab_out.sc_idx[i][t];
-            }
-            output.bypass_front2back_fifo_out.loop_used[i] = ptab_out.loop_used[i];
-            output.bypass_front2back_fifo_out.loop_hit[i] = ptab_out.loop_hit[i];
-            output.bypass_front2back_fifo_out.loop_pred[i] = ptab_out.loop_pred[i];
-            output.bypass_front2back_fifo_out.loop_idx[i] = ptab_out.loop_idx[i];
-            output.bypass_front2back_fifo_out.loop_tag[i] = ptab_out.loop_tag[i];
         }
+    }
+    output.front2back_fifo_in.meta = ptab_out.meta;
+    output.front2back_fifo_in.meta.mask();
+    if (use_front2back_output_bypass) {
+        output.bypass_front2back_fifo_out.meta = ptab_out.meta;
     }
     output.front2back_fifo_in.predict_next_fetch_address_corrected =
         checker_out.predict_next_fetch_address_corrected;
@@ -329,24 +274,24 @@ static void front_output_comb(const FrontOutputCombIn &input,
         output.out.page_fault_inst[i] = out_src->page_fault_inst[i];
         output.out.predict_dir[i] = out_src->predict_dir_corrected[i];
         output.out.pc[i] = out_src->predict_base_pc[i];
-        output.out.alt_pred[i] = out_src->alt_pred[i];
-        output.out.altpcpn[i] = out_src->altpcpn[i];
-        output.out.pcpn[i] = out_src->pcpn[i];
+        output.out.alt_pred[i] = out_src->meta.alt_pred[i];
+        output.out.altpcpn[i] = out_src->meta.altpcpn[i];
+        output.out.pcpn[i] = out_src->meta.pcpn[i];
         for (int j = 0; j < 4; j++) {
-            output.out.tage_idx[i][j] = out_src->tage_idx[i][j];
-            output.out.tage_tag[i][j] = out_src->tage_tag[i][j];
+            output.out.tage_idx[i][j] = out_src->meta.tage_idx[i][j];
+            output.out.tage_tag[i][j] = out_src->meta.tage_tag[i][j];
         }
-        output.out.sc_used[i] = out_src->sc_used[i];
-        output.out.sc_pred[i] = out_src->sc_pred[i];
-        output.out.sc_sum[i] = out_src->sc_sum[i];
+        output.out.sc_used[i] = out_src->meta.sc_used[i];
+        output.out.sc_pred[i] = out_src->meta.sc_pred[i];
+        output.out.sc_sum[i] = out_src->meta.sc_sum[i];
         for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-            output.out.sc_idx[i][t] = out_src->sc_idx[i][t];
+            output.out.sc_idx[i][t] = out_src->meta.sc_idx[i][t];
         }
-        output.out.loop_used[i] = out_src->loop_used[i];
-        output.out.loop_hit[i] = out_src->loop_hit[i];
-        output.out.loop_pred[i] = out_src->loop_pred[i];
-        output.out.loop_idx[i] = out_src->loop_idx[i];
-        output.out.loop_tag[i] = out_src->loop_tag[i];
+        output.out.loop_used[i] = out_src->meta.loop_used[i];
+        output.out.loop_hit[i] = out_src->meta.loop_hit[i];
+        output.out.loop_pred[i] = out_src->meta.loop_pred[i];
+        output.out.loop_idx[i] = out_src->meta.loop_idx[i];
+        output.out.loop_tag[i] = out_src->meta.loop_tag[i];
         output.out.inst_valid[i] = out_src->inst_valid[i];
     }
     for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {

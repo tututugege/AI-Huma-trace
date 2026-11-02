@@ -66,61 +66,7 @@ struct front_top_out {
   tage_loop_meta_tag_t loop_tag[BACKEND_FETCH_WIDTH];
 };
 
-struct BPU_in {
-  wire1_t reset;
-  // from back-end
-  wire1_t back2front_valid[COMMIT_WIDTH];
-  wire1_t refetch;
-  fetch_addr_t refetch_address;
-  pc_t predict_base_pc[COMMIT_WIDTH];
-  wire1_t predict_dir[COMMIT_WIDTH];
-  wire1_t actual_dir[COMMIT_WIDTH];
-  br_type_t actual_br_type[COMMIT_WIDTH];
-  target_addr_t actual_target[COMMIT_WIDTH];
-  // for TAGE update
-  wire1_t alt_pred[COMMIT_WIDTH];
-  pcpn_t altpcpn[COMMIT_WIDTH];
-  pcpn_t pcpn[COMMIT_WIDTH];
-  tage_idx_t tage_idx[COMMIT_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[COMMIT_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[COMMIT_WIDTH];
-  wire1_t sc_pred[COMMIT_WIDTH];
-  tage_scl_meta_sum_t sc_sum[COMMIT_WIDTH];
-  tage_scl_meta_idx_t sc_idx[COMMIT_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[COMMIT_WIDTH];
-  wire1_t loop_hit[COMMIT_WIDTH];
-  wire1_t loop_pred[COMMIT_WIDTH];
-  tage_loop_meta_idx_t loop_idx[COMMIT_WIDTH];
-  tage_loop_meta_tag_t loop_tag[COMMIT_WIDTH];
-  // from icache
-  wire1_t icache_read_ready;
-};
 
-struct BPU_out {
-  // to icache
-  wire1_t icache_read_valid;
-  fetch_addr_t fetch_address;
-  // to PTAB
-  wire1_t PTAB_write_enable;
-  wire1_t predict_dir[FETCH_WIDTH];
-  fetch_addr_t predict_next_fetch_address;
-  pc_t predict_base_pc[FETCH_WIDTH];
-  // for TAGE update
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
-};
 
 struct icache_in {
   wire1_t reset;
@@ -210,20 +156,7 @@ struct PTAB_in {
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
   // for TAGE update
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
   // from back-end
   wire1_t read_enable;
 };
@@ -236,20 +169,7 @@ struct PTAB_out {
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
   // for TAGE update
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
 };
 
 struct front2back_FIFO_in {
@@ -265,20 +185,7 @@ struct front2back_FIFO_in {
   fetch_addr_t predict_next_fetch_address_corrected;
   pc_t predict_base_pc[FETCH_WIDTH];
   // for TAGE update
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
 };
 
 struct front2back_FIFO_out {
@@ -292,20 +199,7 @@ struct front2back_FIFO_out {
   wire1_t predict_dir_corrected[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address_corrected;
   pc_t predict_base_pc[FETCH_WIDTH];
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[FETCH_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
 };
 
 struct fetch_address_FIFO_in {
@@ -322,18 +216,5 @@ struct fetch_address_FIFO_out {
   wire1_t read_valid;      // 这一拍是否真的弹出了一条地址
   fetch_addr_t fetch_address;
 };
-
-using front2back_altpcpn_lane_t = std::remove_reference_t<decltype(((front2back_FIFO_in *)nullptr)->altpcpn[0])>;
-using front2back_pcpn_lane_t = std::remove_reference_t<decltype(((front2back_FIFO_in *)nullptr)->pcpn[0])>;
-using front2back_tage_idx_lane_t = std::remove_reference_t<decltype(((front2back_FIFO_in *)nullptr)->tage_idx[0][0])>;
-using front2back_tage_tag_lane_t = std::remove_reference_t<decltype(((front2back_FIFO_in *)nullptr)->tage_tag[0][0])>;
-static_assert(sizeof(front2back_altpcpn_lane_t) * 8 >= pcpn_t_BITS,
-              "front2back_FIFO_in.altpcpn lane width is narrower than pcpn_t_BITS");
-static_assert(sizeof(front2back_pcpn_lane_t) * 8 >= pcpn_t_BITS,
-              "front2back_FIFO_in.pcpn lane width is narrower than pcpn_t_BITS");
-static_assert(sizeof(front2back_tage_idx_lane_t) * 8 >= tage_idx_t_BITS,
-              "front2back_FIFO_in.tage_idx lane width is narrower than tage_idx_t_BITS");
-static_assert(sizeof(front2back_tage_tag_lane_t) * 8 >= tage_tag_t_BITS,
-              "front2back_FIFO_in.tage_tag lane width is narrower than tage_tag_t_BITS");
 
 #endif

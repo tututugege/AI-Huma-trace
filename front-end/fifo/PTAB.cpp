@@ -36,32 +36,12 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
 
   PTAB_entry write_entry{};
   if (do_write) {
-    constexpr uint32_t kPcpnMask = bit_mask_u32(pcpn_t_BITS);
-    constexpr uint32_t kTageIdxMask = bit_mask_u32(tage_idx_t_BITS);
-    constexpr uint32_t kTageTagMask = bit_mask_u32(tage_tag_t_BITS);
     for (int i = 0; i < FETCH_WIDTH; i++) {
       write_entry.predict_dir[i] = in.inp.predict_dir[i];
       write_entry.predict_base_pc[i] = in.inp.predict_base_pc[i];
-      write_entry.alt_pred[i] = in.inp.alt_pred[i];
-      write_entry.altpcpn[i] =
-          static_cast<uint8_t>(in.inp.altpcpn[i] & kPcpnMask);
-      write_entry.pcpn[i] = static_cast<uint8_t>(in.inp.pcpn[i] & kPcpnMask);
-      for (int j = 0; j < TN_MAX; j++) {
-        write_entry.tage_idx[i][j] = in.inp.tage_idx[i][j] & kTageIdxMask;
-        write_entry.tage_tag[i][j] = in.inp.tage_tag[i][j] & kTageTagMask;
-      }
-      write_entry.sc_used[i] = in.inp.sc_used[i];
-      write_entry.sc_pred[i] = in.inp.sc_pred[i];
-      write_entry.sc_sum[i] = in.inp.sc_sum[i];
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        write_entry.sc_idx[i][t] = in.inp.sc_idx[i][t];
-      }
-      write_entry.loop_used[i] = in.inp.loop_used[i];
-      write_entry.loop_hit[i] = in.inp.loop_hit[i];
-      write_entry.loop_pred[i] = in.inp.loop_pred[i];
-      write_entry.loop_idx[i] = in.inp.loop_idx[i];
-      write_entry.loop_tag[i] = in.inp.loop_tag[i];
     }
+    write_entry.meta = in.inp.meta;
+    write_entry.meta.mask();
     write_entry.predict_next_fetch_address = in.inp.predict_next_fetch_address;
   }
 
@@ -70,36 +50,14 @@ void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) {
       std::printf("[PTAB_TOP] ERROR!!: missing head snapshot for same-cycle reread\n");
       std::exit(1);
     }
-    constexpr uint32_t kPcpnMask = bit_mask_u32(pcpn_t_BITS);
-    constexpr uint32_t kTageIdxMask = bit_mask_u32(tage_idx_t_BITS);
-    constexpr uint32_t kTageTagMask = bit_mask_u32(tage_tag_t_BITS);
     const PTAB_entry &read_entry =
         has_data_before_read ? in.rd.head_entry : write_entry;
     for (int i = 0; i < FETCH_WIDTH; i++) {
       out.out_regs.predict_dir[i] = read_entry.predict_dir[i];
       out.out_regs.predict_base_pc[i] = read_entry.predict_base_pc[i];
-      out.out_regs.alt_pred[i] = read_entry.alt_pred[i];
-      out.out_regs.altpcpn[i] =
-          static_cast<pcpn_t>(read_entry.altpcpn[i] & kPcpnMask);
-      out.out_regs.pcpn[i] = static_cast<pcpn_t>(read_entry.pcpn[i] & kPcpnMask);
-      for (int j = 0; j < TN_MAX; j++) {
-        out.out_regs.tage_idx[i][j] =
-            static_cast<tage_idx_t>(read_entry.tage_idx[i][j] & kTageIdxMask);
-        out.out_regs.tage_tag[i][j] =
-            static_cast<tage_tag_t>(read_entry.tage_tag[i][j] & kTageTagMask);
-      }
-      out.out_regs.sc_used[i] = read_entry.sc_used[i];
-      out.out_regs.sc_pred[i] = read_entry.sc_pred[i];
-      out.out_regs.sc_sum[i] = read_entry.sc_sum[i];
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        out.out_regs.sc_idx[i][t] = read_entry.sc_idx[i][t];
-      }
-      out.out_regs.loop_used[i] = read_entry.loop_used[i];
-      out.out_regs.loop_hit[i] = read_entry.loop_hit[i];
-      out.out_regs.loop_pred[i] = read_entry.loop_pred[i];
-      out.out_regs.loop_idx[i] = read_entry.loop_idx[i];
-      out.out_regs.loop_tag[i] = read_entry.loop_tag[i];
     }
+    out.out_regs.meta = read_entry.meta;
+    out.out_regs.meta.mask();
     out.out_regs.predict_next_fetch_address = read_entry.predict_next_fetch_address;
   }
 

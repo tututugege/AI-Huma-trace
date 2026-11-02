@@ -268,4 +268,38 @@ using bpu_bank_sel_ext_t = wire_for_bits_t<ceil_log2_u32(BPU_BANK_NUM + 1)>;
 static constexpr int bpu_bank_sel_ext_t_BITS = ceil_log2_u32(BPU_BANK_NUM + 1);
 static constexpr bpu_bank_sel_ext_t BPU_BANK_SEL_INVALID = BPU_BANK_NUM;
 
+// Prediction/training metadata that travels with a fetch group from the BPU
+// through PTAB and the front2back FIFO to the back end (all lanes of one group).
+struct PredMeta {
+  wire1_t alt_pred[FETCH_WIDTH];
+  pcpn_t altpcpn[FETCH_WIDTH];
+  pcpn_t pcpn[FETCH_WIDTH];
+  tage_idx_t tage_idx[FETCH_WIDTH][TN_MAX];
+  tage_tag_t tage_tag[FETCH_WIDTH][TN_MAX];
+  wire1_t sc_used[FETCH_WIDTH];
+  wire1_t sc_pred[FETCH_WIDTH];
+  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
+  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
+  wire1_t loop_used[FETCH_WIDTH];
+  wire1_t loop_hit[FETCH_WIDTH];
+  wire1_t loop_pred[FETCH_WIDTH];
+  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
+  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+
+  // Fields are stored at their declared hardware widths.
+  void mask() {
+    constexpr uint32_t kPcpnMask = (1u << pcpn_t_BITS) - 1u;
+    constexpr uint32_t kTageIdxMask = (1u << tage_idx_t_BITS) - 1u;
+    constexpr uint32_t kTageTagMask = (1u << tage_tag_t_BITS) - 1u;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      altpcpn[i] = static_cast<pcpn_t>(altpcpn[i] & kPcpnMask);
+      pcpn[i] = static_cast<pcpn_t>(pcpn[i] & kPcpnMask);
+      for (int j = 0; j < TN_MAX; j++) {
+        tage_idx[i][j] = static_cast<tage_idx_t>(tage_idx[i][j] & kTageIdxMask);
+        tage_tag[i][j] = static_cast<tage_tag_t>(tage_tag[i][j] & kTageTagMask);
+      }
+    }
+  }
+};
+
 #endif

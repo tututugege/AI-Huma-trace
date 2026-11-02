@@ -45,20 +45,7 @@ struct PTAB_entry {
   wire1_t predict_dir[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][TN_MAX];
-  tage_tag_t tage_tag[FETCH_WIDTH][TN_MAX];
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
 };
 
 struct PTAB_read_data {
@@ -74,20 +61,7 @@ struct front2back_FIFO_entry {
   wire1_t predict_dir_corrected[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address_corrected;
   pc_t predict_base_pc[FETCH_WIDTH];
-  wire1_t alt_pred[FETCH_WIDTH];
-  pcpn_t altpcpn[FETCH_WIDTH];
-  pcpn_t pcpn[FETCH_WIDTH];
-  tage_idx_t tage_idx[FETCH_WIDTH][TN_MAX];
-  tage_tag_t tage_tag[FETCH_WIDTH][TN_MAX];
-  wire1_t sc_used[FETCH_WIDTH];
-  wire1_t sc_pred[FETCH_WIDTH];
-  tage_scl_meta_sum_t sc_sum[FETCH_WIDTH];
-  tage_scl_meta_idx_t sc_idx[FETCH_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[FETCH_WIDTH];
-  wire1_t loop_hit[FETCH_WIDTH];
-  wire1_t loop_pred[FETCH_WIDTH];
-  tage_loop_meta_idx_t loop_idx[FETCH_WIDTH];
-  tage_loop_meta_tag_t loop_tag[FETCH_WIDTH];
+  PredMeta meta;
 };
 
 struct front2back_FIFO_read_data {
@@ -107,7 +81,6 @@ struct Front2BackCombOut;
 struct FrontReadData;
 struct FrontUpdateRequest;
 
-void BPU_top(struct BPU_in *in, struct BPU_out *out);
 void icache_top(struct icache_in *in, struct icache_out *out);
 void icache_seq_read(struct icache_in *in, struct icache_out *out);
 void icache_peek_ready(struct icache_in *in, struct icache_out *out);
