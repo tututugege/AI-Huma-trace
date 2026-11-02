@@ -104,10 +104,7 @@ static bool front_focus_any_out_pc(const front_top_out &out) {
 
 
 
-static BPU_TOP bpu_instance;
-
-// 定义全局指针，供TAGE访问BPU的GHR/FH
-BPU_TOP *g_bpu_top = &bpu_instance;
+static bpuf::Bpu bpu_instance;
 // ============================================================================
 // 辅助函数
 // ============================================================================
@@ -118,7 +115,7 @@ BPU_TOP *g_bpu_top = &bpu_instance;
 
 static void front_ptab_write_comb(const FrontPtabWriteCombIn &input,
                                   FrontPtabWriteCombOut &output) {
-    const BPU_TOP::OutputPayload &bpu_output = input.bpu_output;
+    const bpuf::OutputPayload &bpu_output = input.bpu_output;
     const wire1_t global_reset = input.global_reset;
     const wire1_t global_refetch = input.global_refetch;
     const wire1_t ptab_can_write = input.ptab_can_write;
@@ -491,14 +488,14 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     bool bpu_stall = false;
     bool bpu_can_run = false;
     bool can_bypass_fetch_to_icache = false;
-    BPU_TOP::OutputPayload bpu_output{};
+    bpuf::OutputPayload bpu_output{};
     {
         // ========================================================================
         // 阶段 4: BPU 控制逻辑
         // ========================================================================
         bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || rd.ptab_full_latch_snapshot;
         bpu_can_run = !bpu_stall || global_reset || global_refetch;
-        BPU_TOP::InputPayload bpu_input{};
+        bpuf::InputPayload bpu_input{};
         bpu_input.refetch = global_refetch;
         bpu_input.refetch_address = refetch_address;
         bpu_input.icache_read_ready = bpu_can_run && !rd.fetch_addr_fifo_full_latch_snapshot;
@@ -517,30 +514,17 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                 bpu_input.in_tage_idxs[i][j] = in->tage_idx[i][j];
             }
             bpu_input.in_sc_used[i] = in->sc_used[i];
-            bpu_input.in_sc_pred[i] = in->sc_pred[i];
-            bpu_input.in_sc_sum[i] = in->sc_sum[i];
-            for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-                bpu_input.in_sc_idx[i][t] = in->sc_idx[i][t];
-            }
             bpu_input.in_loop_used[i] = in->loop_used[i];
-            bpu_input.in_loop_hit[i] = in->loop_hit[i];
-            bpu_input.in_loop_pred[i] = in->loop_pred[i];
-            bpu_input.in_loop_idx[i] = in->loop_idx[i];
-            bpu_input.in_loop_tag[i] = in->loop_tag[i];
         }
         bpu_seq_txn_req.valid = false;
         bpu_seq_txn_req.reset = in->reset;
         if (in->reset) {
             bpu_seq_txn_req.valid = true;
             bpu_seq_txn_req.inp = bpu_input;
-            bpu_seq_txn_req.req = BPU_TOP::UpdateRequest{};
             bpu_seq_txn_req.reset = true;
             bpu_output.fetch_address = RESET_PC;
         } else {
-            BPU_TOP::ReadData bpu_rd;
-            bpu_instance.bpu_seq_read(bpu_input, bpu_rd);
-            bpu_instance.bpu_comb_calc(bpu_input, bpu_rd, bpu_output,
-                                       bpu_seq_txn_req.req);
+            bpu_instance.comb(bpu_input, bpu_output, bpu_seq_txn_req.req);
             bpu_seq_txn_req.valid = true;
             bpu_seq_txn_req.inp = bpu_input;
             bpu_seq_txn_req.reset = false;
@@ -957,8 +941,8 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   (void)inp;
   (void)reset;
   if (req.bpu_seq_txn.valid) {
-    bpu_instance.bpu_seq_write(req.bpu_seq_txn.inp, req.bpu_seq_txn.req,
-                               req.bpu_seq_txn.reset);
+    if (req.bpu_seq_txn.reset) bpu_instance.reset();
+    else bpu_instance.commit(req.bpu_seq_txn.inp, req.bpu_seq_txn.req);
   }
   fetch_address_FIFO_seq_write(&req.fetch_addr_fifo_req);
   instruction_FIFO_seq_write(&req.fifo_req);

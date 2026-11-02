@@ -62,27 +62,11 @@ struct Front2BackCombOut {
 };
 
 
-using BpuPostReadReqCombOut = BPU_TOP::BpuPostReadReqCombOut;
-
-using TypePredCombIn = TypePredictor::TypePredCombIn;
-using TypePredCombOut = TypePredictor::TypePredCombOut;
-
-using TagePreReadCombIn = TAGE_TOP::TagePreReadCombIn;
-using TagePreReadCombOut = TAGE_TOP::TagePreReadCombOut;
-using TageCombIn = TAGE_TOP::TageCombIn;
-using TageCombOut = TAGE_TOP::TageCombOut;
-
-using BtbPreReadCombIn = BTB_TOP::BtbPreReadCombIn;
-using BtbPreReadCombOut = BTB_TOP::BtbPreReadCombOut;
-using BtbCombIn = BTB_TOP::BtbCombIn;
-using BtbCombOut = BTB_TOP::BtbCombOut;
-
-
 struct PendingBpuSeqTxn {
   wire1_t valid = false;
   wire1_t reset = false;
-  BPU_TOP::InputPayload inp;
-  BPU_TOP::UpdateRequest req;
+  bpuf::InputPayload inp;
+  bpuf::Bpu::Txn req;
 };
 
 struct PendingFrontState {
@@ -143,7 +127,7 @@ struct FrontUpdateRequest {
 
 
 struct FrontPtabWriteCombIn {
-  BPU_TOP::OutputPayload bpu_output;
+  bpuf::OutputPayload bpu_output;
   wire1_t global_reset;
   wire1_t global_refetch;
   wire1_t ptab_can_write;
