@@ -197,6 +197,8 @@ public:
   bool is_ckpt = false;
   uint64_t ckpt_warmup_commit_target = 0;
   uint64_t ckpt_measure_commit_target = 0;
+  // Front-door checkpoint restore: the restore program is still running; the measurement starts at its mret
+  bool front_door_pending = false;
   SimCpu *cpu = nullptr;
   void run_commit_inst(InstEntry *inst_entry, int commit_slot);
   void run_interrupt_hook();

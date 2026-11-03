@@ -237,6 +237,95 @@ void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   lsu->cur.lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
 }
 
+void BackTop::restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file) {
+  std::string final_name = filename;
+  gzFile file = gzopen(final_name.c_str(), "rb");
+  if (!file && final_name.find(".gz") == std::string::npos) {
+    final_name += ".gz";
+    file = gzopen(final_name.c_str(), "rb");
+  }
+  if (!file) {
+    Assert(0 && "Error: Could not open checkpoint file");
+  }
+
+  struct CkptCpuState {  // layout of CPU_state in the checkpoint; read and discarded
+    uint32_t gpr[32];
+    uint32_t csr[21];
+    uint32_t pc;
+    uint32_t store_addr;
+    uint32_t store_data;
+    uint32_t store_strb;
+    bool store;
+    bool reserve_valid;
+    uint32_t reserve_addr;
+  };
+
+  CkptHeader ckpt_header = {};
+  gz_read_pod(file, ckpt_header);
+  if (ckpt_header.magic != kCkptMagic) {
+    std::cerr << "Error: Invalid checkpoint magic." << std::endl;
+    std::exit(1);
+  }
+  if (ckpt_header.format_ver != kCkptFormatVersion && ckpt_header.format_ver != kCkptLegacyFormatVersion) {
+    std::cerr << "Error: Unsupported checkpoint version: " << ckpt_header.format_ver << std::endl;
+    std::exit(1);
+  }
+  uint32_t checkpoint_sdram_size = 0;
+  if (ckpt_header.format_ver >= kCkptFormatVersion) {
+    gz_read_pod(file, checkpoint_sdram_size);
+    if (checkpoint_sdram_size != PMEM_SDRAM_SIZE) {
+      std::cerr << "Error: SDRAM checkpoint size is incompatible: file=0x" << std::hex << checkpoint_sdram_size
+                << " sim=0x" << PMEM_SDRAM_SIZE << std::dec << std::endl;
+      std::exit(1);
+    }
+  }
+  if (ckpt_header.ram_size == 0 || ckpt_header.ram_size > kCkptSimpointRamBytes) {
+    std::cerr << "Error: RAM-only checkpoint size is incompatible: file=0x" << std::hex << ckpt_header.ram_size
+              << " sim=0x" << kCkptSimpointRamBytes << std::dec << std::endl;
+    std::exit(1);
+  }
+
+  // The CPU state and the devices are not injected: they are set by the restore program. Read the state only to get to
+  // the interval length (0 for a special checkpoint).
+  CkptCpuState discarded_state;
+  uint64_t interval_inst_count = 0;
+  gz_read_pod(file, discarded_state);
+  gz_read_pod(file, interval_inst_count);
+  ckpt_interval_inst_count = interval_inst_count;
+
+  if (pmem_ram_ptr() == nullptr || pmem_sdram_ptr() == nullptr) {
+    Assert(0 && "Error: Memory backends not allocated during checkpoint restore.");
+  }
+  pmem_clear_all();
+  std::cout << "Restoring Memory (front-door restore: the CPU state is set by the restore program)... format=simpoint-v"
+            << ckpt_header.format_ver << std::endl;
+  gz_read_exact(file, reinterpret_cast<uint8_t *>(pmem_ram_ptr()), ckpt_header.ram_size);
+  if (checkpoint_sdram_size != 0) {
+    gz_read_exact(file, reinterpret_cast<uint8_t *>(pmem_sdram_ptr()), checkpoint_sdram_size);
+  }
+  gzclose(file);
+
+  // The restore program goes into the boot window (words at 0x0; the core fetches the reset code from there).
+  std::ifstream stub(stub_file, std::ios::binary);
+  if (!stub.is_open()) {
+    Assert(0 && "Error: restore program (stub) does not exist");
+  }
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stub)), std::istreambuf_iterator<char>());
+  if (bytes.empty() || bytes.size() > BOOT_IO_SIZE || (bytes.size() & 3u) != 0) {
+    Assert(0 && "Error: restore program must be a non-empty word array that fits the boot window");
+  }
+  for (size_t off = 0; off < bytes.size(); off += 4) {
+    const uint32_t word = static_cast<uint32_t>(bytes[off]) | (static_cast<uint32_t>(bytes[off + 1]) << 8) |
+                          (static_cast<uint32_t>(bytes[off + 2]) << 16) | (static_cast<uint32_t>(bytes[off + 3]) << 24);
+    pmem_write(static_cast<uint32_t>(off), word);
+  }
+  seed_uart_io_words();  // device defaults, as for a normal boot
+  std::cout << "[CKPT] Restored DDR and SDRAM; restore program: " << (bytes.size() / 4) << " instructions from "
+            << stub_file << std::endl;
+
+  init_difftest(static_cast<int>(RAM_SIZE > 0x7fffffffu ? 0x7fffffff : RAM_SIZE));
+}
+
 void BackTop::restore_from_ref() {
   CPU_state state;
   uint8_t privilege;

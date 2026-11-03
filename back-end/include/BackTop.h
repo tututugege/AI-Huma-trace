@@ -97,6 +97,9 @@ public:
   void load_sd_boot_blob(const std::string &sdcard_image,
                          uint32_t sector_offset = 64u);
   void restore_checkpoint(const std::string &filename);
+  // Front-door restore: only the memory of the checkpoint is loaded and the restore program (stub) is put in the boot
+  // window; the DUT and the reference core start from reset and execute it. ckpt_interval_inst_count is still read.
+  void restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file);
   void restore_from_ref();
 
   uint32_t get_reg(uint8_t arch_idx) {

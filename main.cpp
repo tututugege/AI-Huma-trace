@@ -31,6 +31,7 @@ struct SimConfig {
   // 目标文件路径
   std::string target_file;
   std::string flash_image_file;
+  std::string restore_stub_file;  // CKPT: front-door restore program (tools/ckpt2stub.py of the function model)
   std::string sdcard_image_file;
   bool direct_opensbi = false;
   // 存储 Fast-forward 的指令数/周期数
@@ -53,6 +54,8 @@ void print_help(char *argv[]) {
   std::cout
       << "  -m, --mode <run|ckpt|fast|ref>  Set execution mode (default: run)"
       << std::endl;
+  std::cout << "      --restore-stub <file>     CKPT: front-door restore (load only the memory; the CPU runs this restore program)"
+            << std::endl;
   std::cout << "      --flash-image <file>       Load SPI flash image at 0x0 (RUN/FAST only)"
             << std::endl;
   std::cout << "      --sdcard-image <file>      Attach SD card image backend"
@@ -155,6 +158,7 @@ int main(int argc, char *argv[]) {
       {"mode", required_argument, 0, 'm'},
       {"fast-forward", required_argument, 0, 'f'}, // 快进参数
       {"flash-image", required_argument, 0, 1001},
+      {"restore-stub", required_argument, 0, 1008},
       {"sdcard-image", required_argument, 0, 1002},
       {"direct-opensbi", no_argument, 0, 1004},
       {"irq-seed", required_argument, 0, 1005},
@@ -240,6 +244,9 @@ int main(int argc, char *argv[]) {
     }
     case 1001:
       config.flash_image_file = optarg;
+      break;
+    case 1008:
+      config.restore_stub_file = optarg;
       break;
     case 1002:
       config.sdcard_image_file = optarg;
@@ -396,8 +403,14 @@ int main(int argc, char *argv[]) {
     difftest_configure_run_assets(
         config.sdcard_image_file.empty() ? nullptr
                                          : config.sdcard_image_file.c_str());
-    cpu.back.restore_checkpoint(config.target_file);
-    cpu.sync_mmio_devices_from_backing();
+    const bool front_door = !config.restore_stub_file.empty();
+    if (front_door) {
+      std::cout << "[CKPT] front-door restore, restore program: " << config.restore_stub_file << std::endl;
+      cpu.back.restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
+    } else {
+      cpu.back.restore_checkpoint(config.target_file);
+      cpu.sync_mmio_devices_from_backing();
+    }
 
     const uint64_t ckpt_interval = cpu.back.ckpt_interval_inst_count;
     if (ckpt_interval == 0) {
@@ -442,6 +455,13 @@ int main(int argc, char *argv[]) {
 
     uint64_t warmup_target = config.ckpt_warmup_target;
     uint64_t ref_prewarm_target = ckpt_interval - warmup_target;
+    if (front_door && ref_prewarm_target > 0) {
+      std::cerr << "Error: --restore-stub needs --warmup equal to the checkpoint interval (" << ckpt_interval
+                << "): the reference prewarm hands its state to the DUT, which is exactly what the front-door "
+                   "restore avoids."
+                << std::endl;
+      return 1;
+    }
 
     uint64_t ref_prewarm_done = 0;
     if (ref_prewarm_target > 0) {
@@ -467,15 +487,21 @@ int main(int argc, char *argv[]) {
                 << " steps." << std::endl;
     }
 
-    std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
-    cpu.back.restore_from_ref();
-    cpu.sync_mmio_devices_from_backing();
-    cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
+    if (!front_door) {
+      std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
+      cpu.back.restore_from_ref();
+      cpu.sync_mmio_devices_from_backing();
+      cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
+    }
 
     cpu.ctx.is_ckpt = true;
+    cpu.ctx.front_door_pending = front_door;  // the measurement starts at the restore program's mret
     cpu.ctx.ckpt_warmup_commit_target = warmup_target;
     cpu.ctx.ckpt_measure_commit_target = config.max_commit_inst;
-    if (cpu.ctx.ckpt_warmup_commit_target == 0) {
+    if (front_door) {
+      std::cout << "[Plan] front-door restore: the restore program runs first; warmup (" << warmup_target
+                << ") and measure (" << config.max_commit_inst << ") count from its mret." << std::endl;
+    } else if (cpu.ctx.ckpt_warmup_commit_target == 0) {
       cpu.ctx.perf.perf_reset();
       cpu.ctx.perf.perf_start = true;
       std::cout << "[Plan] O3 warmup skipped: target = 0. Measure phase "

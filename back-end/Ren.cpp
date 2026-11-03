@@ -116,6 +116,19 @@ void count_commit(SimContext *ctx, const Uop &u) {
   if (is_load(u)) ctx->perf.commit_load_num++;
   if (is_store(u)) ctx->perf.commit_store_num++;
   if (!ctx->is_ckpt) return;
+  if (ctx->front_door_pending) {
+    // The restore program ends with mret: the measurement counts from the checkpoint's first instruction. The commit
+    // counters restart; the cycle count is kept (the memory system uses it as a clock) and its baseline moves.
+    if (decode_inst_type(u->type) == MRET) {
+      ctx->front_door_pending = false;
+      std::cout << "[front-door] restore program committed: " << std::dec << ctx->perf.commit_num << " instructions, "
+                << ctx->perf.cycle << " cycles; measuring from here" << std::endl;
+      ctx->perf.commit_num = ctx->perf.commit_load_num = ctx->perf.commit_store_num = 0;
+      ctx->perf.cycle_base = ctx->perf.cycle;
+      if (ctx->ckpt_warmup_commit_target == 0) ctx->perf.perf_start = true;
+    }
+    return;
+  }
   if (!ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
     std::cout << "[CKPT] O3 warmup done at commit " << std::dec << ctx->perf.commit_num << "/"
               << ctx->ckpt_warmup_commit_target << ". Resetting perf counters and starting measure phase." << std::endl;
