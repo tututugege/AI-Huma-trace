@@ -162,6 +162,20 @@ void init_diff_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   RefCpuState ref_state = to_ref_state(ckpt_state, privilege);
   refcpu_set_state(ref_cpu_ctx, &ref_state);
 
+  // The trace bridge steps the core that owns the RAM (pmem_core_ctx()), not ref_cpu_ctx: it needs the checkpoint's
+  // architectural state and device registers (timer, interrupt controller, UART, ...) too, otherwise it runs from
+  // the reset state with zeroed registers and every address it computes is wrong.
+  if (RefCpuContext *core = pmem_core_ctx(); core != nullptr && core != ref_cpu_ctx) {
+    refcpu_set_state(core, &ref_state);
+    refcpu_clear_io_words(core);
+    for (const auto &range : kCheckpointMmioRanges) {
+      for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
+        refcpu_set_io_word(core, range.base + off, pmem_read(range.base + off));
+      }
+    }
+    refcpu_sync_mmio_devices_from_backing(core);
+  }
+
   Assert(pmem_ram_ptr() != nullptr && pmem_sdram_ptr() != nullptr &&
          "init_diff_ckpt: pmem backends are not initialized");
   sync_all_memory_to_ref();
