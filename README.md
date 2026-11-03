@@ -1,3 +1,6 @@
+> **trace-sim**: this tree is the trace-driven, cycle-identical distillation of tututugege/simulator.
+> See [docs/PROJECT.md](docs/PROJECT.md) for the gate, verification harnesses and status; the text below is the upstream README.
+
 # RISC-V 乱序执行模拟器
 2026.8.13
 ## 1. 项目简介

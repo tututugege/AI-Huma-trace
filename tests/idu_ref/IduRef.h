@@ -1,0 +1,37 @@
+#pragma once
+// Frozen copy of the original Idu (lockstep reference, IDU_SHADOW builds).
+#include "IO.h"
+#include "PreIduQueue.h"
+#include "config.h"
+class SimContext;
+
+class IduRef {
+public:
+  IduRef(SimContext *ctx, int max_br = 1) {
+    this->ctx = ctx;
+    this->max_br_per_cycle = max_br;
+  }
+  SimContext *ctx;
+  int max_br_per_cycle;
+  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  void decode(Uop &uop, uint32_t inst);
+
+  void init();
+  void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
+  void comb_decode(); // 译码并分配tag
+  void comb_branch(); // 分支处理
+  void comb_fire();  // 发射握手与分支tag推进
+  void seq();              // 时钟跳变，状态更新
+
+  // 状态
+  reg<BR_MASK_WIDTH> now_br_mask;
+  reg<BR_MASK_WIDTH> br_mask_cp[MAX_BR_NUM];
+  reg<1> tag_vec[MAX_BR_NUM];
+  ExuIdIO br_latch;
+
+  // 下一周期状态
+  wire<BR_MASK_WIDTH> now_br_mask_1;
+  wire<BR_MASK_WIDTH> br_mask_cp_1[MAX_BR_NUM];
+  wire<1> tag_vec_1[MAX_BR_NUM];
+  ExuIdIO br_latch_1;
+};

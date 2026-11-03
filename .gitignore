@@ -44,3 +44,9 @@ __pycache__/
 .vscode/
 .idea/
 .clangd/
+
+# lockstep reference symlinks made by scripts/*_shadow.sh (sources live in tests/*_ref)
+/*_ref
+/build/
+/results/*
+!/results/baseline/

@@ -1,0 +1,1226 @@
+#ifndef BPU_TOP_H
+#define BPU_TOP_H
+
+#include "frontend.h"
+#include "wire_types.h"
+#include "./dir_predictor/TAGE_top.h"
+#include "./type_predictor/TypePredictor.h"
+#include "./target_predictor/BTB_top.h"
+#include "BPU/BPU_configs.h"
+#include <cstdint>
+
+#include <cassert>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <vector>
+
+class BPU_TOP;             // 前向声明类
+extern BPU_TOP *g_bpu_top; // 再声明全局指针
+
+struct BankSelCombIn {
+  pc_t pc;
+};
+
+struct BankSelCombOut {
+  bpu_bank_sel_t bank_sel;
+};
+
+inline void bank_sel_comb(const BankSelCombIn &in, BankSelCombOut &out) {
+  out = BankSelCombOut{};
+  out.bank_sel = static_cast<bpu_bank_sel_t>((in.pc >> 2) % BPU_BANK_NUM);
+}
+
+struct BankPcCombIn {
+  pc_t pc;
+};
+
+struct BankPcCombOut {
+  pc_t bank_pc;
+};
+
+inline void bank_pc_comb(const BankPcCombIn &in, BankPcCombOut &out) {
+  out = BankPcCombOut{};
+  if ((BPU_BANK_NUM & (BPU_BANK_NUM - 1)) != 0) {
+    uint32_t bank_pc = in.pc >> 2;
+    bank_pc = bank_pc / BPU_BANK_NUM;
+    bank_pc = bank_pc << 2;
+    out.bank_pc = bank_pc;
+    return;
+  }
+
+  uint32_t n = BPU_BANK_NUM;
+  int highest_bit_pos = 0;
+  while (n > 1) {
+    n >>= 1;
+    highest_bit_pos++;
+  }
+  out.bank_pc = in.pc >> highest_bit_pos;
+}
+
+
+
+
+
+
+
+
+inline tage_path_hist_t tage_path_update_value(tage_path_hist_t current_path, pc_t pc,
+                                               wire1_t dir) {
+  uint32_t path = static_cast<uint32_t>(current_path) & TAGE_SC_PATH_MASK;
+  uint32_t pc_mix = (pc >> 2);
+  pc_mix ^= (pc_mix >> 5);
+  pc_mix ^= (pc_mix >> 11);
+  pc_mix ^= dir ? 0x9e3779b9u : 0x7f4a7c15u;
+  path = ((path << 1) ^ pc_mix) & TAGE_SC_PATH_MASK;
+  return static_cast<tage_path_hist_t>(path);
+}
+
+
+class BPU_TOP {
+public:
+  struct InputPayload {
+    // I-Cache & Backend Control
+    wire1_t refetch;
+    fetch_addr_t refetch_address;
+    wire1_t icache_read_ready;
+
+    // Update Interface
+    pc_t in_update_base_pc[COMMIT_WIDTH];
+    wire1_t in_upd_valid[COMMIT_WIDTH];
+    wire1_t in_actual_dir[COMMIT_WIDTH];
+    br_type_t in_actual_br_type[COMMIT_WIDTH]; // 3-bit each
+    target_addr_t in_actual_targets[COMMIT_WIDTH];
+
+    wire1_t in_pred_dir[COMMIT_WIDTH];
+    wire1_t in_alt_pred[COMMIT_WIDTH];
+    pcpn_t in_pcpn[COMMIT_WIDTH];    // 3-bit each
+    pcpn_t in_altpcpn[COMMIT_WIDTH]; // 3-bit each
+    tage_tag_t in_tage_tags[COMMIT_WIDTH][TN_MAX];
+    tage_idx_t in_tage_idxs[COMMIT_WIDTH][TN_MAX];
+    wire1_t in_sc_used[COMMIT_WIDTH];
+    wire1_t in_sc_pred[COMMIT_WIDTH];
+    tage_scl_meta_sum_t in_sc_sum[COMMIT_WIDTH];
+    tage_scl_meta_idx_t in_sc_idx[COMMIT_WIDTH][BPU_SCL_META_NTABLE];
+    wire1_t in_loop_used[COMMIT_WIDTH];
+    wire1_t in_loop_hit[COMMIT_WIDTH];
+    wire1_t in_loop_pred[COMMIT_WIDTH];
+    tage_loop_meta_idx_t in_loop_idx[COMMIT_WIDTH];
+    tage_loop_meta_tag_t in_loop_tag[COMMIT_WIDTH];
+  };
+
+  struct OutputPayload {
+    fetch_addr_t fetch_address;
+    wire1_t icache_read_valid;
+    fetch_addr_t predict_next_fetch_address;
+    wire1_t PTAB_write_enable;
+    wire1_t out_pred_dir[FETCH_WIDTH];
+    PredMeta meta;
+    pc_t out_pred_base_pc;
+    wire1_t update_queue_full;
+  };
+
+  // 顶层三阶段兼容接口的数据容器
+  struct ReadData {
+    struct QueueEntrySnapshot {
+      pc_t base_pc;
+      wire1_t valid_mask;
+      wire1_t actual_dir;
+      br_type_t br_type;
+      target_addr_t targets;
+      wire1_t pred_dir;
+      wire1_t alt_pred;
+      pcpn_t pcpn;
+      pcpn_t altpcpn;
+      tage_tag_t tage_tags[TN_MAX];
+      tage_idx_t tage_idxs[TN_MAX];
+      wire1_t sc_used;
+      wire1_t sc_pred;
+      tage_scl_meta_sum_t sc_sum;
+      tage_scl_meta_idx_t sc_idx[BPU_SCL_META_NTABLE];
+      wire1_t loop_used;
+      wire1_t loop_hit;
+      wire1_t loop_pred;
+      tage_loop_meta_idx_t loop_idx;
+      tage_loop_meta_tag_t loop_tag;
+    };
+
+    bpu_state_t state_snapshot;
+    pc_t pc_reg_snapshot;
+    wire1_t pc_can_send_to_icache_snapshot;
+    pc_t pred_base_pc_fired_snapshot;
+    wire1_t do_pred_latch_snapshot;
+    wire1_t do_upd_latch_snapshot[BPU_BANK_NUM];
+
+    wire1_t tage_calc_pred_dir_latch_snapshot[FETCH_WIDTH];
+    wire1_t tage_calc_altpred_latch_snapshot[FETCH_WIDTH];
+    pcpn_t tage_calc_pcpn_latch_snapshot[FETCH_WIDTH];
+    pcpn_t tage_calc_altpcpn_latch_snapshot[FETCH_WIDTH];
+    tage_tag_t tage_pred_calc_tags_latch_snapshot[FETCH_WIDTH][TN_MAX];
+    tage_idx_t tage_pred_calc_idxs_latch_snapshot[FETCH_WIDTH][TN_MAX];
+    wire1_t tage_result_valid_latch_snapshot[FETCH_WIDTH];
+    target_addr_t btb_pred_target_latch_snapshot[FETCH_WIDTH];
+    wire1_t btb_result_valid_latch_snapshot[FETCH_WIDTH];
+    wire1_t tage_done_snapshot[BPU_BANK_NUM];
+    wire1_t btb_done_snapshot[BPU_BANK_NUM];
+
+    queue_ptr_t q_wr_ptr_snapshot[BPU_BANK_NUM];
+    queue_ptr_t q_rd_ptr_snapshot[BPU_BANK_NUM];
+    queue_count_t q_count_snapshot[BPU_BANK_NUM];
+
+    wire1_t ras_has_entry_snapshot;
+    target_addr_t ras_top_snapshot;
+    ras_count_t ras_count_snapshot;
+    wire1_t Arch_GHR_snapshot[GHR_LENGTH];
+    wire1_t Spec_GHR_snapshot[GHR_LENGTH];
+    wire32_t Arch_FH_snapshot[FH_N_MAX][TN_MAX];
+    wire32_t Spec_FH_snapshot[FH_N_MAX][TN_MAX];
+    tage_path_hist_t Arch_PATH_snapshot;
+    tage_path_hist_t Spec_PATH_snapshot;
+    target_addr_t Arch_ras_stack_snapshot[RAS_DEPTH];
+    ras_count_t Arch_ras_count_snapshot;
+    target_addr_t Spec_ras_stack_snapshot[RAS_DEPTH];
+    ras_count_t Spec_ras_count_snapshot;
+
+    pc_t pred_base_pc;
+    fetch_addr_t boundary_addr;
+    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
+    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
+    pc_t do_pred_for_this_pc[FETCH_WIDTH];
+    br_type_t pred_inst_type_snapshot[FETCH_WIDTH];
+
+    wire1_t q_full[BPU_BANK_NUM];
+    wire1_t q_empty[BPU_BANK_NUM];
+    QueueEntrySnapshot q_data[BPU_BANK_NUM];
+
+    wire1_t going_to_do_pred;
+    wire1_t going_to_do_upd[BPU_BANK_NUM];
+    wire1_t going_to_do_upd_any;
+    wire1_t trans_ready_to_fire;
+    wire1_t set_submodule_input;
+
+    TAGE_TOP::InputPayload tage_in[BPU_BANK_NUM];
+    BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
+    TypePredictor::ReadData type_rd;
+    TAGE_TOP::ReadData tage_rd[BPU_BANK_NUM];
+    BTB_TOP::ReadData btb_rd[BPU_BANK_NUM];
+  };
+
+  struct UpdateRequest {
+    OutputPayload out_regs;
+    bpu_state_t next_state;
+    pc_t pc_reg_next;
+    wire1_t pc_can_send_to_icache_next;
+    wire1_t do_pred_latch_next;
+    wire1_t do_upd_latch_next[BPU_BANK_NUM];
+    pc_t pred_base_pc_fired_next;
+    wire1_t Spec_GHR_next[GHR_LENGTH];
+    wire1_t Arch_GHR_next[GHR_LENGTH];
+    wire32_t Spec_FH_next[FH_N_MAX][TN_MAX];
+    wire32_t Arch_FH_next[FH_N_MAX][TN_MAX];
+    tage_path_hist_t Spec_PATH_next;
+    tage_path_hist_t Arch_PATH_next;
+    target_addr_t Arch_ras_stack_next[RAS_DEPTH];
+    ras_count_t Arch_ras_count_next;
+    target_addr_t Spec_ras_stack_next[RAS_DEPTH];
+    ras_count_t Spec_ras_count_next;
+    queue_ptr_t q_wr_ptr_next[BPU_BANK_NUM];
+    queue_ptr_t q_rd_ptr_next[BPU_BANK_NUM];
+    queue_count_t q_count_next[BPU_BANK_NUM];
+    wire1_t q_entry_we[COMMIT_WIDTH];
+    bpu_bank_sel_t q_entry_bank[COMMIT_WIDTH];
+    queue_ptr_t q_entry_slot[COMMIT_WIDTH];
+    ReadData::QueueEntrySnapshot q_entry_data[COMMIT_WIDTH];
+    pc_t pred_base_pc;
+    wire1_t do_pred_on_this_pc[FETCH_WIDTH];
+    bpu_bank_sel_ext_t this_pc_bank_sel[FETCH_WIDTH];
+    pc_t do_pred_for_this_pc[FETCH_WIDTH];
+
+    wire1_t going_to_do_pred;
+    wire1_t going_to_do_upd[BPU_BANK_NUM];
+
+    wire1_t q_push_en[BPU_BANK_NUM];
+    wire1_t q_pop_en[BPU_BANK_NUM];
+
+    wire1_t final_pred_dir[FETCH_WIDTH];
+    fetch_addr_t next_fetch_addr_calc;
+    wire1_t should_update_spec_hist;
+
+    TAGE_TOP::InputPayload tage_in[BPU_BANK_NUM];
+    BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
+    TypePredictor::InputPayload type_in;
+    TypePredictor::CombResult type_req;
+    TAGE_TOP::CombResult tage_req[BPU_BANK_NUM];
+    BTB_TOP::CombResult btb_req[BPU_BANK_NUM];
+
+    wire1_t tage_done_next[BPU_BANK_NUM];
+    wire1_t btb_done_next[BPU_BANK_NUM];
+    wire1_t tage_calc_pred_dir_latch_next[FETCH_WIDTH];
+    wire1_t tage_calc_altpred_latch_next[FETCH_WIDTH];
+    pcpn_t tage_calc_pcpn_latch_next[FETCH_WIDTH];
+    pcpn_t tage_calc_altpcpn_latch_next[FETCH_WIDTH];
+    tage_tag_t tage_pred_calc_tags_latch_next[FETCH_WIDTH][TN_MAX];
+    tage_idx_t tage_pred_calc_idxs_latch_next[FETCH_WIDTH][TN_MAX];
+    wire1_t tage_result_valid_latch_next[FETCH_WIDTH];
+    target_addr_t btb_pred_target_latch_next[FETCH_WIDTH];
+    wire1_t btb_result_valid_latch_next[FETCH_WIDTH];
+  };
+
+
+
+
+  struct BpuPostReadReqCombOut {
+    TypePredictor::InputPayload type_in;
+    TAGE_TOP::InputPayload tage_in[BPU_BANK_NUM];
+    BTB_TOP::InputPayload btb_in[BPU_BANK_NUM];
+  };
+
+
+
+
+
+  
+  
+
+
+
+
+private:
+  // ========================================================================
+  // 内部数据结构 (Internal Structures)
+  // ========================================================================
+
+  // Update Queue Entry Structure --- for one bank slot!
+  struct QueueEntry {
+    pc_t base_pc;
+    wire1_t valid_mask;
+    wire1_t actual_dir;
+    br_type_t br_type;
+    target_addr_t targets;
+    wire1_t pred_dir;
+    wire1_t alt_pred;
+    pcpn_t pcpn;
+    pcpn_t altpcpn;
+    tage_tag_t tage_tags[TN_MAX];
+    tage_idx_t tage_idxs[TN_MAX];
+    wire1_t sc_used;
+    wire1_t sc_pred;
+    tage_scl_meta_sum_t sc_sum;
+    tage_scl_meta_idx_t sc_idx[BPU_SCL_META_NTABLE];
+    wire1_t loop_used;
+    wire1_t loop_hit;
+    wire1_t loop_pred;
+    tage_loop_meta_idx_t loop_idx;
+    tage_loop_meta_tag_t loop_tag;
+  };
+
+  
+  enum State {
+    S_IDLE = 0,
+    S_WORKING = 1,  // TAGE和BTB并行执行
+    S_REFEATCH = 2  // refetch时的并行更新
+  };
+
+  // ========================================================================
+  // Registers & Memory
+  // ========================================================================
+
+  // Global History Registers & Folded Histories (Arch + Spec)
+  // GHR/FH从TAGE迁移到BPU统一管理
+  wire1_t Arch_GHR[GHR_LENGTH];
+  wire1_t Spec_GHR[GHR_LENGTH];
+  wire32_t Arch_FH[FH_N_MAX][TN_MAX];
+  wire32_t Spec_FH[FH_N_MAX][TN_MAX];
+  tage_path_hist_t Arch_PATH;
+  tage_path_hist_t Spec_PATH;
+  target_addr_t Arch_ras_stack[RAS_DEPTH];
+  ras_count_t Arch_ras_count;
+  target_addr_t Spec_ras_stack[RAS_DEPTH];
+  ras_count_t Spec_ras_count;
+
+  // FH constants (从TAGE复制，用于调用FH_update函数)
+  const uint32_t ghr_length[TN_MAX] = {8, 13, 32, 119};
+  const uint32_t fh_length[FH_N_MAX][TN_MAX] = {
+      {8, 11, 11, 11}, {8, 8, 8, 8}, {7, 7, 7, 7}};
+
+  // PC & Memory
+  pc_t pc_reg;
+  State state;
+  // Transaction Flags (Latched in IDLE) // doing prediction and updating
+  wire1_t do_pred_latch;
+  wire1_t do_upd_latch[BPU_BANK_NUM]; // indicate whether to update this bank
+
+  wire1_t pc_can_send_to_icache;            // 当前pc是不是可以发送给icache
+  pc_t pred_base_pc_fired; // 当前预测流程中正在处理的pc基地址
+
+  // 存储TAGE和BTB的预测结果（缓存先到的结果）对于FETCH_WIDTH建立！
+  wire1_t tage_calc_pred_dir_latch[FETCH_WIDTH];
+  wire1_t tage_calc_altpred_latch[FETCH_WIDTH];
+  pcpn_t tage_calc_pcpn_latch[FETCH_WIDTH];
+  pcpn_t tage_calc_altpcpn_latch[FETCH_WIDTH];
+  tage_tag_t tage_pred_calc_tags_latch[FETCH_WIDTH][TN_MAX];
+  tage_idx_t tage_pred_calc_idxs_latch[FETCH_WIDTH][TN_MAX];
+  wire1_t tage_result_valid_latch[FETCH_WIDTH]; // 标记TAGE预测结果是否已缓存
+  target_addr_t btb_pred_target_latch[FETCH_WIDTH];
+  wire1_t btb_result_valid_latch[FETCH_WIDTH]; // 标记BTB预测结果是否已缓存
+
+  // Done信号：标记每个bank的TAGE/BTB是否完成
+  wire1_t tage_done[BPU_BANK_NUM];  // TAGE完成信号
+  wire1_t btb_done[BPU_BANK_NUM];   // BTB完成信号
+
+  // Queue Registers
+  QueueEntry update_queue[Q_DEPTH][BPU_BANK_NUM];
+  queue_ptr_t q_wr_ptr[BPU_BANK_NUM];
+  queue_ptr_t q_rd_ptr[BPU_BANK_NUM];
+  queue_count_t q_count[BPU_BANK_NUM];
+
+  // bool out_pred_dir_latch[FETCH_WIDTH];
+  // bool out_alt_pred_latch[FETCH_WIDTH];
+  // uint8_t out_pcpn_latch[FETCH_WIDTH];
+  // uint8_t out_altpcpn_latch[FETCH_WIDTH];
+  // uint8_t out_tage_pred_calc_tags_latch_latch[FETCH_WIDTH][TN_MAX];
+  // uint32_t out_tage_pred_calc_idxs_latch_latch[FETCH_WIDTH][TN_MAX];
+
+  // Sub-modules
+  TAGE_TOP *tage_inst[BPU_BANK_NUM];
+  BTB_TOP *btb_inst[BPU_BANK_NUM];
+  TypePredictor *type_pred_inst;
+
+  
+  // 2-Ahead Predictor Registers
+  // 类似pc_reg的2-ahead reg,跟pc_reg保持同步
+  // 指示的是上一个的2-ahead预测器是否有效
+  wire1_t saved_2ahead_pred_valid; // may not used
+  // goes to PTAB, 需要跟PTAB相关信号同步
+  // goes to fetch_address_FIFO, 需要跟fetch_address_FIFO相关信号同步
+  fetch_addr_t saved_mini_flush_target; // may not used
+
+  void ras_push(target_addr_t *stack, ras_count_t &count, target_addr_t value) const {
+    if (count < RAS_DEPTH) {
+      stack[count++] = value;
+      return;
+    }
+    for (int i = 1; i < RAS_DEPTH; ++i) {
+      stack[i - 1] = stack[i];
+    }
+    stack[RAS_DEPTH - 1] = value;
+  }
+
+  void ras_pop(ras_count_t &count) const {
+    if (count > 0) {
+      count--;
+    }
+  }
+
+
+public:
+  // ========================================================================
+  // 构造与析构
+  // ========================================================================
+  BPU_TOP() {
+    // 注册全局指针，让TAGE可以访问BPU的GHR/FH
+    g_bpu_top = this;
+    
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      tage_inst[i] = new TAGE_TOP();
+      btb_inst[i] = new BTB_TOP();
+    }
+    type_pred_inst = new TypePredictor();
+
+    reset_internal_all();
+  }
+
+  void bpu_seq_read(const InputPayload &inp, ReadData &rd) const {
+    std::memset(&rd, 0, sizeof(ReadData));
+
+    rd.state_snapshot = state;
+    rd.pc_reg_snapshot = pc_reg;
+    rd.pc_can_send_to_icache_snapshot = pc_can_send_to_icache;
+    rd.pred_base_pc_fired_snapshot = pred_base_pc_fired;
+    rd.do_pred_latch_snapshot = do_pred_latch;
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      rd.do_upd_latch_snapshot[i] = do_upd_latch[i];
+      rd.tage_done_snapshot[i] = tage_done[i];
+      rd.btb_done_snapshot[i] = btb_done[i];
+      rd.q_wr_ptr_snapshot[i] = q_wr_ptr[i];
+      rd.q_rd_ptr_snapshot[i] = q_rd_ptr[i];
+      rd.q_count_snapshot[i] = q_count[i];
+    }
+
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      rd.tage_calc_pred_dir_latch_snapshot[i] = tage_calc_pred_dir_latch[i];
+      rd.tage_calc_altpred_latch_snapshot[i] = tage_calc_altpred_latch[i];
+      rd.tage_calc_pcpn_latch_snapshot[i] = tage_calc_pcpn_latch[i];
+      rd.tage_calc_altpcpn_latch_snapshot[i] = tage_calc_altpcpn_latch[i];
+      rd.tage_result_valid_latch_snapshot[i] = tage_result_valid_latch[i];
+      rd.btb_pred_target_latch_snapshot[i] = btb_pred_target_latch[i];
+      rd.btb_result_valid_latch_snapshot[i] = btb_result_valid_latch[i];
+      for (int k = 0; k < TN_MAX; k++) {
+        rd.tage_pred_calc_tags_latch_snapshot[i][k] = tage_pred_calc_tags_latch[i][k];
+        rd.tage_pred_calc_idxs_latch_snapshot[i][k] = tage_pred_calc_idxs_latch[i][k];
+      }
+    }
+
+    std::memcpy(rd.Arch_GHR_snapshot, Arch_GHR, sizeof(rd.Arch_GHR_snapshot));
+    std::memcpy(rd.Spec_GHR_snapshot, Spec_GHR, sizeof(rd.Spec_GHR_snapshot));
+    std::memcpy(rd.Arch_FH_snapshot, Arch_FH, sizeof(rd.Arch_FH_snapshot));
+    std::memcpy(rd.Spec_FH_snapshot, Spec_FH, sizeof(rd.Spec_FH_snapshot));
+    rd.Arch_PATH_snapshot = Arch_PATH;
+    rd.Spec_PATH_snapshot = Spec_PATH;
+    std::memcpy(rd.Arch_ras_stack_snapshot, Arch_ras_stack, sizeof(rd.Arch_ras_stack_snapshot));
+    rd.Arch_ras_count_snapshot = Arch_ras_count;
+    std::memcpy(rd.Spec_ras_stack_snapshot, Spec_ras_stack, sizeof(rd.Spec_ras_stack_snapshot));
+    rd.Spec_ras_count_snapshot = Spec_ras_count;
+    rd.ras_count_snapshot = 0;
+    rd.ras_has_entry_snapshot = false;
+    rd.ras_top_snapshot = 0;
+  }
+
+  // Address/queue stage of the read phase: everything that is derived from the
+  // registered state and this cycle's inputs, written straight into rd.
+  void bpu_data_read(const InputPayload &inp, ReadData &rd) const {
+    const bool use_arch_ras = inp.refetch;
+    rd.ras_count_snapshot =
+        use_arch_ras ? rd.Arch_ras_count_snapshot : rd.Spec_ras_count_snapshot;
+    rd.ras_has_entry_snapshot = (rd.ras_count_snapshot > 0);
+    if (rd.ras_has_entry_snapshot) {
+      const ras_index_t top = rd.ras_count_snapshot - 1;
+      rd.ras_top_snapshot =
+          use_arch_ras ? rd.Arch_ras_stack_snapshot[top] : rd.Spec_ras_stack_snapshot[top];
+    } else {
+      rd.ras_top_snapshot = 0;
+    }
+
+    rd.pred_base_pc = inp.refetch ? inp.refetch_address : rd.pc_reg_snapshot;
+    const uint32_t cache_mask = ~(ICACHE_LINE_SIZE - 1);
+    const uint32_t pc_plus_width = rd.pred_base_pc + (FETCH_WIDTH * 4);
+    rd.boundary_addr =
+        ((rd.pred_base_pc & cache_mask) != (pc_plus_width & cache_mask))
+            ? (pc_plus_width & cache_mask)
+            : pc_plus_width;
+
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      rd.do_pred_for_this_pc[i] = rd.pred_base_pc + (i * 4);
+      if (rd.do_pred_for_this_pc[i] < rd.boundary_addr) {
+        BankSelCombOut bank_sel_out{};
+        bank_sel_comb(BankSelCombIn{rd.do_pred_for_this_pc[i]}, bank_sel_out);
+        rd.this_pc_bank_sel[i] = bank_sel_out.bank_sel;
+        rd.do_pred_on_this_pc[i] = true;
+      } else {
+        rd.this_pc_bank_sel[i] = BPU_BANK_SEL_INVALID;
+        rd.do_pred_on_this_pc[i] = false;
+      }
+    }
+
+    rd.going_to_do_pred =
+        rd.pc_can_send_to_icache_snapshot && (inp.icache_read_ready || inp.refetch);
+    rd.going_to_do_upd_any = false;
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      rd.going_to_do_upd[i] = (rd.q_count_snapshot[i] != 0);
+      rd.going_to_do_upd_any |= rd.going_to_do_upd[i];
+      if (rd.going_to_do_upd[i]) {
+        const QueueEntry &entry = update_queue[rd.q_rd_ptr_snapshot[i]][i];
+        rd.q_data[i].base_pc = entry.base_pc;
+        rd.q_data[i].valid_mask = entry.valid_mask;
+        rd.q_data[i].actual_dir = entry.actual_dir;
+        rd.q_data[i].br_type = entry.br_type;
+        rd.q_data[i].targets = entry.targets;
+        rd.q_data[i].pred_dir = entry.pred_dir;
+        rd.q_data[i].alt_pred = entry.alt_pred;
+        rd.q_data[i].pcpn = entry.pcpn;
+        rd.q_data[i].altpcpn = entry.altpcpn;
+        for (int k = 0; k < TN_MAX; k++) {
+          rd.q_data[i].tage_tags[k] = entry.tage_tags[k];
+          rd.q_data[i].tage_idxs[k] = entry.tage_idxs[k];
+        }
+        rd.q_data[i].sc_used = entry.sc_used;
+        rd.q_data[i].sc_pred = entry.sc_pred;
+        rd.q_data[i].sc_sum = entry.sc_sum;
+        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+          rd.q_data[i].sc_idx[t] = entry.sc_idx[t];
+        }
+        rd.q_data[i].loop_used = entry.loop_used;
+        rd.q_data[i].loop_hit = entry.loop_hit;
+        rd.q_data[i].loop_pred = entry.loop_pred;
+        rd.q_data[i].loop_idx = entry.loop_idx;
+        rd.q_data[i].loop_tag = entry.loop_tag;
+      } else {
+        std::memset(&rd.q_data[i], 0, sizeof(rd.q_data[i]));
+      }
+    }
+    rd.set_submodule_input = rd.going_to_do_pred || rd.going_to_do_upd_any;
+  }
+
+
+  void bpu_post_read_req_comb(const InputPayload &inp, const ReadData &rd,
+                              BpuPostReadReqCombOut &out) const {
+    out = BpuPostReadReqCombOut{};
+    for (int b = 0; b < BPU_BANK_NUM; b++) {
+      for (int k = 0; k < FH_N_MAX; k++) {
+        for (int i = 0; i < TN_MAX; i++) {
+          out.tage_in[b].fh_in[k][i] = rd.Spec_FH_snapshot[k][i];
+        }
+      }
+      for (int i = 0; i < GHR_LENGTH; i++) {
+        out.tage_in[b].ghr_in[i] = rd.Spec_GHR_snapshot[i];
+      }
+      out.tage_in[b].path_in = rd.Spec_PATH_snapshot;
+    }
+
+
+    if (rd.set_submodule_input) {
+      if (rd.going_to_do_pred) {
+        bool pred_req_sent[BPU_BANK_NUM];
+        std::memset(pred_req_sent, 0, sizeof(pred_req_sent));
+        for (int i = 0; i < FETCH_WIDTH; i++) {
+          if (!rd.do_pred_on_this_pc[i]) {
+            continue;
+          }
+          out.type_in.pred_valid[i] = true;
+          out.type_in.pred_pc[i] = rd.do_pred_for_this_pc[i];
+          const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
+          if (bank_sel < BPU_BANK_NUM && !pred_req_sent[bank_sel]) {
+            BankPcCombOut bank_pc_out{};
+            bank_pc_comb(BankPcCombIn{rd.do_pred_for_this_pc[i]}, bank_pc_out);
+            out.tage_in[bank_sel].pred_req = true;
+            out.tage_in[bank_sel].pc_pred_in = bank_pc_out.bank_pc;
+            out.btb_in[bank_sel].pred_req = true;
+            out.btb_in[bank_sel].pred_pc = bank_pc_out.bank_pc;
+            out.btb_in[bank_sel].pred_type_in = BR_NONCTL;
+            pred_req_sent[bank_sel] = true;
+          }
+        }
+      }
+
+      for (int i = 0; i < BPU_BANK_NUM; i++) {
+        if (!rd.going_to_do_upd[i]) {
+          continue;
+        }
+        BankPcCombOut bank_pc_out{};
+        bank_pc_comb(BankPcCombIn{rd.q_data[i].base_pc}, bank_pc_out);
+        if (rd.q_data[i].br_type == BR_DIRECT) {
+          out.tage_in[i].update_en = rd.q_data[i].valid_mask;
+          out.tage_in[i].pc_update_in = bank_pc_out.bank_pc;
+          out.tage_in[i].real_dir = rd.q_data[i].actual_dir;
+          out.tage_in[i].pred_in = rd.q_data[i].pred_dir;
+          out.tage_in[i].alt_pred_in = rd.q_data[i].alt_pred;
+          out.tage_in[i].pcpn_in = rd.q_data[i].pcpn;
+          out.tage_in[i].altpcpn_in = rd.q_data[i].altpcpn;
+          out.tage_in[i].sc_used_in = rd.q_data[i].sc_used;
+          out.tage_in[i].sc_pred_in = rd.q_data[i].sc_pred;
+          out.tage_in[i].sc_sum_in = rd.q_data[i].sc_sum;
+          for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+            out.tage_in[i].sc_idx_in[t] = rd.q_data[i].sc_idx[t];
+          }
+          out.tage_in[i].loop_used_in = rd.q_data[i].loop_used;
+          out.tage_in[i].loop_hit_in = rd.q_data[i].loop_hit;
+          out.tage_in[i].loop_pred_in = rd.q_data[i].loop_pred;
+          out.tage_in[i].loop_idx_in = rd.q_data[i].loop_idx;
+          out.tage_in[i].loop_tag_in = rd.q_data[i].loop_tag;
+          for (int k = 0; k < TN_MAX; k++) {
+            out.tage_in[i].tage_tag_flat_in[k] = rd.q_data[i].tage_tags[k];
+            out.tage_in[i].tage_idx_flat_in[k] = rd.q_data[i].tage_idxs[k];
+          }
+        }
+
+        out.btb_in[i].upd_valid = rd.q_data[i].valid_mask;
+        out.btb_in[i].upd_pc = bank_pc_out.bank_pc;
+        out.btb_in[i].upd_actual_addr = rd.q_data[i].targets;
+        out.btb_in[i].upd_actual_dir = rd.q_data[i].actual_dir;
+        out.btb_in[i].upd_br_type_in = rd.q_data[i].br_type;
+      }
+    }
+
+    for (int i = 0; i < COMMIT_WIDTH; ++i) {
+      out.type_in.upd_valid[i] = inp.in_upd_valid[i];
+      out.type_in.upd_pc[i] = inp.in_update_base_pc[i];
+      out.type_in.upd_br_type[i] = inp.in_actual_br_type[i];
+    }
+  }
+
+  void bpu_submodule_bind_comb(const ReadData &rd,
+                              const BTB_TOP::InputPayload (&btb_in)[BPU_BANK_NUM],
+                              const TypePredictor::OutputPayload &type_out,
+                              BTB_TOP::InputPayload (&btb_in_with_type)[BPU_BANK_NUM]) const {
+    for (int i = 0; i < BPU_BANK_NUM; ++i) {
+      btb_in_with_type[i] = btb_in[i];
+    }
+    for (int i = 0; i < FETCH_WIDTH; ++i) {
+      if (!rd.do_pred_on_this_pc[i]) {
+        continue;
+      }
+      const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
+      if (bank_sel >= BPU_BANK_NUM) {
+        continue;
+      }
+      if (btb_in_with_type[bank_sel].pred_req) {
+        btb_in_with_type[bank_sel].pred_type_in = type_out.pred_type[i];
+      }
+    }
+  }
+
+  void bpu_predict_main_comb(const InputPayload &inp, const ReadData &rd,
+                             const TypePredictor::OutputPayload &type_out,
+                             const TAGE_TOP::OutputPayload (&tage_out)[BPU_BANK_NUM],
+                             const BTB_TOP::OutputPayload (&btb_out)[BPU_BANK_NUM],
+                             OutputPayload &out, UpdateRequest &req) const {
+    out.icache_read_valid = rd.pc_can_send_to_icache_snapshot && !inp.refetch;
+    out.fetch_address = rd.pred_base_pc;
+    out.out_pred_base_pc = out.fetch_address;
+    req.next_fetch_addr_calc = rd.boundary_addr;
+
+    bool found_taken_branch = false;
+    if (rd.going_to_do_pred) {
+      for (int i = 0; i < FETCH_WIDTH; ++i) {
+        if (!rd.do_pred_on_this_pc[i]) {
+          continue;
+        }
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
+        if (bank_sel >= BPU_BANK_NUM) {
+          continue;
+        }
+        const br_type_t p_type = type_out.pred_type[i];
+        const bool tage_valid = tage_out[bank_sel].tage_pred_out_valid;
+        const bool btb_valid = btb_out[bank_sel].btb_pred_out_valid;
+        bool pred_taken = false;
+        if (p_type == BR_NONCTL) {
+          pred_taken = false;
+        } else if (p_type == BR_RET || p_type == BR_CALL || p_type == BR_IDIRECT ||
+                   p_type == BR_JAL) {
+          pred_taken = true;
+        } else {
+          pred_taken = tage_valid ? tage_out[bank_sel].pred_out : false;
+        }
+        req.final_pred_dir[i] = pred_taken;
+        req.tage_calc_pred_dir_latch_next[i] = pred_taken;
+        req.tage_calc_altpred_latch_next[i] =
+            tage_valid ? tage_out[bank_sel].alt_pred_out : false;
+        req.tage_calc_pcpn_latch_next[i] =
+            tage_valid ? tage_out[bank_sel].pcpn_out : static_cast<pcpn_t>(0);
+        req.tage_calc_altpcpn_latch_next[i] =
+            tage_valid ? tage_out[bank_sel].altpcpn_out : static_cast<pcpn_t>(0);
+        req.tage_result_valid_latch_next[i] = tage_valid;
+        req.btb_pred_target_latch_next[i] =
+            btb_valid ? btb_out[bank_sel].pred_target : rd.do_pred_for_this_pc[i] + 4;
+        req.btb_result_valid_latch_next[i] = btb_valid;
+        for (int k = 0; k < TN_MAX; ++k) {
+          req.tage_pred_calc_tags_latch_next[i][k] =
+              tage_out[bank_sel].tage_tag_flat_out[k];
+          req.tage_pred_calc_idxs_latch_next[i][k] =
+              tage_out[bank_sel].tage_idx_flat_out[k];
+        }
+        out.meta.sc_used[i] = tage_valid ? tage_out[bank_sel].sc_used_out : false;
+        out.meta.sc_pred[i] = tage_valid ? tage_out[bank_sel].sc_pred_out : false;
+        out.meta.sc_sum[i] = tage_valid ? tage_out[bank_sel].sc_sum_out : 0;
+        for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+          out.meta.sc_idx[i][t] =
+              tage_valid ? tage_out[bank_sel].sc_idx_out[t] : 0;
+        }
+        out.meta.loop_used[i] = tage_valid ? tage_out[bank_sel].loop_used_out : false;
+        out.meta.loop_hit[i] = tage_valid ? tage_out[bank_sel].loop_hit_out : false;
+        out.meta.loop_pred[i] = tage_valid ? tage_out[bank_sel].loop_pred_out : false;
+        out.meta.loop_idx[i] = tage_valid ? tage_out[bank_sel].loop_idx_out : 0;
+        out.meta.loop_tag[i] = tage_valid ? tage_out[bank_sel].loop_tag_out : 0;
+
+        if (pred_taken && !found_taken_branch && btb_valid) {
+          uint32_t chosen_target = btb_out[bank_sel].pred_target;
+          if (p_type == BR_RET && rd.ras_has_entry_snapshot) {
+            chosen_target = rd.ras_top_snapshot;
+          }
+          req.next_fetch_addr_calc = chosen_target;
+          found_taken_branch = true;
+        }
+      }
+    }
+
+    out.predict_next_fetch_address = req.next_fetch_addr_calc;
+    out.PTAB_write_enable = rd.going_to_do_pred && !inp.refetch;
+    for (int i = 0; i < FETCH_WIDTH; ++i) {
+      out.out_pred_dir[i] = req.final_pred_dir[i];
+      out.meta.alt_pred[i] = req.tage_calc_altpred_latch_next[i];
+      out.meta.pcpn[i] = req.tage_calc_pcpn_latch_next[i];
+      out.meta.altpcpn[i] = req.tage_calc_altpcpn_latch_next[i];
+      for (int k = 0; k < TN_MAX; ++k) {
+        out.meta.tage_tag[i][k] = req.tage_pred_calc_tags_latch_next[i][k];
+        out.meta.tage_idx[i][k] = req.tage_pred_calc_idxs_latch_next[i][k];
+      }
+    }
+
+  }
+
+  
+  void bpu_hist_comb(const InputPayload &inp, const ReadData &rd,
+                     const TypePredictor::OutputPayload &type_out,
+                     UpdateRequest &req) const {
+    const wire1_t (&final_pred_dir)[FETCH_WIDTH] = req.final_pred_dir;
+        std::memcpy(req.Spec_GHR_next, rd.Spec_GHR_snapshot, sizeof(req.Spec_GHR_next));
+    std::memcpy(req.Arch_GHR_next, rd.Arch_GHR_snapshot, sizeof(req.Arch_GHR_next));
+    std::memcpy(req.Spec_FH_next, rd.Spec_FH_snapshot, sizeof(req.Spec_FH_next));
+    std::memcpy(req.Arch_FH_next, rd.Arch_FH_snapshot, sizeof(req.Arch_FH_next));
+    req.Spec_PATH_next = rd.Spec_PATH_snapshot;
+    req.Arch_PATH_next = rd.Arch_PATH_snapshot;
+    std::memcpy(req.Arch_ras_stack_next, rd.Arch_ras_stack_snapshot,
+                sizeof(req.Arch_ras_stack_next));
+    req.Arch_ras_count_next = rd.Arch_ras_count_snapshot;
+    std::memcpy(req.Spec_ras_stack_next, rd.Spec_ras_stack_snapshot,
+                sizeof(req.Spec_ras_stack_next));
+    req.Spec_ras_count_next = rd.Spec_ras_count_snapshot;
+    req.should_update_spec_hist = rd.going_to_do_pred && !inp.refetch;
+
+    if (req.should_update_spec_hist) {
+      bool spec_ghr_tmp[GHR_LENGTH];
+      uint32_t spec_fh_tmp[FH_N_MAX][TN_MAX];
+      tage_path_hist_t spec_path_tmp = req.Spec_PATH_next;
+      std::memcpy(spec_ghr_tmp, req.Spec_GHR_next, sizeof(spec_ghr_tmp));
+      std::memcpy(spec_fh_tmp, req.Spec_FH_next, sizeof(spec_fh_tmp));
+      for (int i = 0; i < FETCH_WIDTH; ++i) {
+        if (!rd.do_pred_on_this_pc[i]) {
+          continue;
+        }
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
+        if (bank_sel >= BPU_BANK_NUM) {
+          continue;
+        }
+        br_type_t p_type = type_out.pred_type[i];
+        const bool pred_taken = final_pred_dir[i];
+        if (p_type == BR_DIRECT) {
+          tage_hist_update_inplace(spec_ghr_tmp, spec_fh_tmp, pred_taken,
+                                   fh_length, ghr_length);
+          spec_path_tmp =
+              tage_path_update_value(spec_path_tmp, rd.do_pred_for_this_pc[i], pred_taken);
+        }
+        if (pred_taken) {
+          break;
+        }
+      }
+      std::memcpy(req.Spec_GHR_next, spec_ghr_tmp, sizeof(req.Spec_GHR_next));
+      std::memcpy(req.Spec_FH_next, spec_fh_tmp, sizeof(req.Spec_FH_next));
+      req.Spec_PATH_next = spec_path_tmp;
+
+      target_addr_t spec_ras_stack_tmp[RAS_DEPTH];
+      ras_count_t spec_ras_count_tmp = req.Spec_ras_count_next;
+      std::memcpy(spec_ras_stack_tmp, req.Spec_ras_stack_next, sizeof(spec_ras_stack_tmp));
+      for (int i = 0; i < FETCH_WIDTH; ++i) {
+        if (!rd.do_pred_on_this_pc[i]) {
+          continue;
+        }
+        const bpu_bank_sel_ext_t bank_sel = rd.this_pc_bank_sel[i];
+        if (bank_sel >= BPU_BANK_NUM) {
+          continue;
+        }
+        pc_t pc = rd.do_pred_for_this_pc[i];
+        br_type_t p_type = type_out.pred_type[i];
+        bool pred_taken = final_pred_dir[i];
+        if (!pred_taken) {
+          continue;
+        }
+        if (p_type == BR_CALL) {
+          ras_push(spec_ras_stack_tmp, spec_ras_count_tmp, pc + 4);
+        } else if (p_type == BR_RET) {
+          ras_pop(spec_ras_count_tmp);
+        }
+        break;
+      }
+      std::memcpy(req.Spec_ras_stack_next, spec_ras_stack_tmp, sizeof(req.Spec_ras_stack_next));
+      req.Spec_ras_count_next = spec_ras_count_tmp;
+    }
+
+    {
+      wire1_t arch_ghr_tmp[GHR_LENGTH];
+      wire32_t arch_fh_tmp[FH_N_MAX][TN_MAX];
+      tage_path_hist_t arch_path_tmp = req.Arch_PATH_next;
+      std::memcpy(arch_ghr_tmp, req.Arch_GHR_next, sizeof(arch_ghr_tmp));
+      std::memcpy(arch_fh_tmp, req.Arch_FH_next, sizeof(arch_fh_tmp));
+      bool arch_need_write = false;
+      for (int i = 0; i < COMMIT_WIDTH; ++i) {
+        if (!inp.in_upd_valid[i]) {
+          continue;
+        }
+        bool is_cond_upd = (inp.in_actual_br_type[i] == BR_DIRECT);
+        if (!is_cond_upd) {
+          continue;
+        }
+        bool real_dir = inp.in_actual_dir[i];
+        tage_hist_update_inplace(arch_ghr_tmp, arch_fh_tmp, real_dir, fh_length,
+                                 ghr_length);
+        const tage_path_hist_t next_path =
+            tage_path_update_value(arch_path_tmp, inp.in_update_base_pc[i], real_dir);
+        if (inp.in_pred_dir[i] != real_dir) {
+          std::memcpy(req.Spec_GHR_next, arch_ghr_tmp, sizeof(req.Spec_GHR_next));
+          std::memcpy(req.Spec_FH_next, arch_fh_tmp, sizeof(req.Spec_FH_next));
+          req.Spec_PATH_next = next_path;
+        }
+        arch_path_tmp = next_path;
+        arch_need_write = true;
+      }
+      if (arch_need_write) {
+        std::memcpy(req.Arch_GHR_next, arch_ghr_tmp, sizeof(req.Arch_GHR_next));
+        std::memcpy(req.Arch_FH_next, arch_fh_tmp, sizeof(req.Arch_FH_next));
+        req.Arch_PATH_next = arch_path_tmp;
+      }
+    }
+
+    {
+      target_addr_t arch_ras_stack_tmp[RAS_DEPTH];
+      ras_count_t arch_ras_count_tmp = req.Arch_ras_count_next;
+      std::memcpy(arch_ras_stack_tmp, req.Arch_ras_stack_next, sizeof(arch_ras_stack_tmp));
+      for (int i = 0; i < COMMIT_WIDTH; ++i) {
+        if (!inp.in_upd_valid[i]) {
+          continue;
+        }
+        br_type_t br_type = inp.in_actual_br_type[i];
+        if (br_type == BR_CALL) {
+          ras_push(arch_ras_stack_tmp, arch_ras_count_tmp, inp.in_update_base_pc[i] + 4);
+        } else if (br_type == BR_RET) {
+          ras_pop(arch_ras_count_tmp);
+        }
+      }
+      std::memcpy(req.Arch_ras_stack_next, arch_ras_stack_tmp,
+                  sizeof(req.Arch_ras_stack_next));
+      req.Arch_ras_count_next = arch_ras_count_tmp;
+    }
+  }
+
+  void bpu_queue_comb(const InputPayload &inp, const ReadData &rd,
+                      UpdateRequest &req, OutputPayload &out_payload) const {
+        for (int i = 0; i < BPU_BANK_NUM; ++i) {
+      req.q_wr_ptr_next[i] = rd.q_wr_ptr_snapshot[i];
+      req.q_rd_ptr_next[i] = rd.q_rd_ptr_snapshot[i];
+      req.q_count_next[i] = rd.q_count_snapshot[i];
+      if (rd.going_to_do_upd[i] && req.q_count_next[i] > 0) {
+        req.q_pop_en[i] = true;
+        req.q_rd_ptr_next[i] = (req.q_rd_ptr_next[i] + 1) % Q_DEPTH;
+        req.q_count_next[i]--;
+      }
+    }
+    bool bank_enqueued[BPU_BANK_NUM] = {};
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      if (!inp.in_upd_valid[i]) {
+        continue;
+      }
+      BankSelCombOut bank_sel_out{};
+      bank_sel_comb(BankSelCombIn{inp.in_update_base_pc[i]}, bank_sel_out);
+      int bank_sel = bank_sel_out.bank_sel;
+      if (bank_enqueued[bank_sel] || req.q_count_next[bank_sel] >= Q_DEPTH) {
+        continue;
+      }
+
+      bank_enqueued[bank_sel] = true;
+      req.q_push_en[bank_sel] = true;
+      req.q_entry_we[i] = true;
+      req.q_entry_bank[i] = bank_sel;
+      req.q_entry_slot[i] = req.q_wr_ptr_next[bank_sel];
+      req.q_entry_data[i].base_pc = inp.in_update_base_pc[i];
+      req.q_entry_data[i].valid_mask = inp.in_upd_valid[i];
+      req.q_entry_data[i].actual_dir = inp.in_actual_dir[i];
+      req.q_entry_data[i].pred_dir = inp.in_pred_dir[i];
+      req.q_entry_data[i].alt_pred = inp.in_alt_pred[i];
+      req.q_entry_data[i].br_type = inp.in_actual_br_type[i];
+      req.q_entry_data[i].targets = inp.in_actual_targets[i];
+      req.q_entry_data[i].pcpn = inp.in_pcpn[i];
+      req.q_entry_data[i].altpcpn = inp.in_altpcpn[i];
+      for (int k = 0; k < TN_MAX; k++) {
+        req.q_entry_data[i].tage_tags[k] = inp.in_tage_tags[i][k];
+        req.q_entry_data[i].tage_idxs[k] = inp.in_tage_idxs[i][k];
+      }
+      req.q_entry_data[i].sc_used = inp.in_sc_used[i];
+      req.q_entry_data[i].sc_pred = inp.in_sc_pred[i];
+      req.q_entry_data[i].sc_sum = inp.in_sc_sum[i];
+      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+        req.q_entry_data[i].sc_idx[t] = inp.in_sc_idx[i][t];
+      }
+      req.q_entry_data[i].loop_used = inp.in_loop_used[i];
+      req.q_entry_data[i].loop_hit = inp.in_loop_hit[i];
+      req.q_entry_data[i].loop_pred = inp.in_loop_pred[i];
+      req.q_entry_data[i].loop_idx = inp.in_loop_idx[i];
+      req.q_entry_data[i].loop_tag = inp.in_loop_tag[i];
+      req.q_wr_ptr_next[bank_sel] = (req.q_wr_ptr_next[bank_sel] + 1) % Q_DEPTH;
+      req.q_count_next[bank_sel]++;
+    }
+    out_payload.update_queue_full = false;
+  }
+
+  void bpu_submodule_seq_read(const BpuPostReadReqCombOut &in, ReadData &rd) const {
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      tage_inst[i]->tage_seq_read(in.tage_in[i], rd.tage_rd[i]);
+      btb_inst[i]->btb_seq_read(in.btb_in[i], rd.btb_rd[i]);
+    }
+    type_pred_inst->type_pred_seq_read(in.type_in, rd.type_rd);
+  }
+
+  void bpu_core_comb_calc(const InputPayload &inp, ReadData &rd,
+                          const BpuPostReadReqCombOut &post_req,
+                          OutputPayload &out, UpdateRequest &req) {
+    std::memset(&out, 0, sizeof(OutputPayload));
+    std::memset(&req, 0, sizeof(UpdateRequest));
+    req.next_state = S_IDLE;
+    req.pred_base_pc = rd.pred_base_pc;
+    req.going_to_do_pred = rd.going_to_do_pred;
+    req.pc_reg_next = rd.pc_reg_snapshot;
+    req.pc_can_send_to_icache_next = rd.pc_can_send_to_icache_snapshot;
+    req.do_pred_latch_next = false;
+    req.pred_base_pc_fired_next = rd.pred_base_pc;
+    std::memcpy(req.Spec_GHR_next, rd.Spec_GHR_snapshot, sizeof(req.Spec_GHR_next));
+    std::memcpy(req.Arch_GHR_next, rd.Arch_GHR_snapshot, sizeof(req.Arch_GHR_next));
+    std::memcpy(req.Spec_FH_next, rd.Spec_FH_snapshot, sizeof(req.Spec_FH_next));
+    std::memcpy(req.Arch_FH_next, rd.Arch_FH_snapshot, sizeof(req.Arch_FH_next));
+    req.Spec_PATH_next = rd.Spec_PATH_snapshot;
+    req.Arch_PATH_next = rd.Arch_PATH_snapshot;
+    std::memcpy(req.Arch_ras_stack_next, rd.Arch_ras_stack_snapshot,
+                sizeof(req.Arch_ras_stack_next));
+    req.Arch_ras_count_next = rd.Arch_ras_count_snapshot;
+    std::memcpy(req.Spec_ras_stack_next, rd.Spec_ras_stack_snapshot,
+                sizeof(req.Spec_ras_stack_next));
+    req.Spec_ras_count_next = rd.Spec_ras_count_snapshot;
+
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      req.going_to_do_upd[i] = rd.going_to_do_upd[i];
+      req.do_upd_latch_next[i] = false;
+      req.q_push_en[i] = false;
+      req.q_pop_en[i] = false;
+      req.q_wr_ptr_next[i] = rd.q_wr_ptr_snapshot[i];
+      req.q_rd_ptr_next[i] = rd.q_rd_ptr_snapshot[i];
+      req.q_count_next[i] = rd.q_count_snapshot[i];
+      req.tage_done_next[i] = false;
+      req.btb_done_next[i] = false;
+      req.tage_in[i] = post_req.tage_in[i];
+      req.btb_in[i] = post_req.btb_in[i];
+    }
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      req.do_pred_on_this_pc[i] = rd.do_pred_on_this_pc[i];
+      req.this_pc_bank_sel[i] = rd.this_pc_bank_sel[i];
+      req.do_pred_for_this_pc[i] = rd.do_pred_for_this_pc[i];
+      req.final_pred_dir[i] = false;
+      req.tage_calc_pred_dir_latch_next[i] = false;
+      req.tage_calc_altpred_latch_next[i] = false;
+      req.tage_calc_pcpn_latch_next[i] = 0;
+      req.tage_calc_altpcpn_latch_next[i] = 0;
+      req.tage_result_valid_latch_next[i] = false;
+      req.btb_pred_target_latch_next[i] = 0;
+      req.btb_result_valid_latch_next[i] = false;
+      for (int k = 0; k < TN_MAX; ++k) {
+        req.tage_pred_calc_tags_latch_next[i][k] = 0;
+        req.tage_pred_calc_idxs_latch_next[i][k] = 0;
+      }
+    }
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      req.q_entry_we[i] = false;
+      req.q_entry_bank[i] = 0;
+      req.q_entry_slot[i] = 0;
+      std::memset(&req.q_entry_data[i], 0, sizeof(req.q_entry_data[i]));
+    }
+
+    req.type_in = post_req.type_in;
+    TypePredictor::OutputPayload type_out{};
+    {
+      type_pred_inst->type_pred_comb_calc(post_req.type_in, rd.type_rd, type_out,
+                                          req.type_req);
+    }
+
+    TAGE_TOP::OutputPayload tage_out[BPU_BANK_NUM];
+    BTB_TOP::OutputPayload btb_out[BPU_BANK_NUM];
+    bpu_submodule_bind_comb(rd, post_req.btb_in, type_out, req.btb_in);
+    {
+      for (int i = 0; i < BPU_BANK_NUM; i++) {
+        tage_inst[i]->tage_comb_calc(post_req.tage_in[i], rd.tage_rd[i], tage_out[i],
+                                     req.tage_req[i]);
+      }
+    }
+    {
+      for (int i = 0; i < BPU_BANK_NUM; i++) {
+        btb_inst[i]->btb_comb_calc(req.btb_in[i], rd.btb_rd[i],
+                                   btb_out[i], req.btb_req[i]);
+      }
+    }
+    bpu_predict_main_comb(inp, rd, type_out, tage_out, btb_out, out, req);
+
+    bpu_hist_comb(inp, rd, type_out, req);
+
+    bpu_queue_comb(inp, rd, req, out);
+
+    if (inp.refetch) {
+      req.pc_reg_next = inp.refetch_address;
+      req.pc_can_send_to_icache_next = true;
+      std::memcpy(req.Spec_GHR_next, req.Arch_GHR_next, sizeof(req.Spec_GHR_next));
+      std::memcpy(req.Spec_FH_next, req.Arch_FH_next, sizeof(req.Spec_FH_next));
+      req.Spec_PATH_next = req.Arch_PATH_next;
+      std::memcpy(req.Spec_ras_stack_next, req.Arch_ras_stack_next,
+                  sizeof(req.Spec_ras_stack_next));
+      req.Spec_ras_count_next = req.Arch_ras_count_next;
+    } else if (req.going_to_do_pred) {
+      req.pc_reg_next = req.next_fetch_addr_calc;
+      req.pc_can_send_to_icache_next = true;
+    }
+
+
+    assert(out.out_pred_base_pc == out.fetch_address);
+    req.out_regs = out;
+  }
+
+  void bpu_seq_write(const InputPayload &inp, const UpdateRequest &req,
+                     bool reset) {
+    if (reset) {
+      type_pred_inst->reset();
+      reset_internal_all();
+      return;
+    }
+    (void)inp;
+
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      tage_inst[i]->tage_seq_write(req.tage_in[i], req.tage_req[i], false);
+      btb_inst[i]->btb_seq_write(req.btb_in[i], req.btb_req[i], false);
+      tage_done[i] = req.tage_done_next[i];
+      btb_done[i] = req.btb_done_next[i];
+    }
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      tage_calc_pred_dir_latch[i] = req.tage_calc_pred_dir_latch_next[i];
+      tage_calc_altpred_latch[i] = req.tage_calc_altpred_latch_next[i];
+      tage_calc_pcpn_latch[i] = req.tage_calc_pcpn_latch_next[i];
+      tage_calc_altpcpn_latch[i] = req.tage_calc_altpcpn_latch_next[i];
+      tage_result_valid_latch[i] = req.tage_result_valid_latch_next[i];
+      btb_pred_target_latch[i] = req.btb_pred_target_latch_next[i];
+      btb_result_valid_latch[i] = req.btb_result_valid_latch_next[i];
+      for (int k = 0; k < TN_MAX; k++) {
+        tage_pred_calc_tags_latch[i][k] = req.tage_pred_calc_tags_latch_next[i][k];
+        tage_pred_calc_idxs_latch[i][k] = req.tage_pred_calc_idxs_latch_next[i][k];
+      }
+    }
+
+    do_pred_latch = req.do_pred_latch_next;
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      do_upd_latch[i] = req.do_upd_latch_next[i];
+    }
+    pred_base_pc_fired = req.pred_base_pc_fired_next;
+    pc_reg = req.pc_reg_next;
+    pc_can_send_to_icache = req.pc_can_send_to_icache_next;
+
+    std::memcpy(Spec_GHR, req.Spec_GHR_next, sizeof(Spec_GHR));
+    std::memcpy(Arch_GHR, req.Arch_GHR_next, sizeof(Arch_GHR));
+    std::memcpy(Spec_FH, req.Spec_FH_next, sizeof(Spec_FH));
+    std::memcpy(Arch_FH, req.Arch_FH_next, sizeof(Arch_FH));
+    Spec_PATH = req.Spec_PATH_next;
+    Arch_PATH = req.Arch_PATH_next;
+    std::memcpy(Arch_ras_stack, req.Arch_ras_stack_next, sizeof(Arch_ras_stack));
+    Arch_ras_count = req.Arch_ras_count_next;
+    std::memcpy(Spec_ras_stack, req.Spec_ras_stack_next, sizeof(Spec_ras_stack));
+    Spec_ras_count = req.Spec_ras_count_next;
+
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      if (!req.q_entry_we[i]) {
+        continue;
+      }
+      int bank_sel = req.q_entry_bank[i];
+      uint32_t slot = req.q_entry_slot[i];
+      QueueEntry &entry = update_queue[slot][bank_sel];
+      entry.base_pc = req.q_entry_data[i].base_pc;
+      entry.valid_mask = req.q_entry_data[i].valid_mask;
+      entry.actual_dir = req.q_entry_data[i].actual_dir;
+      entry.br_type = req.q_entry_data[i].br_type;
+      entry.targets = req.q_entry_data[i].targets;
+      entry.pred_dir = req.q_entry_data[i].pred_dir;
+      entry.alt_pred = req.q_entry_data[i].alt_pred;
+      entry.pcpn = req.q_entry_data[i].pcpn;
+      entry.altpcpn = req.q_entry_data[i].altpcpn;
+      for (int k = 0; k < TN_MAX; k++) {
+        entry.tage_tags[k] = req.q_entry_data[i].tage_tags[k];
+        entry.tage_idxs[k] = req.q_entry_data[i].tage_idxs[k];
+      }
+      entry.sc_used = req.q_entry_data[i].sc_used;
+      entry.sc_pred = req.q_entry_data[i].sc_pred;
+      entry.sc_sum = req.q_entry_data[i].sc_sum;
+      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
+        entry.sc_idx[t] = req.q_entry_data[i].sc_idx[t];
+      }
+      entry.loop_used = req.q_entry_data[i].loop_used;
+      entry.loop_hit = req.q_entry_data[i].loop_hit;
+      entry.loop_pred = req.q_entry_data[i].loop_pred;
+      entry.loop_idx = req.q_entry_data[i].loop_idx;
+      entry.loop_tag = req.q_entry_data[i].loop_tag;
+    }
+
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      q_wr_ptr[i] = req.q_wr_ptr_next[i];
+      q_rd_ptr[i] = req.q_rd_ptr_next[i];
+      q_count[i] = req.q_count_next[i];
+    }
+
+    type_pred_inst->type_pred_seq_write(req.type_in, req.type_req, false);
+    state = static_cast<State>(req.next_state);
+  }
+
+  ~BPU_TOP() {
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      delete tage_inst[i];
+      delete btb_inst[i];
+    }
+    delete type_pred_inst;
+  }
+
+  void reset_internal_all() {
+
+    pc_reg = RESET_PC;
+    pc_can_send_to_icache = true;
+    pred_base_pc_fired = 0;
+
+    state = S_IDLE;
+    do_pred_latch = false;
+    for (int i = 0; i < BPU_BANK_NUM; i++)
+      do_upd_latch[i] = false;
+
+    // 初始化全局GHR/FH（从TAGE迁移过来）
+    std::memset(Arch_GHR, 0, sizeof(Arch_GHR));
+    std::memset(Spec_GHR, 0, sizeof(Spec_GHR));
+    std::memset(Arch_FH, 0, sizeof(Arch_FH));
+    std::memset(Spec_FH, 0, sizeof(Spec_FH));
+    Arch_PATH = 0;
+    Spec_PATH = 0;
+    std::memset(Arch_ras_stack, 0, sizeof(Arch_ras_stack));
+    std::memset(Spec_ras_stack, 0, sizeof(Spec_ras_stack));
+    Arch_ras_count = 0;
+    Spec_ras_count = 0;
+
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      q_wr_ptr[i] = 0;
+      q_rd_ptr[i] = 0;
+      q_count[i] = 0;
+      tage_done[i] = false;
+      btb_done[i] = false;
+    }
+
+    // 初始化预测结果数组
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      tage_calc_pred_dir_latch[i] = false;
+      tage_calc_altpred_latch[i] = false;
+      tage_calc_pcpn_latch[i] = 0;
+      tage_calc_altpcpn_latch[i] = 0;
+      tage_result_valid_latch[i] = false;
+      btb_pred_target_latch[i] = 0;
+      btb_result_valid_latch[i] = false;
+      for (int k = 0; k < TN_MAX; k++) {
+        tage_pred_calc_tags_latch[i][k] = 0;
+        tage_pred_calc_idxs_latch[i][k] = 0;
+      }
+    }
+    
+    // 初始化done信号
+    for (int i = 0; i < BPU_BANK_NUM; i++) {
+      tage_done[i] = false;
+      btb_done[i] = false;
+    }
+
+
+
+  }
+
+  void bpu_comb_calc(const InputPayload &inp, ReadData &rd,
+                     OutputPayload &out, UpdateRequest &req) {
+    BpuPostReadReqCombOut post_read_req{};
+    bpu_data_read(inp, rd);
+    bpu_post_read_req_comb(inp, rd, post_read_req);
+    bpu_submodule_seq_read(post_read_req, rd);
+    bpu_core_comb_calc(inp, rd, post_read_req, out, req);
+  }
+
+};
+
+#endif // BPU_TOP_H
