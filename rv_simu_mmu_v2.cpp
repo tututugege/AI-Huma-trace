@@ -695,6 +695,7 @@ void SimCpu::init() {
   oracle_pending_out = {};
   front2back_hold = {};
   front2back_hold_1 = {};
+  front2back_hold_live = front2back_hold_1_live = false;
   peripheral_resp_hold = {};
   peripheral_resp_hold_1 = {};
 }
@@ -709,6 +710,7 @@ void SimCpu::reinit_frontend_after_restore() {
   oracle_pending_out = {};
   front2back_hold = {};
   front2back_hold_1 = {};
+  front2back_hold_live = front2back_hold_1_live = false;
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -727,6 +729,7 @@ void SimCpu::restore_pc(uint32_t pc) {
   front.force_back2front_refetch(pc);
   front2back_hold = {};
   front2back_hold_1 = {};
+  front2back_hold_live = front2back_hold_1_live = false;
   back.out.flush = true;
   back.out.mispred = true;
   back.out.redirect_pc = pc;
@@ -740,7 +743,7 @@ void SimCpu::cycle() {
   // BackTop inputs are combinational wires. Re-drive the only intentionally
   // retained payload from an explicit top-level register before producers run.
   back.clear_comb_inputs();
-  static_cast<FrontPreIO &>(back.in) = front2back_hold;
+  if (front2back_hold_live) static_cast<FrontPreIO &>(back.in) = front2back_hold;
   back.in.peripheral_resp = peripheral_resp_hold;
   // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
   {
@@ -826,12 +829,17 @@ void SimCpu::cycle() {
   }
 }
 
+// The hold registers stay all-zero in the common (no stall) case; the live flags let the cycle skip copying zeros.
 void SimCpu::front2back_hold_comb() {
-  front2back_hold_1 = {};
+  if (front2back_hold_1_live) {
+    front2back_hold_1 = {};
+    front2back_hold_1_live = false;
+  }
   if (back.out.mispred || back.out.flush || !back.out.stall) {
     return;
   }
 
+  front2back_hold_1_live = true;
   front2back_hold_1 = static_cast<const FrontPreIO &>(back.in);
   for (int i = 0; i < BACKEND_FETCH_WIDTH; ++i) {
     if (back.out.fire[i]) {
@@ -840,7 +848,10 @@ void SimCpu::front2back_hold_comb() {
   }
 }
 
-void SimCpu::front2back_hold_seq() { front2back_hold = front2back_hold_1; }
+void SimCpu::front2back_hold_seq() {
+  if (front2back_hold_live || front2back_hold_1_live) front2back_hold = front2back_hold_1;
+  front2back_hold_live = front2back_hold_1_live;
+}
 
 void SimCpu::peripheral_resp_hold_comb() {
   peripheral_resp_hold_1 = back.in.peripheral_resp;

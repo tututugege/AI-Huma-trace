@@ -33,6 +33,8 @@ public:
   // retained this payload across a backend stall.
   FrontPreIO front2back_hold{};
   FrontPreIO front2back_hold_1{};
+  bool front2back_hold_live = false;
+  bool front2back_hold_1_live = false;
   // PeripheralAxi produces this response after BackTop::comb(). Model the
   // intended one-cycle delay explicitly instead of retaining BackTop::in.
   PeripheralRespIO peripheral_resp_hold{};
