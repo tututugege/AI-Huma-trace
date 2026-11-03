@@ -103,7 +103,6 @@ struct FrontReadData {
 };
 
 struct FrontUpdateRequest {
-  front_top_out out_regs;
   PendingBpuSeqTxn bpu_seq_txn;
   PendingFrontState front_state;
   FetchAddrCombOut fetch_addr_fifo_req{};

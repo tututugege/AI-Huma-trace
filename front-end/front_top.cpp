@@ -39,25 +39,7 @@ static SimContext *front_ctx = nullptr;
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
 
 
-struct FrontDeadlockSnapshot {
-  bool valid = false;
-  bool global_reset = false;
-  bool global_refetch = false;
-  bool icache_ready = false;
-  bool icache_ready_2 = false;
-  bool fetch_addr_read_enable_slot0 = false;
-  bool fetch_addr_read_enable_slot1 = false;
-  bool inst_fifo_read_enable = false;
-  bool ptab_read_enable = false;
-  bool front2back_read_enable = false;
-  icache_out icache = {};
-  instruction_FIFO_out fifo = {};
-  PTAB_out ptab = {};
-  front2back_FIFO_out front2back = {};
-  front_top_out out = {};
-};
 
-static FrontDeadlockSnapshot front_deadlock_snapshot;
 
 
 static uint32_t sequential_next_pc(uint32_t fetch_pc,
@@ -327,28 +309,28 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
     struct fetch_address_FIFO_in fetch_addr_fifo_in;
     struct fetch_address_FIFO_out fetch_addr_fifo_out;
     fetch_address_FIFO_read_data fetch_addr_fifo_rd = rd.fetch_addr_fifo_rd_snapshot;
-    fetch_address_FIFO_read_data fetch_addr_fifo_next_rd = fetch_addr_fifo_rd;
-    FetchAddrCombOut fetch_addr_fifo_req{};
+    fetch_address_FIFO_read_data &fetch_addr_fifo_next_rd = fetch_addr_fifo_rd;
+    FetchAddrCombOut &fetch_addr_fifo_req = fetch_addr_fifo_final_req;
     FetchAddrCombOut fetch_addr_fifo_step_req{};
     struct icache_in icache_in;
     struct icache_out icache_out;
     struct instruction_FIFO_in fifo_in;
     struct instruction_FIFO_out fifo_out;
     instruction_FIFO_read_data fifo_rd = rd.fifo_rd_snapshot;
-    instruction_FIFO_read_data fifo_next_rd = fifo_rd;
-    InstructionCombOut fifo_req{};
+    instruction_FIFO_read_data &fifo_next_rd = fifo_rd;
+    InstructionCombOut &fifo_req = fifo_final_req;
     InstructionCombOut fifo_step_req{};
     struct PTAB_in ptab_in;
     struct PTAB_out ptab_out;
     PTAB_read_data ptab_rd = rd.ptab_rd_snapshot;
-    PTAB_read_data ptab_next_rd = ptab_rd;
-    PtabCombOut ptab_req{};
+    PTAB_read_data &ptab_next_rd = ptab_rd;
+    PtabCombOut &ptab_req = ptab_final_req;
     PtabCombOut ptab_step_req{};
     struct front2back_FIFO_in front2back_fifo_in;
     struct front2back_FIFO_out front2back_fifo_out;
     front2back_FIFO_read_data front2back_fifo_rd = rd.front2back_fifo_rd_snapshot;
-    front2back_FIFO_read_data front2back_fifo_next_rd = front2back_fifo_rd;
-    Front2BackCombOut front2back_fifo_req{};
+    front2back_FIFO_read_data &front2back_fifo_next_rd = front2back_fifo_rd;
+    Front2BackCombOut &front2back_fifo_req = front2back_fifo_final_req;
     Front2BackCombOut front2back_fifo_step_req{};
     
     memset(&fetch_addr_fifo_in, 0, sizeof(fetch_addr_fifo_in));
@@ -439,7 +421,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                                      &fetch_addr_fifo_out, &fetch_addr_fifo_next_rd,
                                      &fetch_addr_fifo_step_req);
         accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
-        fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
 
         saved_fetch_addr_fifo_out_0 = fetch_addr_fifo_out;
 
@@ -452,24 +433,20 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                                          &fetch_addr_fifo_out, &fetch_addr_fifo_next_rd,
                                          &fetch_addr_fifo_step_req);
             accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
-            fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
             saved_fetch_addr_fifo_out_1 = fetch_addr_fifo_out;
         }
         
         instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
                                    &fifo_step_req);
         accumulate_instruction_fifo_req(fifo_req, fifo_step_req);
-        fifo_rd = fifo_next_rd;
         
         PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_out, &ptab_next_rd, &ptab_step_req);
         accumulate_ptab_req(ptab_req, ptab_step_req);
-        ptab_rd = ptab_next_rd;
         
         front2back_FIFO_comb_calc(&front2back_fifo_in, &front2back_fifo_rd,
                                   &front2back_fifo_out, &front2back_fifo_next_rd,
                                   &front2back_fifo_step_req);
         accumulate_front2back_req(front2back_fifo_req, front2back_fifo_step_req);
-        front2back_fifo_rd = front2back_fifo_next_rd;
     }
     
     // 保存读出的数据用于后续处理
@@ -554,7 +531,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                                          &fetch_addr_fifo_out, &fetch_addr_fifo_next_rd,
                                          &fetch_addr_fifo_step_req);
             accumulate_fetch_addr_req(fetch_addr_fifo_req, fetch_addr_fifo_step_req);
-            fetch_addr_fifo_rd = fetch_addr_fifo_next_rd;
         }
     }
 
@@ -617,7 +593,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_out, &ptab_next_rd,
                            &ptab_step_req);
             accumulate_ptab_req(ptab_req, ptab_step_req);
-            ptab_rd = ptab_next_rd;
             saved_ptab_out = ptab_out;
             predecode_source_valid = true;
 
@@ -684,7 +659,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
                                        &fifo_step_req);
             accumulate_instruction_fifo_req(fifo_req, fifo_step_req);
-            fifo_rd = fifo_next_rd;
             inst_fifo_full_for_write = fifo_out.full;
         }
 
@@ -720,7 +694,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_out, &fifo_next_rd,
                                        &fifo_step_req);
             accumulate_instruction_fifo_req(fifo_req, fifo_step_req);
-            fifo_rd = fifo_next_rd;
         }
     }
     
@@ -746,7 +719,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
             PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_out, &ptab_next_rd,
                            &ptab_step_req);
             accumulate_ptab_req(ptab_req, ptab_step_req);
-            ptab_rd = ptab_next_rd;
         }
         
         struct predecode_checker_out checker_out;
@@ -823,7 +795,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
                                           &front2back_fifo_step_req);
                 accumulate_front2back_req(front2back_fifo_req,
                                           front2back_fifo_step_req);
-                front2back_fifo_rd = front2back_fifo_next_rd;
             }
         }
         
@@ -874,28 +845,6 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd,
         }
         
         front_state_req.next_front_sim_time = front_sim_time;
-        fetch_addr_fifo_final_req = fetch_addr_fifo_req;
-        fifo_final_req = fifo_req;
-        ptab_final_req = ptab_req;
-        front2back_fifo_final_req = front2back_fifo_req;
-        front_deadlock_snapshot.valid = true;
-        front_deadlock_snapshot.global_reset = global_reset;
-        front_deadlock_snapshot.global_refetch = global_refetch;
-        front_deadlock_snapshot.icache_ready = icache_ready;
-        front_deadlock_snapshot.icache_ready_2 = icache_ready_2;
-        front_deadlock_snapshot.fetch_addr_read_enable_slot0 =
-            fetch_addr_fifo_read_enable_slot0;
-        front_deadlock_snapshot.fetch_addr_read_enable_slot1 =
-            fetch_addr_fifo_read_enable_slot1_candidate;
-        front_deadlock_snapshot.inst_fifo_read_enable = inst_fifo_read_enable;
-        front_deadlock_snapshot.ptab_read_enable = ptab_read_enable;
-        front_deadlock_snapshot.front2back_read_enable = front2back_read_enable;
-        front_deadlock_snapshot.icache = icache_out;
-        front_deadlock_snapshot.fifo = fifo_out;
-        front_deadlock_snapshot.ptab = ptab_out;
-        front_deadlock_snapshot.front2back = front2back_fifo_out;
-        front_deadlock_snapshot.out = *out_ptr;
-        req.out_regs = out;
     }
 }
 

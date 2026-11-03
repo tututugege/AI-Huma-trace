@@ -7,7 +7,7 @@
 #include <cstring>
 #include <vector>
 
-void fetch_address_FIFO_comb(const FetchAddrCombIn &in, FetchAddrCombOut &out) {
+static void fetch_address_FIFO_comb_impl(const fetch_address_FIFO_in &inp, const fetch_address_FIFO_read_data &rd, FetchAddrCombOut &out) {
   std::memset(&out, 0, sizeof(FetchAddrCombOut));
 
   out.out_regs.full = false;
@@ -15,34 +15,34 @@ void fetch_address_FIFO_comb(const FetchAddrCombIn &in, FetchAddrCombOut &out) {
   out.out_regs.read_valid = false;
   out.out_regs.fetch_address = 0;
 
-  if (in.inp.reset) {
+  if (inp.reset) {
     out.clear_fifo = true;
     return;
   }
 
-  bool has_data_before_read = (in.rd.size > 0);
-  uint8_t queue_size_before = in.rd.size;
-  if (in.inp.refetch) {
+  bool has_data_before_read = (rd.size > 0);
+  uint8_t queue_size_before = rd.size;
+  if (inp.refetch) {
     out.clear_fifo = true;
     has_data_before_read = false;
     queue_size_before = 0;
   }
 
-  const bool do_write = in.inp.write_enable;
-  const bool do_read = in.inp.read_enable && (has_data_before_read || do_write);
+  const bool do_write = inp.write_enable;
+  const bool do_read = inp.read_enable && (has_data_before_read || do_write);
 
   if (do_read) {
-    if (has_data_before_read && !in.rd.head_valid) {
+    if (has_data_before_read && !rd.head_valid) {
       std::printf("[fetch_address_FIFO] ERROR: missing head snapshot for same-cycle reread\n");
       std::exit(1);
     }
     out.out_regs.read_valid = true;
     out.out_regs.fetch_address =
-        has_data_before_read ? in.rd.head_entry : in.inp.fetch_address;
+        has_data_before_read ? rd.head_entry : inp.fetch_address;
   }
 
   out.push_en = do_write;
-  out.push_data = in.inp.fetch_address;
+  out.push_data = inp.fetch_address;
   out.pop_en = do_read;
 
   int next_size = static_cast<int>(queue_size_before);
@@ -54,6 +54,8 @@ void fetch_address_FIFO_comb(const FetchAddrCombIn &in, FetchAddrCombOut &out) {
   out.out_regs.full = (next_size >= (FETCH_ADDR_FIFO_SIZE - 1));
   out.out_regs.empty = (next_size == 0);
 }
+
+void fetch_address_FIFO_comb(const FetchAddrCombIn &in, FetchAddrCombOut &out) { fetch_address_FIFO_comb_impl(in.inp, in.rd, out); }
 
 namespace {
 
@@ -72,7 +74,9 @@ public:
   void build_next_read_data(const fetch_address_FIFO_read_data &cur,
                             const FetchAddrCombOut &comb_out,
                             fetch_address_FIFO_read_data &next_rd) const {
-    next_rd = cur;
+    if (&next_rd != &cur) {
+      next_rd = cur;
+    }
     if (comb_out.clear_fifo) {
       next_rd = {};
     }
@@ -112,11 +116,7 @@ public:
                  fetch_address_FIFO_out &out,
                  fetch_address_FIFO_read_data &next_rd,
                  FetchAddrCombOut &step_req) const {
-    FetchAddrCombIn comb_in{};
-    comb_in.inp = inp;
-    comb_in.rd = rd;
-
-    fetch_address_FIFO_comb(comb_in, step_req);
+    fetch_address_FIFO_comb_impl(inp, rd, step_req);
     out = step_req.out_regs;
     build_next_read_data(rd, step_req, next_rd);
   }
