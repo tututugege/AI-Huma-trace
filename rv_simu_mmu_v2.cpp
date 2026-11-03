@@ -95,7 +95,6 @@ void clear_axi_master_inputs(InterconnectT &interconnect) {
 
 struct AxiInternalTickBoundaryState {
   bool read_req_ready_r[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool read_req_drop_warned[axi_interconnect::NUM_READ_MASTERS] = {};
   axi_interconnect::ReadReqHoldLatch
       read_req_hold[axi_interconnect::NUM_READ_MASTERS] = {};
   bool write_req_ready_r[axi_interconnect::NUM_WRITE_MASTERS] = {};
@@ -106,7 +105,6 @@ void capture_axi_internal_tick_boundary_state(
     InterconnectT &interconnect, AxiInternalTickBoundaryState &state) {
   for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
     state.read_req_ready_r[i] = interconnect.req_ready_r[i];
-    state.read_req_drop_warned[i] = interconnect.req_drop_warned[i];
     state.read_req_hold[i] = interconnect.read_req_hold[i];
   }
   for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
@@ -119,7 +117,6 @@ void restore_axi_internal_tick_boundary_state(
     InterconnectT &interconnect, const AxiInternalTickBoundaryState &state) {
   for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
     interconnect.req_ready_r[i] = state.read_req_ready_r[i];
-    interconnect.req_drop_warned[i] = state.read_req_drop_warned[i];
     interconnect.read_req_hold[i] = state.read_req_hold[i];
   }
   for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
@@ -135,7 +132,6 @@ void restore_axi_internal_tick_boundary_state_except_dcache(
       continue;
     }
     interconnect.req_ready_r[i] = state.read_req_ready_r[i];
-    interconnect.req_drop_warned[i] = state.read_req_drop_warned[i];
     interconnect.read_req_hold[i] = state.read_req_hold[i];
   }
   for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
