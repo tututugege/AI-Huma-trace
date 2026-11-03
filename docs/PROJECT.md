@@ -84,3 +84,12 @@ Frozen copies of the original modules live in `tests/*_ref`; the live modules we
 - zsh does not word-split unquoted variables: use bash scripts.
 - BSD sed has no `\|`; `git commit` needs an explicit identity in this environment.
 - Long runs go in the background with `SIM_MAX_CYCLES` set.
+
+## Experiments (opt-in, default off; cycles with the flag off stay identical)
+- **Move elimination** (`ME_ELIM=1`): `addi rd, rs, 0` is renamed away in Ren (rd takes rs's physical register, no
+  free-list slot, no uop, ROB entry complete at dispatch); a register is freed when no arch_RAT entry names it
+  (`arch_cnt`). Results (single run, same commit counts, programs finish normally):
+  dhrystone 3,911,612 -> 3,881,628 cycles (-0.77%), 111,900 moves eliminated (3.4% of commits);
+  coremark10 976,652 -> 965,385 (-1.15%), 225,909 moves (8.7% of commits).
+  Not handled: `add rd, rs, x0` (the toolchain here emits no compressed `c.mv`), and a commit in the same cycle as a
+  mispredict asserts in ME mode.

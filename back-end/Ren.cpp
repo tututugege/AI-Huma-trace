@@ -10,12 +10,14 @@
 // Shared by several phases of a cycle.
 static wire<1> fire[DECODE_WIDTH];
 static wire<PRF_IDX_WIDTH> alloc_reg[DECODE_WIDTH];
+static bool elim[DECODE_WIDTH];  // move elimination: renamed away, takes no free register
 
 static inline int ring_distance(int from, int to) { return to >= from ? to - from : to - from + PRF_NUM; }
 
 // Free list invariant: free slots + registers held by in-flight instructions == the managed pool.
 static inline void ren_freelist_sanity(int spec_head, int commit_head, int tail) {
   constexpr int kManagedPool = PRF_NUM - (ARF_NUM + 1);
+  if (move_elim_enabled()) return;  // shared registers change the pool size
   Assert(spec_head >= 0 && spec_head < PRF_NUM && commit_head >= 0 && commit_head < PRF_NUM && tail >= 0 &&
          tail < PRF_NUM && "Ren: free list pointer out of range");
   Assert(ring_distance(spec_head, tail) + ring_distance(commit_head, spec_head) == kManagedPool &&
@@ -27,7 +29,9 @@ void Ren::init() {
   for (int i = 0; i < PRF_NUM; i++) {
     if (i < ARF_NUM + 1) {
       spec_RAT[i] = arch_RAT[i] = i;
+      arch_cnt[i] = 1;
     } else {
+      arch_cnt[i] = 0;
       free_list[free_count++] = i;
     }
   }
@@ -72,9 +76,13 @@ void Ren::comb_alloc() {
   bool stall = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     alloc_reg[i] = 0;
+    elim[i] = false;
     wires->ren2dis.valid[i] = false;
     if (!inst_valid[i]) continue;
-    if (!inst_r[i].dest_en) {
+    if (move_elim_enabled() && is_move_shape(inst_r[i])) {
+      elim[i] = true;
+      wires->ren2dis.valid[i] = !stall;
+    } else if (!inst_r[i].dest_en) {
       wires->ren2dis.valid[i] = !stall;
     } else if (!stall && left > 0) {
       alloc_reg[i] = free_list[head];
@@ -90,9 +98,11 @@ void Ren::comb_alloc() {
 // Source/old-destination lookup in spec_RAT; an older instruction of the same group that writes the same architectural
 // register (x0 excluded) takes precedence, the youngest such writer wins.
 void Ren::comb_rename() {
+  wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination register of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
     wires->ren2dis.uop[i] = inst_r[i];
     wires->ren2dis.uop[i].dest_preg = alloc_reg[i];
+    dest_of[i] = alloc_reg[i];
     // Static fields live in the uop pool: an invalid slot still holds the handle of an instruction that has long
     // left the stage, so it must not be written.
     if (!inst_valid[i]) continue;
@@ -100,12 +110,16 @@ void Ren::comb_rename() {
       wire<PRF_IDX_WIDTH> p = spec_RAT[areg];
       for (int j = 0; j < i; j++)
         if (inst_valid[j] && inst_r[j].dest_en && inst_r[j]->dest_areg != 0 && inst_r[j]->dest_areg == areg)
-          p = alloc_reg[j];
+          p = dest_of[j];
       return p;
     };
     wires->ren2dis.uop[i]->src1_preg = lookup(inst_r[i]->src1_areg);
     wires->ren2dis.uop[i]->src2_preg = lookup(inst_r[i]->src2_areg);
     wires->ren2dis.uop[i]->old_dest_preg = lookup(inst_r[i]->dest_areg);
+    if (elim[i]) {
+      dest_of[i] = wires->ren2dis.uop[i]->src1_preg;
+      wires->ren2dis.uop[i].dest_preg = dest_of[i];
+    }
   }
 }
 
@@ -152,9 +166,11 @@ void Ren::comb_fire() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!fire[i]) continue;
     if (wires->ren2dis.uop[i].dest_en) {
-      Assert(free_head_1 != free_tail_1 && "Ren: allocate when free list is empty");
       spec_RAT_1[inst_r[i]->dest_areg] = wires->ren2dis.uop[i].dest_preg;
-      LOOP_INC(free_head_1, PRF_NUM);
+      if (!elim[i]) {
+        Assert(free_head_1 != free_tail_1 && "Ren: allocate when free list is empty");
+        LOOP_INC(free_head_1, PRF_NUM);
+      }
     }
     if (is_branch(inst_r[i]->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
       const auto br_id = inst_r[i]->br_id;
@@ -178,10 +194,31 @@ void Ren::comb_fire() {
     InstInfo *inst = &commit_entry.uop;
     // An exception instruction does not free its old destination: it looks as if it never committed.
     if (inst->dest_en && !is_exception(*inst) && !interrupt) {
-      Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
-      free_list_1[free_tail_1] = (*inst)->old_dest_preg;
-      LOOP_INC(free_tail_1, PRF_NUM);
-      LOOP_INC(free_head_commit_1, PRF_NUM);
+      if (move_elim_enabled()) {
+        // the old register is freed when no architectural register names it any more; an eliminated move
+        // allocated nothing, so it does not advance the commit head
+        Assert(!mispred && "Ren(ME): commit together with mispredict");
+        static struct Stat {
+          uint64_t elim = 0;
+          ~Stat() { fprintf(stderr, "[ME] eliminated moves committed: %llu\n", (unsigned long long)elim); }
+        } stat;
+        if (is_eliminated_move(*inst)) stat.elim++;
+        if (!is_eliminated_move(*inst)) {
+          Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
+          LOOP_INC(free_head_commit_1, PRF_NUM);
+        }
+        arch_cnt[inst->dest_preg]++;
+        const auto old = (*inst)->old_dest_preg;
+        if (--arch_cnt[old] == 0) {
+          free_list_1[free_tail_1] = old;
+          LOOP_INC(free_tail_1, PRF_NUM);
+        }
+      } else {
+        Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
+        free_list_1[free_tail_1] = (*inst)->old_dest_preg;
+        LOOP_INC(free_tail_1, PRF_NUM);
+        LOOP_INC(free_head_commit_1, PRF_NUM);
+      }
       arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
     }
     BE_LOG("ROB commit PC=0x%08x Inst=0x%08x idx=%ld", (*inst)->dbg.pc, (*inst)->dbg.instruction,
