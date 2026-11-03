@@ -2,6 +2,7 @@
 #include "BeginCheck.h"
 #include "Ren.h"
 #include "config.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -169,6 +170,27 @@ void Ren::me_check() const {
   }
   Assert(ring_distance(free_head_1, free_tail_1) + ring_distance(free_head_commit_1, free_head_1) + distinct == PRF_NUM &&
          "Ren(ME): physical register leak");
+  // reference-count statistics: the largest number of arch_RAT / spec_RAT entries naming one register, per cycle
+  static struct Hist {
+    uint64_t arch[ARF_NUM + 2] = {0}, spec[ARF_NUM + 2] = {0};
+    ~Hist() {
+      for (int k = 0; k < 2; k++) {
+        const uint64_t *h = k ? spec : arch;
+        fprintf(stderr, "[ME] max refs on one register (%s_RAT), cycles at each max:", k ? "spec" : "arch");
+        for (int n = 1; n < ARF_NUM + 2; n++)
+          if (h[n]) fprintf(stderr, " %d:%llu", n, (unsigned long long)h[n]);
+        fprintf(stderr, "\n");
+      }
+    }
+  } hist;
+  int sp[PRF_NUM] = {0}, mx_a = 0, mx_s = 0;
+  for (int a = 1; a < ARF_NUM + 1; a++) sp[spec_RAT_1[a]]++;
+  for (int p = 0; p < PRF_NUM; p++) {
+    if (p != 0) mx_a = std::max(mx_a, seen[p]);
+    mx_s = std::max(mx_s, sp[p]);
+  }
+  hist.arch[std::max(mx_a, 1)]++;
+  hist.spec[std::max(mx_s, 1)]++;
 }
 
 // Rename state updates: fired instructions take their register and checkpoint spec_RAT at branches, commits free old
