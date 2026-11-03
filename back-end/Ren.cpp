@@ -145,6 +145,7 @@ void Ren::comb_fire() {
       const auto br_id = inst_r[i]->br_id;
       Assert(br_id < MAX_BR_NUM && "Ren: branch id out of range");
       memcpy(RAT_checkpoint_1[br_id], spec_RAT_1, sizeof(spec_RAT_1));
+      ckpt_dirty |= uint64_t(1) << br_id;
       alloc_checkpoint_head_1[br_id] = free_head_1;
     }
   }
@@ -215,6 +216,11 @@ void Ren::seq() {
   free_head = free_head_1;
   free_head_commit = free_head_commit_1;
   free_tail = free_tail_1;
-  memcpy(RAT_checkpoint, RAT_checkpoint_1, sizeof(RAT_checkpoint));
+  // RAT_checkpoint_1 already equals RAT_checkpoint except for the rows written this cycle.
+  for (uint64_t d = ckpt_dirty; d != 0; d &= d - 1) {
+    const int row = __builtin_ctzll(d);
+    memcpy(RAT_checkpoint[row], RAT_checkpoint_1[row], sizeof(RAT_checkpoint[row]));
+  }
+  ckpt_dirty = 0;
   memcpy(alloc_checkpoint_head, alloc_checkpoint_head_1, sizeof(alloc_checkpoint_head));
 }

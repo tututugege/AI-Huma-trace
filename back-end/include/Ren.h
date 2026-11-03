@@ -35,6 +35,8 @@ public:
   wire<PRF_IDX_WIDTH> arch_RAT_1[ARF_NUM + 1];
   wire<PRF_IDX_WIDTH> spec_RAT_1[ARF_NUM + 1];
   wire<PRF_IDX_WIDTH> RAT_checkpoint_1[MAX_BR_NUM][ARF_NUM + 1];
+  static_assert(MAX_BR_NUM <= 64, "ckpt_dirty is a 64-bit row mask");
+  uint64_t ckpt_dirty = 0;  // rows of RAT_checkpoint_1 written this cycle
   wire<PRF_IDX_WIDTH> free_list_1[PRF_NUM];
   wire<PRF_IDX_WIDTH> free_head_1;
   wire<PRF_IDX_WIDTH> free_head_commit_1;
