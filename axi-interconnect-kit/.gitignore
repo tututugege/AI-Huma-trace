@@ -1,0 +1,15 @@
+/build/
+build_*/
+local_debug/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+Makefile
+*.o
+*.a
+*.so
+*.d
+*.swp
+.DS_Store

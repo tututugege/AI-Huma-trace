@@ -1,0 +1,3 @@
+build/**
+demos/single_cycle/include/softfloat.h
+demos/single_cycle/include/softfloat_types.h
