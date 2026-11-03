@@ -63,7 +63,10 @@ public:
   // in-flight entry, then the core takes the interrupt with the cause the model chose.
   bool take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot);
   uint64_t oldest_uid() const;
-  void drop_oldest();  // commit-less removal of a killed entry at the head
+  void drop_oldest();
+  // Entries older than `uid` that are still in flight were killed without a rewind (wrong path): undo their effects
+  // (registers, memory, pc) and re-execute the entries from `uid` on on top of the restored state.
+  size_t kill_older_than(uint64_t uid);  // returns the number of killed entries
   const Fact *find(uint64_t uid) const;
   // Functional word at a physical address as the core sees it now (RAM or boot ROM).
   bool read_word(uint32_t paddr, uint32_t &word) const;

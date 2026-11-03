@@ -245,11 +245,24 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
 
 void Bridge::rewind_after(int64_t uid) {
   stats.rewinds++;
-  if (chain_.empty() || (int64_t)chain_.back()->f.uid <= uid) return;
+  // Position, not uid order: some wrong-path entries carry uid 0, so uids are not monotonic along the chain.
+  size_t keep = 0;  // number of entries kept (the oldest ones, up to and including `uid`)
+  if (uid >= 0) {
+    keep = chain_.size();
+    for (size_t i = 0; i < chain_.size(); i++)
+      if ((int64_t)chain_[i]->f.uid == uid) { keep = i + 1; break; }
+    if (keep == chain_.size() && (chain_.empty() || (int64_t)chain_.back()->f.uid <= uid)) return;
+    if (keep == chain_.size() && chain_[keep - 1]->f.uid != (uint64_t)uid) {
+      // not in the chain (already retired): keep the entries that are older by uid
+      keep = 0;
+      while (keep < chain_.size() && (int64_t)chain_[keep]->f.uid <= uid) keep++;
+    }
+  }
+  if (chain_.size() <= keep) return;
   RefCpuState st;
   refcpu_get_state(ctx_, &st);
   // youngest first
-  while (!chain_.empty() && (int64_t)chain_.back()->f.uid > uid) {
+  while (chain_.size() > keep) {
     Entry *e = chain_.back();
     chain_.pop_back();
 #ifndef TB_NEG_NO_STORE_UNDO
@@ -324,6 +337,25 @@ bool Bridge::take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pendin
 }
 
 uint64_t Bridge::oldest_uid() const { return chain_.front()->f.uid; }
+size_t Bridge::kill_older_than(uint64_t uid) {
+  size_t killed = 0;
+  while (killed < chain_.size() && chain_[killed]->f.uid != uid) killed++;  // entries before the committing one
+  if (killed == chain_.size()) return 0;  // not in the chain
+  if (!killed) return 0;
+  struct Re { uint64_t uid; uint32_t pc, inst; };
+  std::vector<Re> younger;
+  for (size_t i = killed; i < chain_.size(); i++) younger.push_back({chain_[i]->f.uid, chain_[i]->f.pc, chain_[i]->f.inst});
+  const int64_t saved = stats.rewinds;
+  rewind_after(-1);  // undoes the killed entries and everything younger (the chain starts with the killed ones)
+  stats.rewinds = saved;
+  const uint64_t d = stats.dispatched, fj = stats.forced_jumps;
+  for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst);
+  stats.replayed += younger.size();
+  stats.dispatched = d;
+  stats.forced_jumps = fj;
+  return killed;
+}
+
 void Bridge::drop_oldest() { delete chain_.front(); chain_.pop_front(); }
 
 size_t Bridge::undo_bytes() const { return sizeof(Entry) - sizeof(Fact); }  // fixed part; +84 B for SYSTEM
