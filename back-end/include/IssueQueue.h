@@ -219,8 +219,18 @@ public:
   }
 
   void comb_issue() {
-    for (auto &grant : out.issue_grants) {
-      grant = {};
+    // Grants are all-zero unless the previous call filled one, and most cycles have nothing ready.
+    if (grants_live) {
+      for (auto &grant : out.issue_grants) {
+        grant = {};
+      }
+      grants_live = false;
+    }
+    bool any_ready = false;
+    for (uint64_t w : ready_bits) any_ready |= (w != 0);
+    if (!any_ready) {
+      out.free_slots = size - count_1;
+      return;
     }
     const std::vector<std::pair<int, int>> &scheduled_pairs = schedule();
     committed_indices.clear();
@@ -233,6 +243,7 @@ public:
           !in.issue_block) {
         out.issue_grants[phys_port].valid = true;
         out.issue_grants[phys_port].uop = entry[entry_idx].uop;
+        grants_live = true;
         committed_indices.push_back(entry_idx);
       }
     }
@@ -374,6 +385,7 @@ private:
   std::vector<int> ready_indices;
   std::vector<uint8_t> inst_issued;
   std::vector<int> committed_indices;
+  bool grants_live = true;  // out.issue_grants may hold a payload (conservative until the first comb_issue)
 
   const std::vector<std::pair<int, int>> &schedule() {
     std::vector<std::pair<int, int>> &result = sched_result;
