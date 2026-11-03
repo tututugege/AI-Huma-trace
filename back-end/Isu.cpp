@@ -90,12 +90,12 @@ void Isu::comb_enq() {
     auto &q = iqs[i];
     const int width = configs[i].dispatch_width;
     for (int w = 0; w < width; w++) {
-      q.in.enq_reqs[w] = {};
+      auto &slot = q.in.enq_reqs[w];
+      slot.valid = false;  // the payload is only read when valid
       if (!wires->dis2iss.req[i][w].valid) continue;
-      Uop uop = wires->dis2iss.req[i][w].uop;
-      apply_wakeup_to_uop(uop);
-      q.in.enq_reqs[w].uop = uop;
-      q.in.enq_reqs[w].valid = true;
+      slot.uop = wires->dis2iss.req[i][w].uop;
+      apply_wakeup_to_uop(slot.uop);
+      slot.valid = true;
     }
     q.comb_enq();
   }
