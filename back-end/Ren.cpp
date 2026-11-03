@@ -156,6 +156,21 @@ void count_commit(SimContext *ctx, const Uop &u) {
 }
 }  // namespace
 
+// ME_CHECK=1: every cycle, (1) arch_cnt equals the number of arch_RAT entries naming each register and (2) free
+// registers + registers held by in-flight allocations + distinct architectural registers == PRF_NUM (no leak).
+void Ren::me_check() const {
+  static const bool on = std::getenv("ME_CHECK") != nullptr;
+  if (!on) return;
+  int seen[PRF_NUM] = {0}, distinct = 0;
+  for (int a = 0; a < ARF_NUM + 1; a++) seen[arch_RAT_1[a]]++;
+  for (int p = 0; p < PRF_NUM; p++) {
+    Assert(seen[p] == arch_cnt[p] && "Ren(ME): arch_cnt differs from arch_RAT");
+    distinct += seen[p] > 0;
+  }
+  Assert(ring_distance(free_head_1, free_tail_1) + ring_distance(free_head_commit_1, free_head_1) + distinct == PRF_NUM &&
+         "Ren(ME): physical register leak");
+}
+
 // Rename state updates: fired instructions take their register and checkpoint spec_RAT at branches, commits free old
 // registers and update arch_RAT, then flush (restore from arch_RAT) or mispredict (restore a checkpoint) override
 // the next-cycle spec state.
@@ -238,6 +253,7 @@ void Ren::comb_fire() {
     free_tail_1 = free_tail;  // reclaims of this cycle are dropped, as in the original
   }
   ren_freelist_sanity(free_head_1, free_head_commit_1, free_tail_1);
+  if (move_elim_enabled()) me_check();
 }
 
 // Pipeline register: emptied by flush/mispredict, reloaded from decode when ready, else keeps unfired instructions.
