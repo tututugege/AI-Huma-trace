@@ -31,18 +31,6 @@
 #endif
 
 namespace {
-static uint64_t g_axi_idle_checked = 0, g_axi_idle_mismatch = 0;
-static const int g_axi_idle_report = [] {
-  if (getenv("AXI_IDLE_VERIFY")) {
-    std::atexit([] {
-      std::fprintf(stderr, "axi-idle-verify: checked=%llu mismatch=%llu\n",
-                   (unsigned long long)g_axi_idle_checked,
-                   (unsigned long long)g_axi_idle_mismatch);
-    });
-  }
-  return 0;
-}();
-static const bool kAxiIdleVerify = getenv("AXI_IDLE_VERIFY") != nullptr;
 constexpr bool kDcacheFastDomainEnabled = CONFIG_DCACHE_FAST_DOMAIN != 0;
 
 void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
@@ -113,18 +101,6 @@ void capture_axi_internal_tick_boundary_state(
 }
 
 template <typename InterconnectT>
-void restore_axi_internal_tick_boundary_state(
-    InterconnectT &interconnect, const AxiInternalTickBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    interconnect.req_ready_r[i] = state.read_req_ready_r[i];
-    interconnect.read_req_hold[i] = state.read_req_hold[i];
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    interconnect.w_req_ready_r[i] = state.write_req_ready_r[i];
-  }
-}
-
-template <typename InterconnectT>
 void restore_axi_internal_tick_boundary_state_except_dcache(
     InterconnectT &interconnect, const AxiInternalTickBoundaryState &state) {
   for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
@@ -141,9 +117,6 @@ void restore_axi_internal_tick_boundary_state_except_dcache(
     interconnect.w_req_ready_r[i] = state.write_req_ready_r[i];
   }
 }
-
-
-
 
 void connect_axi_slave_outputs(sim_ddr::SimDDR_IO_t &master_io,
                                const sim_ddr::SimDDR_IO_t &slave_io) {
@@ -193,63 +166,41 @@ axi_interconnect::AXI_LLCConfig make_default_llc_config() {
   return llc_cfg;
 }
 
-
-void bridge_axi_to_mem_subsystem(SimCpu &cpu) {
-  const auto &rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
+// L1D (MSHR refill / write-back) side of the AXI <-> MemSubsystem handshake.
+void bridge_dcache_axi_to_mem_subsystem(SimCpu &cpu) {
+  const auto &rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
   cpu.mem_subsystem.mshr_axi_in.req_ready = rport.req.ready;
   cpu.mem_subsystem.mshr_axi_in.req_accepted = rport.req.accepted;
   cpu.mem_subsystem.mshr_axi_in.req_accepted_id = rport.req.accepted_id;
   cpu.mem_subsystem.mshr_axi_in.resp_valid = rport.resp.valid;
   cpu.mem_subsystem.mshr_axi_in.resp_id = rport.resp.id;
-  const auto &wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
+  const auto &wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
   cpu.mem_subsystem.wb_axi_in.req_ready = wport.req.ready;
   cpu.mem_subsystem.wb_axi_in.req_accepted = wport.req.accepted;
   cpu.mem_subsystem.wb_axi_in.resp_valid = wport.resp.valid;
+}
 
-  const auto &peri_rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
+void bridge_axi_to_mem_subsystem(SimCpu &cpu) {
+  bridge_dcache_axi_to_mem_subsystem(cpu);
+
+  const auto &peri_rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
   cpu.mem_subsystem.peripheral_axi_read_in.req_ready = peri_rport.req.ready;
-  cpu.mem_subsystem.peripheral_axi_read_in.req_accepted =
-      peri_rport.req.accepted;
+  cpu.mem_subsystem.peripheral_axi_read_in.req_accepted = peri_rport.req.accepted;
   cpu.mem_subsystem.peripheral_axi_read_in.resp_valid = peri_rport.resp.valid;
   cpu.mem_subsystem.peripheral_axi_read_in.resp_id = peri_rport.resp.id;
-  for (int i = 0; i < DCACHE_WORD_NUM &&
-                  i < axi_interconnect::MAX_READ_TRANSACTION_WORDS;
-       i++) {
-    cpu.mem_subsystem.peripheral_axi_read_in.resp_data[i] =
-        peri_rport.resp.data[i];
+  for (int i = 0; i < DCACHE_WORD_NUM && i < axi_interconnect::MAX_READ_TRANSACTION_WORDS; i++) {
+    cpu.mem_subsystem.peripheral_axi_read_in.resp_data[i] = peri_rport.resp.data[i];
   }
 
-  const auto &peri_wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
+  const auto &peri_wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
   cpu.mem_subsystem.peripheral_axi_write_in.req_ready = peri_wport.req.ready;
-  cpu.mem_subsystem.peripheral_axi_write_in.req_accepted =
-      peri_wport.req.accepted;
+  cpu.mem_subsystem.peripheral_axi_write_in.req_accepted = peri_wport.req.accepted;
   cpu.mem_subsystem.peripheral_axi_write_in.resp_valid = peri_wport.resp.valid;
   cpu.mem_subsystem.peripheral_axi_write_in.resp_id = peri_wport.resp.id;
 }
 
-void bridge_dcache_axi_to_mem_subsystem(SimCpu &cpu) {
-  const auto &rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
-  cpu.mem_subsystem.mshr_axi_in.req_ready = rport.req.ready;
-  cpu.mem_subsystem.mshr_axi_in.req_accepted = rport.req.accepted;
-  cpu.mem_subsystem.mshr_axi_in.req_accepted_id = rport.req.accepted_id;
-  cpu.mem_subsystem.mshr_axi_in.resp_valid = rport.resp.valid;
-  cpu.mem_subsystem.mshr_axi_in.resp_id = rport.resp.id;
-
-  const auto &wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
-  cpu.mem_subsystem.wb_axi_in.req_ready = wport.req.ready;
-  cpu.mem_subsystem.wb_axi_in.req_accepted = wport.req.accepted;
-  cpu.mem_subsystem.wb_axi_in.resp_valid = wport.resp.valid;
-}
-
-void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
-  auto &rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
+void bridge_dcache_mem_subsystem_to_axi(SimCpu &cpu) {
+  auto &rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
   rport.req.valid = cpu.mem_subsystem.mshr_axi_out.req_valid;
   rport.req.addr = cpu.mem_subsystem.mshr_axi_out.req_addr;
   rport.req.total_size = cpu.mem_subsystem.mshr_axi_out.req_total_size;
@@ -257,71 +208,40 @@ void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
   rport.req.bypass = false;
   rport.resp.ready = cpu.mem_subsystem.mshr_axi_out.resp_ready;
 
-  auto &wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
+  auto &wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
   wport.req.valid = cpu.mem_subsystem.wb_axi_out.req_valid;
   wport.req.addr = cpu.mem_subsystem.wb_axi_out.req_addr;
   wport.req.total_size = cpu.mem_subsystem.wb_axi_out.req_total_size;
   wport.req.id = cpu.mem_subsystem.wb_axi_out.req_id;
   wport.req.wstrb = cpu.mem_subsystem.wb_axi_out.req_wstrb;
   wport.req.bypass = false;
-  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) {
-    wport.req.wdata[i] = 0;
-  }
+  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) wport.req.wdata[i] = 0;
   wport.resp.ready = cpu.mem_subsystem.wb_axi_out.resp_ready;
+}
 
-  auto &peri_rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
+void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
+  bridge_dcache_mem_subsystem_to_axi(cpu);
+
+  auto &peri_rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
   peri_rport.req.valid = cpu.mem_subsystem.peripheral_axi_read_out.req_valid;
   peri_rport.req.addr = cpu.mem_subsystem.peripheral_axi_read_out.req_addr;
-  peri_rport.req.total_size =
-      cpu.mem_subsystem.peripheral_axi_read_out.req_total_size;
+  peri_rport.req.total_size = cpu.mem_subsystem.peripheral_axi_read_out.req_total_size;
   peri_rport.req.id = cpu.mem_subsystem.peripheral_axi_read_out.req_id;
   peri_rport.req.bypass = true;
   peri_rport.resp.ready = cpu.mem_subsystem.peripheral_axi_read_out.resp_ready;
 
-  auto &peri_wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
+  auto &peri_wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
   peri_wport.req.valid = cpu.mem_subsystem.peripheral_axi_write_out.req_valid;
   peri_wport.req.addr = cpu.mem_subsystem.peripheral_axi_write_out.req_addr;
-  peri_wport.req.total_size =
-      cpu.mem_subsystem.peripheral_axi_write_out.req_total_size;
+  peri_wport.req.total_size = cpu.mem_subsystem.peripheral_axi_write_out.req_total_size;
   peri_wport.req.id = cpu.mem_subsystem.peripheral_axi_write_out.req_id;
   peri_wport.req.wstrb = cpu.mem_subsystem.peripheral_axi_write_out.req_wstrb;
   peri_wport.req.bypass = true;
-  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) {
-    peri_wport.req.wdata[i] = 0;
-  }
-  for (int i = 0;
-       i < DCACHE_WORD_NUM && i < axi_interconnect::CACHELINE_WORDS; i++) {
-    peri_wport.req.wdata[i] =
-        cpu.mem_subsystem.peripheral_axi_write_out.req_wdata[i];
+  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) peri_wport.req.wdata[i] = 0;
+  for (int i = 0; i < DCACHE_WORD_NUM && i < axi_interconnect::CACHELINE_WORDS; i++) {
+    peri_wport.req.wdata[i] = cpu.mem_subsystem.peripheral_axi_write_out.req_wdata[i];
   }
   peri_wport.resp.ready = cpu.mem_subsystem.peripheral_axi_write_out.resp_ready;
-}
-
-void bridge_dcache_mem_subsystem_to_axi(SimCpu &cpu) {
-  auto &rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
-  rport.req.valid = cpu.mem_subsystem.mshr_axi_out.req_valid;
-  rport.req.addr = cpu.mem_subsystem.mshr_axi_out.req_addr;
-  rport.req.total_size = cpu.mem_subsystem.mshr_axi_out.req_total_size;
-  rport.req.id = cpu.mem_subsystem.mshr_axi_out.req_id;
-  rport.req.bypass = false;
-  rport.resp.ready = cpu.mem_subsystem.mshr_axi_out.resp_ready;
-
-  auto &wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
-  wport.req.valid = cpu.mem_subsystem.wb_axi_out.req_valid;
-  wport.req.addr = cpu.mem_subsystem.wb_axi_out.req_addr;
-  wport.req.total_size = cpu.mem_subsystem.wb_axi_out.req_total_size;
-  wport.req.id = cpu.mem_subsystem.wb_axi_out.req_id;
-  wport.req.wstrb = cpu.mem_subsystem.wb_axi_out.req_wstrb;
-  wport.req.bypass = false;
-  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) {
-    wport.req.wdata[i] = 0;
-  }
-  wport.resp.ready = cpu.mem_subsystem.wb_axi_out.resp_ready;
 }
 
 struct AxiCpuBoundaryState {
@@ -509,30 +429,6 @@ void axi_subsystem_comb_inputs_dcache_fast_tick(SimCpu &cpu) {
   cpu.axi_mmio.comb_inputs();
 }
 
-void count_dcache_fast_tick_axi_events(SimCpu &cpu) {
-
-
-  const auto &rport =
-      cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
-  if (cpu.axi_interconnect
-          .read_req_accepted[axi_interconnect::MASTER_DCACHE_R]) {
-
-  }
-  if (rport.resp.valid && rport.resp.ready) {
-
-  }
-
-  const auto &wport =
-      cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
-  if (cpu.axi_interconnect
-          .write_req_accepted[axi_interconnect::MASTER_DCACHE_W]) {
-
-  }
-  if (wport.resp.valid && wport.resp.ready) {
-
-  }
-}
-
 void axi_subsystem_seq(SimCpu &cpu) {
   cpu.mem_subsystem.llc_seq(cpu.axi_interconnect.get_llc_table_out(),
                             cpu.axi_interconnect.get_llc_perf_counters());
@@ -555,21 +451,11 @@ void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
 
   AxiCpuBoundaryState cpu_boundary_state{};
   capture_axi_cpu_boundary_state(cpu, cpu_boundary_state);
-  bool detected = false;
-  AxiCpuBoundaryState at_detect{};
   for (uint32_t tick = 1; tick < CONFIG_AXI_SUBSYSTEM_FREQ_DIV; ++tick) {
     // Once a tick has left the whole AXI/LLC/DDR/MMIO subsystem and the L1D
     // fast domain quiescent, the remaining ticks are fixed points: their
     // boundary contribution is already accumulated.
-    if (tick >= 2 && axi_subsystem_quiescent(cpu)) {
-      if (!kAxiIdleVerify) {
-        break;
-      }
-      if (!detected) {
-        detected = true;
-        at_detect = cpu_boundary_state;
-      }
-    }
+    if (tick >= 2 && axi_subsystem_quiescent(cpu)) break;
     mask_axi_cpu_boundary_for_internal_tick(cpu);
     axi_subsystem_comb_outputs(cpu);
     if (kDcacheFastDomainEnabled) {
@@ -578,19 +464,9 @@ void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
       bridge_dcache_mem_subsystem_to_axi(cpu);
     }
     axi_subsystem_comb_inputs_dcache_fast_tick(cpu);
-    if (kDcacheFastDomainEnabled) {
-      count_dcache_fast_tick_axi_events(cpu);
-      cpu.mem_subsystem.dcache_fast_seq(false);
-    }
+    if (kDcacheFastDomainEnabled) cpu.mem_subsystem.dcache_fast_seq(false);
     axi_subsystem_seq(cpu);
     accumulate_axi_cpu_boundary_state(cpu, cpu_boundary_state);
-  }
-  if (kAxiIdleVerify && detected) {
-    ++g_axi_idle_checked;
-    if (!axi_subsystem_quiescent(cpu) ||
-        std::memcmp(&at_detect, &cpu_boundary_state, sizeof(at_detect)) != 0) {
-      ++g_axi_idle_mismatch;
-    }
   }
   restore_axi_cpu_boundary_state(cpu, cpu_boundary_state);
 }
@@ -615,9 +491,6 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   }
 }
 
-
-
-
 void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
   Assert(cpu != nullptr && "SimContext::run_commit_inst: cpu is null");
   Assert(inst_entry != nullptr &&
@@ -626,7 +499,6 @@ void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
          "SimContext::run_commit_inst: inst_entry is not valid");
   cpu->commit_sync(&inst_entry->uop, commit_slot);
 }
-
 
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
@@ -746,77 +618,43 @@ void SimCpu::cycle() {
   if (front2back_hold_live) static_cast<FrontPreIO &>(back.in) = front2back_hold;
   back.in.peripheral_resp = peripheral_resp_hold;
   // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
-  {
-    back.comb_csr_status();
-  }
+  back.comb_csr_status();
 
-  {
-    clear_axi_master_inputs(axi_interconnect);
-  }
+  clear_axi_master_inputs(axi_interconnect);
 
-  {
-    front_comb_before_back();
-  }
+  front_comb_before_back();
 
   // AXI phase-1: slave outputs -> interconnect outputs.
   // Interconnect outputs (req.ready/resp.valid) are bridged into MemSubsystem
   // before backend comb, so DCache responses from the previous DCache stage can
   // be visible to LSU in this CPU cycle.
-  {
-    axi_subsystem_comb_outputs(*this);
-  }
-  {
-    bridge_axi_to_mem_subsystem(*this);
-  }
+  axi_subsystem_comb_outputs(*this);
+  bridge_axi_to_mem_subsystem(*this);
 
-  {
-    mem_subsystem.comb_outputs();
-  }
+  mem_subsystem.comb_outputs();
 
-  {
-    back.comb();
-  }
+  back.comb();
 
-  {
-    mem_subsystem.comb_inputs();
-  }
+  mem_subsystem.comb_inputs();
   peripheral_resp_hold_comb();
 
-  {
-    bridge_mem_subsystem_to_axi(*this);
-  }
+  bridge_mem_subsystem_to_axi(*this);
 
   // AXI phase-2: master requests -> interconnect -> slave inputs.
-  {
-    axi_subsystem_comb_inputs(*this);
-  }
+  axi_subsystem_comb_inputs(*this);
 
-  {
-    back2front_comb();
-  }
-  {
-    front2back_hold_comb();
-  }
+  back2front_comb();
+  front2back_hold_comb();
 
-  {
-    front.seq_write_bpu();
-    front.seq_back2front();
-  }
-  {
-    front2back_hold_seq();
-  }
+  front.seq_write_bpu();
+  front.seq_back2front();
+  front2back_hold_seq();
   peripheral_resp_hold_seq();
 
-  {
-    back.seq();
-  }
-  {
-    mem_subsystem.seq();
-  }
-  {
-    axi_subsystem_seq(*this);
-    run_extra_axi_subsystem_ticks(*this);
-  }
+  back.seq();
+  mem_subsystem.seq();
+  axi_subsystem_seq(*this);
+  run_extra_axi_subsystem_ticks(*this);
   ctx.perf.perf_maybe_capture_simtime_snapshot();
 
   if (ctx.exit_reason != ExitReason::NONE) {
@@ -862,23 +700,6 @@ void SimCpu::peripheral_resp_hold_seq() {
 }
 
 void SimCpu::front_comb_before_back() {
-  auto perf_account_front_supply = [&]() {
-    if (front.in.FIFO_read_enable) {
-
-    }
-    if (front.out.FIFO_valid) {
-
-    }
-    if (front.in.FIFO_read_enable && !front.out.FIFO_valid) {
-
-    }
-    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-      if (back.in.valid[j]) {
-
-      }
-    }
-  };
-
   const bool registered_refetch = static_cast<bool>(front.back2front.refetch);
   const bool frontend_can_read = !front.back2front_stall || registered_refetch;
 
@@ -903,18 +724,12 @@ void SimCpu::front_comb_before_back() {
       back.in.page_fault_inst[j] = front.out.page_fault_inst[j];
       back.in.inst[j] = front.out.instructions[j];
 
-      // if (back.in.valid[j]) {
-      //   cout << "指令index:" << dec << sim_time << " 当前PC的取值为:" << hex
-      //        << front.out.pc[j] << " Inst: " << back.in.inst[j] << endl;
-      // }
-
       back.in.predict_dir[j] = front.out.predict_dir[j];
       if (back.in.valid[j] && front.out.predict_dir[j])
         no_taken = false;
     }
     back.in.meta = front.out.meta;
     back.in.front_stall = static_cast<bool>(front.out.commit_stall);
-    perf_account_front_supply();
   } else {
     front.in.FIFO_read_enable = false;
     front.in.refetch = false;
