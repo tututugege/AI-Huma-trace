@@ -20,6 +20,7 @@ illegal-instruction-trap.bin,0,0.36,300
 interrupt-vectored.bin,0,0.53,2477
 leap-year.bin,0,0.4,881
 load-store.bin,255,0.36,NA
+load-store-aligned.bin,0,0.40,536
 matmul_fpu.bin,0,3.65,42253
 matrix-mul.bin,0,0.42,1178
 max.bin,0,0.4,816

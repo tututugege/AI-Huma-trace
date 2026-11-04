@@ -15,7 +15,7 @@ one() {
   if [ "$c" = "$base" ] && [ $rc -eq 0 -o $rc -eq 1 ]; then echo "PASS $t $c"; else echo "FAIL $t base=$base got=${c:-none} rc=$rc"; fi
 }
 export -f one; export SIM OUT BASE DEADLINE
-ls "$T"/build/tests/*/*.bin "$T"/build/vm/*/*.bin 2>/dev/null | grep -v "memory-stress/\|load-store\|smc-" | xargs -P "$JOBS" -I{} bash -c 'one {}' > "$OUT/result.txt"
+ls "$T"/build/tests/*/*.bin "$T"/build/vm/*/*.bin 2>/dev/null | grep -v "memory-stress/\|load-store/\|smc-" | xargs -P "$JOBS" -I{} bash -c 'one {}' > "$OUT/result.txt"
 sort "$OUT/result.txt" -o "$OUT/result.txt"
 grep FAIL "$OUT/result.txt"
 echo "gate: pass=$(grep -c ^PASS "$OUT/result.txt") fail=$(grep -c ^FAIL "$OUT/result.txt")"

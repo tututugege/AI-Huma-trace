@@ -4,7 +4,7 @@ AI-Huma is the whole project (AI + human working together; also a nod to Rem's m
 - `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core, tututugege/GenSimpoint plus our
   commits; built as `librefcpu.a`. Used here as the submodule `GenSimpoint/`.
 - `trace-model` (this repo): the cycle-identical timing model, fed with facts by the function model.
-- `rtl` (`~/personal/tututugege-rtl`, to be moved to `~/personal/AI-Huma/rtl` once its agents finish): the SystemVerilog
+- `rtl` (`~/personal/AI-Huma/rtl`, moved there from `~/personal/tututugege-rtl` on 2026-11-04): the SystemVerilog
   translation of the modules, checked cycle by cycle against the trace model.
 The sections below describe trace-model.
 
@@ -33,12 +33,12 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
 1b. `git submodule update --init`, then `gmake -C GenSimpoint librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (build artifact, not tracked).
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 61 tests, pass = cycles equal to baseline.csv.
+3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv.
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
-   dhrystone 3,911,612; coremark 1/3/10 iterations 127,757 / 323,962 / 976,652; memory-stress 1,541,195;
+   dhrystone 64 runs 150,838; coremark 2 iterations 226,991 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big); memory-stress 1,541,195;
    smc-div 8,996; smc-addi 8,866.
 5. Small-LLC check (`scripts/llc_small_check.sh $PWD <abs path of baseline-sim/src>` (absolute paths required)): the default 8 MiB LLC never evicts in small tests.
-   `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing).
+   `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.
 
 ## Verification harnesses
 Frozen copies of the original modules live in `tests/*_ref`; the live modules were rewritten and proven against them.
