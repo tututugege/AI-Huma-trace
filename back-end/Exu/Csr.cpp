@@ -8,8 +8,9 @@
 namespace {
 constexpr uint32_t kSstatusMask = 0x800DE133;  // mstatus bits visible through sstatus
 constexpr uint32_t kMstatusWriteMask = 0x807FF9BB;
-constexpr uint32_t kSipMask = 0x00000333, kSieMask = 0x00000333;  // supervisor view of mip / mie
-constexpr uint32_t kMipMask = 0x00000bbb, kMieMask = 0x00000bbb;
+// Interrupt CSRs per the privileged spec (no N extension, same as the function model): mie holds SSIE/MSIE/STIE/MTIE/SEIE/MEIE;
+// the supervisor views sie / sip show only the bits delegated by mideleg (mideleg holds SSI/STI/SEI), and sip can only write SSIP.
+constexpr uint32_t kMipMask = 0x00000aaa, kMieMask = 0x00000aaa, kDelegBits = 0x00000222;
 
 // Interrupts that can be taken now, split by the privilege level that handles them.
 struct IrqState {
@@ -73,7 +74,7 @@ void Csr::comb_interrupt_inject() {
   for (const auto &l : lines) {
     if (!l.valid) continue;
     CSR_RegFile_1[csr_mip] = l.pending ? (CSR_RegFile_1[csr_mip] | l.bit) : (CSR_RegFile_1[csr_mip] & ~l.bit);
-    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & kSipMask;
+    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & (CSR_RegFile_1[csr_mideleg] & kDelegBits);
   }
 }
 
@@ -198,10 +199,16 @@ void Csr::comb_csr_write() {
     CSR_RegFile_1[m] = via_s ? (CSR_RegFile[m] & ~s_mask) | (csr_wdata & s_mask) : (m == csr_mstatus ? (CSR_RegFile[m] & ~m_mask) | (csr_wdata & m_mask) : csr_wdata & m_mask);
     CSR_RegFile_1[s] = CSR_RegFile_1[m] & s_mask;
   };
+  const uint32_t deleg = CSR_RegFile[csr_mideleg] & kDelegBits;
   if (csr_idx == number_mie || csr_idx == number_sie) {
-    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, kSieMask);
+    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, deleg);
   } else if (csr_idx == number_mip || csr_idx == number_sip) {
-    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, kSipMask);
+    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg);
+    CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & deleg;
+  } else if (csr_idx == number_mideleg) {
+    CSR_RegFile_1[csr_mideleg] = csr_wdata & kDelegBits;
+    CSR_RegFile_1[csr_sie] = CSR_RegFile[csr_mie] & CSR_RegFile_1[csr_mideleg];
+    CSR_RegFile_1[csr_sip] = CSR_RegFile[csr_mip] & CSR_RegFile_1[csr_mideleg];
   } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
     write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusMask);
   } else if (csr_idx == number_satp) {
