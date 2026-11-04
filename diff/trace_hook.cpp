@@ -1,5 +1,6 @@
 #include "trace_hook.h"
 #include "TraceBridge.h"
+extern long long sim_time;   // timing-model cycle counter (main.cpp)
 #include "config.h"
 #include "diff.h"
 #include "PhysMemory.h"
@@ -137,7 +138,7 @@ void on_commit(uint64_t uid) {
   // dispatched after the mispredict): undo them and re-execute the younger ones before the fact is used.
   if (const size_t k = g_bridge->kill_older_than(uid)) g_c.commit_front_miss += k;
   apply_mem_write(g_bridge->find(uid));
-  if (static const bool tr = std::getenv("TB_TRACE_COMMIT") != nullptr; tr) { const tb::Fact *tf = g_bridge->find(uid); if (tf) std::fprintf(stderr, "[COMMIT] pc=0x%08x inst=0x%08x rd=%d v=0x%08x\n", tf->pc, tf->inst, tf->rd_valid ? tf->rd : -1, tf->rd_value); }
+  if (static const bool tr = std::getenv("TB_TRACE_COMMIT") != nullptr; tr) { const tb::Fact *tf = g_bridge->find(uid); if (tf) std::fprintf(stderr, "[COMMIT] cyc=%lld pc=0x%08x inst=0x%08x rd=%d v=0x%08x\n", (long long)sim_time, tf->pc, tf->inst, tf->rd_valid ? tf->rd : -1, tf->rd_value); }
   g_c.commit++;
   g_bridge->commit(uid);
 }
