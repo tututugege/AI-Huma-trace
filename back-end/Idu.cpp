@@ -161,7 +161,9 @@ void Idu::seq() {
 }
 
 namespace {
-// CSRs the core implements; accessing any other one executes as a NOP.
+// CSRs the core implements; accessing any other one raises an illegal-instruction exception (like the function model:
+// OpenSBI probes menvcfg / mcounteren / stimecmp / ... by trapping, and must see them absent). The floating-point CSRs
+// are executed by the function model but have no timing effect here, so they stay NOPs.
 bool is_known_csr(uint32_t c) {
   switch (c) {
   case number_mtvec: case number_mepc: case number_mcause: case number_mie: case number_mip: case number_mtval:
@@ -258,7 +260,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     if ((f3 & 0b001) || (f3 & 0b010)) {
       if (!is_known_csr(csr)) {
         set(false, false, false, NOP);
-        if (csr == number_time || csr == number_timeh) uop.illegal_inst = true;
+        if (csr < 0x001 || csr > 0x003) uop.illegal_inst = true;   // not fflags / frm / fcsr
       } else {
         set(true, true, !uop->src2_is_imm, CSR);
         uop->imm = ra;  // zimm for the immediate forms
