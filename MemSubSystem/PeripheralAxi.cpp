@@ -46,19 +46,6 @@ uint32_t read_uncached_ram(uint32_t addr, uint8_t func3) {
   }
   return extract_uncached_read_data(raw, func3);
 }
-
-void write_uncached_ram(uint32_t addr, uint32_t data, uint8_t func3) {
-  const uint8_t size = uncached_access_size_bytes(func3);
-  for (uint8_t i = 0; i < size; i++) {
-    const uint32_t byte_addr = addr + i;
-    const uint32_t word_addr = byte_addr & ~0x3u;
-    const uint32_t shift = (byte_addr & 0x3u) * 8u;
-    const uint32_t mask = 0xFFu << shift;
-    const uint32_t byte_val = (data >> (i * 8u)) & 0xFFu;
-    const uint32_t old_word = pmem_read(word_addr);
-    pmem_write(word_addr, (old_word & ~mask) | (byte_val << shift));
-  }
-}
 } // namespace
 
 void PeripheralAxi::init() {
@@ -189,11 +176,9 @@ void PeripheralAxi::comb_inputs() {
                         ? 0
                         : read_uncached_ram(peripheral_req->mmio_addr,
                                             peripheral_req->mmio_fun3);
-        if (peripheral_req->wen) {
-          write_uncached_ram(peripheral_req->mmio_addr,
-                             peripheral_req->mmio_wdata,
-                             peripheral_req->mmio_fun3);
-        }
+        // No write: the core's own RAM is the only memory and the reference already performed this store when it was
+        // dispatched. Writing the store data here (at execution, later than the dispatch) put an old value back over
+        // the newer stores the reference had run ahead (xalancbmk: data in the 0x87f00000 uncached window).
         nxt.req_id = 0;
         return;
       }
