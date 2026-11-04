@@ -16,7 +16,7 @@ Where does host time go: FPU/ALU values, PRF/DCache data arrays, PTW/MMU, AXI/DD
 Rank by share so we delete the biggest first and know the ceiling. Use `sample` (needs get-task-allow) and an
 instruction-retired counter; do not trust wall-clock alone (layout-sensitive).
 
-P0 result (docs/P0_PROFILE.md): ~68% of host time is memmove in AXI_LLC::comb/AXI_Interconnect::seq (whole-state copy);
+P0 result (docs/history/P0_PROFILE.md): ~68% of host time is memmove in AXI_LLC::comb/AXI_Interconnect::seq (whole-state copy);
 value logic (FPU/ALU) is ~0%. So the first speed step is P3a below, before the bridge.
 
 ## P3a (moved first) LLC/AXI state: no whole-state copy, drop line data payloads; gate 56/56 equal.
@@ -64,7 +64,7 @@ the same bridge must work from an RTL tap. Gate source switches from the old mod
 ## Status table (updated at the end of P3)
 | step | state |
 |---|---|
-| P0 profile | done (docs/P0_PROFILE.md) |
+| P0 profile | done (docs/history/P0_PROFILE.md) |
 | P3a LLC copy, P3b IQ/PreIdu copies | done, exact (patches 0001, 0002) |
 | P1 bridge (check mode) | done (0003) |
 | P2 fact injection + commit-time events in the bridge | done (0004, 0005) |

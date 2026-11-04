@@ -2,7 +2,7 @@
 
 AI-Huma is the whole project (AI + human working together; also a nod to Rem's magic). It has three parts:
 - `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core, tututugege/GenSimpoint plus our
-  commits; built as `librefcpu.a`. Used here as the submodule `GenSimpoint/`.
+  commits; built as `librefcpu.a`. Used here through the symlink `GenSimpoint/` -> `../function-model` (the sibling repository in the AI-Huma layout).
 - `trace-model` (this repo): the cycle-identical timing model, fed with facts by the function model.
 - `rtl` (`~/personal/AI-Huma/rtl`, moved there from `~/personal/tututugege-rtl` on 2026-11-04): the SystemVerilog
   translation of the modules, checked cycle by cycle against the trace model.
@@ -15,7 +15,7 @@ Every change must keep identical cycle counts; cycle equality is the correctness
 ## Origin and history
 - Forked from tututugege/simulator at 2f31e8d (`upstream` remote). `main` here is the former `trace-distill` branch.
 - `axi-interconnect-kit/` (from dyh1807/axi-interconnect-kit, local commits up to 382cb6f) is vendored as a plain
-  directory. `GenSimpoint/` is a submodule of the function-model repo (URL is a local path until it is published).
+  directory. `GenSimpoint/` is a symlink to `../function-model` (the function-model repo checked out next to this one; it was a git submodule until 2026-11-04, which pinned an older function-model).
 - The pre-merge patch-queue repo (patches 0001..0061, step docs) is `../tututugege-trace`; its docs are in `docs/`,
   its tests/scripts in `tests/` and `scripts/`.
 - The original model stays available as a baseline binary (`~/personal/llm4trace/third_party/tututugege/baseline-sim/src`, 2f31e8d + exact kit patches); the
@@ -30,7 +30,7 @@ memory is written at ROB commit from facts; instruction/PTE/LLC read data come f
 ## Gate (run after every change)
 All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh build/simulator results/gate`.
 1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs).
-1b. `git submodule update --init`, then `gmake -C GenSimpoint librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (build artifact, not tracked).
+1b. `gmake -C GenSimpoint librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
 3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv.

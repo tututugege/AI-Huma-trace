@@ -4,7 +4,7 @@ Trace-driven, cycle-identical timing model distilled from tututugege/simulator (
 out-of-order RISC-V simulator). Part of the AI-Huma project (function-model + trace-model + rtl).
 
 Branch direction/target, addresses, store data and CSR write data come from facts supplied by the trace bridge (`diff/TraceBridge.*`),
-a functional core (`GenSimpoint`, built as `librefcpu`) that follows the model's dispatch stream including wrong paths. Every change
+a functional core (the sibling `function-model` repository, built as `librefcpu`; `GenSimpoint/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths. Every change
 must keep identical cycle counts: cycle equality is the correctness gate.
 
 See [docs/PROJECT.md](docs/PROJECT.md) for the architecture, the gate, the verification harnesses and the status.
@@ -12,8 +12,7 @@ See [docs/PROJECT.md](docs/PROJECT.md) for the architecture, the gate, the verif
 ## Build and run
 
 ```bash
-git submodule update --init
-gmake -C GenSimpoint librefcpu.a LDFLAGS="-lz"     # first time on a fresh checkout
+gmake -C GenSimpoint librefcpu.a LDFLAGS="-lz"     # builds ../function-model (symlink); needs the function-model repository next to this one
 gmake LDFLAGS="-lz" -j8
 ./build/simulator path/to/program.bin
 bash scripts/run_gate.sh build/simulator results/gate      # 62 tests, pass = cycles equal to results/baseline/baseline.csv

@@ -159,7 +159,7 @@ $(SIM_EXE): $(OBJS) $(LIBS)
 	@$(CXX) $(OBJS) $(LIBS) $(LDFLAGS) -o $@ $(CXXFLAGS)
 
 $(REFCPU_LIB):
-	$(error Missing $(REFCPU_LIB). Build the GenSimpoint submodule first with 'make -C GenSimpoint librefcpu.a')
+	$(error Missing $(REFCPU_LIB). Build the function-model first with 'make -C GenSimpoint librefcpu.a LDFLAGS=-lz' (GenSimpoint is a symlink to ../function-model)')
 
 # Compile
 $(BUILD_DIR)/%.o: %.cpp
