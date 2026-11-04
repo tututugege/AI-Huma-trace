@@ -1,8 +1,8 @@
 # AI-Huma / trace-model: project record
 
 AI-Huma is the whole project (AI + human working together; also a nod to Rem's magic). It has three parts:
-- `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core, tututugege/GenSimpoint plus our
-  commits; built as `librefcpu.a`. Used here through the symlink `function-model/` -> `../function-model` (the sibling repository in the AI-Huma layout).
+- `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core;
+  built as `librefcpu.a`. Used here through the symlink `function-model/` -> `../function-model` (the sibling repository in the AI-Huma layout).
 - `trace-model` (this repo): the cycle-identical timing model, fed with facts by the function model.
 - `rtl` (`~/personal/AI-Huma/rtl`, moved there from `~/personal/tututugege-rtl` on 2026-11-04): the SystemVerilog
   translation of the modules, checked cycle by cycle against the trace model.
