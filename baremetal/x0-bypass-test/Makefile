@@ -43,7 +43,7 @@ run: all
 ROOT := ../..
 HOST_INCLUDES := $(addprefix -I$(ROOT)/,include libs/include back-end/include \
   back-end/Exu/include back-end/Lsu/include back-end/tools/include \
-  MemSubSystem/include diff/include GenSimpoint/include/api front-end \
+  MemSubSystem/include diff/include function-model/include/api front-end \
   axi-interconnect-kit/include axi-interconnect-kit/axi_interconnect/include \
   axi-interconnect-kit/sim_ddr/include axi-interconnect-kit/mmio/include)
 ifeq ($(shell uname -s),Darwin)

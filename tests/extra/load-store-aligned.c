@@ -33,7 +33,7 @@ int main() {
 
 	for(i = 0; i < ((LENGTH(mem) / 2) - 1); i ++) {
 		/* the original does an unaligned lw at (char*)mem + 1 + 4*i; the reference core does not support unaligned loads
-		   (GenSimpoint/exec.cpp exits), so assemble the same little-endian word from aligned byte loads */
+		   (function-model/exec.cpp exits), so assemble the same little-endian word from aligned byte loads */
 		const volatile unsigned char *b = (const volatile unsigned char*)mem + 1 + 4 * i;
 		unsigned x = (unsigned)b[0] | ((unsigned)b[1] << 8) | ((unsigned)b[2] << 16) | ((unsigned)b[3] << 24);
 		check(x == lwlr_ans[i]);

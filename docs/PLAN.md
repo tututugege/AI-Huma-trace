@@ -30,7 +30,7 @@ value logic (FPU/ALU) is ~0%. So the first speed step is P3a below, before the b
 - Check: for every executed instruction (wrong path too) compare the core's fact with the model's own value:
   result, branch taken/target, load/store vaddr/paddr/size, exception cause, div/FP latency inputs.
 - Done when 56/56 have 0 mismatches and cycles unchanged.
-- Open: librefcpu's API (get/set state, undo). If it lacks rewind, add it in GenSimpoint (it is the user's code).
+- Open: librefcpu's API (get/set state, undo). If it lacks rewind, add it in function-model (it is the user's code).
 
 ## P2 Inject facts
 Per-instruction Fact record (from the bridge, keyed by uid) replaces computation at the point of use:

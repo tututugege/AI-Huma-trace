@@ -181,7 +181,7 @@ void init_diff_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   sync_all_memory_to_ref();
   seed_ref_io_from_backing();
 
-  // Keep checkpoint bootstrap aligned with GenSimpoint ref execution: only probe a
+  // Keep checkpoint bootstrap aligned with function-model ref execution: only probe a
   // translation when SATP is active, and do not require the restored PC to be
   // immediately translatable at init time.
   (void)refcpu_probe_pc_translation(ref_cpu_ctx);

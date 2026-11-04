@@ -19,7 +19,7 @@ ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)
 CXXFLAGS += $(ZLIB_CFLAGS)
 
 # Libraries
-REFCPU_LIB := ./GenSimpoint/librefcpu.a
+REFCPU_LIB := ./function-model/librefcpu.a
 LIBS := $(REFCPU_LIB) ./libs/softfloat.a
 LDFLAGS := -lz -lstdc++fs
 ifneq ($(ZLIB_LIBDIR),)
@@ -49,7 +49,7 @@ INCLUDES := -I./include/ \
             -I./back-end/tools/include/ \
             -I./MemSubSystem/include/ \
             -I./diff/include/ \
-            -I./GenSimpoint/include/api/ \
+            -I./function-model/include/api/ \
             -I./legacy/mmu/include/ \
             -I$(FRONT_DIR)/
 
@@ -159,7 +159,7 @@ $(SIM_EXE): $(OBJS) $(LIBS)
 	@$(CXX) $(OBJS) $(LIBS) $(LDFLAGS) -o $@ $(CXXFLAGS)
 
 $(REFCPU_LIB):
-	$(error Missing $(REFCPU_LIB). Build the function-model first with 'make -C GenSimpoint librefcpu.a LDFLAGS=-lz' (GenSimpoint is a symlink to ../function-model)')
+	$(error Missing $(REFCPU_LIB). Build the function-model first with 'make -C function-model librefcpu.a LDFLAGS=-lz' (function-model is a symlink to ../function-model)')
 
 # Compile
 $(BUILD_DIR)/%.o: %.cpp

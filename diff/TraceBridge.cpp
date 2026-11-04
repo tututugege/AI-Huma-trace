@@ -11,7 +11,7 @@ namespace tb {
 //   pc / privilege / reservation before it, the old value of its destination register,
 //   the CSRs a trap writes, the whole CSR file only for SYSTEM instructions,
 //   and the old memory word of a store/AMO.
-// Indices into RefCpuState::csr (enum_csr in GenSimpoint/include/CSR.h).
+// Indices into RefCpuState::csr (enum_csr in function-model/include/CSR.h).
 static constexpr int kTrapCsr[8] = {7 /*mstatus*/, 15 /*sstatus*/, 1 /*mepc*/, 2 /*mcause*/,
                                     5 /*mtval*/,   10 /*sepc*/,    12 /*scause*/, 14 /*stval*/};
 
