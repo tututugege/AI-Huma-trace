@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+extern long long sim_time;   // timing-model cycle counter (main.cpp)
+
 namespace tb {
 
 // Undo log of one dispatched instruction (~60 bytes, no full register/CSR copy):
@@ -200,6 +202,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   }
 
   refcpu_set_sim_end(ctx_, false);
+  refcpu_set_sim_time(ctx_, static_cast<uint64_t>(sim_time));   // mtime/rdtime follow the timing model, otherwise machine time stays 0 and Linux never sees a tick
   refcpu_step(ctx_, 1);
   RefCpuStepInfo info{};
   refcpu_get_step_info(ctx_, &info);
