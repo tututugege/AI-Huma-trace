@@ -208,6 +208,7 @@ struct RobBroadcastIO {
   wire<1> mret = {};
   wire<1> sret = {};
   wire<1> ecall = {};
+  wire<1> breakpoint = {};  // ebreak of the semihosting marker sequence: a breakpoint exception (cause 3)
   wire<1> exception = {};
   wire<1> fence = {};
   wire<1> fence_i = {};

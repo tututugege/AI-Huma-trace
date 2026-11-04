@@ -86,12 +86,13 @@ void Csr::comb_exception() {
   const uint32_t medeleg = CSR_RegFile[csr_medeleg];
   const uint32_t mtvec = CSR_RegFile[csr_mtvec], stvec = CSR_RegFile[csr_stvec];
 
-  const bool ecall = rb.ecall, pf_inst = rb.page_fault_inst, pf_load = rb.page_fault_load,
+  const bool bp = rb.breakpoint, ecall = rb.ecall, pf_inst = rb.page_fault_inst, pf_load = rb.page_fault_load,
              pf_store = rb.page_fault_store, illegal = rb.illegal_inst;
   const bool pf = pf_inst || pf_load || pf_store;
   auto deleg = [&](int bit) { return (medeleg >> bit) & 1; };
   const bool d_uecall = deleg(8), d_secall = deleg(9), d_pf_inst = deleg(12), d_pf_load = deleg(13),
-             d_pf_store = deleg(15), d_illegal = deleg(2);
+             d_pf_store = deleg(15), d_illegal = deleg(2),
+             d_bp = deleg(3) && privilege != 3;  // a trap taken in M mode is never delegated
 
   const IrqState irq = eval_interrupts(mstatus, CSR_RegFile[csr_mie], CSR_RegFile[csr_mip], CSR_RegFile[csr_mideleg], privilege);
   const bool resp = wires->rob2csr.interrupt_resp;
@@ -100,9 +101,9 @@ void Csr::comb_exception() {
   const bool u_ecall = ecall && privilege == 0, s_ecall = ecall && privilege == 1, m_ecall = ecall && privilege == 3;
   const bool m_trap = m_irq || (u_ecall && !d_uecall) || (s_ecall && !d_secall) || m_ecall ||
                       (pf_inst && !d_pf_inst) || (pf_load && !d_pf_load) || (pf_store && !d_pf_store) ||
-                      (illegal && !d_illegal);
+                      (illegal && !d_illegal) || (bp && !d_bp);
   const bool s_trap = s_irq || (u_ecall && d_uecall) || (s_ecall && d_secall) || (pf_inst && d_pf_inst) ||
-                      (pf_load && d_pf_load) || (pf_store && d_pf_store) || (illegal && d_illegal);
+                      (pf_load && d_pf_load) || (pf_store && d_pf_store) || (illegal && d_illegal) || (bp && d_bp);
 
   // Vectored mode: interrupts jump to base + 4 * cause.
   auto trap_target = [&](uint32_t tvec, uint32_t cause) {
@@ -122,6 +123,7 @@ void Csr::comb_exception() {
              : (pf_inst && !d_pf_inst) ? 12
              : (pf_load && !d_pf_load) ? 13
              : (pf_store && !d_pf_store) ? 15
+             : (bp && !d_bp) ? 3
              : illegal ? 2
                        : 0;
     CSR_RegFile_1[csr_mcause] = cause;
@@ -133,7 +135,7 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_mstatus] = mstatus;
     CSR_RegFile_1[csr_sstatus] = mstatus & kSstatusMask;
     privilege_1 = RISCV_MODE_M;
-    CSR_RegFile_1[csr_mtval] = (pf || illegal) ? rb.trap_val : 0;
+    CSR_RegFile_1[csr_mtval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (s_trap) {
     CSR_RegFile_1[csr_sepc] = rb.pc;
     uint32_t cause = irq.to_s() ? 1u << 31 : 0;
@@ -144,6 +146,7 @@ void Csr::comb_exception() {
              : (pf_inst && d_pf_inst) ? 12
              : (pf_load && d_pf_load) ? 13
              : (pf_store && d_pf_store) ? 15
+             : (bp && d_bp) ? 3
              : (illegal && d_illegal) ? 2
                                       : 0;
     CSR_RegFile_1[csr_scause] = cause;
@@ -155,7 +158,7 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_sstatus] = sstatus;
     CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusMask) | (sstatus & kSstatusMask);
     privilege_1 = 1;
-    CSR_RegFile_1[csr_stval] = (pf || illegal) ? rb.trap_val : 0;
+    CSR_RegFile_1[csr_stval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (rb.mret) {
     mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);  // MIE = MPIE
     privilege_1 = GET_MPP(mstatus);

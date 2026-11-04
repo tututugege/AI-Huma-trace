@@ -13,6 +13,11 @@ namespace {
 inline bool rob_is_store(const Uop &u) { return u.tma.mem_commit_is_store; }
 inline bool rob_is_load(const Uop &u) { return u.tma.mem_commit_is_load; }
 inline bool rob_is_page_fault(const Uop &u) { return u.page_fault_inst || u.page_fault_load || u.page_fault_store; }
+// RISC-V semihosting marker: slli x0,x0,0x1f ; ebreak ; srai x0,x0,7. OpenSBI's generic platform probes it and expects a breakpoint
+// trap into M mode; every other ebreak still ends the simulation (the bare-metal tests' exit). Same rule as the function model.
+inline bool is_semihost_marker(uint32_t pc) {
+  return tbhook::mem_read(pc - 4) == 0x01f01013u && tbhook::mem_read(pc + 4) == 0x40705013u;
+}
 inline bool rob_is_complete(const Uop &u) { return u.cplt_mask == u.expect_mask; }
 inline InstType rob_type(const Uop &u) { return decode_inst_type(u->type); }
 inline bool rob_is_exception(const Uop &u) { return rob_is_page_fault(u) || u.illegal_inst || rob_type(u) == ECALL; }
@@ -105,7 +110,7 @@ void Rob::comb_ftq_pc_req() {
 void Rob::comb_commit() {
   Wires &w = *wires;
   auto &bc = w.rob_bcast;
-  bc.flush = bc.exception = bc.mret = bc.sret = bc.ecall = bc.fence = bc.fence_i = false;
+  bc.flush = bc.exception = bc.mret = bc.sret = bc.ecall = bc.breakpoint = bc.fence = bc.fence_i = false;
   bc.interrupt = false;
   bc.page_fault_inst = bc.page_fault_load = bc.page_fault_store = bc.illegal_inst = false;
   w.rob2csr.interrupt_resp = false;
@@ -211,7 +216,7 @@ void Rob::comb_commit() {
         Assert(w.ftq_rob_pc_resp.resp[0].valid);
         pc = w.ftq_rob_pc_resp.resp[0].pc;
         bc.flush = true;
-        bc.exception = rob_is_exception(u) || intr;
+        bc.exception = rob_is_exception(u) || intr || (!intr && rob_type(u) == EBREAK && is_semihost_marker(pc));
         bc.pc = pc;
       }
       const InstType t = rob_type(u);
@@ -224,6 +229,7 @@ void Rob::comb_commit() {
       else if (u.page_fault_load) { bc.page_fault_load = true; bc.trap_val = u.diag_val; }
       else if (u.page_fault_inst) { bc.page_fault_inst = true; bc.trap_val = pc; }
       else if (u.illegal_inst) { bc.illegal_inst = true; bc.trap_val = u.diag_val; }
+      else if (t == EBREAK && is_semihost_marker(pc)) { bc.breakpoint = true; bc.trap_val = pc; }  // breakpoint exception, cause 3, tval = pc
       else if (t == EBREAK) ctx->exit_reason = ExitReason::EBREAK;
       else if (wfi) { /* retires without leaving the simulator */ }
       else if (t == CSR) w.rob2csr.commit = true;
