@@ -51,7 +51,10 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 // Frontend / Backend Width
 // ============================================================
 constexpr int FETCH_WIDTH = 8;
-constexpr int BACKEND_FETCH_WIDTH = 16;
+#ifndef CFG_BACKEND_FETCH_WIDTH
+#define CFG_BACKEND_FETCH_WIDTH 16
+#endif
+constexpr int BACKEND_FETCH_WIDTH = CFG_BACKEND_FETCH_WIDTH;
 constexpr int DECODE_WIDTH = 8;
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
 static_assert(BACKEND_FETCH_WIDTH >= FETCH_WIDTH,
@@ -327,20 +330,32 @@ constexpr int DCACHE_WORDS_PER_BANK = DCACHE_WORD_NUM / DCACHE_BANK_NUM;
 // ============================================================
 
 constexpr int ARF_NUM = 32;
-constexpr int PRF_NUM = 128;
-constexpr int MAX_BR_NUM = 64;
+#ifndef CFG_PRF_NUM
+#define CFG_PRF_NUM 128
+#endif
+constexpr int PRF_NUM = CFG_PRF_NUM;
+#ifndef CFG_MAX_BR_NUM
+#define CFG_MAX_BR_NUM 64
+#endif
+constexpr int MAX_BR_NUM = CFG_MAX_BR_NUM;
 constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
 constexpr int CSR_NUM = 21;
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;
-constexpr int ROB_NUM = 128;
+#ifndef CFG_ROB_NUM
+#define CFG_ROB_NUM 128
+#endif
+constexpr int ROB_NUM = CFG_ROB_NUM;
 constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
 
 // ============================================================
 // FTQ/INST BUFFER
 // ============================================================
 
-constexpr int IDU_INST_BUFFER_SIZE = 128;
+#ifndef CFG_IBUF_SIZE
+#define CFG_IBUF_SIZE 128
+#endif
+constexpr int IDU_INST_BUFFER_SIZE = CFG_IBUF_SIZE;
 constexpr int FTQ_SIZE = 64;
 static_assert(is_power_of_two_u64(FTQ_SIZE), "FTQ_SIZE must be a power of two");
 
@@ -365,6 +380,36 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 // Issue Port Layout
 // ============================================================
 
+#ifndef CFG_PLAIN_ALU_PORTS
+#define CFG_PLAIN_ALU_PORTS 2  // ALU-only ports after the four ALU+MUL/DIV/FP/CSR ports
+#endif
+#ifndef CFG_BR_PORTS
+#define CFG_BR_PORTS 4
+#endif
+#ifndef CFG_LD_PORTS
+#define CFG_LD_PORTS 4
+#endif
+#ifndef CFG_STA_PORTS
+#define CFG_STA_PORTS 4
+#endif
+#ifndef CFG_STD_PORTS
+#define CFG_STD_PORTS 4
+#endif
+#ifndef CFG_LD_IQ_SIZE
+#define CFG_LD_IQ_SIZE 64
+#endif
+#ifndef CFG_STA_IQ_SIZE
+#define CFG_STA_IQ_SIZE 64
+#endif
+#ifndef CFG_STD_IQ_SIZE
+#define CFG_STD_IQ_SIZE 64
+#endif
+#ifndef CFG_INT_IQ_SIZE
+#define CFG_INT_IQ_SIZE 128
+#endif
+#ifndef CFG_BR_IQ_SIZE
+#define CFG_BR_IQ_SIZE 64
+#endif
 enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 #define PORT_CFG(mask) {(__COUNTER__ - ISSUE_PORT_COUNTER_BASE - 1), (mask)}
 
@@ -377,24 +422,61 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_FP), // Port 1: ALU + DIV + FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL), // Port 1: ALU + DIV + FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV + FP
-    PORT_CFG(OP_MASK_ALU ), // Port 1: ALU + DIV + FP
-    PORT_CFG(OP_MASK_ALU ), // Port 1: ALU + DIV + FP
-    PORT_CFG(OP_MASK_LD),                             // Port 2: Load
-    PORT_CFG(OP_MASK_LD),                             // Port 3: Load
-    PORT_CFG(OP_MASK_LD),                             // Port 3: Load
-    PORT_CFG(OP_MASK_LD),                             // Port 3: Load
-    PORT_CFG(OP_MASK_STA),                            // Port 4: Store Addr
-    PORT_CFG(OP_MASK_STA),                            // Port 5: Store Addr
-    PORT_CFG(OP_MASK_STA),                            // Port 5: Store Addr
-    PORT_CFG(OP_MASK_STA),                            // Port 5: Store Addr
-    PORT_CFG(OP_MASK_STD),                            // Port 6: Store Data
-    PORT_CFG(OP_MASK_STD),                            // Port 7: Store Data
-    PORT_CFG(OP_MASK_STD),                            // Port 7: Store Data
-    PORT_CFG(OP_MASK_STD),                            // Port 7: Store Data
-    PORT_CFG(OP_MASK_BR),                             // Port 8: Branch
-    PORT_CFG(OP_MASK_BR),                             // Port 8: Branch
-    PORT_CFG(OP_MASK_BR),                             // Port 8: Branch
-    PORT_CFG(OP_MASK_BR)                              // Port 9: Branch
+#if CFG_PLAIN_ALU_PORTS >= 1
+    PORT_CFG(OP_MASK_ALU ), // plain ALU
+#endif
+#if CFG_PLAIN_ALU_PORTS >= 2
+    PORT_CFG(OP_MASK_ALU ), // plain ALU
+#endif
+// memory issue port counts (1..4 each)
+#if CFG_LD_PORTS >= 1
+    PORT_CFG(OP_MASK_LD),
+#endif
+#if CFG_LD_PORTS >= 2
+    PORT_CFG(OP_MASK_LD),
+#endif
+#if CFG_LD_PORTS >= 3
+    PORT_CFG(OP_MASK_LD),
+#endif
+#if CFG_LD_PORTS >= 4
+    PORT_CFG(OP_MASK_LD),
+#endif
+#if CFG_STA_PORTS >= 1
+    PORT_CFG(OP_MASK_STA),
+#endif
+#if CFG_STA_PORTS >= 2
+    PORT_CFG(OP_MASK_STA),
+#endif
+#if CFG_STA_PORTS >= 3
+    PORT_CFG(OP_MASK_STA),
+#endif
+#if CFG_STA_PORTS >= 4
+    PORT_CFG(OP_MASK_STA),
+#endif
+#if CFG_STD_PORTS >= 1
+    PORT_CFG(OP_MASK_STD),
+#endif
+#if CFG_STD_PORTS >= 2
+    PORT_CFG(OP_MASK_STD),
+#endif
+#if CFG_STD_PORTS >= 3
+    PORT_CFG(OP_MASK_STD),
+#endif
+#if CFG_STD_PORTS >= 4
+    PORT_CFG(OP_MASK_STD),
+#endif
+#if CFG_BR_PORTS >= 1
+    PORT_CFG(OP_MASK_BR),
+#endif
+#if CFG_BR_PORTS >= 2
+    PORT_CFG(OP_MASK_BR),
+#endif
+#if CFG_BR_PORTS >= 3
+    PORT_CFG(OP_MASK_BR),
+#endif
+#if CFG_BR_PORTS >= 4
+    PORT_CFG(OP_MASK_BR),
+#endif
 };
 #undef PORT_CFG
 
@@ -513,17 +595,25 @@ constexpr int TOTAL_FU_COUNT = calculate_total_fu_count();
 // ============================================================
 
 constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
-    {IQ_INT, 128, DECODE_WIDTH,
+    {IQ_INT, CFG_INT_IQ_SIZE, DECODE_WIDTH,
      OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE,
      count_ports_with_mask(OP_MASK_ALU)},
-    {IQ_LD, 64, DECODE_WIDTH, OP_MASK_LD, IQ_LD_PORT_BASE,
+    {IQ_LD, CFG_LD_IQ_SIZE, DECODE_WIDTH, OP_MASK_LD, IQ_LD_PORT_BASE,
      count_ports_with_mask(OP_MASK_LD)},
-    {IQ_STA, 64, DECODE_WIDTH, OP_MASK_STA, IQ_STA_PORT_BASE,
+    {IQ_STA, CFG_STA_IQ_SIZE, DECODE_WIDTH, OP_MASK_STA, IQ_STA_PORT_BASE,
      count_ports_with_mask(OP_MASK_STA)},
-    {IQ_STD, 64, DECODE_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
+    {IQ_STD, CFG_STD_IQ_SIZE, DECODE_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
      count_ports_with_mask(OP_MASK_STD)},
-    {IQ_BR, 64, DECODE_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
+    {IQ_BR, CFG_BR_IQ_SIZE, DECODE_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
      count_ports_with_mask(OP_MASK_BR)}};
+
+// per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)
+constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
+constexpr int IQ_LD_SIZE = CFG_LD_IQ_SIZE;
+constexpr int IQ_STA_SIZE = CFG_STA_IQ_SIZE;
+constexpr int IQ_STD_SIZE = CFG_STD_IQ_SIZE;
+constexpr int IQ_BR_SIZE = CFG_BR_IQ_SIZE;
+
 
 constexpr int calculate_max_iq_size() {
   int max_size = 0;
