@@ -49,3 +49,6 @@ __pycache__/
 /build/
 /results/*
 !/results/baseline/
+
+# DRAMsim3 output directory (DS3_OUT, default ds3_out in the working directory)
+ds3_out/

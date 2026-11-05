@@ -455,7 +455,12 @@ void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
     // Once a tick has left the whole AXI/LLC/DDR/MMIO subsystem and the L1D
     // fast domain quiescent, the remaining ticks are fixed points: their
     // boundary contribution is already accumulated.
-    if (tick >= 2 && axi_subsystem_quiescent(cpu)) break;
+    if (tick >= 2 && axi_subsystem_quiescent(cpu)) {
+#ifdef SIM_DDR_DS3
+      cpu.axi_ddr.ds3_advance(CONFIG_AXI_SUBSYSTEM_FREQ_DIV - tick);  // keep DRAM time (refresh) running
+#endif
+      break;
+    }
     mask_axi_cpu_boundary_for_internal_tick(cpu);
     axi_subsystem_comb_outputs(cpu);
     if (kDcacheFastDomainEnabled) {

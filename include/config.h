@@ -243,6 +243,7 @@ constexpr int CONFIG_SIM_DDR_LATENCY_CALC = static_cast<int>(
 #ifndef CONFIG_AXI_SUBSYSTEM_FREQ_DIV
 #define CONFIG_AXI_SUBSYSTEM_FREQ_DIV 16u
 #endif
+constexpr int AXI_SUBSYSTEM_FREQ_DIV = CONFIG_AXI_SUBSYSTEM_FREQ_DIV;  // ticks of the AXI/LLC/DDR subsystem per core cycle (the RTL derives its tick count from it)
 static_assert(CONFIG_AXI_SUBSYSTEM_FREQ_DIV >= 1,
               "CONFIG_AXI_SUBSYSTEM_FREQ_DIV must be >= 1");
 #ifndef CONFIG_AXI_KIT_UART_BASE
