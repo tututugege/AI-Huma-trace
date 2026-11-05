@@ -43,7 +43,7 @@ memory is written at ROB commit from facts; instruction/PTE/LLC read data come f
 
 ## Gate (run after every change)
 All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh build/simulator results/gate`.
-1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs). DRAMsim3 is on by default (EXP-006): it needs `libdramsim3.dylib` in `$(DS3_DIR)` (default `~/personal/AI-Huma-data/third_party/DRAMsim3`; build with `cmake -S . -B build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build build --target dramsim3`). `gmake DS3=0` builds the old fixed-latency SimDDR. Core frequency: `gmake CPU_FREQ_MHZ=...` (default 1000) or the `CPU_FREQ_MHZ` environment variable at run time. After changing flags use a clean `BUILD_DIR`.
+1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs). DRAMsim3 is on by default (EXP-006): it is the pinned git submodule `third_party/DRAMsim3` (`git submodule update --init third_party/DRAMsim3` after cloning), compiled by the Makefile into `build_dramsim3/libdramsim3.a` (`gmake dramsim3`; no cmake, no shared library). `gmake DS3=0` builds the old fixed-latency SimDDR. Core frequency: `gmake CPU_FREQ_MHZ=...` (default 1000) or the `CPU_FREQ_MHZ` environment variable at run time. After changing flags use a clean `BUILD_DIR`.
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).

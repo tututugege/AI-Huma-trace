@@ -3,6 +3,7 @@
 # ==========================================
 
 BUILD_DIR := build
+.DEFAULT_GOAL := all
 SIM_EXE   := $(BUILD_DIR)/simulator
 IMG     := ./baremetal/memory
 AXI_KIT_DIR := ./axi-interconnect-kit
@@ -94,17 +95,33 @@ CXXFLAGS += -DDR_SHADOW
 endif
 
 # DRAMsim3 DRAM timing backend for SimDDR (EXP-006), on by default; `gmake DS3=0` builds the fixed-latency SimDDR.
-# Needs DRAMsim3 built in DS3_DIR (libdramsim3.dylib). Core frequency: `gmake CPU_FREQ_MHZ=...` or env CPU_FREQ_MHZ at run time.
+# DRAMsim3 is the pinned git submodule third_party/DRAMsim3 (`git submodule update --init third_party/DRAMsim3`); its
+# library is compiled here into build_dramsim3/libdramsim3.a (also used by rtl/tb/soc/build.sh, `gmake dramsim3`).
+# Core frequency: `gmake CPU_FREQ_MHZ=...` or the CPU_FREQ_MHZ environment variable at run time.
 DS3 ?= 1
-DS3_DIR ?= $(HOME)/personal/AI-Huma-data/third_party/DRAMsim3
+DS3_DIR ?= third_party/DRAMsim3
+DS3_LIB ?= build_dramsim3/libdramsim3.a
+DS3_SRC := bankstate channel_state command_queue common configuration controller dram_system hmc refresh simple_stats timing memory_system
+DS3_OBJS := $(DS3_SRC:%=$(dir $(DS3_LIB))%.o)
 ifdef CPU_FREQ_MHZ
 CXXFLAGS += -DCONFIG_CPU_FREQ_MHZ=$(CPU_FREQ_MHZ)u
 endif
 ifneq ($(DS3),0)
-INCLUDES += -I$(DS3_DIR)/src
-CXXFLAGS += -DSIM_DDR_DS3 -DDS3_DEFAULT_CONFIG='"$(DS3_DIR)/configs/DDR4_8Gb_x16_3200.ini"'
-override LDFLAGS += -L$(DS3_DIR) -ldramsim3 -Wl,-rpath,$(DS3_DIR)
+ifeq ($(wildcard $(DS3_DIR)/src/dramsim3.h),)
+$(error DRAMsim3 not found in $(DS3_DIR): run 'git submodule update --init third_party/DRAMsim3' (or build with DS3=0))
 endif
+INCLUDES += -I$(DS3_DIR)/src
+CXXFLAGS += -DSIM_DDR_DS3 -DDS3_DEFAULT_CONFIG='"$(abspath $(DS3_DIR))/configs/DDR4_8Gb_x16_3200.ini"'
+LIBS += $(DS3_LIB)
+endif
+$(dir $(DS3_LIB))%.o: $(DS3_DIR)/src/%.cc
+	@mkdir -p $(dir $(DS3_LIB))
+	@echo "Compiling DRAMsim3 $*.cc"
+	@$(CXX) -std=c++14 -O2 -w -DFMT_HEADER_ONLY=1 -I$(DS3_DIR)/src -I$(DS3_DIR)/ext/headers -I$(DS3_DIR)/ext/fmt/include -c $< -o $@
+$(DS3_LIB): $(DS3_OBJS)
+	@ar rcs $@ $^
+.PHONY: dramsim3
+dramsim3: $(DS3_LIB)
 
 ifdef ROB_SHADOW
 CXXSRC += ./rob_ref/RobRef.cpp ./rob_ref/RobShadow.cpp
