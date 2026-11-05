@@ -49,7 +49,8 @@ axi_data_t SimDDR::do_memory_read(uint32_t addr) {
 #ifdef SIM_DDR_DS3
 struct SimDDR::Ds3Holder {
   Ds3 d;
-  Ds3Holder() : d(CONFIG_CPU_FREQ_MHZ, CONFIG_AXI_SUBSYSTEM_FREQ_DIV, CONFIG_DDR_SOC_LATENCY_NS + CONFIG_DDR_CDC_LATENCY_NS) {}
+  Ds3Holder() : d(CONFIG_CPU_FREQ_MHZ, CONFIG_AXI_SUBSYSTEM_FREQ_DIV, CONFIG_DDR_SOC_LATENCY_NS + CONFIG_DDR_CDC_LATENCY_NS +
+                                                                       CONFIG_DDR_CTL_LATENCY_NS + CONFIG_DDR_PHY_LATENCY_NS) {}  // 60 ns: the non-core path of config.h
 };
 SimDDR::SimDDR() : ds3_(new Ds3Holder) {}
 SimDDR::~SimDDR() = default;
