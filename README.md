@@ -1,7 +1,10 @@
 # trace-model
 
-Trace-driven, cycle-identical timing model distilled from tututugege/simulator (an RTL-style, execution-driven, cycle-accurate
-out-of-order RISC-V simulator). Part of the AI-Huma project (function-model + trace-model + rtl).
+The timing model and architecture-exploration platform of the AI-Huma project (function-model + trace-model + rtl).
+It started as a trace-driven, cycle-identical distillation of tututugege/simulator (an RTL-style, execution-driven, cycle-accurate
+out-of-order RISC-V simulator); that base was finished on 2026-11-04. Since then the work is our own optimization: ideas are
+measured here first (cycles, IPC, queue/port usage), then carried to the RTL; the original model's cycle counts are no longer the target
+(first merged result: the batch-3 area configuration, 2026-11-05).
 
 Branch direction/target, addresses, store data and CSR write data come from facts supplied by the trace bridge (`diff/TraceBridge.*`),
 a functional core (the sibling `function-model` repository, built as `librefcpu`; `function-model/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths. Every change

@@ -3,15 +3,17 @@
 AI-Huma is the whole project (AI + human working together; also a nod to Rem's magic). It has three parts:
 - `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core;
   built as `librefcpu.a`. Used here through the symlink `function-model/` -> `../function-model` (the sibling repository in the AI-Huma layout).
-- `trace-model` (this repo): the cycle-identical timing model, fed with facts by the function model.
+- `trace-model` (this repo): the project's timing model and exploration platform, fed with facts by the function model.
 - `rtl` (`~/personal/AI-Huma/rtl`, moved there from `~/personal/tututugege-rtl` on 2026-11-04): the SystemVerilog
   implementation; its configuration package is generated from this repo's `include/config.h`, and on a merge to main the RTL must
   match this model's cycle counts program by program.
 Project-wide rules (branches, merge procedure, records, TODO) live in the AI-Huma repository: `docs/WORKFLOW.md`, `docs/GUIDE.md`.
 The sections below describe trace-model.
 
-Trace-driven timing model distilled from tututugege/simulator (RTL-style, execution-driven, cycle-accurate OoO RISC-V).
-Original goal (done): cycle-identical to the original, much smaller and faster (plan: `docs/history/PLAN.md`).
+Two phases. (1) Base, done 2026-11-04: a trace-driven timing model distilled from tututugege/simulator (RTL-style,
+execution-driven, cycle-accurate OoO RISC-V), cycle-identical to the original, about half the code and faster (plan and
+step records: `docs/history/`). (2) Our own optimization, since then: architecture changes are explored here (exploration
+records EXP-xxx in the AI-Huma repository, `docs/EXPLORATION.md`) and, when merged, carried to the RTL.
 Correctness: difftest against the function model (facts, commit checks). Gate: cycle counts equal to `results/baseline/baseline.csv`.
 The baseline started as the original model's numbers and is only changed by an intentional configuration change merged to main
 (2026-11-05: batch-3 area configuration, EXP-005); every other change must keep identical cycle counts.
