@@ -5,12 +5,24 @@ AI-Huma is the whole project (AI + human working together; also a nod to Rem's m
   built as `librefcpu.a`. Used here through the symlink `function-model/` -> `../function-model` (the sibling repository in the AI-Huma layout).
 - `trace-model` (this repo): the cycle-identical timing model, fed with facts by the function model.
 - `rtl` (`~/personal/AI-Huma/rtl`, moved there from `~/personal/tututugege-rtl` on 2026-11-04): the SystemVerilog
-  translation of the modules, checked cycle by cycle against the trace model.
+  implementation; its configuration package is generated from this repo's `include/config.h`, and on a merge to main the RTL must
+  match this model's cycle counts program by program.
+Project-wide rules (branches, merge procedure, records, TODO) live in the AI-Huma repository: `docs/WORKFLOW.md`, `docs/GUIDE.md`.
 The sections below describe trace-model.
 
 Trace-driven timing model distilled from tututugege/simulator (RTL-style, execution-driven, cycle-accurate OoO RISC-V).
-Goal: cycle-identical to the original, much smaller and faster, later paired with generated RTL.
-Every change must keep identical cycle counts; cycle equality is the correctness gate.
+Original goal (done): cycle-identical to the original, much smaller and faster (plan: `docs/history/PLAN.md`).
+Correctness: difftest against the function model (facts, commit checks). Gate: cycle counts equal to `results/baseline/baseline.csv`.
+The baseline started as the original model's numbers and is only changed by an intentional configuration change merged to main
+(2026-11-05: batch-3 area configuration, EXP-005); every other change must keep identical cycle counts.
+
+## Configuration knobs (include/config.h)
+Sizes are `CFG_*` macros, overridable with `-D` (`gmake EXTRA_CXXFLAGS="-D..." BUILD_DIR=build_area/<name>`); the RTL package
+generator (`rtl/scripts/gen_cfg.sh`) uses the same defaults and accepts the same overrides.
+- widths and windows: `CFG_BACKEND_FETCH_WIDTH` (8), `CFG_MAX_BR_NUM` (32), `CFG_ROB_NUM` (128), `CFG_PRF_NUM` (128), `CFG_IBUF_SIZE` (64);
+- issue queues: `CFG_INT_IQ_SIZE` 64, `CFG_LD_IQ_SIZE` 64, `CFG_STA_IQ_SIZE` 64, `CFG_STD_IQ_SIZE` 16, `CFG_BR_IQ_SIZE` 32 (also exported as `IQ_*_SIZE`);
+- issue ports: `CFG_PLAIN_ALU_PORTS` 2 (after the four ALU+MUL/DIV/FP/CSR ports), `CFG_LD_PORTS` 4, `CFG_STA_PORTS` 3, `CFG_STD_PORTS` 3, `CFG_BR_PORTS` 2;
+- front-end FIFOs (`front-end/config/frontend_feature_config.h`): `FRONT2BACK_FIFO_SIZE` 8, `PTAB_SIZE`, `INSTRUCTION_FIFO_SIZE`, `FETCH_ADDR_FIFO_SIZE` 16.
 
 ## Origin and history
 - Forked from tututugege/simulator at 2f31e8d (`upstream` remote). `main` here is the former `trace-distill` branch.

@@ -5,7 +5,7 @@ out-of-order RISC-V simulator). Part of the AI-Huma project (function-model + tr
 
 Branch direction/target, addresses, store data and CSR write data come from facts supplied by the trace bridge (`diff/TraceBridge.*`),
 a functional core (the sibling `function-model` repository, built as `librefcpu`; `function-model/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths. Every change
-must keep identical cycle counts: cycle equality is the correctness gate.
+must keep the gate's cycle counts (`results/baseline/baseline.csv`) unless it is an intentional configuration change merged to main.
 
 See [docs/PROJECT.md](docs/PROJECT.md) for the architecture, the gate, the verification harnesses and the status.
 
