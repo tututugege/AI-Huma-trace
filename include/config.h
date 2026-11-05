@@ -52,7 +52,7 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 // ============================================================
 constexpr int FETCH_WIDTH = 8;
 #ifndef CFG_BACKEND_FETCH_WIDTH
-#define CFG_BACKEND_FETCH_WIDTH 16
+#define CFG_BACKEND_FETCH_WIDTH 8   // = FETCH_WIDTH (16 was a leftover; EXP-001)
 #endif
 constexpr int BACKEND_FETCH_WIDTH = CFG_BACKEND_FETCH_WIDTH;
 constexpr int DECODE_WIDTH = 8;
@@ -335,7 +335,7 @@ constexpr int ARF_NUM = 32;
 #endif
 constexpr int PRF_NUM = CFG_PRF_NUM;
 #ifndef CFG_MAX_BR_NUM
-#define CFG_MAX_BR_NUM 64
+#define CFG_MAX_BR_NUM 32
 #endif
 constexpr int MAX_BR_NUM = CFG_MAX_BR_NUM;
 constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
@@ -353,7 +353,7 @@ constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
 // ============================================================
 
 #ifndef CFG_IBUF_SIZE
-#define CFG_IBUF_SIZE 128
+#define CFG_IBUF_SIZE 64
 #endif
 constexpr int IDU_INST_BUFFER_SIZE = CFG_IBUF_SIZE;
 constexpr int FTQ_SIZE = 64;
@@ -384,16 +384,16 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #define CFG_PLAIN_ALU_PORTS 2  // ALU-only ports after the four ALU+MUL/DIV/FP/CSR ports
 #endif
 #ifndef CFG_BR_PORTS
-#define CFG_BR_PORTS 4
+#define CFG_BR_PORTS 2
 #endif
 #ifndef CFG_LD_PORTS
 #define CFG_LD_PORTS 4
 #endif
 #ifndef CFG_STA_PORTS
-#define CFG_STA_PORTS 4
+#define CFG_STA_PORTS 3
 #endif
 #ifndef CFG_STD_PORTS
-#define CFG_STD_PORTS 4
+#define CFG_STD_PORTS 3
 #endif
 #ifndef CFG_LD_IQ_SIZE
 #define CFG_LD_IQ_SIZE 64
@@ -402,13 +402,13 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #define CFG_STA_IQ_SIZE 64
 #endif
 #ifndef CFG_STD_IQ_SIZE
-#define CFG_STD_IQ_SIZE 64
+#define CFG_STD_IQ_SIZE 16
 #endif
 #ifndef CFG_INT_IQ_SIZE
-#define CFG_INT_IQ_SIZE 128
+#define CFG_INT_IQ_SIZE 64
 #endif
 #ifndef CFG_BR_IQ_SIZE
-#define CFG_BR_IQ_SIZE 64
+#define CFG_BR_IQ_SIZE 32
 #endif
 enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 #define PORT_CFG(mask) {(__COUNTER__ - ISSUE_PORT_COUNTER_BASE - 1), (mask)}

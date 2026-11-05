@@ -35,7 +35,7 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
 3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv.
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
-   dhrystone 64 runs 150,838; coremark 2 iterations 226,991 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big); memory-stress 1,541,195;
+   dhrystone 64 runs 150,427; coremark 2 iterations 233,515 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big; numbers for the batch-3 configuration of 2026-11-05, before: 150,838 / 226,991); memory-stress 1,541,195;
    smc-div 8,996; smc-addi 8,866.
 5. Small-LLC check (`scripts/llc_small_check.sh $PWD <abs path of baseline-sim/src>` (absolute paths required)): the default 8 MiB LLC never evicts in small tests.
    `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.

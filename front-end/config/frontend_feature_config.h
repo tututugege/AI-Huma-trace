@@ -342,7 +342,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define FETCH_ADDR_FIFO_SIZE 16
 #endif
 #ifndef FRONT2BACK_FIFO_SIZE
-#define FRONT2BACK_FIFO_SIZE 32
+#define FRONT2BACK_FIFO_SIZE 8
 #endif
 
 #endif
