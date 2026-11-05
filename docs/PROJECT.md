@@ -43,14 +43,16 @@ memory is written at ROB commit from facts; instruction/PTE/LLC read data come f
 
 ## Gate (run after every change)
 All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh build/simulator results/gate`.
-1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs).
+1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs). DRAMsim3 is on by default (EXP-006): it needs `libdramsim3.dylib` in `$(DS3_DIR)` (default `~/personal/AI-Huma-data/third_party/DRAMsim3`; build with `cmake -S . -B build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build build --target dramsim3`). `gmake DS3=0` builds the old fixed-latency SimDDR. Core frequency: `gmake CPU_FREQ_MHZ=...` (default 1000) or the `CPU_FREQ_MHZ` environment variable at run time. After changing flags use a clean `BUILD_DIR`.
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv.
+3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv (regenerated 2026-11-05 for the EXP-006 baseline).
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
-   dhrystone 64 runs 150,427; coremark 2 iterations 233,515 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big; numbers for the batch-3 configuration of 2026-11-05, before: 150,838 / 226,991); memory-stress 1,541,195;
-   smc-div 8,996; smc-addi 8,866.
+   dhrystone 64 runs 158,756; coremark 2 iterations 250,658 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
+   memory-stress 2,425,029; smc-div 11,096; smc-addi 10,966; memory-stress-small 343,975.
+   Numbers are for the EXP-006 baseline of 2026-11-05: no AXI subsystem divider (`FREQ_DIV` 1), DRAMsim3 DDR4-3200 behind SimDDR, 1 GHz core.
+   Before (batch-3 configuration, divider 16, fixed 60-tick DDR latency, 500 MHz): 150,427 / 233,515 / 1,541,195 / 8,996 / 8,866 / 189,128.
 5. Small-LLC check (`scripts/llc_small_check.sh $PWD <abs path of baseline-sim/src>` (absolute paths required)): the default 8 MiB LLC never evicts in small tests.
    `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.
 

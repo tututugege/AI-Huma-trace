@@ -93,9 +93,9 @@ INCLUDES += -I./ddr_ref
 CXXFLAGS += -DDR_SHADOW
 endif
 
-# DRAMsim3 DRAM timing backend for SimDDR (EXP-006), off by default: `gmake DS3=1` (see docs/PROJECT.md).
+# DRAMsim3 DRAM timing backend for SimDDR (EXP-006), on by default; `gmake DS3=0` builds the fixed-latency SimDDR.
 # Needs DRAMsim3 built in DS3_DIR (libdramsim3.dylib). Core frequency: `gmake CPU_FREQ_MHZ=...` or env CPU_FREQ_MHZ at run time.
-DS3 ?= 0
+DS3 ?= 1
 DS3_DIR ?= $(HOME)/personal/AI-Huma-data/third_party/DRAMsim3
 ifdef CPU_FREQ_MHZ
 CXXFLAGS += -DCONFIG_CPU_FREQ_MHZ=$(CPU_FREQ_MHZ)u
