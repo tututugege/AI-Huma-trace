@@ -203,6 +203,8 @@ public:
   void flush();
   void seq();
   void cancel_pending_walk();
+  // Fast-warmup replay (EXP-011): load a ready-made TLB state (entries in slot order, round-robin pointer).
+  void warm_install(const TlbEntry *entries, int count, int repl_ptr);
   void set_ptw_mem_port(PtwMemPort *port);
   void set_ptw_walk_port(PtwWalkPort *port);
   RetryReason last_retry_reason() const { return last_retry_reason_; }

@@ -581,6 +581,36 @@ class Bpu {
     }
   }
 
+  // Fast-warmup replay (EXP-011): one committed instruction in program order. The update path (type predictor,
+  // TAGE, BTB/indirect target cache, histories, RAS) is applied immediately instead of through the update queue; the
+  // prediction metadata comes from a predict() on the architectural history. warm_finish() copies the committed
+  // history to the speculative one.
+  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {
+    const br_type_t pty = type_.predict(pc);
+    if (type == BR_NONCTL) {
+      if (pty != BR_NONCTL) { TypeWr tw; type_.update(pc, type, tw); type_.commit(tw); }
+      return;
+    }
+    const uint32_t b = bank_of(pc);
+    const pc_t bpc = bank_pc_of(pc);
+    TagePred tp;
+    tage_[b].predict(bpc, arch_.fh, tp);
+    const bool pred = pty == BR_NONCTL ? false
+                      : (pty == BR_RET || pty == BR_CALL || pty == BR_IDIRECT || pty == BR_JAL) ? true : tp.pred;
+    TypeWr tw; type_.update(pc, type, tw); type_.commit(tw);
+    if (type == BR_DIRECT) {
+      TageUpd u;
+      std::memset(&u, 0, sizeof(u));
+      u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn;
+      for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
+      TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
+      arch_.push(dir);
+    } else if (type == BR_CALL) arch_ras_.push(pc + 4);
+    else if (type == BR_RET) arch_ras_.pop();
+    BtbWr bw; btb_[b].update(bpc, type, dir, target, bw); btb_[b].commit(bw);
+  }
+  void warm_finish() { spec_ = arch_; spec_ras_ = arch_ras_; }
+
   void commit(const InputPayload &in, const Txn &t) {
     for (int b = 0; b < NB; b++) { tage_[b].commit(t.tage[b]); btb_[b].commit(t.btb[b]); }
     for (int i = 0; i < CW; i++) type_.commit(t.type[i]);

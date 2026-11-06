@@ -31,6 +31,7 @@ static SimContext *front_ctx = nullptr;
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
 
 static bpuf::Bpu bpu_instance;
+bpuf::Bpu &front_bpu_instance() { return bpu_instance; }  // fast-warmup replay (EXP-011)
 
 static uint32_t sequential_next_pc(uint32_t fetch_pc, const wire1_t *inst_valid) {
   uint32_t valid_prefix = 0;

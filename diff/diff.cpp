@@ -370,6 +370,8 @@ bool difftest_get_ref_state(RefCpuState *out) {
   return true;
 }
 
+RefCpuContext *difftest_ref_ctx() { ensure_ref_cpu(); return ref_cpu_ctx; }
+
 bool difftest_ref_sim_end() { return current_step_info().sim_end; }
 
 bool difftest_ref_last_inst_is_wfi() {

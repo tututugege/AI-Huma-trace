@@ -217,6 +217,28 @@ void plru_tree_touch(uint32_t set_idx, uint32_t way) {
     plru_touch_way(set_idx, way);
 }
 
+// Fast-warmup replay (EXP-011): one L1D access applied to the tag/valid/dirty/PLRU arrays as the cache would (hit: touch,
+// store marks dirty; miss: PLRU victim, install, store installs dirty). Returns true on a miss; *wb_line is the dirty
+// victim's line address, or 0xffffffff if there is none.
+bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line) {
+    const AddrFields f = decode(paddr);
+    *wb_line = 0xffffffffu;
+    for (uint32_t w = 0; w < DCACHE_WAYS_NUM; w++) {
+        if (valid_array[f.set_idx][w] && tag_array[f.set_idx][w] == f.tag) {
+            if (is_store) dirty_array[f.set_idx][w] = true;
+            plru_touch_way(f.set_idx, w);
+            return false;
+        }
+    }
+    const uint32_t v = choose_plru_tree_victim(plru_tree_state[f.set_idx], valid_array[f.set_idx]);
+    if (valid_array[f.set_idx][v] && dirty_array[f.set_idx][v]) *wb_line = get_addr(f.set_idx, tag_array[f.set_idx][v], 0);
+    valid_array[f.set_idx][v] = true;
+    dirty_array[f.set_idx][v] = is_store;
+    tag_array[f.set_idx][v] = f.tag;
+    plru_touch_way(f.set_idx, v);
+    return true;
+}
+
 bool CheckAddr(uint32_t addr1, uint8_t strb1, uint32_t addr2, uint8_t strb2) {
     uint32_t base1 = addr1 & ~0x3u;
     uint32_t base2 = addr2 & ~0x3u;

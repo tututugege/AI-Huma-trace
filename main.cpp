@@ -1,3 +1,4 @@
+#include "FastWarm.h"
 #include "SimDDR.h"
 #include "trace_hook.h"
 #include "SimCpu.h"
@@ -31,6 +32,7 @@ struct SimConfig {
   // 目标文件路径
   std::string target_file;
   std::string flash_image_file;
+  bool fast_warmup = false;  // CKPT: functional replay of (interval - warmup) instructions into the caches/TLBs/BPU (EXP-011)
   std::string restore_stub_file;  // CKPT: front-door restore program (tools/ckpt2stub.py of the function model)
   std::string sdcard_image_file;
   bool direct_opensbi = false;
@@ -159,6 +161,7 @@ int main(int argc, char *argv[]) {
       {"fast-forward", required_argument, 0, 'f'}, // 快进参数
       {"flash-image", required_argument, 0, 1001},
       {"restore-stub", required_argument, 0, 1008},
+      {"fast-warmup", no_argument, 0, 1009},
       {"sdcard-image", required_argument, 0, 1002},
       {"direct-opensbi", no_argument, 0, 1004},
       {"irq-seed", required_argument, 0, 1005},
@@ -247,6 +250,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1008:
       config.restore_stub_file = optarg;
+      break;
+    case 1009:
+      config.fast_warmup = true;
       break;
     case 1002:
       config.sdcard_image_file = optarg;
@@ -433,8 +439,10 @@ int main(int argc, char *argv[]) {
     if (!config.max_commit_inst_set) {
       config.max_commit_inst = ckpt_interval;
     }
+    if (const char *e = std::getenv("FAST_WARMUP"); e != nullptr && e[0] == '1') config.fast_warmup = true;
     if (!config.ckpt_warmup_target_set) {
-      config.ckpt_warmup_target = ckpt_interval;
+      // --fast-warmup: the detailed warm-up is short (1M); the rest of the interval is replayed functionally
+      config.ckpt_warmup_target = config.fast_warmup ? std::min<uint64_t>(1000000, ckpt_interval) : ckpt_interval;
     }
     if (config.ckpt_warmup_target > ckpt_interval) {
       std::cerr << "Error: --warmup must be in [0," << ckpt_interval
@@ -455,7 +463,7 @@ int main(int argc, char *argv[]) {
 
     uint64_t warmup_target = config.ckpt_warmup_target;
     uint64_t ref_prewarm_target = ckpt_interval - warmup_target;
-    if (front_door && ref_prewarm_target > 0) {
+    if (front_door && ref_prewarm_target > 0 && !config.fast_warmup) {
       std::cerr << "Error: --restore-stub needs --warmup equal to the checkpoint interval (" << ckpt_interval
                 << "): the reference prewarm hands its state to the DUT, which is exactly what the front-door "
                    "restore avoids."
@@ -464,7 +472,25 @@ int main(int argc, char *argv[]) {
     }
 
     uint64_t ref_prewarm_done = 0;
-    if (ref_prewarm_target > 0) {
+    FastWarmStats fw_stats;
+    const bool fast_warm_active = config.fast_warmup && ref_prewarm_target > 0;
+    if (fast_warm_active) {
+      std::cout << "[Run] Fast warm-up: functional replay of " << ref_prewarm_target << " steps into L1I/L1D/LLC/TLB/BPU"
+                << (front_door ? " (after the restore program)" : "") << "..." << std::endl;
+      const bool ok = fast_warm_replay(cpu, front_door, ref_prewarm_target, fw_stats);
+      ref_prewarm_done = fw_stats.steps;
+      if (!ok) cpu.ctx.exit_reason = ExitReason::EBREAK;
+      std::cout << "[FastWarm] stub_steps=" << fw_stats.stub_steps << " steps=" << fw_stats.steps
+                << " branches=" << fw_stats.branches << " ifetch_lines=" << fw_stats.ifetch_lines
+                << " l1i_miss=" << fw_stats.ifetch_miss << " loads=" << fw_stats.loads << " stores=" << fw_stats.stores
+                << " l1d_miss=" << fw_stats.l1d_miss << " llc_acc=" << fw_stats.llc_acc << " llc_miss=" << fw_stats.llc_miss
+                << " itlb_miss=" << fw_stats.itlb_miss << " dtlb_miss=" << fw_stats.dtlb_miss
+                << " skipped_exc=" << fw_stats.skipped_exc << (ok ? "" : " ENDED_EARLY") << std::endl;
+      difftest_ref_set_interrupt_delivery(false);
+      difftest_ref_set_device_effects(false);
+      difftest_ref_set_ref_only(true);
+    }
+    if (ref_prewarm_target > 0 && !fast_warm_active) {
       std::cout << "[Run] Ref prewarm for " << ref_prewarm_target
                 << " steps..." << std::endl;
       difftest_ref_set_uart_print(false);
@@ -487,18 +513,19 @@ int main(int argc, char *argv[]) {
                 << " steps." << std::endl;
     }
 
-    if (!front_door) {
+    if (!front_door || fast_warm_active) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
       cpu.back.restore_from_ref();
       cpu.sync_mmio_devices_from_backing();
       cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
+      if (fast_warm_active) fast_warm_install(cpu);
     }
 
     cpu.ctx.is_ckpt = true;
-    cpu.ctx.front_door_pending = front_door;  // the measurement starts at the restore program's mret
+    cpu.ctx.front_door_pending = front_door && !fast_warm_active;  // the measurement starts at the restore program's mret
     cpu.ctx.ckpt_warmup_commit_target = warmup_target;
     cpu.ctx.ckpt_measure_commit_target = config.max_commit_inst;
-    if (front_door) {
+    if (front_door && !fast_warm_active) {
       std::cout << "[Plan] front-door restore: the restore program runs first; warmup (" << warmup_target
                 << ") and measure (" << config.max_commit_inst << ") count from its mret." << std::endl;
     } else if (cpu.ctx.ckpt_warmup_commit_target == 0) {

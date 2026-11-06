@@ -4,9 +4,12 @@ SIM=${SIM:-/Users/ruyaoh/personal/AI-Huma/trace-model/build/simulator}
 C=$1; b=$(basename $(dirname $C)); n=$(basename $C .gz)
 O=${OUT:?set by replay.sh}/$b; mkdir -p $O
 [ -f $O/$n.ok ] && exit 0
-python3 -I /Users/ruyaoh/personal/AI-Huma/function-model/tools/ckpt2stub.py $C $O/$n.stub > $O/$n.stub.log 2>&1 || { echo "$b $n STUBFAIL" >> ${OUT:?set by replay.sh}/fail.txt; exit 1; }
+python3 -I ${CKPT2STUB:-/Users/ruyaoh/personal/AI-Huma/function-model/tools/ckpt2stub.py} $C $O/$n.stub > $O/$n.stub.log 2>&1 || { echo "$b $n STUBFAIL" >> ${OUT:?set by replay.sh}/fail.txt; exit 1; }
 case $n in *nowarmup*) ARGS="-w 0 -c 10000000";; *) ARGS="-c 10000000";; esac
-$SIM --mode ckpt --restore-stub $O/$n.stub $ARGS $C > $O/$n.log 2>&1
+# FASTW=<n>: fast warm-up (EXP-011): functional replay of interval-n instructions into caches/TLBs/BPU, n detailed warm-up
+[ -n "${FASTW:-}" ] && case $n in *nowarmup*) ;; *) ARGS="--fast-warmup -w $FASTW -c 10000000";; esac
+TIMEFORMAT="%R %U %S"  # wall, user, system seconds -> $n.time
+{ time $SIM --mode ckpt --restore-stub $O/$n.stub $ARGS $C > $O/$n.log 2>&1; } 2> $O/$n.time
 rc=$?
 cyc=$(grep -a "^.*cycle       num:" $O/$n.log | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | awk '{print $3}')
 ins=$(grep -a "instruction num:" $O/$n.log | tail -1 | sed 's/\x1b\[[0-9;]*m//g' | awk '{print $3}')

@@ -42,6 +42,12 @@ private:
   void install_arch_state(const CPU_state &state, uint8_t privilege);
 
 public:
+  void warm_dtlb(const TlbMmu::TlbEntry *entries, int count, int repl_ptr) {  // fast-warmup replay (EXP-011)
+    if (dtlb_mmu) dtlb_mmu->warm_install(entries, count, repl_ptr);
+  }
+private:
+
+public:
   SimContext *ctx;
 
   PreIduQueue *pre;

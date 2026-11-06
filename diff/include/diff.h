@@ -22,6 +22,7 @@ void difftest_ref_set_next_csr_read(uint32_t csr_addr, uint32_t value);
 void difftest_take_interrupt(uint32_t cause, uint8_t target_privilege,
                              uint32_t pending_snapshot);
 bool difftest_get_ref_state(RefCpuState *out);
+RefCpuContext *difftest_ref_ctx();  // fast-warmup replay (EXP-011)
 bool difftest_ref_sim_end();
 bool difftest_ref_last_inst_is_wfi();
 void difftest_ref_set_uart_print(bool enable);
