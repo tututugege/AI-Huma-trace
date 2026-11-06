@@ -192,10 +192,6 @@ void RealLsu::handle_load_req(const MicroOp &inst) {
   e.p_addr_valid = false;
   e.p_addr = 0;
   e.func3 = inst->func3;
-  e.pc_hash = pf_pc_hash(inst->dbg.pc);   // the PC of the load (debug sideband in the model; hardware reads it from the FTQ)
-#ifdef PF_STUDY
-  e.pc_full = inst->dbg.pc;
-#endif
   e.load_state = LoadState::WaitTlb;
   e.stq_snapshot.idx = inst.stq_idx;
   e.stq_snapshot.flag = inst.stq_flag;
@@ -474,10 +470,6 @@ void RealLsu::comb_lsu2dcache_ldq() {
     ports[issued].addr = l.p_addr;
     ports[issued].req_id = make_lsu_load_req_id(wait_idx, gen);
     ports[issued].replay = l.replay_type != ReplayType::HIT;
-    ports[issued].pc_hash = l.pc_hash;
-#ifdef PF_STUDY
-    ports[issued].pc_full = l.pc_full;
-#endif
     w.req_gen = gen;
     l.load_state = LoadState::WaitDcacheResp;
     issued++;

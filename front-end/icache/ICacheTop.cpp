@@ -5,7 +5,6 @@
 
 #include "trace_hook.h"
 #include "include/ICacheTop.h"
-#include "include/IPrefetch.h"
 
 #include "../front_module.h"
 #include "../frontend.h"
@@ -776,13 +775,9 @@ public:
     icache_hw.io.in.ppn_valid = false;
     icache_hw.io.in.page_fault = false;
     icache_hw.io.in.mem_req_ready = mem.req_ready;
-    // the prefetch engine owns transaction id ipf::kId: its handshakes are hidden from the I-cache
-    const bool ipf_on = ipf::engine().enabled();
-    const bool acc_is_pf = ipf_on && mem.req_accepted && mem.req_accepted_id >= ipf::kIdBase;
-    const bool resp_is_pf = ipf_on && mem.resp_valid && mem.resp_id >= ipf::kIdBase;
-    icache_hw.io.in.mem_req_accepted = mem.req_accepted && !acc_is_pf;
+    icache_hw.io.in.mem_req_accepted = mem.req_accepted;
     icache_hw.io.in.mem_req_accepted_id = mem.req_accepted_id;
-    icache_hw.io.in.mem_resp_valid = mem.resp_valid && !resp_is_pf;
+    icache_hw.io.in.mem_resp_valid = mem.resp_valid;
     icache_hw.io.in.mem_resp_id = mem.resp_id;
     icache_hw.io.in.dcache_resp_valid = dcache_probe.resp_valid;
     icache_hw.io.in.dcache_resp_retry = dcache_probe.resp_retry;
@@ -808,42 +803,12 @@ public:
     refresh_lookup_data_input(icache_hw);
     icache_hw.comb_lookup_data();
 
-    ipf::Drive ipf_drive;
-    if (ipf_on) {
-      static bool prev_req = false;
-      static uint32_t prev_addr = 0;
-      const bool ic_line_req = icache_hw.io.out.mem_req_valid && !icache_hw.io.out.mem_req_bypass;
-      ipf::In pin;
-      pin.trig = ic_line_req && (!prev_req || prev_addr != icache_hw.io.out.mem_req_addr);
-      pin.trig_addr = icache_hw.io.out.mem_req_addr;
-      pin.flush = cache_invalidate;
-      pin.demand_axi = icache_hw.io.out.mem_req_valid;
-      pin.acc_pf = acc_is_pf;
-      pin.acc_id = mem.req_accepted_id;
-      pin.resp_pf = resp_is_pf;
-      pin.resp_id = mem.resp_id;
-      pin.fifo_n = fetch_addr_fifo_peek(pin.fifo, 16);
-      pin.refetch = in->refetch;
-      if (mmu_resp.ppn_valid && !mmu_resp.page_fault && mmu_resp.translate_invoked) {
-        pin.utlb_fill = true;
-        pin.fill_vpn = static_cast<uint32_t>(icache_hw.io.out.mmu_req_vtag);
-        pin.fill_ppn = mmu_resp.ppn & 0xFFFFFu;
-      }
-      prev_req = ic_line_req;
-      prev_addr = icache_hw.io.out.mem_req_addr;
-      ipf_drive = ipf::engine().cycle(pin);
-    }
-    if (ipf_drive.valid && !icache_hw.io.out.mem_req_valid) {
-      read_port.comb_accept(true, ipf_drive.addr, static_cast<uint8_t>(ICACHE_LINE_SIZE - 1u), false, ipf_drive.id,
-                            icache_hw.io.out.mem_resp_ready || ipf_drive.resp_ready);
-    } else {
-      read_port.comb_accept(
-          icache_hw.io.out.mem_req_valid, icache_hw.io.out.mem_req_addr,
-          static_cast<uint8_t>(icache_hw.io.out.mem_req_total_size),
-          icache_hw.io.out.mem_req_bypass,
-          static_cast<uint8_t>(icache_hw.io.out.mem_req_id & 0xF),
-          icache_hw.io.out.mem_resp_ready || ipf_drive.resp_ready);
-    }
+    read_port.comb_accept(
+        icache_hw.io.out.mem_req_valid, icache_hw.io.out.mem_req_addr,
+        static_cast<uint8_t>(icache_hw.io.out.mem_req_total_size),
+        icache_hw.io.out.mem_req_bypass,
+        static_cast<uint8_t>(icache_hw.io.out.mem_req_id & 0xF),
+        icache_hw.io.out.mem_resp_ready);
     drive_dcache_probe_req_port(
         runtime.mem_probe_req_port, icache_hw.io.out.dcache_req_valid,
         icache_hw.io.out.dcache_req_addr);

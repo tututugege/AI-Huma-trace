@@ -48,10 +48,6 @@ struct LdqEntry {
   wire<1> is_lrsc;
   StoreTag stq_snapshot;
   wire<1> cache_miss;
-  wire<PF_PC_BITS> pc_hash;  // hashed load PC for the L1D prefetcher
-#ifdef PF_STUDY
-  wire<32> pc_full;
-#endif
 };
 
 struct UncachedUnit {

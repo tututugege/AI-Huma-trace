@@ -291,10 +291,7 @@ static_assert(CONFIG_AXI_SUBSYSTEM_FREQ_DIV >= 1,
 #define CONFIG_AXI_LLC_DEBUG_LOG 0
 #endif
 
-#ifndef CFG_ICACHE_WAYS
-#define CFG_ICACHE_WAYS 8
-#endif
-constexpr int ICACHE_WAY_NUM = CFG_ICACHE_WAYS;  // study knob: a huge value gives a (nearly) miss-free I-cache
+constexpr int ICACHE_WAY_NUM = 8;
 constexpr int ICACHE_OFFSET_BITS = clog2(ICACHE_LINE_SIZE);
 constexpr int ICACHE_INDEX_BITS = 12 - ICACHE_OFFSET_BITS;
 constexpr int ICACHE_SET_NUM = 1 << ICACHE_INDEX_BITS;
@@ -311,15 +308,6 @@ constexpr int DCACHE_WORD_NUM = DCACHE_LINE_SIZE / 4;
 constexpr int DCACHE_OFFSET_BITS = clog2(DCACHE_LINE_SIZE);
 constexpr int DCACHE_INDEX_BITS = clog2(DCACHE_SETS_NUM);
 constexpr int DCACHE_TAG_BITS = 32 - DCACHE_INDEX_BITS - DCACHE_OFFSET_BITS;
-
-// L1D prefetcher (EXP-009): hashed load PC sent from the LSU to the L1D
-#ifndef CFG_PF_PC_BITS
-#define CFG_PF_PC_BITS 10
-#endif
-constexpr int PF_PC_BITS = CFG_PF_PC_BITS;
-inline uint32_t pf_pc_hash(uint32_t pc) {
-  return ((pc >> 2) ^ (pc >> (2 + PF_PC_BITS)) ^ (pc >> (2 + 2 * PF_PC_BITS))) & ((1u << PF_PC_BITS) - 1u);
-}
 
 #ifndef CFG_DCACHE_MSHR
 #define CFG_DCACHE_MSHR 8

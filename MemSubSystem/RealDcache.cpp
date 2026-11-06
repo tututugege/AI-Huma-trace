@@ -175,16 +175,8 @@ void RealDcache::stage1_comb() {
             lsu_req.valid ? lsu_req.req_id
                           : (use_pending_retry ? pending_retry.req_id
                                                : new_retry.req_id);
-        const uint32_t req_pc =
-            lsu_req.valid ? uint32_t(lsu_req.pc_hash)
-                          : (use_pending_retry ? uint32_t(pending_retry.pc_hash)
-                                               : uint32_t(new_retry.pc_hash));
         S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
         slot.pf = false;
-        slot.pc_hash = req_pc;
-#ifdef PF_STUDY
-        slot.pc_full = lsu_req.valid ? uint32_t(lsu_req.pc_full) : (use_pending_retry ? uint32_t(pending_retry.pc_full) : uint32_t(new_retry.pc_full));
-#endif
         if (use_pending_retry) {
             bank_retry_nxt.loads[i] = {};
         }
@@ -318,7 +310,7 @@ void RealDcache::stage1_comb() {
     }
 
     // Prefetch tag probe: lowest priority, rides an idle load port (it competes for the bank like any load).
-    if (PF_ALGO != 0 && in.lsu2dcache != nullptr && pf.head_valid()) {
+    if (pf.enabled() && in.lsu2dcache != nullptr && pf.head_valid()) {
         for (int i = 0; i < LSU_LDU_COUNT; i++) {
             S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
             if (slot.valid) continue;                      // port busy with a demand request or a retry
@@ -432,10 +424,6 @@ void RealDcache::stage2_comb() {
                 bank_retry_issue_wires.loads[i].valid = true;
                 bank_retry_issue_wires.loads[i].addr = slot.addr;
                 bank_retry_issue_wires.loads[i].req_id = slot.req_id;
-                bank_retry_issue_wires.loads[i].pc_hash = slot.pc_hash;
-#ifdef PF_STUDY
-                bank_retry_issue_wires.loads[i].pc_full = slot.pc_full;
-#endif
 
                 continue;
             }
@@ -467,7 +455,7 @@ void RealDcache::stage2_comb() {
                 if (pf_array[f.set_idx][hit_way]) {        // first use of a prefetched line
                     pf_array[f.set_idx][hit_way] = false;
                     g_pf_stats.useful++;
-                    pf.acc[i] = PfAccess{true, slot.addr, slot.pc_hash, false, true};
+                    pf.acc[i] = PfAccess{true, slot.addr, false, true};
                 }
             }
             // ── Cache Hit ────────────────────────────────────────────────────
@@ -489,19 +477,9 @@ void RealDcache::stage2_comb() {
                 resp.req_id = slot.req_id;
                 continue;
             }
-#ifdef PF_STUDY
-            {
-                static const int ideal = pf::param("IDEAL", 0);
-                if ((ideal == 1 || (ideal == 2 && g_study.ideal_pc(slot.pc_full))) && dcache_req_id_is_lsu(slot.req_id)) {   // perfect L1D for loads: an upper bound for any data prefetcher
-                    resp.valid = true; resp.replay = ReplayType::HIT; resp.req_id = slot.req_id; resp.retry = false;
-                    continue;
-                }
-                if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) g_study.miss(slot.pc_full, slot.addr);
-            }
-#endif
             if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) {
                 g_pf_stats.demand_miss++;
-                pf.acc[i] = PfAccess{true, slot.addr, slot.pc_hash, true, false};
+                pf.acc[i] = PfAccess{true, slot.addr, true, false};
             }
             if(in.mshr2dcache->find_resp[i].valid){
                 resp.valid = true;
@@ -654,14 +632,6 @@ void RealDcache::stage2_comb() {
         }
     }
 
-    if (out.fill_write->valid) {                            // fill feedback for the prefetcher
-        pf.fill.valid = true;
-        pf.fill.paddr = get_addr(out.fill_write->set_idx, out.fill_write->tag, 0);
-        pf.fill.is_prefetch = out.fill_write->is_prefetch;
-        const uint32_t vw = out.fill_write->way_idx;           // way chosen for replacement (pf bit read with the fill snapshot)
-        pf.fill.victim_unused = in.fillin->valid_snap[vw] && pf_array[out.fill_write->set_idx][vw] &&
-                                in.fillin->tag_snap[vw] != out.fill_write->tag;
-    }
     // ── Prefetch probe (lowest priority: after every demand request has taken its MSHR) ──────────
     if (pf_slot >= 0) {
         const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[pf_slot];
@@ -678,7 +648,7 @@ void RealDcache::stage2_comb() {
         if (in.wb2dcache->bypass_resp[pf_slot].valid) g_pf_stats.probe_wb++;
         else if (hit_way >= 0 || fill_same) g_pf_stats.probe_hit++;
         else if (in.mshr2dcache->find_resp[pf_slot].valid) g_pf_stats.probe_inflight++;
-        else if (mshr_free_entries <= pf.mshr_reserve) g_pf_stats.probe_mshr_full++;
+        else if (mshr_free_entries <= PF_MSHR_RESERVE) g_pf_stats.probe_mshr_full++;
         else {
             out.dcache2mshr->mshr_req[pf_slot].valid = true;
             out.dcache2mshr->mshr_req[pf_slot].addr = slot.addr;

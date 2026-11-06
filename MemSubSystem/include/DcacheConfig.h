@@ -199,7 +199,7 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 void plru_tree_touch(uint32_t set_idx, uint32_t way);
 
 
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, bool touch_plru = true);
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2);
 

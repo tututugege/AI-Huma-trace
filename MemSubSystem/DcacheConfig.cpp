@@ -131,7 +131,7 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 
 
 
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, bool touch_plru)
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag)
 {
     check_data_bank_access(set_idx, "write", "fill_line");
 
@@ -148,7 +148,7 @@ void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, bool touch_
     valid_array[set_idx][target_way] = true;
     dirty_array[set_idx][target_way] = false;
     tag_array[set_idx][target_way] = tag;
-    if (touch_plru) plru_tree_touch(set_idx, target_way);
+    plru_tree_touch(set_idx, target_way);
 }
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2){
@@ -203,11 +203,7 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
                 break;
             }
         }
-        if (valid_array[fillwrite.set_idx][target_way] && pf_array[fillwrite.set_idx][target_way] &&
-            tag_array[fillwrite.set_idx][target_way] != fillwrite.tag)
-            g_pf_stats.useless_evict++;  // victim was a prefetched line nobody used
-        static const bool pf_low_insert = pf::param("INSERT", 0) != 0;  // prefetched lines do not update the PLRU state on fill
-        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag, !(fillwrite.is_prefetch && pf_low_insert));
+        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag);
         pf_array[fillwrite.set_idx][target_way] = fillwrite.is_prefetch;
         if (fillwrite.is_prefetch) g_pf_stats.filled++;
         if (fillwrite.dirty) {

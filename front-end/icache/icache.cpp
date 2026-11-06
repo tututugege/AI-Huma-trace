@@ -1,5 +1,3 @@
-#include "DataPrefetcher.h"
-#include "include/IPrefetch.h"
 #include "trace_hook.h"
 #include "../front_IO.h"
 #include "PtwMemPort.h"
@@ -40,10 +38,6 @@ constexpr int kValidChunkBits = 1;
 
 using TagTable = GenericTable<kRows, kTagChunks, kTagChunkBits, LookupTimingPolicy>;
 using ValidTable = GenericTable<kRows, kValidChunks, kValidChunkBits, LookupTimingPolicy>;
-
-GenericTableTimingConfig make_lookup_timing_config();
-TagTable &tag_tbl() { static TagTable t(make_lookup_timing_config()); return t; }
-ValidTable &valid_tbl() { static ValidTable t(make_lookup_timing_config()); return t; }
 
 GenericTableTimingConfig make_lookup_timing_config() {
   GenericTableTimingConfig cfg;
@@ -118,13 +112,12 @@ void update_icache_perf_counters(const struct icache_in *in,
   }
 
   if (!in->refetch && out->perf_req_fire) {
-    g_ic_req++;
+
   }
   if (icache.perf.miss_issue_valid) {
-    g_ic_miss++;
+
   }
   if (icache.perf.miss_penalty_valid) {
-    g_ic_penalty += icache.perf.miss_penalty_cycles;
 
 
 
@@ -192,8 +185,8 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
     assert(in->csr_status != nullptr &&
            "icache_comb_calc requires csr_status when not in reset");
   }
-  TagTable &tag_table = tag_tbl();
-  ValidTable &valid_table = valid_tbl();
+  static TagTable tag_table(make_lookup_timing_config());
+  static ValidTable valid_table(make_lookup_timing_config());
   if (in->reset) {
     tag_table.reset();
     valid_table.reset();
@@ -250,18 +243,6 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
         icache.io.table_write.valid;
     valid_write.chunk_enable[icache.io.table_write.way] = true;
   }
-  else if (g_icache_pf_inst.valid) {            // prefetch install: only in cycles without a demand refill write
-    tag_write.enable = true;
-    valid_write.enable = true;
-    tag_write.address = g_icache_pf_inst.index;
-    valid_write.address = g_icache_pf_inst.index;
-    tag_write.payload.chunks[g_icache_pf_inst.way][0] = g_icache_pf_inst.tag;
-    tag_write.chunk_enable[g_icache_pf_inst.way] = true;
-    valid_write.payload.chunks[g_icache_pf_inst.way][0] = 1;
-    valid_write.chunk_enable[g_icache_pf_inst.way] = true;
-    g_icache_pf_inst.valid = false;
-    g_icache_pf_inst_done = true;
-  }
   if (icache.io.table_write.invalidate_all) {
     valid_table.reset();
   }
@@ -270,28 +251,6 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
 }
 
 void icache_seq_write() {}
-
-IcachePfInst g_icache_pf_inst;
-bool g_icache_pf_inst_done = false;
-
-// Is the line of `paddr` in the I-cache? Also returns the way a prefetch would fill (first invalid way, else round robin).
-bool icache_pf_present(uint32_t paddr, int *victim_way) {
-  static uint32_t rr = 0;
-  const uint32_t index = (paddr >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
-  const uint32_t tag = (paddr >> (ICACHE_OFFSET_BITS + ICACHE_INDEX_BITS)) & ICACHE_TAG_MASK;
-  const auto &tags = tag_tbl().peek_row(index);
-  const auto &valids = valid_tbl().peek_row(index);
-  int free_way = -1;
-  for (int w = 0; w < ICACHE_WAY_NUM; ++w) {
-    if (valids.chunks[w][0]) {
-      if (uint32_t(tags.chunks[w][0]) == tag) return true;
-    } else if (free_way < 0) {
-      free_way = w;
-    }
-  }
-  *victim_way = free_way >= 0 ? free_way : int(rr++ % ICACHE_WAY_NUM);
-  return false;
-}
 
 void icache_top(struct icache_in *in, struct icache_out *out) {
   icache_seq_read(in, out);

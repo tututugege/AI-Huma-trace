@@ -42,7 +42,7 @@ inline bool icache_req_slot_idle(const ICache_regs_t &regs) {
 }
 
 inline int alloc_free_txid(const ICache_regs_t &regs) {
-  for (int id = 0; id < 12; ++id) {  // ids 12..15 belong to the prefetch engine
+  for (int id = 0; id < 16; ++id) {
     if (!regs.txid_inflight_r[id]) {
       return id;
     }

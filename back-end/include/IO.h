@@ -481,10 +481,6 @@ struct LoadReq {
   wire<32> addr;
   wire<32> req_id;
   wire<1> replay;
-  wire<PF_PC_BITS> pc_hash;  // hashed PC of the load (prefetcher training)
-#ifdef PF_STUDY
-  wire<32> pc_full;
-#endif
 };
 
 struct StoreReq {

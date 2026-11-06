@@ -1,12 +1,12 @@
 #pragma once
-// L1D data prefetcher (EXP-009).
+// Circuit-style building blocks for the L1D data prefetcher (EXP-009).
 //
 // Circuit-style rules (checked at run time, a violation aborts the simulation):
 //   * every piece of state is a pf::Table (entries declared with PF_ENTRY: each field has a declared width, values are
-//     truncated to it on write) or a pf::Fifo; the total declared size is printed and bounded by PF_STATE_BUDGET_BITS;
+//     truncated to it on write) or a pf::Fifo; the total declared size is reported (PF_STATS=1);
 //   * a table has a fixed number of read, write and CAM-search ports per cycle; exceeding them aborts;
 //   * the prefetcher is evaluated once per cycle: comb() reads only state (cur), seq() updates it.
-// Inputs per cycle: up to LSU_LDU_COUNT load access events, fill / eviction feedback. Output: one candidate line from the
+// Inputs per cycle: up to LSU_LDU_COUNT load access events. Output: one candidate line from the
 // head of the request FIFO (the L1D probes the tag array through an idle load port and allocates an MSHR on a miss).
 #include <cstdint>
 #include <cstdio>
@@ -17,29 +17,6 @@
 
 #include "config.h"
 
-#ifndef CFG_PF_ALGO
-#define CFG_PF_ALGO 0  // 0 off, 1 next-line, 2 IP-stride, 3 stream+stride ...
-#endif
-#ifndef CFG_PF_TRAIN_PORTS
-#define CFG_PF_TRAIN_PORTS 2
-#endif
-#ifndef CFG_PF_QUEUE
-#define CFG_PF_QUEUE 8
-#endif
-#ifndef CFG_PF_MSHR_RESERVE
-#define CFG_PF_MSHR_RESERVE 2  // a prefetch takes an MSHR only if more than this many stay free
-#endif
-#ifndef CFG_PF_STATE_BUDGET_BITS
-#define CFG_PF_STATE_BUDGET_BITS (4 * 1024 * 8)  // 4 KB of predictor state
-#endif
-
-constexpr int PF_TRAIN_PORTS = CFG_PF_TRAIN_PORTS;
-constexpr int PF_QUEUE = CFG_PF_QUEUE;
-constexpr int PF_MSHR_RESERVE = CFG_PF_MSHR_RESERVE;
-constexpr int PF_LINE_BITS = 32 - 6;  // physical line number (64 B lines, 32-bit physical address)
-
-
-#define PF_ALGO (pf::algo())
 namespace pf {
 
 inline void fail(const char *what, const char *name) {
@@ -59,11 +36,6 @@ inline int param(const char *name, int def) {
   std::string k = std::string("PF_") + name;
   const char *v = std::getenv(k.c_str());
   return v ? std::atoi(v) : def;
-}
-
-inline int algo() {  // 0 off, 1 next-line, 2 IP-stride, 3 best-offset, 4 best-offset + IP-stride (runtime: PF_ALGO)
-  static const int v = param("ALGO", CFG_PF_ALGO);
-  return v;
 }
 
 struct StateReport {
