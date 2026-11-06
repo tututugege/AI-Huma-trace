@@ -61,12 +61,26 @@ void pmem_release() {
 
 RefCpuContext *pmem_core_ctx() { return g_core; }
 
+namespace {
+// Zero a buffer page by page, touching only pages that are not zero already: a freshly calloc'ed 2 GiB stays unmapped
+// (the result is the same as memset, the resident size is not).
+void clear_sparse(void *base, size_t bytes) {
+  constexpr size_t kPage = 4096;
+  auto *p = static_cast<uint8_t *>(base);
+  static const uint8_t zeros[kPage] = {};
+  for (size_t off = 0; off < bytes; off += kPage) {
+    const size_t n = bytes - off < kPage ? bytes - off : kPage;
+    if (std::memcmp(p + off, zeros, n) != 0) std::memset(p + off, 0, n);
+  }
+}
+}  // namespace
+
 void pmem_clear_all() {
   if (p_memory != nullptr) {
-    std::memset(p_memory, 0, RAM_SIZE);
+    clear_sparse(p_memory, RAM_SIZE);
   }
   if (g_sdram_memory != nullptr) {
-    std::memset(g_sdram_memory, 0, PMEM_SDRAM_SIZE);
+    clear_sparse(g_sdram_memory, PMEM_SDRAM_SIZE);
   }
   g_io_words.clear();
 }

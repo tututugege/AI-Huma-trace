@@ -9,7 +9,10 @@ STUBS=$SPEC/tm/pf_stubs/$B; mkdir -p "$STUBS" "$OUT/$B"
 if [ -n "${MEAS:-}" ]; then ARGS="-w ${WARM:-10000000} -c $MEAS"
 else case $N in *nowarmup*) ARGS="-w 0 -c 10000000";; *) ARGS="-c 10000000";; esac; fi
 L=$OUT/$B/$N.log
-PF_STATS=1 DS3_STATS=1 DS3_OUT=$OUT/$B/$N.ds3 "$SIM" --mode ckpt --restore-stub "$STUBS/$N.stub" $ARGS "$C" > "$L" 2>&1
+# FASTW=<n>: fast-warmup tier (EXP-009): the function model fast-forwards (interval - n) instructions, the DUT is restored from its
+# state (no front-door restore) and warms up for n instructions in detail; ~1.8x less simulation per point, an approximation.
+if [ -n "${FASTW:-}" ]; then STUBARG=""; ARGS="-w $FASTW -c ${MEAS:-10000000}"; else STUBARG="--restore-stub $STUBS/$N.stub"; fi
+PF_STATS=1 DS3_STATS=1 DS3_OUT=$OUT/$B/$N.ds3 "$SIM" --mode ckpt $STUBARG $ARGS "$C" > "$L" 2>&1
 rc=$?
 clean() { sed 's/\x1b\[[0-9;]*m//g' "$L"; }
 cyc=$(clean | grep -a "cycle       num:" | tail -1 | awk '{print $3}')

@@ -73,6 +73,29 @@ typedef struct CkptIoRange {
   uint32_t size;
 } CkptIoRange;
 
+// Like gz_read_exact for the big RAM / SDRAM images: the data is read through a small buffer and only pages that differ
+// from what is there already are written, so the zero pages of a calloc'ed 2 GiB image never become resident.
+void gz_read_sparse(gzFile file, uint8_t *dst, uint64_t total_bytes) {
+  constexpr size_t kPage = 4096;
+  std::vector<uint8_t> buf(1u << 20);
+  uint64_t done = 0;
+  while (done < total_bytes) {
+    const size_t want = static_cast<size_t>(std::min<uint64_t>(buf.size(), total_bytes - done));
+    size_t got = 0;
+    while (got < want) {
+      const int r = gzread(file, buf.data() + got, static_cast<unsigned int>(want - got));
+      if (r < 0) Assert(0 && "Error: gzread failed during checkpoint restore.");
+      if (r == 0) Assert(0 && "Error: Unexpected EOF during checkpoint restore.");
+      got += static_cast<size_t>(r);
+    }
+    for (size_t off = 0; off < want; off += kPage) {
+      const size_t n = std::min(kPage, want - off);
+      if (std::memcmp(dst + done + off, buf.data() + off, n) != 0) std::memcpy(dst + done + off, buf.data() + off, n);
+    }
+    done += want;
+  }
+}
+
 void gz_read_exact(gzFile file, uint8_t *dst, uint64_t total_bytes) {
   uint64_t remain = total_bytes;
   while (remain > 0) {
@@ -299,9 +322,9 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
   pmem_clear_all();
   std::cout << "Restoring Memory (front-door restore: the CPU state is set by the restore program)... format=simpoint-v"
             << ckpt_header.format_ver << std::endl;
-  gz_read_exact(file, reinterpret_cast<uint8_t *>(pmem_ram_ptr()), ckpt_header.ram_size);
+  gz_read_sparse(file, reinterpret_cast<uint8_t *>(pmem_ram_ptr()), ckpt_header.ram_size);
   if (checkpoint_sdram_size != 0) {
-    gz_read_exact(file, reinterpret_cast<uint8_t *>(pmem_sdram_ptr()), checkpoint_sdram_size);
+    gz_read_sparse(file, reinterpret_cast<uint8_t *>(pmem_sdram_ptr()), checkpoint_sdram_size);
   }
   gzclose(file);
 
@@ -439,10 +462,10 @@ void BackTop::restore_checkpoint(const std::string &filename) {
             << std::endl;
 
   uint8_t *ram_dst = reinterpret_cast<uint8_t *>(pmem_ram_ptr());
-  gz_read_exact(file, ram_dst, ckpt_header.ram_size);
+  gz_read_sparse(file, ram_dst, ckpt_header.ram_size);
   if (checkpoint_sdram_size != 0) {
     uint8_t *sdram_dst = reinterpret_cast<uint8_t *>(pmem_sdram_ptr());
-    gz_read_exact(file, sdram_dst, checkpoint_sdram_size);
+    gz_read_sparse(file, sdram_dst, checkpoint_sdram_size);
   }
 
   if (ckpt_header.io_range_count > 64u) {

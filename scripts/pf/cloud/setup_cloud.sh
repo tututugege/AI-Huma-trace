@@ -17,11 +17,11 @@ make -C function-model librefcpu.a -j16 > function-model/build.log 2>&1 || { tai
 echo "[setup] building trace-model (with DRAMsim3)"
 ( cd trace-model && make -j32 > build.log 2>&1 ) || { tail -40 trace-model/build.log; exit 1; }
 test -x trace-model/build/simulator
-echo "[setup] validating cycle counts (PF_ALGO=0 = no prefetch; must equal the Mac numbers)"
+echo "[setup] validating cycle counts (PF_ENABLE=0 = no prefetch = the 2026-11-05 baseline; PF_ENABLE=1 = default; must equal the Mac numbers)"
 cd trace-model
 fail=0
-check() {  # name expected
-  got=$(PF_ALGO=0 SIM_MAX_CYCLES=5000000 build/simulator validate/$1.bin 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -a "cycle       num" | awk '{print $3}')
+check() {  # name expected [PF_ENABLE]
+  got=$(PF_ENABLE=${3:-0} SIM_MAX_CYCLES=5000000 build/simulator validate/$1.bin 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -a "cycle       num" | awk '{print $3}')
   if [ "$got" = "$2" ]; then echo "  PASS $1 $got"; else echo "  FAIL $1 got=$got expected=$2"; fail=1; fi
 }
 check dhrystone 162033
@@ -29,5 +29,8 @@ check coremark 255335
 check memory-stress-small 347305
 check matmul_fpu 43523
 check prime 12233
+check dhrystone 161183 1
+check coremark 256573 1
+check memory-stress-small 334635 1
 mkdir -p /root/res /root/spec
 [ $fail -eq 0 ] && echo "[setup] OK" || { echo "[setup] VALIDATION FAILED: do not use the results of this machine"; exit 2; }
