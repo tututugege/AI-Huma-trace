@@ -10,6 +10,7 @@
 //   - seq(): (1) the FIFO head is popped if the L1D took it for a tag probe, (2) the stride generator pushes one candidate,
 //     (3) otherwise the LLC engine pushes one candidate, (4) the events registered last cycle train the detector,
 //     (5) up to PF_TRAIN_PORTS new events are selected into the input registers (extra events are dropped).
+// On by default (EXP-009); the environment variable PF_ENABLE=0 turns it off.
 // Circuit rules (pf::Table / pf::Fifo): fixed port counts per cycle, widths truncate on write; violations abort.
 #include "Prefetch.h"
 
@@ -59,7 +60,7 @@ class DataPrefetcher {
 
   DataPrefetcher()
       : reqq("pf_reqq", 1), stride("pf_stride", PF_TRAIN_PORTS, PF_TRAIN_PORTS) {
-    enabled_ = pf::param("ENABLE", 0) != 0;
+    enabled_ = pf::param("ENABLE", 1) != 0;   // default on; PF_ENABLE=0 turns the prefetcher off
     if (enabled_ && std::getenv("PF_STATS")) {
       pf::StateReport r; report(r);
       std::fprintf(stderr, "[PF] h1: state=%ld bits\n", r.total());
