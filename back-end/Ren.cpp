@@ -68,6 +68,26 @@ void Ren::comb_begin() {
   BEGIN_EQ(alloc_checkpoint_head_1, alloc_checkpoint_head);
 }
 
+// Move elimination bound. The architectural state after a move commits equals the speculative RAT right after its
+// rename, so the architectural reference count of the source register never exceeds the speculative one. A move is
+// eliminated only when its source comes straight from the speculative RAT (no older instruction of the group writes
+// it) and  (RAT entries naming it) + (older instructions of the group with a destination) + 1  <= MOVE_ELIM_MAX_REFS;
+// older writers can add at most one reference each, so the bound holds without looking at what they write.
+bool Ren::elim_refs_ok(int i) const {
+  const int s1 = inst_r[i]->src1_areg;
+  int older = 0;
+  for (int j = 0; j < i; j++) {
+    if (!inst_valid[j] || !inst_r[j].dest_en) continue;
+    if (inst_r[j]->dest_areg != 0 && inst_r[j]->dest_areg == s1) return false;  // source bypassed inside the group
+    older++;
+  }
+  int refs = 0;
+  for (int e = 0; e < ARF_NUM + 1; e++)
+    if (spec_RAT[e] == spec_RAT[s1]) refs++;
+  const bool ok = refs + older + 1 <= MOVE_ELIM_MAX_REFS;
+  return ok;
+}
+
 // Pick destination physical registers from the free list, in order. The first instruction that finds it empty stalls
 // itself and everything behind it (ren2dis.valid = 0).
 void Ren::comb_alloc() {
@@ -80,7 +100,7 @@ void Ren::comb_alloc() {
     elim[i] = false;
     wires->ren2dis.valid[i] = false;
     if (!inst_valid[i]) continue;
-    if (move_elim_enabled() && is_move_shape(inst_r[i])) {
+    if (move_elim_enabled() && is_move_shape(inst_r[i]) && elim_refs_ok(i)) {
       elim[i] = true;
       wires->ren2dis.valid[i] = !stall;
     } else if (!inst_r[i].dest_en) {

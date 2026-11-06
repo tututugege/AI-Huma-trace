@@ -136,18 +136,17 @@ inline bool is_load(InstInfo uop) {
   return uop->type == LOAD || (uop->type == AMO && (uop->func7 >> 2) != AmoOp::SC);
 }
 
-// Move elimination (experiment, ME_ELIM=1 in the environment): `addi rd, rs, 0` with rd and rs both real registers is
+// Move elimination (CFG_MOVE_ELIM / MOVE_ELIM in config.h): `addi rd, rs, 0` with rd and rs both real registers is
 // renamed away: rd takes over rs's physical register, no uop is issued, the ROB entry completes at dispatch.
-inline bool move_elim_enabled() {
-  static const bool on = std::getenv("ME_ELIM") != nullptr;
-  return on;
-}
+inline constexpr bool move_elim_enabled() { return MOVE_ELIM != 0; }
 inline bool is_move_shape(const InstInfo &u) {
   return decode_inst_type(u->type) == ADD && u->src2_is_imm && u->func3 == 0 && u->imm == 0 && u->src1_en &&
          !u->src1_is_pc && u->src1_areg != 0 && u.dest_en && u->dest_areg != 0;
 }
 // After rename: an eliminated move shares its source's physical register.
-inline bool is_eliminated_move(const InstInfo &u) { return is_move_shape(u) && u.dest_preg == u->src1_preg; }
+inline bool is_eliminated_move(const InstInfo &u) {
+  return move_elim_enabled() && is_move_shape(u) && u.dest_preg == u->src1_preg;
+}
 
 inline bool is_amo_sc_inst(InstType type,uint32_t func7) {
   return type == AMO && ((func7 >> 2) == AmoOp::SC);
