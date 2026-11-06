@@ -45,6 +45,12 @@ TlbMmu::TlbMmu(SimContext *ctx, PtwMemPort *port, int tlb_entries, Kind kind)
 void TlbMmu::set_ptw_mem_port(PtwMemPort *port) { walker.set_mem_port(port); }
 void TlbMmu::set_ptw_walk_port(PtwWalkPort *port) { walk_port = port; }
 
+void TlbMmu::warm_install(const TlbEntry *entries, int count, int repl_ptr) {
+  const int n = count < tlb_capacity_ ? count : tlb_capacity_;
+  for (int i = 0; i < n; ++i) tlb_entries_[i] = entries[i];
+  repl_ptr_ = tlb_capacity_ > 0 ? repl_ptr % tlb_capacity_ : 0;
+}
+
 void TlbMmu::cancel_pending_walk() {
   consume_completed_walk_refill(true);
   walker.flush();

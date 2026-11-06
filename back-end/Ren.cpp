@@ -132,6 +132,8 @@ void count_commit(SimContext *ctx, const Uop &u) {
   if (!ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
     std::cout << "[CKPT] O3 warmup done at commit " << std::dec << ctx->perf.commit_num << "/"
               << ctx->ckpt_warmup_commit_target << ". Resetting perf counters and starting measure phase." << std::endl;
+    if (std::getenv("CKPT_TRACE_PC"))  // window-position check (EXP-011): pc of the commit that ends the warm-up
+      std::cout << "[CKPT_PC] warmup-end commit pc=0x" << std::hex << (uint32_t)u->dbg.pc << " inst=0x" << (uint32_t)u->dbg.instruction << std::dec << std::endl;
     ctx->perf.perf_reset();
     ctx->perf.perf_start = true;
   }

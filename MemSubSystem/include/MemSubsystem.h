@@ -83,6 +83,8 @@ public:
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);
   bool timer_irq_level() const { return peripheral_model_.timer_irq_level(); }
+  // Fast-warmup replay (EXP-011): write one LLC set (per way: tag, valid, dirty) and its round-robin pointer.
+  void llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t *valid, const uint8_t *dirty, uint32_t repl_next);
   void llc_comb_outputs();
   const axi_interconnect::AXI_LLC_LookupIn_t &llc_lookup_in() const;
   void llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out,

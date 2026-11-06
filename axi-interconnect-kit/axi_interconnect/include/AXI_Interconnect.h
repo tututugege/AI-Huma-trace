@@ -232,6 +232,11 @@ public:
   bool llc_invalidate_line_accepted() const {
     return llc.io.ext_out.mem.invalidate_line_accepted;
   }
+  // Fast-warmup replay (EXP-011): the number of dirty lines the LLC tables now hold.
+  void warm_set_llc_dirty_lines(uint32_t n) {
+    llc.io.regs.dirty_line_count_r = n;
+    llc.io.reg_write.dirty_line_count_r = n;
+  }
   const AXI_LLC_TableOut_t &get_llc_table_out() const { return llc.io.table_out; }
   const AXI_LLCPerfCounters_t &get_llc_perf_counters() const {
     return llc.perf_counters();

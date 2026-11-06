@@ -356,6 +356,41 @@ void MemSubsystem::set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg) {
 #endif
 }
 
+void MemSubsystem::llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t *valid, const uint8_t *dirty,
+                                uint32_t repl_next) {
+#if AXI_KIT_RUNTIME_ENABLED
+  if (axi_kit_runtime == nullptr || !axi_kit_runtime->llc_tables.enabled) return;
+  auto &t = axi_kit_runtime->llc_tables;
+  const uint32_t ways = t.config.ways;
+  DynamicTableWriteReq m, v, r;
+  m.enable = v.enable = r.enable = true;
+  m.address = v.address = r.address = set;
+  m.payload.reset(ways * axi_interconnect::AXI_LLC_META_ENTRY_BYTES);
+  m.chunk_enable.assign(m.payload.size(), 1);
+  v.payload.reset(axi_interconnect::AXI_LLC::valid_row_bytes(t.config));
+  v.chunk_enable.assign(v.payload.size(), 1);
+  r.payload.reset(axi_interconnect::AXI_LLC_REPL_BYTES);
+  r.chunk_enable.assign(r.payload.size(), 1);
+  for (uint32_t w = 0; w < ways; ++w) {
+    axi_interconnect::AXI_LLCMetaEntry_t e{};
+    e.tag = tag[w];
+    e.flags = uint8_t((valid[w] ? axi_interconnect::AXI_LLC_META_VALID : 0) |
+                      (dirty[w] ? axi_interconnect::AXI_LLC_META_DIRTY : 0));
+    axi_interconnect::AXI_LLC_Bytes_t b;
+    axi_interconnect::AXI_LLC::encode_meta(e, b);
+    std::memcpy(m.payload.data() + w * axi_interconnect::AXI_LLC_META_ENTRY_BYTES, b.data(),
+                axi_interconnect::AXI_LLC_META_ENTRY_BYTES);
+    v.payload.data()[w] = valid[w] ? 1 : 0;
+  }
+  for (int i = 0; i < 4; ++i) r.payload.data()[i] = uint8_t(repl_next >> (8 * i));
+  t.meta.seq({}, m);
+  t.valid.seq({}, v);
+  t.repl.seq({}, r);
+#else
+  (void)set; (void)tag; (void)valid; (void)dirty; (void)repl_next;
+#endif
+}
+
 void MemSubsystem::llc_comb_outputs() {
 #if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {

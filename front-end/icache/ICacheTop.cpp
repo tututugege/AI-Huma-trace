@@ -645,6 +645,13 @@ public:
                          resp_port);
   }
 
+  void warm_install_itlb(const void *entries, int count, int repl_ptr) override {
+    auto &runtime = true_icache_runtime<HW, ReadPort>();
+    ensure_mmu_model(runtime, ctx);
+    if (runtime.mmu_model != nullptr)
+      runtime.mmu_model->warm_install(static_cast<const TlbMmu::TlbEntry *>(entries), count, repl_ptr);
+  }
+
   void peek_ready() override {
     clear_primary_outputs(out);
     clear_secondary_outputs(out);
@@ -911,3 +918,8 @@ ICacheTop *get_icache_instance() {
   return instance.get();
 }
 
+
+// Fast-warmup replay (EXP-011)
+void icache_warm_install_itlb(const void *entries, int count, int repl_ptr) {
+  get_icache_instance()->warm_install_itlb(entries, count, repl_ptr);
+}

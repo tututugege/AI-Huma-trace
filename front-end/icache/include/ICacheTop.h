@@ -51,6 +51,11 @@ public:
     (void)resp_port;
   }
 
+  // Fast-warmup replay (EXP-011): load a ready-made ITLB state (const TlbMmu::TlbEntry *, slot order, round-robin pointer).
+  virtual void warm_install_itlb(const void *entries, int count, int repl_ptr) {
+    (void)entries; (void)count; (void)repl_ptr;
+  }
+
   virtual ~ICacheTop() {}
 };
 

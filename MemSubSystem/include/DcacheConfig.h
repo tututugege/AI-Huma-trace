@@ -190,6 +190,7 @@ AddrFields decode(uint32_t addr);
 uint32_t get_addr(uint32_t set_idx, uint32_t tag, uint32_t word_off);
 uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], const bool valid[DCACHE_WAYS_NUM]);
 void plru_tree_touch(uint32_t set_idx, uint32_t way);
+bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line);  // fast-warmup replay (EXP-011)
 
 
 void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);

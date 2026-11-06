@@ -49,6 +49,9 @@ GenericTableTimingConfig make_lookup_timing_config() {
 }
 
 
+TagTable &g_tag_table() { static TagTable t(make_lookup_timing_config()); return t; }
+ValidTable &g_valid_table() { static ValidTable t(make_lookup_timing_config()); return t; }
+
 void bind_icache_runtime(ICacheTop *instance) {
   static PtwMemPort *bound_mem_port = nullptr;
   static PtwWalkPort *bound_walk_port = nullptr;
@@ -185,8 +188,8 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
     assert(in->csr_status != nullptr &&
            "icache_comb_calc requires csr_status when not in reset");
   }
-  static TagTable tag_table(make_lookup_timing_config());
-  static ValidTable valid_table(make_lookup_timing_config());
+  TagTable &tag_table = g_tag_table();
+  ValidTable &valid_table = g_valid_table();
   if (in->reset) {
     tag_table.reset();
     valid_table.reset();
@@ -251,6 +254,25 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
 }
 
 void icache_seq_write() {}
+
+// Fast-warmup replay (EXP-011): load a ready-made L1I tag/valid state.
+void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]) {
+  TagTable &tt = g_tag_table();
+  ValidTable &vt = g_valid_table();
+  for (int set = 0; set < ICACHE_SET_NUM; ++set) {
+    TagTable::WriteReq tw{};
+    ValidTable::WriteReq vw{};
+    tw.enable = vw.enable = true;
+    tw.address = vw.address = set;
+    for (int way = 0; way < ICACHE_WAY_NUM; ++way) {
+      tw.payload.chunks[way][0] = tag[set][way];
+      vw.payload.chunks[way][0] = valid[set][way];
+      tw.chunk_enable[way] = vw.chunk_enable[way] = true;
+    }
+    tt.seq(TagTable::ReadReq{}, tw);
+    vt.seq(ValidTable::ReadReq{}, vw);
+  }
+}
 
 void icache_top(struct icache_in *in, struct icache_out *out) {
   icache_seq_read(in, out);
