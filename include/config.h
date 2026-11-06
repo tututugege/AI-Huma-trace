@@ -343,7 +343,7 @@ constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
 // Move elimination (EXP-010): `addi rd, rs, 0` is renamed away (rd shares rs's physical register, no uop, no free-list
 // slot, ROB entry complete at dispatch); a register is freed when no architectural RAT entry names it.
 #ifndef CFG_MOVE_ELIM
-#define CFG_MOVE_ELIM 0
+#define CFG_MOVE_ELIM 1
 #endif
 constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
 // Upper bound of architectural RAT entries naming one physical register (the reference counters are

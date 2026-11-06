@@ -47,11 +47,12 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv (regenerated 2026-11-05 for the EXP-006 baseline).
+3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv (regenerated 2026-11-06 for move elimination, EXP-010: 7 programs changed).
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
-   dhrystone 64 runs 162,033; coremark 2 iterations 255,335 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
-   memory-stress 2,428,470; smc-div 11,348; smc-addi 11,218; memory-stress-small 347,305.
+   dhrystone 64 runs 162,033; coremark 2 iterations 252,400 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
+   memory-stress 2,425,220; smc-div 11,348; smc-addi 11,218; memory-stress-small 347,305.
    Numbers are for the EXP-006 baseline of 2026-11-05: no AXI subsystem divider (`FREQ_DIV` 1), DRAMsim3 DDR4-3200 behind SimDDR with 60 ns of fixed non-core latency (SOC 20 + CDC 12 + CTL 15 + PHY 13 from config.h; `DS3_EXTRA_NS` overrides), 1 GHz core.
+   Before move elimination (EXP-010, `CFG_MOVE_ELIM` 1 from 2026-11-06): dhrystone 162,033; coremark 255,335; memory-stress 2,428,470; smc-div 11,348; smc-addi 11,218; memory-stress-small 347,305.
    Before (batch-3 configuration, divider 16, fixed 60-tick DDR latency, 500 MHz): 150,427 / 233,515 / 1,541,195 / 8,996 / 8,866 / 189,128. (First version of the new baseline, 32 ns extra latency: 158,756 / 250,658 / 2,425,029 / 11,096 / 10,966 / 343,975.)
 5. Small-LLC check (`scripts/llc_small_check.sh $PWD <abs path of baseline-sim/src>` (absolute paths required)): the default 8 MiB LLC never evicts in small tests.
    `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.
