@@ -6,6 +6,10 @@
 #include "types.h"
 #include "DcacheConfig.h"   
 #include "IO.h"
+#include "DataPrefetcher.h"
+#ifdef PF_STUDY
+#include "PfStudy.h"
+#endif
 #include <cstdint>
 
 class SimContext;
@@ -25,6 +29,12 @@ struct S1S2Reg {
         reg<1>    replayed  = false; // whether this load has been replayed due to MSHR full or conflict, used to avoid accepting new requests for the same load and causing starvation when there are multiple back-to-back misses
         reg<1>    bank_conflict = false;
         reg<1>    perf_replay = false;
+        reg<PF_PC_BITS> pc_hash = 0; // hashed PC of the load (prefetcher training)
+#ifdef PF_STUDY
+        reg<32> pc_full = 0;
+#endif
+        reg<1>    pf = false;        // prefetch tag probe riding an idle load port (no response to the LSU)
+        reg<1>    pf_llc = false;    // ... whose line only goes to the LLC
     } loads[LSU_LDU_COUNT];
 
     // Store slots
@@ -78,6 +88,10 @@ private:
         reg<1> valid = false;
         reg<32> addr = 0;
         reg<32> req_id = 0;
+        reg<PF_PC_BITS> pc_hash = 0;
+#ifdef PF_STUDY
+        reg<32> pc_full = 0;
+#endif
     };
     struct BankRetryStore {
         reg<1> valid = false;
@@ -100,4 +114,6 @@ private:
     bool bank_retry_load_blocked[LSU_LDU_COUNT] = {};
     bool bank_retry_store_blocked[LSU_STA_COUNT] = {};
     SimContext *ctx = nullptr;
+public:
+    DataPrefetcher pf; // L1D data prefetcher (EXP-009)
 };

@@ -7,6 +7,7 @@
 extern uint32_t tag_array  [DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
 extern wire<1>  valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
 extern wire<1>  dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
+extern wire<1>  pf_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];  // line was brought in by the prefetcher and not used yet
 
 static_assert((DCACHE_WAYS_NUM & (DCACHE_WAYS_NUM - 1)) == 0,
               "tree-PLRU requires power-of-two DCACHE_WAYS_NUM");
@@ -19,6 +20,7 @@ extern wire<1>  plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS];
 
 struct MSHRFINDReq{
     wire<1> valid;
+    wire<1> is_prefetch; // the lookup comes from a prefetch probe (it must not promote an in-flight prefetch)
     wire<DCACHE_SET_BITS> set_idx;
     wire<DCACHE_TAG_BITS> tag;
 };
@@ -32,6 +34,8 @@ struct MSHRReq{
     wire<32> addr;
     wire<1> is_store;
     wire<1> lsu_origin;
+    wire<1> is_prefetch; // allocated by the L1D prefetcher (lowest priority towards AXI)
+    wire<1> no_fill;     // prefetch into the LLC only: the response is dropped, the line is not filled into the L1D
 };
 
 struct MSHR_FILLReq{
@@ -39,6 +43,7 @@ struct MSHR_FILLReq{
     wire<DCACHE_MSHR_BITS> id;
     wire<1> dirty;
     wire<1> lsu_origin;
+    wire<1> is_prefetch;
     wire<DCACHE_WAY_BITS> way_idx;
     wire<32> addr;
 };
@@ -50,6 +55,7 @@ struct MSHRDcacheIO {
     MSHR_FILLReq fill_req;
     MSHRFINDResp find_resp[LSU_LDU_COUNT + LSU_STA_COUNT]; // one MSHRResp per load/store slot, for miss allocation and hit check
     wire<DCACHE_MSHR_COUNT_BITS> free;
+    wire<1> release_event; // an LLC-only prefetch entry was released this cycle (wakes loads waiting for a free MSHR)
     void clear() {
         memset(this, 0, sizeof(MSHRDcacheIO));
     }
@@ -121,6 +127,7 @@ struct FILLWrite {
     wire<DCACHE_MSHR_BITS> id = 0;
     wire<1>     dirty    = false;
     wire<1>     lsu_origin = false;
+    wire<1>     is_prefetch = false;
     wire<DCACHE_SET_BITS> set_idx  = 0;
     wire<DCACHE_TAG_BITS> tag      = 0;
     wire<DCACHE_WAY_BITS> way_idx  = 0;
@@ -192,7 +199,7 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 void plru_tree_touch(uint32_t set_idx, uint32_t way);
 
 
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, bool touch_plru = true);
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2);
 

@@ -146,6 +146,13 @@ public:
     }
   }
 
+  // read-only view of the queued fetch addresses (head first); used by the I-cache prefetch engine (FDIP)
+  int peek(uint32_t *out, int max) const {
+    const int n = size_ < max ? int(size_) : max;
+    for (int i = 0; i < n; ++i) out[i] = entries_[i];
+    return n;
+  }
+
 private:
   fetch_addr_t entries_[FETCH_ADDR_FIFO_SIZE]{};
   fetch_addr_fifo_size_t size_ = 0;
@@ -179,3 +186,5 @@ void fetch_address_FIFO_seq_write(const FetchAddrCombOut *req) {
   assert(req);
   g_fetch_addr_fifo_model.seq_write(*req);
 }
+
+int fetch_addr_fifo_peek(uint32_t *out, int max) { return g_fetch_addr_fifo_model.peek(out, max); }

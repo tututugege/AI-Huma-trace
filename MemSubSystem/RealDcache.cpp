@@ -130,6 +130,7 @@ void RealDcache::stage1_comb() {
             s1s2_nxt.fill_write.id = in.mshr2dcache->fill_req.id;
             s1s2_nxt.fill_write.dirty = in.mshr2dcache->fill_req.dirty;
             s1s2_nxt.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
+            s1s2_nxt.fill_write.is_prefetch = in.mshr2dcache->fill_req.is_prefetch;
             s1s2_nxt.fill_write.set_idx = fill_f.set_idx;
             s1s2_nxt.fill_write.tag = fill_f.tag;
         }
@@ -174,7 +175,16 @@ void RealDcache::stage1_comb() {
             lsu_req.valid ? lsu_req.req_id
                           : (use_pending_retry ? pending_retry.req_id
                                                : new_retry.req_id);
+        const uint32_t req_pc =
+            lsu_req.valid ? uint32_t(lsu_req.pc_hash)
+                          : (use_pending_retry ? uint32_t(pending_retry.pc_hash)
+                                               : uint32_t(new_retry.pc_hash));
         S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
+        slot.pf = false;
+        slot.pc_hash = req_pc;
+#ifdef PF_STUDY
+        slot.pc_full = lsu_req.valid ? uint32_t(lsu_req.pc_full) : (use_pending_retry ? uint32_t(pending_retry.pc_full) : uint32_t(new_retry.pc_full));
+#endif
         if (use_pending_retry) {
             bank_retry_nxt.loads[i] = {};
         }
@@ -307,6 +317,36 @@ void RealDcache::stage1_comb() {
         }
     }
 
+    // Prefetch tag probe: lowest priority, rides an idle load port (it competes for the bank like any load).
+    if (PF_ALGO != 0 && in.lsu2dcache != nullptr && pf.head_valid()) {
+        for (int i = 0; i < LSU_LDU_COUNT; i++) {
+            S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
+            if (slot.valid) continue;                      // port busy with a demand request or a retry
+            const uint32_t pf_addr = pf.head_addr();
+            const AddrFields f = decode(pf_addr);
+            if (!try_grant_bank(f, line_id(pf_addr))) { g_pf_stats.probe_conflict++; break; }
+            slot.valid = true;
+            slot.pf = true;
+            slot.pf_llc = pf.head_llc_only();
+            slot.addr = pf_addr;
+            slot.req_id = 1u << 31;                        // not an LSU request
+            slot.replayed = false;
+            slot.bank_conflict = false;
+            slot.perf_replay = true;
+            out.dcachereadreq[i]->valid = true;
+            out.dcachereadreq[i]->set_idx = f.set_idx;
+            out.dcachereadreq[i]->word_off = f.word_off;
+            out.dcache2wb->bypass_req[i].valid = true;     // a line still in the write buffer must not be re-read
+            out.dcache2wb->bypass_req[i].addr = pf_addr;
+            out.dcache2mshr->find_req[i].valid = true;
+            out.dcache2mshr->find_req[i].set_idx = f.set_idx;
+            out.dcache2mshr->find_req[i].tag = f.tag;
+            out.dcache2mshr->find_req[i].is_prefetch = true;
+            pf.head_taken = true;
+            break;
+        }
+    }
+
     out.fillout->valid = fillout_granted;
     out.fillout->set_idx = fillout_granted ? fill_f.set_idx : 0;
 
@@ -347,6 +387,7 @@ void RealDcache::stage2_comb() {
                 out.fill_write->valid = true;
                 out.fill_write->dirty = s1s2_cur.fill_write.dirty;
                 out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
+                out.fill_write->is_prefetch = s1s2_cur.fill_write.is_prefetch;
                 out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
                 out.fill_write->tag = s1s2_cur.fill_write.tag;
                 out.fill_write->way_idx = select_way;
@@ -362,6 +403,7 @@ void RealDcache::stage2_comb() {
             out.fill_write->valid = true;
             out.fill_write->dirty = s1s2_cur.fill_write.dirty;
             out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
+            out.fill_write->is_prefetch = s1s2_cur.fill_write.is_prefetch;
             out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
             out.fill_write->tag = s1s2_cur.fill_write.tag;
             out.fill_write->way_idx = select_way;
@@ -371,6 +413,7 @@ void RealDcache::stage2_comb() {
     }
 
     int mshr_free_entries = in.mshr2dcache->free;
+    int pf_slot = -1;
     // ── Load ports ────────────────────────────────────────────────────────────
     for (int i = 0; i < LSU_LDU_COUNT; i++) {
         const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[i];
@@ -378,6 +421,7 @@ void RealDcache::stage2_comb() {
         DcacheLineReadResp &line_resp = *in.dcachelinereadresp[i];
         resp.valid = false; 
         if (!slot.valid) continue;
+        if (slot.pf) { pf_slot = i; continue; }            // handled after the demand requests
 
         AddrFields f          = decode(slot.addr);
         uint32_t tag_expected = f.tag;
@@ -388,6 +432,10 @@ void RealDcache::stage2_comb() {
                 bank_retry_issue_wires.loads[i].valid = true;
                 bank_retry_issue_wires.loads[i].addr = slot.addr;
                 bank_retry_issue_wires.loads[i].req_id = slot.req_id;
+                bank_retry_issue_wires.loads[i].pc_hash = slot.pc_hash;
+#ifdef PF_STUDY
+                bank_retry_issue_wires.loads[i].pc_full = slot.pc_full;
+#endif
 
                 continue;
             }
@@ -414,6 +462,14 @@ void RealDcache::stage2_comb() {
             resp.retry = false;
             resp.replay = ReplayType::HIT;
         }else if (hit_way >= 0 ) {
+            if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) {
+                g_pf_stats.demand_hit++;
+                if (pf_array[f.set_idx][hit_way]) {        // first use of a prefetched line
+                    pf_array[f.set_idx][hit_way] = false;
+                    g_pf_stats.useful++;
+                    pf.acc[i] = PfAccess{true, slot.addr, slot.pc_hash, false, true};
+                }
+            }
             // ── Cache Hit ────────────────────────────────────────────────────
             resp.valid  = true;
             resp.replay = ReplayType::HIT;
@@ -432,6 +488,20 @@ void RealDcache::stage2_comb() {
                 resp.replay = ReplayType::CONFLICT;
                 resp.req_id = slot.req_id;
                 continue;
+            }
+#ifdef PF_STUDY
+            {
+                static const int ideal = pf::param("IDEAL", 0);
+                if ((ideal == 1 || (ideal == 2 && g_study.ideal_pc(slot.pc_full))) && dcache_req_id_is_lsu(slot.req_id)) {   // perfect L1D for loads: an upper bound for any data prefetcher
+                    resp.valid = true; resp.replay = ReplayType::HIT; resp.req_id = slot.req_id; resp.retry = false;
+                    continue;
+                }
+                if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) g_study.miss(slot.pc_full, slot.addr);
+            }
+#endif
+            if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) {
+                g_pf_stats.demand_miss++;
+                pf.acc[i] = PfAccess{true, slot.addr, slot.pc_hash, true, false};
             }
             if(in.mshr2dcache->find_resp[i].valid){
                 resp.valid = true;
@@ -584,7 +654,43 @@ void RealDcache::stage2_comb() {
         }
     }
 
-    out.dcache2lsu->mshr_fill = out.fill_write->valid; // Inform LSU about MSHR fill in the same cycle, so that it can prioritize the waiting load/store to consume the fill data and free up the MSHR entry as soon as possible, improving performance when there are back-to-back misses.
+    if (out.fill_write->valid) {                            // fill feedback for the prefetcher
+        pf.fill.valid = true;
+        pf.fill.paddr = get_addr(out.fill_write->set_idx, out.fill_write->tag, 0);
+        pf.fill.is_prefetch = out.fill_write->is_prefetch;
+        const uint32_t vw = out.fill_write->way_idx;           // way chosen for replacement (pf bit read with the fill snapshot)
+        pf.fill.victim_unused = in.fillin->valid_snap[vw] && pf_array[out.fill_write->set_idx][vw] &&
+                                in.fillin->tag_snap[vw] != out.fill_write->tag;
+    }
+    // ── Prefetch probe (lowest priority: after every demand request has taken its MSHR) ──────────
+    if (pf_slot >= 0) {
+        const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[pf_slot];
+        const AddrFields f = decode(slot.addr);
+        const bool pf_llc_only = slot.pf_llc;
+        const DcacheLineReadResp &line_resp = *in.dcachelinereadresp[pf_slot];
+        int hit_way = -1;
+        for (int w = 0; w < DCACHE_WAYS_NUM; w++)
+            if (line_resp.valid[w] && line_resp.tag[w] == f.tag) { hit_way = w; break; }
+        const bool fill_same =
+            (s1s2_cur.fill_write.valid && s1s2_cur.fill_write.set_idx == f.set_idx && s1s2_cur.fill_write.tag == f.tag) ||
+            (in.mshr2dcache->fill_req.valid && cache_line_match(slot.addr, in.mshr2dcache->fill_req.addr));
+        g_pf_stats.probe++;
+        if (in.wb2dcache->bypass_resp[pf_slot].valid) g_pf_stats.probe_wb++;
+        else if (hit_way >= 0 || fill_same) g_pf_stats.probe_hit++;
+        else if (in.mshr2dcache->find_resp[pf_slot].valid) g_pf_stats.probe_inflight++;
+        else if (mshr_free_entries <= pf.mshr_reserve) g_pf_stats.probe_mshr_full++;
+        else {
+            out.dcache2mshr->mshr_req[pf_slot].valid = true;
+            out.dcache2mshr->mshr_req[pf_slot].addr = slot.addr;
+            out.dcache2mshr->mshr_req[pf_slot].is_store = false;
+            out.dcache2mshr->mshr_req[pf_slot].lsu_origin = false;
+            out.dcache2mshr->mshr_req[pf_slot].is_prefetch = true;
+            out.dcache2mshr->mshr_req[pf_slot].no_fill = pf_llc_only;
+            mshr_free_entries--;
+        }
+    }
+
+    out.dcache2lsu->mshr_fill = out.fill_write->valid || in.mshr2dcache->release_event; // Inform LSU about MSHR fill in the same cycle, so that it can prioritize the waiting load/store to consume the fill data and free up the MSHR entry as soon as possible, improving performance when there are back-to-back misses.
     out.dcache2lsu->mshr_fill_addr =
         out.fill_write->valid
             ? get_addr(out.fill_write->set_idx, out.fill_write->tag, 0)
@@ -605,4 +711,5 @@ void RealDcache::seq() {
     // 1. Advance pipeline register.
     s1s2_cur = s1s2_nxt;
     bank_retry_cur = bank_retry_nxt;
+    pf.seq();
 }

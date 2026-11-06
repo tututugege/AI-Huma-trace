@@ -20,6 +20,8 @@ struct MSHREntry {
     uint64_t axi_read_start_cycle;
     bool axi_read_active;
     bool lsu_origin;
+    bool is_prefetch;
+    bool no_fill;
 };
 
 
@@ -84,6 +86,7 @@ public:
 
     MSHR_STATE cur,nxt;
     bool axi_resp_accepted_this_cycle = false;
+    bool nofill_released = false;
     SimContext *ctx = nullptr;
 
     bool idle_quiescent() const {

@@ -244,6 +244,8 @@ void Rob::comb_commit() {
   w.rob2dis.rob_flag = enq_flag;
 
   if (++stall_cycle > 50000) {
+    extern void mshr_debug_dump();
+    mshr_debug_dump();
     std::fprintf(stderr, "ROB deadlock at cycle %llu: empty=%d deq_ptr=%d enq_ptr=%d commit=%d single=%d front_stall=%d head_line_empty=%d\n",
                  (unsigned long long)ctx->perf.cycle, (int)is_empty(), (int)deq_ptr, (int)enq_ptr, (int)commit, (int)single,
                  (int)front_stall, (int)head_line_empty);

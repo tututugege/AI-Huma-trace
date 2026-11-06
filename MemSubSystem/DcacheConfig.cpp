@@ -1,5 +1,6 @@
 #include "PhysMemory.h"
 #include "DcacheConfig.h"
+#include "DataPrefetcher.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@ uint32_t tag_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 // No L1D line-data storage (P3): load data is a fact of the trace; tags/valid/dirty/PLRU are kept.
 bool valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 bool dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
+bool pf_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 bool plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS] = {};
 
 namespace {
@@ -84,6 +86,7 @@ void init_dcache()
     std::memset(tag_array, 0, sizeof(tag_array));
     std::memset(valid_array, 0, sizeof(valid_array));
     std::memset(dirty_array, 0, sizeof(dirty_array));
+    std::memset(pf_array, 0, sizeof(pf_array));
     std::memset(plru_tree_state, 0, sizeof(plru_tree_state));
     begin_data_bank_cycle();
 }
@@ -128,7 +131,7 @@ uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], co
 
 
 
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag)
+void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag, bool touch_plru)
 {
     check_data_bank_access(set_idx, "write", "fill_line");
 
@@ -145,7 +148,7 @@ void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag)
     valid_array[set_idx][target_way] = true;
     dirty_array[set_idx][target_way] = false;
     tag_array[set_idx][target_way] = tag;
-    plru_tree_touch(set_idx, target_way);
+    if (touch_plru) plru_tree_touch(set_idx, target_way);
 }
 
 bool cache_line_match(uint32_t addr1, uint32_t addr2){
@@ -200,7 +203,13 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
                 break;
             }
         }
-        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag);
+        if (valid_array[fillwrite.set_idx][target_way] && pf_array[fillwrite.set_idx][target_way] &&
+            tag_array[fillwrite.set_idx][target_way] != fillwrite.tag)
+            g_pf_stats.useless_evict++;  // victim was a prefetched line nobody used
+        static const bool pf_low_insert = pf::param("INSERT", 0) != 0;  // prefetched lines do not update the PLRU state on fill
+        write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag, !(fillwrite.is_prefetch && pf_low_insert));
+        pf_array[fillwrite.set_idx][target_way] = fillwrite.is_prefetch;
+        if (fillwrite.is_prefetch) g_pf_stats.filled++;
         if (fillwrite.dirty) {
             dirty_array[fillwrite.set_idx][target_way] = true;
         }
