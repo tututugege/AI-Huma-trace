@@ -45,9 +45,9 @@ memory is written at ROB commit from facts; instruction/PTE/LLC read data come f
 All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh build/simulator results/gate`.
 1. `gmake LDFLAGS="-lz" -j8` (macOS: no -lstdc++fs). DRAMsim3 is on by default (EXP-006): it is the pinned git submodule `third_party/DRAMsim3` (`git submodule update --init third_party/DRAMsim3` after cloning), compiled by the Makefile into `build_dramsim3/libdramsim3.a` (`gmake dramsim3`; no cmake, no shared library). `gmake DS3=0` builds the old fixed-latency SimDDR. Core frequency: `gmake CPU_FREQ_MHZ=...` (default 1000) or the `CPU_FREQ_MHZ` environment variable at run time. After changing flags use a clean `BUILD_DIR`.
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
-2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div`
+2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div pf-stress`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests, pass = cycles equal to baseline.csv (regenerated 2026-11-06 with the L1D prefetcher on; `PF_ENABLE=0` reproduces `baseline_nopf.csv`, the 2026-11-05 EXP-006 baseline, 62/62).
+3. `scripts/run_gate.sh build/simulator results/gate`: 63 tests (62 + pf-stress, 2026-11-06), pass = cycles equal to baseline.csv (regenerated 2026-11-06 with the L1D prefetcher on; `PF_ENABLE=0` reproduces `baseline_nopf.csv`, the 2026-11-05 EXP-006 baseline, 62/62 + pf-stress).
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
    **L1D prefetcher on (default since EXP-009, 2026-11-06; `PF_ENABLE=0` turns it off):** dhrystone 64 runs 161,183; coremark 2 iterations 256,573 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
    memory-stress 2,383,063; smc-div 11,348; smc-addi 11,218; memory-stress-small 334,635.

@@ -62,3 +62,4 @@ vm_pagefault_test.bin,0,0,35493
 vm_sfence_perm_test.bin,0,0,44366
 vm_sum_fetch_test.bin,0,0,4049
 memory-stress-small.bin,0,0,347305
+pf-stress.bin,0,0,612878
