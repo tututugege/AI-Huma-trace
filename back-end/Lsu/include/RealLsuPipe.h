@@ -12,8 +12,8 @@ namespace lp {
 constexpr int LD = LSU_LDU_COUNT;      // load pipelines (L1/L2)
 constexpr int STA = LSU_STA_COUNT;     // STA ports (AGU + DTLB)
 constexpr int STD = LSU_SDU_COUNT;     // store-data write ports
-constexpr int RP_MAX = 2;              // replay ports (runtime value 1..2, LSU_PIPE_RP)
-constexpr int DRAIN_PORTS = (STA < 2 ? STA : 2);  // committed stores sent to the DCache per cycle
+constexpr int RP_MAX = 4;              // replay registers (runtime value 1..4, CFG_LSU_PIPE_RP / LSU_PIPE_RP)
+constexpr int DRAIN_MAX = STA;         // store drain ports at most (runtime value CFG_LSU_PIPE_DRAIN / LSU_PIPE_DRAIN, <= STA)
 constexpr int RETIRE_PORTS = 4;        // STQ head entries freed per cycle
 constexpr int EPOCH_W = 4;             // per-LDQ-entry request epoch (stale-response filter), never reset
 constexpr int RWAIT_W = 3;             // replay countdown (0..LSU_PEPLAY_WAIT_CYCLES)

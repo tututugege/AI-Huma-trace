@@ -368,6 +368,21 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_PIPE_L2
 #define CFG_LSU_PIPE_L2 115
 #endif
+// Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
+//   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
+//   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older
+//                       overlapping store does NOT take a port (env LSU_PIPE_DCAND; 0 = the first-version drain: N = DRAIN, a blocked
+//                       candidate keeps its port idle)
+//   CFG_LSU_PIPE_RP     load replay registers (1..4); env LSU_PIPE_RP
+#ifndef CFG_LSU_PIPE_DRAIN
+#define CFG_LSU_PIPE_DRAIN 3
+#endif
+#ifndef CFG_LSU_PIPE_DCAND
+#define CFG_LSU_PIPE_DCAND 4
+#endif
+#ifndef CFG_LSU_PIPE_RP
+#define CFG_LSU_PIPE_RP 4
+#endif
 inline bool lsu_pipe_enabled() {
   static const bool v = [] { const char *e = std::getenv("LSU_PIPE"); return e && e[0] ? e[0] != '0' : CFG_LSU_PIPE != 0; }();
   return v;

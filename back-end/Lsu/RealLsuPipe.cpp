@@ -187,6 +187,8 @@ static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CU
 //   8 = d: speculative wake-up at L2 from the hit prediction made at L1 (TLB hit, no MMIO, no CAM candidate, no hidden-retry block);
 //       a wrong prediction is cancelled at the start of the next cycle (woken entries wait again) before the select
 static const unsigned lp_l2 = lsu_pipe_env_mask("LSU_PIPE_L2", CFG_LSU_PIPE_L2);
+static const int lp_drain = std::max(1, std::min<int>(DRAIN_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_DRAIN", CFG_LSU_PIPE_DRAIN)));
+static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIPE_DCAND);
 
 void RealLsu::comb_cal_p() {
   pw = {};
@@ -943,9 +945,10 @@ void RealLsu::comb_lsu2dcache_ldq_p() {
 // committed-store drain (RTL-aligned form, see rtl docs/analysis/lsu-pipe.md "model changes" M4):
 //   1. every eligible store of the committed window counts its replay countdown down (all of them, every cycle);
 //   2. the head store, when MMIO, takes the uncached unit;
-//   3. the DRAIN_PORTS oldest ready non-MMIO stores are the candidates; candidate m uses the m-th store port without a pending
-//      DCache hidden retry; a candidate is dropped for this cycle when an older committed, not done store overlaps its bytes
-//      (the port of a dropped candidate stays idle).
+//   3. the first lp_dcand (4) oldest ready non-MMIO stores are the candidates; a candidate is dropped for this cycle when an older
+//      committed, not done store overlaps its bytes (a dropped candidate does not take a port); the m-th remaining candidate
+//      (m < lp_drain = 3) uses the m-th store port without a pending DCache hidden retry. lp_dcand = 0 is the first-version
+//      drain: the first lp_drain ready candidates, candidate m on port m, a dropped candidate keeps its port idle.
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_lsu2dcache_stq_p() {
   auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
@@ -974,20 +977,24 @@ void RealLsu::comb_lsu2dcache_stq_p() {
     u.idx = pnxt.stq_head;
     s.mmw = 1;
   }
-  // free ports among the first DRAIN_PORTS (no hidden retry pending)
-  int free_port[DRAIN_PORTS], nfree = 0;
-  for (int t = 0; t < DRAIN_PORTS; t++)
+  // free ports among the first lp_drain (no hidden retry pending)
+  int free_port[DRAIN_MAX], nfree = 0;
+  for (int t = 0; t < lp_drain; t++)
     if (!(lp_rblk && wires->in.dcache2lsu.store_retry_busy[t])) free_port[nfree++] = t;
-  int m = 0;
-  for (uint32_t rank = 0; rank < n && m < DRAIN_PORTS; rank++) {
+  int m = 0, seen = 0;
+  for (uint32_t rank = 0; rank < n && m < lp_drain; rank++) {
     const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
     PStq &s = pnxt.stq[j];
     if (!rdy[rank] || s.mmio) continue;
-    const int cm = m++;
-    if (cm >= nfree) continue;
+    if (lp_dcand > 0 && seen++ >= lp_dcand) break;  // only the first lp_dcand ready candidates have a CAM
+    int cm = 0;
+    if (lp_dcand == 0) {  // first-version drain: the candidate index is the port index, a blocked candidate keeps its port idle
+      cm = m++;
+      if (cm >= nfree) continue;
+    }
     const uint8_t strb = get_store_strb(s.paddr, s.func3);
     bool blocked = false;
-    for (uint32_t q = 0; q < rank && !blocked; q++) {  // 2-port x 64 CAM in hardware
+    for (uint32_t q = 0; q < rank && !blocked; q++) {  // lp_dcand x 64 CAM in hardware
       const PStq &o = pnxt.stq[(pnxt.stq_head + q) % STQ_SIZE];
       if (o.done || !o.cmt) continue;
       if (CheckAddr(o.paddr, get_store_strb(o.paddr, o.func3), s.paddr, strb)) blocked = true;
@@ -995,6 +1002,10 @@ void RealLsu::comb_lsu2dcache_stq_p() {
     if (blocked) {
       g_st.st_conflict++;
       continue;
+    }
+    if (lp_dcand > 0) {  // the m-th unblocked candidate uses the m-th free port
+      cm = m++;
+      if (cm >= nfree) continue;
     }
     auto &p = ports[free_port[cm]];
     p.valid = true;
@@ -1005,7 +1016,7 @@ void RealLsu::comb_lsu2dcache_stq_p() {
     s.iss = 1;
     g_st.st_drain++;
   }
-  LP_PORT_CHECK(m, DRAIN_PORTS + 1, "store_drain");
+  LP_PORT_CHECK(m, lp_drain + 1, "store_drain");
 }
 
 // ---------------------------------------------------------------------------------------------------------------

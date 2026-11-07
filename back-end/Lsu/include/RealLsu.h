@@ -170,7 +170,7 @@ public:
   bool pipe = false;
   lp::LsuPipeState pcur, pnxt;
   lp::PCycle pw;
-  int lp_rp_ports = 2;      // replay ports (LSU_PIPE_RP)
+  int lp_rp_ports = CFG_LSU_PIPE_RP;  // replay registers (LSU_PIPE_RP)
   int lp_bounce = 0;        // aged replay register bumps the last new load (LSU_PIPE_BOUNCE cycles, 0 = off)
   int lp_rblk = 1;          // do not launch on a port with a pending DCache hidden retry (LSU_PIPE_RBLK)
   int lp_gate = 1;          // DCache read enable qualified by the partial CAM (LSU_PIPE_GATE)
