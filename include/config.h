@@ -464,19 +464,19 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #endif
 // Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014; 8 = unrestricted).
 #ifndef CFG_INT_IQ_ENQ_WIDTH
-#define CFG_INT_IQ_ENQ_WIDTH 6
+#define CFG_INT_IQ_ENQ_WIDTH 7
 #endif
 #ifndef CFG_LD_IQ_ENQ_WIDTH
-#define CFG_LD_IQ_ENQ_WIDTH 4
+#define CFG_LD_IQ_ENQ_WIDTH 6
 #endif
 #ifndef CFG_STA_IQ_ENQ_WIDTH
-#define CFG_STA_IQ_ENQ_WIDTH 3
+#define CFG_STA_IQ_ENQ_WIDTH 4
 #endif
 #ifndef CFG_STD_IQ_ENQ_WIDTH
-#define CFG_STD_IQ_ENQ_WIDTH 3
+#define CFG_STD_IQ_ENQ_WIDTH 4
 #endif
 #ifndef CFG_BR_IQ_ENQ_WIDTH
-#define CFG_BR_IQ_ENQ_WIDTH 3
+#define CFG_BR_IQ_ENQ_WIDTH 5
 #endif
 enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 #define PORT_CFG(mask) {(__COUNTER__ - ISSUE_PORT_COUNTER_BASE - 1), (mask)}
