@@ -1,4 +1,5 @@
 #pragma once
+#include "Pmu.h"
 #include "config.h"
 #include <cstdint>
 #include <cstdio>
@@ -14,12 +15,15 @@ public:
   uint64_t commit_num = 0;
   uint64_t commit_load_num = 0;
   uint64_t commit_store_num = 0;
+  Pmu pmu;  // event counters + analysis (PMU=1)
+  PerfCount() { pmu.init_from_env(); }
 
   void perf_reset() {
     cycle = 0;
     commit_num = 0;
     commit_load_num = 0;
     commit_store_num = 0;
+    pmu.reset();
   }
 
   void perf_print() {
@@ -29,6 +33,7 @@ public:
     printf("\033[38;5;34minstruction num: %ld\033[0m\n", (long)commit_num);
     printf("\033[38;5;34mcycle       num: %ld\033[0m\n", (long)cyc);
     printf("\033[38;5;34mipc            : %f\033[0m\n", cyc ? (double)commit_num / cyc : 0.0);
+    pmu.report(commit_num);
   }
 
   void perf_maybe_capture_simtime_snapshot() {}

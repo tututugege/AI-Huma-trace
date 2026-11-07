@@ -32,6 +32,8 @@ public:
   void comb_fire();
   void comb_branch();
   void comb_flush();
+  // PMU (EXP-013): the oldest incomplete instruction of the head line (the one that blocks commit), if any
+  bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   RobOut out;

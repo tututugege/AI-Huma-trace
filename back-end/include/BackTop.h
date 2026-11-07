@@ -73,6 +73,7 @@ public:
   void comb_stage_issue_and_translate();
   void comb_stage_operands_and_dispatch();
   void comb_stage_fire_and_recover();
+  void pmu_sample();  // PMU (EXP-013): one cycle of the event bus, called at the end of comb()
   void seq();
   void set_lsu_ptw_mem_port(PtwMemPort *port);
   void set_lsu_ptw_walk_port(PtwWalkPort *port);

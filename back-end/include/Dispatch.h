@@ -3,6 +3,7 @@
 #include "config.h"
 
 class BackTop;
+class Ren;
 
 struct UopPacket {
   int iq_id;               // 目标 IQ
@@ -48,6 +49,8 @@ public:
   void comb_fire();
   void comb_pipeline();
   void seq();
+  // PMU (EXP-013): classify this cycle's DECODE_WIDTH dispatch slots into the event vector (read-only, after comb_fire)
+  void pmu_slots(struct PmuVec &ev, bool recovering, bool recovering_by_flush, int &be_slots) const;
   Uop inst_r[DECODE_WIDTH];
   Uop inst_r_1[DECODE_WIDTH];
   reg<1> inst_valid[DECODE_WIDTH];

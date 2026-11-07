@@ -1,4 +1,5 @@
 #include "BPU/BPU.h"
+#include "Pmu.h"
 #include "front_IO.h"
 #include "front_module.h"
 #include "predecode.h"
@@ -381,6 +382,11 @@ void FrontComb::run_icache() {
   ic_in.icache_read_valid_2 = false;
   ic_in.fetch_address_2 = 0;
   icache_comb_calc(&ic_in, &ic_out);
+  g_pmu_front.icache_req_fire = ic_out.perf_req_fire;
+  g_pmu_front.icache_miss_issue = ic_out.perf_miss_event;
+  g_pmu_front.icache_miss_busy = ic_out.perf_miss_busy;
+  g_pmu_front.itlb_access = ic_out.perf_itlb_hit || ic_out.perf_itlb_miss || ic_out.perf_itlb_fault;
+  g_pmu_front.itlb_miss = ic_out.perf_itlb_miss;
 }
 
 // A completed ICache read is predecoded and written to the instruction FIFO.

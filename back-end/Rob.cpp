@@ -368,3 +368,18 @@ void Rob::seq() {
   enq_flag = enq_flag_1;
   deq_flag = deq_flag_1;
 }
+
+// PMU (EXP-013): same "oldest incomplete instruction of the head line" as comb_ready(); also the number of valid entries.
+bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
+  occupied_entries = 0;
+  for (int l = 0; l < ROB_LINE_NUM; l++)
+    for (int i = 0; i < ROB_BANK_NUM; i++) occupied_entries += entry[i][l].valid ? 1 : 0;
+  for (int i = 0; i < ROB_BANK_NUM; i++) {
+    const auto &e = entry[i][deq_ptr];
+    if (e.valid && !rob_is_complete(e.uop)) {
+      out = e.uop;
+      return true;
+    }
+  }
+  return false;
+}

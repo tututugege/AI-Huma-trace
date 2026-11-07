@@ -344,6 +344,7 @@ void BackTop::comb() {
 
   comb_outputs();
   comb_stage_fire_and_recover();
+  pmu_sample();
 }
 
 void BackTop::seq() {

@@ -159,6 +159,7 @@ void count_commit(SimContext *ctx, const Uop &u) {
       std::cout << "[front-door] restore program committed: " << std::dec << ctx->perf.commit_num << " instructions, "
                 << ctx->perf.cycle << " cycles; measuring from here" << std::endl;
       ctx->perf.commit_num = ctx->perf.commit_load_num = ctx->perf.commit_store_num = 0;
+      ctx->perf.pmu.reset();
       ctx->perf.cycle_base = ctx->perf.cycle;
       if (ctx->ckpt_warmup_commit_target == 0) ctx->perf.perf_start = true;
     }
