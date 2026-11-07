@@ -55,6 +55,7 @@ void Dispatch::comb_alloc() {
     ldq_port_owner[k] = -1;
   }
 
+  for (int i = 0; i < DECODE_WIDTH; i++) { iq_blk[i] = -1; iq_blk_width[i] = false; }
   for (int i = 0; i < DECODE_WIDTH; i++) {
     Uop &u = inst_alloc[i];
     u = inst_r[i];
@@ -74,6 +75,7 @@ void Dispatch::comb_alloc() {
         u.ldq_idx = w.lsu2dis.ldq_alloc_idx[loads];
         ldq_port_owner[loads++] = i;
       } else {
+        if (loads < w.lsu2dis.ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
         w.dis2rob.valid[i] = false;
       }
     }
@@ -150,6 +152,10 @@ void Dispatch::comb_dispatch() {
     for (int k = 0; k < cnt && fit; k++) {
       const int q = uops[k].iq_id;
       fit = usage[q] < GLOBAL_IQ_CONFIG[q].dispatch_width && usage[q] < w.iss2dis.ready_num[q];
+      if (!fit) {
+        iq_blk[i] = q;
+        iq_blk_width[i] = usage[q] < w.iss2dis.ready_num[q];  // room left: the enqueue width is what stopped it
+      }
     }
     if (!fit) break;
 

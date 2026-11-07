@@ -13,11 +13,14 @@
 // ones: the frontend could not have been used), and the cause is the first resource that stopped it.
 void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, int &be_slots) const {
   const Wires &w = *wires;
+  for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch)
+    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q), GLOBAL_IQ_CONFIG[q].size - w.iss2dis.ready_num[q]);
   const bool kill = w.rob_bcast.flush || w.dec_bcast.mispred;
   const bool recov = recovering || kill;
   const bool by_flush = kill ? static_cast<bool>(w.rob_bcast.flush) : recovering_by_flush;
   bool blocked = false, fired_before = false;
   PmuEvent cause = PMU_SLOT_BE_SERIAL;
+  int iq_sub = -1;  // sub-event of an IQ stall
   be_slots = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (w.dis2rob.dis_fire[i]) {
@@ -34,12 +37,19 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
       if (w.rob2dis.stall) cause = PMU_SLOT_BE_FLUSH_WAIT;
       else if (!w.rob2dis.ready) cause = PMU_SLOT_BE_ROB_FULL;
       else if (serial) cause = PMU_SLOT_BE_SERIAL;
-      else if (!w.dis2rob.valid[i] && is_load(inst_r[i])) cause = PMU_SLOT_BE_LDQ_FULL;
+      else if (!w.dis2rob.valid[i] && is_load(inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
       else if (!w.dis2rob.valid[i] && is_store(inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
-      else if (!dispatch_success_flags[i]) cause = PMU_SLOT_BE_IQ_FULL;
+      else if (!dispatch_success_flags[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
       else cause = PMU_SLOT_BE_SERIAL;  // behind an exclusive instruction (AMO/WFI) that fired this cycle
+      if (cause == PMU_SLOT_BE_IQ_FULL && iq_blk[i] >= 0)
+        iq_sub = (iq_blk_width[i] ? PMU_SLOT_BE_IQ_WIDTH_INT : PMU_SLOT_BE_IQ_SPACE_INT) + iq_blk[i];
     }
-    if (blocked) { e.add(cause); be_slots++; continue; }
+    if (blocked) {
+      e.add(cause);
+      if (cause == PMU_SLOT_BE_IQ_FULL && iq_sub >= 0) e.add(static_cast<PmuEvent>(iq_sub));
+      be_slots++;
+      continue;
+    }
     // an empty slot (no valid instruction, nothing blocked)
     e.add(PMU_SLOT_FE_EMPTY);
     if (recov) e.add(by_flush ? PMU_SLOT_FE_RECOV_FLUSH : PMU_SLOT_FE_RECOV_MISPRED);
