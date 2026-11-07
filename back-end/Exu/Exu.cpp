@@ -67,6 +67,8 @@ void Exu::comb_begin() {
   w.exu2id.redirect_rob_idx = 0;
   w.exu2id.br_id = 0;
   w.exu2id.ftq_idx = 0;
+  w.exu2id.ftq_off = 0;
+  w.exu2id.br_type = 0;
   for (auto &e : exu2fu_io.entry) {
     e.en = e.consume = e.flush = false;
     e.flush_mask = e.clear_mask = 0;
@@ -290,6 +292,14 @@ void Exu::comb_fu2exu_collect() {
   w.exu2id.redirect_rob_idx = mispred ? oldest->rob_idx : 0;
   w.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
   w.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
+  w.exu2id.ftq_off = mispred ? (*oldest)->ftq_offset : 0;
+  if (mispred) {   // type of the mispredicted branch in the BPU's encoding (0 cond, 1 call, 2 ret, 3 indirect, 5 jal, 6 indirect call)
+    const auto &u = *oldest;
+    int t = 0;
+    if (u->type == JAL) t = (oldest->dest_en && u->dest_areg == 1) ? 1 : 5;
+    else if (u->type == JALR) t = (u->src1_areg == 1 && u->dest_areg == 0 && u->imm == 0) ? 2 : (u->dest_areg == 1) ? 6 : 3;
+    w.exu2id.br_type = t;
+  }
 }
 
 // FU interaction in dependency order: controls -> dispatch to FUs -> FU evaluation -> collection.

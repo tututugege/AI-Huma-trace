@@ -20,6 +20,7 @@ struct FetchAddrCombOut {
   wire1_t push_en;
   fetch_addr_t push_data;
   wire1_t pop_en;
+  uint8_t drop_tail_n;
 };
 
 struct InstructionCombIn {
@@ -73,6 +74,7 @@ struct PendingFrontState {
   wire1_t valid = false;
   wire32_t next_front_sim_time = 0;
   wire1_t next_predecode_refetch = false;
+  bpuf::PdInfo next_pd{};
   fetch_addr_t next_predecode_refetch_address = 0;
   wire1_t next_fetch_addr_fifo_full = false;
   wire1_t next_fetch_addr_fifo_empty = true;
@@ -86,6 +88,7 @@ struct PendingFrontState {
 
 struct FrontReadData {
   wire1_t predecode_refetch_snapshot = false;
+  bpuf::PdInfo pd_snapshot{};
   fetch_addr_t predecode_refetch_address_snapshot = 0;
   wire32_t front_sim_time_snapshot = 0;
   fetch_address_FIFO_read_data fetch_addr_fifo_rd_snapshot{};

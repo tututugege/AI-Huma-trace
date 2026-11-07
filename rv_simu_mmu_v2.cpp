@@ -24,6 +24,7 @@
 #include "diff.h"
 #include "front_IO.h"
 #include "front_module.h"
+#include "BPU/BPU.h"
 #include "util.h"
 
 #ifndef CONFIG_DCACHE_FAST_DOMAIN
@@ -764,6 +765,11 @@ void SimCpu::back2front_comb() {
   front.back2front_1.FIFO_read_enable = false;
   front.back2front_1.csr_status = &back.csr_status;
   front.back2front_1.refetch = back.out.mispred || back.out.flush;
+  front.back2front_1.rf_valid = back.out.rf_valid && !back.out.flush;
+  front.back2front_1.rf_blk = back.out.rf_blk;
+  front.back2front_1.rf_slot = back.out.rf_slot;
+  front.back2front_1.rf_type = back.out.rf_type;
+  front.back2front_1.rf_pc = back.out.rf_pc;
   front.back2front_1.itlb_flush = back.out.itlb_flush;
   front.back2front_1.fence_i = back.out.fence_i;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
@@ -808,6 +814,8 @@ void SimCpu::back2front_comb() {
         if (commit_extra.src1_areg == 1 && (*inst)->dest_areg == 0 &&
             commit_extra.imm == 0)
           br_type = BR_RET;
+        else if (bpuf::cfg_icall() && (*inst)->dest_areg == 1)
+          br_type = BR_ICALL;
         else
           br_type = BR_IDIRECT;
       }

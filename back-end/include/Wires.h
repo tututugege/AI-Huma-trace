@@ -21,6 +21,10 @@ struct Back_out {
   bool itlb_flush;
   wire<1> *fire;
   uint32_t redirect_pc;
+  bool rf_valid = false;               // BPA_REPAIR: the redirect is a branch mispredict; the block / slot / type of the branch
+  uint16_t rf_blk = 0;
+  uint8_t rf_slot = 0, rf_type = 0;
+  uint32_t rf_pc = 0;
   InstEntry commit_entry[COMMIT_WIDTH];
 
   wire<32> sstatus;

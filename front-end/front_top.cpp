@@ -1,4 +1,5 @@
 #include "BPU/BPU.h"
+#include "BPU/BPU_pipe.h"
 #include "Pmu.h"
 #include "front_IO.h"
 #include "front_module.h"
@@ -16,6 +17,7 @@
 // ============================================================================
 static bool predecode_refetch = false;
 static uint32_t predecode_refetch_address = 0;
+static bpuf::PdInfo pd_latch{};
 static uint32_t front_sim_time = 0;
 
 // FIFO full/empty latches
@@ -33,6 +35,16 @@ void front_set_context(SimContext *ctx) { front_ctx = ctx; }
 
 static bpuf::Bpu bpu_instance;
 bpuf::Bpu &front_bpu_instance() { return bpu_instance; }  // fast-warmup replay (EXP-011)
+// BPU_PIPE: pipelined predictor (default off). Its per-cycle decision and transaction are kept in statics (large, only used when on).
+static bpuf::BpuPipe bpu_pipe;
+static bpuf::BpuPipe::Txn g_pipe_txn;
+static bpuf::Decision g_pipe_dec;
+static bool g_pipe_txn_valid = false;
+static const bool g_use_pipe = bpuf::cfg_pipe() > 0;
+void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {  // fast-warmup replay (EXP-011)
+  if (g_use_pipe) bpu_pipe.warm_commit(pc, type, dir, target); else bpu_instance.warm_commit(pc, type, dir, target);
+}
+void front_warm_finish() { if (g_use_pipe) bpu_pipe.warm_finish(); else bpu_instance.warm_finish(); }
 
 static uint32_t sequential_next_pc(uint32_t fetch_pc, const wire1_t *inst_valid) {
   uint32_t valid_prefix = 0;
@@ -135,6 +147,7 @@ static void front_output_comb(const front2back_FIFO_out &saved, const front2back
 static void accumulate_fetch_addr_req(FetchAddrCombOut &acc,
                                       const FetchAddrCombOut &step) {
     acc.clear_fifo |= step.clear_fifo;
+    acc.drop_tail_n |= step.drop_tail_n;
     if (step.pop_en) {
         if (acc.pop_en) {
             std::printf("[front_top] ERROR: fetch_address_FIFO pop requested multiple times in one cycle\n");
@@ -250,6 +263,7 @@ struct FrontComb {
   bool f2b_read_enable = false;
   bpuf::OutputPayload bpu_output{};
   bool bpu_can_run = false;
+  bpuf::PdInfo pd_next{};
   predecode_checker_out checker_out{};
 
   FrontComb(const front_top_in &i, const FrontReadData &r, front_top_out &o, FrontUpdateRequest &q)
@@ -280,8 +294,20 @@ void FrontComb::read_fifos() {
   ic_in.csr_status = in.csr_status;
   icache_peek_ready(&ic_in, &ic_out);
 
+  // BPU_PIPE: the pipeline's last stage may override an older block this cycle. The youngest squash_n fetch addresses are
+  // dropped, and the FIFO head is not popped when it is one of them. An entry is popped only when it is at least
+  // max(0, D-2) cycles old, so a block is never inside the ICache before the decision on its predecessor.
+  bool pipe_head_ok = true;
+  fetch_addr_in.drop_tail_n = 0;
+  if (g_use_pipe) {
+    bpu_pipe.decide(global_refetch, g_pipe_dec);
+    const auto &fa = rd.fetch_addr_fifo_rd_snapshot;
+    const int min_age = bpu_pipe.depth() > 2 ? bpu_pipe.depth() - 2 : 0;
+    pipe_head_ok = !(g_pipe_dec.ovr && fa.size <= g_pipe_dec.squash_n) && fa.head_age >= min_age;
+    fetch_addr_in.drop_tail_n = g_pipe_dec.ovr ? g_pipe_dec.squash_n : 0;
+  }
   const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.fetch_addr_fifo_empty_latch_snapshot &&
-                                      !global_reset && !global_refetch;
+                                      !global_reset && !global_refetch && pipe_head_ok;
   fifo_read_enable = !rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
                      !rd.front2back_fifo_full_latch_snapshot && !global_reset && !global_refetch;
   f2b_read_enable = in.FIFO_read_enable;
@@ -318,13 +344,18 @@ void FrontComb::read_fifos() {
 
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
 void FrontComb::run_bpu() {
-  const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || rd.ptab_full_latch_snapshot;
-  bpu_can_run = !bpu_stall || global_reset || global_refetch;
+  const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || (!g_use_pipe && rd.ptab_full_latch_snapshot);
+  bpu_can_run = ((!bpu_stall && (g_use_pipe || !bpu_instance.bubble())) || global_reset || global_refetch);
 
   bpuf::InputPayload bpu_input{};
   bpu_input.refetch = global_refetch;
+  bpu_input.refetch_pd = global_refetch && !in.refetch;
+  bpu_input.rf_valid = in.refetch && in.rf_valid;
+  bpu_input.rf_blk = in.rf_blk; bpu_input.rf_slot = in.rf_slot; bpu_input.rf_type = in.rf_type; bpu_input.rf_pc = in.rf_pc;
+  bpu_input.pd = rd.pd_snapshot;
   bpu_input.refetch_address = in.refetch ? in.refetch_address : rd.predecode_refetch_address_snapshot;
   bpu_input.icache_read_ready = bpu_can_run && !rd.fetch_addr_fifo_full_latch_snapshot;
+  bpu_input.ptab_size = rd.ptab_rd_snapshot.size > 255 ? 255 : rd.ptab_rd_snapshot.size;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     bpu_input.in_update_base_pc[i] = in.predict_base_pc[i];
     bpu_input.in_upd_valid[i] = in.back2front_valid[i];
@@ -349,6 +380,9 @@ void FrontComb::run_bpu() {
   txn.inp = bpu_input;
   if (in.reset) {
     bpu_output.fetch_address = RESET_PC;
+  } else if (g_use_pipe) {
+    bpu_pipe.comb(bpu_input, g_pipe_dec, bpu_output, g_pipe_txn);
+    g_pipe_txn_valid = true;
   } else {
     bpu_instance.comb(bpu_input, bpu_output, txn.req);
   }
@@ -360,6 +394,7 @@ void FrontComb::write_fetch_addr() {
   fetch_addr_in.reset = false;
   fetch_addr_in.refetch = false;
   fetch_addr_in.read_enable = false;
+  fetch_addr_in.drop_tail_n = 0;
   fetch_addr_in.write_enable = true;
   fetch_addr_in.fetch_address = bpu_output.fetch_address;
   fetch_address_FIFO_out unused_out{};
@@ -426,7 +461,7 @@ void FrontComb::write_instruction_fifo() {
 // for a refetch.
 void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_address) {
   const bool ptab_can_write =
-      bpu_output.PTAB_write_enable && !rd.ptab_full_latch_snapshot && !global_reset && !global_refetch;
+      bpu_output.PTAB_write_enable && (g_use_pipe || !rd.ptab_full_latch_snapshot) && !global_reset && !global_refetch;
   if (ptab_can_write) {
     front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in);
     PTAB_out unused_out{};
@@ -450,6 +485,30 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
   if (checker_out.predecode_flush_enable) {
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
+  }
+  if (g_use_pipe) {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
+    bpuf::PdInfo &pd = pd_next;
+    pd = bpuf::PdInfo{};
+    pd.valid = true;
+    pd.flush = predecode_flush;
+    if (predecode_flush) {
+      const bool hist = bpuf::cfg_hist();
+      for (int i = 0; i < FETCH_WIDTH; i++) {
+        if (!fifo_head.inst_valid[i]) continue;
+        const predecode_type_t ty = fifo_head.predecode_type[i];
+        if (ty == PREDECODE_NON_BRANCH) continue;
+        const uint32_t pc = fifo_head.pc[i], inst = fifo_head.instructions[i];
+        const bool taken = checker_out.predict_dir_corrected[i];
+        const uint32_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];
+        if (ty == PREDECODE_DIRECT_JUMP_NO_JAL && !hist) { pd.bits |= uint8_t(taken) << pd.nbits; pd.nbits++; }
+        if (!taken) continue;
+        if (hist) { pd.nbits = bpuf::cfg_hsym(); pd.bits = bpuf::hist_sym(pc, tgt); }
+        const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
+        if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + 4; }
+        else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) pd.ras_op = 2;
+        break;
+      }
+    }
   }
 }
 
@@ -483,6 +542,7 @@ void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
     icache_comb_calc(&invalidate_in, &ic_out);
   }
   state.next_predecode_refetch = predecode_flush;
+  state.next_pd = pd_next;
   state.next_predecode_refetch_address = predecode_flush ? flush_address : 0;
   state.next_fetch_addr_fifo_full = (fetch_addr_rd.size >= (FETCH_ADDR_FIFO_SIZE - 1));
   state.next_fetch_addr_fifo_empty = (fetch_addr_rd.size == 0);
@@ -521,6 +581,7 @@ namespace {
 void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   rd.predecode_refetch_snapshot = predecode_refetch;
   rd.predecode_refetch_address_snapshot = predecode_refetch_address;
+  rd.pd_snapshot = pd_latch;
   rd.front_sim_time_snapshot = front_sim_time;
   rd.fetch_addr_fifo_full_latch_snapshot = fetch_addr_fifo_full_latch;
   rd.fetch_addr_fifo_empty_latch_snapshot = fetch_addr_fifo_empty_latch;
@@ -558,7 +619,8 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   (void)inp;
   (void)reset;
   if (req.bpu_seq_txn.valid) {
-    if (req.bpu_seq_txn.reset) bpu_instance.reset();
+    if (req.bpu_seq_txn.reset) { bpu_instance.reset(); if (g_use_pipe) bpu_pipe.reset(); }
+    else if (g_use_pipe) { if (g_pipe_txn_valid) bpu_pipe.commit(g_pipe_txn); g_pipe_txn_valid = false; }
     else bpu_instance.commit(req.bpu_seq_txn.inp, req.bpu_seq_txn.req);
   }
   fetch_address_FIFO_seq_write(&req.fetch_addr_fifo_req);
@@ -572,6 +634,7 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
     front_sim_time = req.front_state.next_front_sim_time;
     predecode_refetch = req.front_state.next_predecode_refetch;
     predecode_refetch_address = req.front_state.next_predecode_refetch_address;
+    pd_latch = req.front_state.next_pd;
     fetch_addr_fifo_full_latch = req.front_state.next_fetch_addr_fifo_full;
     fetch_addr_fifo_empty_latch = req.front_state.next_fetch_addr_fifo_empty;
     fifo_full_latch = req.front_state.next_fifo_full;

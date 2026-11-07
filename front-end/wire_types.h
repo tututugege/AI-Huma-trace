@@ -286,6 +286,8 @@ struct PredMetaT {
   wire1_t loop_pred[N];
   tage_loop_meta_idx_t loop_idx[N];
   tage_loop_meta_tag_t loop_tag[N];
+  wire16_t blk_id[N];  // BPA_REPAIR: sequence number of the fetch block (key of the BPU's checkpoint record)
+  wire8_t ps_info[N];  // statistics only (BPA_STATS, docs/BPU_ACC.md): predicted type / target source / use-alt of the slot; no consumer in the pipeline
 
   // Copy the first M lanes of a narrower bundle; the other lanes keep their value.
   template <int M>
@@ -308,6 +310,8 @@ struct PredMetaT {
       loop_pred[i] = s.loop_pred[i];
       loop_idx[i] = s.loop_idx[i];
       loop_tag[i] = s.loop_tag[i];
+      ps_info[i] = s.ps_info[i];
+      blk_id[i] = s.blk_id[i];
     }
   }
 

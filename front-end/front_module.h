@@ -23,6 +23,7 @@ struct fetch_address_FIFO_read_data {
   fetch_addr_fifo_size_t size;
   wire1_t head_valid;
   fetch_addr_t head_entry;
+  uint8_t head_age;  // BPU_PIPE: cycles since the head was pushed (saturates at 3)
 };
 
 struct instruction_FIFO_entry {
