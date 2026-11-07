@@ -1,14 +1,13 @@
-# LSU_PIPE: staged load/store unit prototype (trace-model, branch exp/lsu-pipe)
+# LSU_PIPE: staged load/store unit prototype (trace-model; experiment branch exp/lsu-pipe, merged into main as lsu-pipe-main, EXP-014)
 
 Purpose: the C++ model is the prototype of the RTL. `back-end/Lsu/RealLsu.cpp` (legacy) is queue-centric; its RTL translation
 (`rtl/docs/modules/lsu.md`) is one combinational chain per cycle. This document (1) records the analysis of the legacy
 design (Step 0), (2) specifies the staged replacement implemented in `back-end/Lsu/RealLsuPipe.cpp` /
 `include/RealLsuPipe.h`, and (3) lists the model approximations. The RTL is to be written from sections 2-4.
 
-Switch: env `LSU_PIPE=1` (or compile `-DCFG_LSU_PIPE=1`), default OFF. With the switch off the model is cycle-identical to
-main (dhrystone 162,033; gate 62/62). Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay ports 1..2 [2],
+Switch: `CFG_LSU_PIPE` (config.h, default 1 in main since 2026-11-07; env `LSU_PIPE=0` selects the legacy LSU for regression; cut masks `CFG_LSU_PIPE_CUT` 63 and `CFG_LSU_PIPE_L2` 115, env `LSU_PIPE_CUT` / `LSU_PIPE_L2`). The text below was written while the switch was off by default; "default OFF / cycle-identical to main" statements describe the experiment branch. Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay ports 1..2 [2],
 `LSU_PIPE_GATE` DCache read enable qualified by the partial CAM [1], `LSU_PIPE_BOUNCE=n` aging bounce of a new load by a replay register
-that waited n cycles [0 = off], `LSU_PIPE_STATS=1` prints the counters at exit, `LSU_PIPE_DUMP=<cycle>` / `LSU_PIPE_TRACE=<ldq>` debug dumps.
+that waited n cycles [0 = off], `LSU_PIPE_STATS=1` prints the counters at exit, `LSU_PIPE_DUMP=<cycle>` debug dump.
 Port counts come from `config.h` (`CFG_LD_PORTS` 4, `CFG_STA_PORTS` 3, `CFG_STD_PORTS` 3, LDQ 64, STQ 64).
 
 ---------------------------------------------------------------------------------------------------------------------
@@ -510,3 +509,11 @@ The model watchdog (`LSU_PIPE_NOWD` unset) never changed a cycle count: with NOW
 63 cycles (crc32, memory-stress-small, Linux), these are long fill waits that complete on their own, cycles are identical with and without the watchdog.
 Not run: `LSU_PIPE_RPRIO=0` / `LSU_PIPE_RBLK=0` with the prefetcher, other CUT/L2 masks with the prefetcher, SPEC points, small-LLC check, random differential tests.
 Model default stays OFF (env switches); the new defaults for main (and the new `baseline.csv`) are a later stage.
+
+## 10. Merge into main (EXP-014, 2026-11-07)
+
+Branch `lsu-pipe-main` (two commits: code with the switch off, then the new defaults). Content: `RealLsuPipe.*`, the hooks (Dispatch busy-table cancel, IssueQueue/Isu wake channels, PRF wake, DCache RPRIO order and retry-busy outputs), L2 cuts mask 115, the STA replay register round-robin (9.2).
+Left on the experiment branch `exp/lsu-pipe` only: `LSU_MMU_DBG` / `LSU_MMU_DBG2`, `TlbMmu::dbg_walk_*`, `LP_TL` timeline prints, `LSU_PIPE_ROBTRACE`, `LSU_PIPE_TRACE`, `tests/ubench`, `scripts/ubench.sh`, `scripts/spec/timing_eval.sh`.
+Speculative wake-up (L2 bit 8 = d, with 128 = Y and 4 = oracle) is in the code and OFF (`LSU_PIPE_L2` 115 has none of them); it is entangled with the wake channels (`WAKE_CH_ALL`, `lsu_awake.cancel`) so it stays, default off.
+New defaults: gate 63/63 difftest Success, new `results/baseline/baseline.csv`; `LSU_PIPE=0` reproduces the old baselines (`legacy_lsu_baseline*.csv`). Big programs: see PROJECT.md gate item 4.
+Model-only: the LDQ/STQ watchdog (63 cycles stuck, off with `LSU_PIPE_NOWD=1`) is not in the RTL; it never fired in the gate programs (memory-stress differs by 4 cycles with and without it).

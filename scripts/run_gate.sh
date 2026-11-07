@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Parallel gate with per-test limits derived from the baseline.
-# Usage: run_gate.sh <simulator-binary> <outdir> [jobs]
+# Usage: [BASELINE=<csv>] run_gate.sh <simulator-binary> <outdir> [jobs]
 # - each test gets SIM_MAX_CYCLES = max(3000, 4 x baseline cycles): a hang is reported at once (exit 3)
 # - one hard deadline per test as a last resort (default 20 s)
 # - prints PASS/FAIL per test, a summary, and exits non-zero on any failure
 SIM=$1; OUT=$2; JOBS=${3:-8}
-T=$(cd "$(dirname "$0")/.." && pwd); BASE=$T/results/baseline/baseline.csv
+T=$(cd "$(dirname "$0")/.." && pwd); BASE=${BASELINE:-$T/results/baseline/baseline.csv}  # BASELINE=results/baseline/legacy_lsu_baseline.csv with LSU_PIPE=0 for the legacy-LSU regression
 rm -rf "$OUT"; mkdir -p "$OUT/logs"
 one() {
   b=$1; t=$(basename "$b"); base=$(grep "^$t," "$BASE" | cut -d, -f4)
