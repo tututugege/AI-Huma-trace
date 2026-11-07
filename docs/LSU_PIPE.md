@@ -5,7 +5,7 @@ Purpose: the C++ model is the prototype of the RTL. `back-end/Lsu/RealLsu.cpp` (
 design (Step 0), (2) specifies the staged replacement implemented in `back-end/Lsu/RealLsuPipe.cpp` /
 `include/RealLsuPipe.h`, and (3) lists the model approximations. The RTL is to be written from sections 2-4.
 
-Switch: `CFG_LSU_PIPE` (config.h, default 1 in main since 2026-11-07; env `LSU_PIPE=0` selects the legacy LSU for regression; cut masks `CFG_LSU_PIPE_CUT` 63 and `CFG_LSU_PIPE_L2` 115, env `LSU_PIPE_CUT` / `LSU_PIPE_L2`). The text below was written while the switch was off by default; "default OFF / cycle-identical to main" statements describe the experiment branch. Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay ports 1..2 [2],
+Switch: `CFG_LSU_PIPE` (config.h, default 1 in main since 2026-11-07; env `LSU_PIPE=0` selects the legacy LSU for regression; cut masks `CFG_LSU_PIPE_CUT` 127 (was 63 before section 11: + bit 64 FM) and `CFG_LSU_PIPE_L2` 115, env `LSU_PIPE_CUT` / `LSU_PIPE_L2`; since section 11 also `CFG_LSU_PIPE_DRAIN` 3 / `CFG_LSU_PIPE_DCAND` 4 / `CFG_LSU_PIPE_RP` 4, env `LSU_PIPE_DRAIN` / `LSU_PIPE_DCAND` / `LSU_PIPE_RP`). The text below was written while the switch was off by default; "default OFF / cycle-identical to main" statements describe the experiment branch. Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay registers 1..4 [4 since section 11; was 1..2 [2]],
 `LSU_PIPE_GATE` DCache read enable qualified by the partial CAM [1], `LSU_PIPE_BOUNCE=n` aging bounce of a new load by a replay register
 that waited n cycles [0 = off], `LSU_PIPE_STATS=1` prints the counters at exit, `LSU_PIPE_DUMP=<cycle>` debug dump.
 Port counts come from `config.h` (`CFG_LD_PORTS` 4, `CFG_STA_PORTS` 3, `CFG_STD_PORTS` 3, LDQ 64, STQ 64).
@@ -562,3 +562,48 @@ Per benchmark (geomean of the points): perlbench -11.88% (2 points), gcc -6.26% 
 ### 10.2 Checks on the main-ready branch (2026-11-07)
 
 Linux from reset to `rv32 login:` (prefetcher on, default config, `SIM_MAX_CYCLES=400000000`): reached before 110 M cycles (no deadlock, watchdog on; log `~/personal/AI-Huma-data/linux/lsupipe_main/model_boot.log`). Small-LLC check (`llc_small_check.sh`, 64 KiB LLC) with `LSU_PIPE=0`: 5/5 equal to main; with the new default the 5 programs end with Success and 0 mismatches (memory-stress-small 621,167 vs 632,880 legacy).
+
+---------------------------------------------------------------------------------------------------------------------
+
+## 11. IPC fixes (branch lsu-pipe-fix, 2026-11-07): 3 drain ports with skip-blocked, 4 replay registers, MMIO exempt from the F cut (FM)
+
+Analysis: `docs/LSU_PIPE_IPC.md` (root causes of the -4.98% against the legacy LSU). This section records what was implemented and measured.
+
+### 11.1 Changes (defaults)
+| parameter | before | now | env | RTL |
+| --- | --- | --- | --- | --- |
+| `CFG_LSU_PIPE_DRAIN` committed stores sent to the DCache per cycle | 2 | **3** | `LSU_PIPE_DRAIN` | `lp_pkg::NDR` |
+| `CFG_LSU_PIPE_DCAND` drain candidates (CAM ports) = first N ready non-MMIO committed stores; a candidate blocked by an older overlapping store does **not** take a port, the m-th unblocked candidate takes the m-th free port | first-version drain (0): candidate m on port m, blocked candidate keeps the port idle | **4** (0 = first-version drain) | `LSU_PIPE_DCAND` | `lp_pkg::NDC` |
+| `CFG_LSU_PIPE_RP` load replay registers | 2 | **4** (`RP_MAX` 4) | `LSU_PIPE_RP` | `lp_pkg::NRP` |
+| `CFG_LSU_PIPE_CUT` | 63 (B R D F G H) | **127** (+ FM, bit 64; F stays on) | `LSU_PIPE_CUT` | `LP_CUT` 262143 (bit 17 = FM) |
+`LSU_PIPE_DRAIN=2 LSU_PIPE_DCAND=0 LSU_PIPE_RP=2 LSU_PIPE_CUT=63` reproduces the previous default (gate 63/63 equal to the old baseline.csv before it was regenerated). The 4 candidates of 64 are enough: 2 or 3 candidates and 3 or 4 gave the same cycles on the 12 points tried (`z_n_c3/c4`, `z_n_d3c4` in the study); more than 4 candidates is not needed. Drain = 3 ports needs the third STA port (`STA`=3).
+CUT bit 64 (new, FM; RTL `LP_CUT` bit 17): with the F cut the MMIO load whose response arrives in this cycle may still be written back in this cycle (see 11.3). F itself stays on: removing it makes the RTL `lp_core` 36 levels deeper (131 -> 167 levels, rtl docs 15), although it would give +0.1 point more IPC (CUT 55 below).
+
+### 11.2 SPEC 30 points (same set / parameters as 10.1: exact warm-up, 10M warm-up + 10M measured, prefetcher on, `LSU_PIPE_STATS=1`; geomean of cycles(legacy)/cycles(config) - 1, tags in `/root/lsufix/res` on the server)
+| program (points) | current (63, DRAIN 2 first-version, RP 2) | + drain fix (3 ports, 4 cand, skip) | + RP 4 | + F off (CUT 55, not taken: +36 levels) | F off + L2=123 (speculative wake-up d, info) | **F kept + MMIO exempt (CUT 127, new default)** |
+| --- | --- | --- | --- | --- | --- | --- |
+| 400.perlbench | -11.9% | -12.5% | -9.2% | -10.5% | -5.6% | **-9.1%** |
+| 403.gcc | -6.3% | -2.2% | -2.1% | -2.1% | -2.0% | -2.1% |
+| 429.mcf | +2.2% | +2.4% | +3.3% | +3.4% | +4.5% | **+3.5%** |
+| 445.gobmk | -4.5% | -4.2% | -3.7% | -3.5% | +0.5% | **-3.7%** |
+| 456.hmmer | -8.7% | +1.8% | +1.9% | +2.1% | +3.1% | **+2.1%** |
+| 458.sjeng | -4.4% | -4.5% | -3.9% | -3.8% | +2.4% | **-3.7%** |
+| 464.h264ref | -16.7% | -14.3% | -14.4% | -4.9% | -3.9% | **-4.9%** |
+| 473.astar | -5.4% | -5.3% | -4.0% | -4.1% | +2.3% | **-4.0%** |
+| **ALL 30** | **-4.98%** | **-2.94%** | **-2.18%** | -1.52% | +1.34% | **-1.39%** |
+(The program rows are geomeans over the points of that program in the 30-point set of 10.1; the per-point tables are in the study data.) Default (last column) is -1.39%, i.e. the F-off column (-1.52%) is only 0.13 points lower. Drain fix alone +2.0 points (hmmer -8.7 -> +1.8, gcc sp42 -15.0 -> -6.0, h264 sp17), RP 4 +0.8, F off / FM +0.7-0.8, L2=123 speculative wake-up another +2.9 (hardware cost of the wake-up not measured here; the 58 percent cancel rate of 7.3 stays).
+Remaining deficit to the legacy LSU: -1.52% (perlbench -10.5%, gobmk, sjeng, astar around -4%: cut D and the replay path, not investigated further).
+
+### 11.3 Why the F cut cost h264ref 16 percent (found with `LSU_PIPE_STATS` occupancy counters)
+h264ref sp9 executes 2.78 million MMIO loads in the 20 M simulated cycles (`mmio_ld`), almost 30 percent of its loads. MMIO loads run one at a time (the uncached unit) and a load only goes to the bus when it is the oldest unfinished instruction. With the F cut the result of the MMIO response goes through the registered WBP bit and is written back one cycle later, so the next MMIO load starts one cycle later: 2.6 M extra cycles in a 16.3 M cycle run (16.28 M -> 18.87 M, the same number as the WBP occupancy counter, 2.70 M entry-cycles against 2.8 K without F). F therefore costs exactly one cycle per MMIO load in a serial chain, not because of WBP port pressure. Cure options: (a) drop the F cut (-1.52%), but the RTL synthesis says F is worth 36 levels of lp_core (131 with F, 167 without; the study's estimate of about 6 levels was wrong), (b) keep F and give the MMIO response a same-cycle write-back (CUT bit 64 = FM, **default**): ALL -1.39%, h264ref -4.9%. RTL: `wbp_sel = wbp_r | wbp_m` with `wbp_m` = entry that goes MMR -> WBP in this cycle, an OR in front of the registered select.
+Caveat on the benchmark: 2.78 M MMIO loads in a SPEC checkpoint is not typical SPEC behaviour (checkpoint restore region mapped as MMIO?); it is the same in the legacy run.
+
+### 11.4 Checks (model, default build `build/simulator`)
+| check | result |
+| --- | --- |
+| gate (`run_gate.sh`, 63 tests) after `baseline.csv` / `baseline_nopf.csv` regeneration | 63/63 PASS, all difftest Success, 0 mismatches (both prefetcher on and `PF_ENABLE=0`) |
+| old defaults by env (`LSU_PIPE_CUT=63 LSU_PIPE_DRAIN=2 LSU_PIPE_DCAND=0 LSU_PIPE_RP=2`) before regeneration | 63/63 equal to the previous baseline.csv |
+| memory-stress, memory-stress-small, smc-addi, smc-div, load-store-aligned, pf-stress, each with and without `LSU_PIPE_NOWD=1` | all Success, 0 mismatches, cycles identical with and without the watchdog (2,356,073 / 330,579 / 11,406 / 11,536 / 1,958 / 613,402) |
+| 12 SPEC points with the most watchdog events, `LSU_PIPE_NOWD=1` | all finish (no deadlock), cycles within +-0.2% of the watchdog run (the stuck loads are wrong-path loads whose DCache response is lost) |
+| Linux boot to `rv32 login:` (NOWD, `SIM_MAX_CYCLES=400000000`) | CUT 55 build: login reached (log line `rv32 login:` at the 100 M mark); final CUT 127 build: see below |
+Side finding: with 4 replay registers the load watchdog ("load stuck in DCW", a DCache request that never answers, 63 cycles) fires much more often: 4,267 events in the 30 runs (22 runs affected) against 403 with 2 registers and 142 in the (6) current-default runs checked; the affected loads are on mispredicted paths (all NOWD runs complete), root cause in the DCache request path not analysed. The RTL has no watchdog, so a cycle difference against the default model is possible in short programs when a wrong-path load is released by the watchdog (seen with the intermediate CUT 55 build on sub-longlong: 1905 against 1906 without the watchdog and in the RTL; with the final defaults all 63 tests are equal with and without NOWD); the RTL reference tables are generated with `LSU_PIPE_NOWD=1`. The NOWD run of the 12 SPEC points above used CUT 55.
