@@ -343,6 +343,18 @@ constexpr int PRF_NUM = CFG_PRF_NUM;
 #endif
 constexpr int MAX_BR_NUM = CFG_MAX_BR_NUM;
 constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
+// Move elimination (EXP-012): `addi rd, rs, 0` is renamed away (rd shares rs's physical register, no uop, no free-list
+// slot, ROB entry complete at dispatch); a register is freed when no architectural RAT entry names it.
+#ifndef CFG_MOVE_ELIM
+#define CFG_MOVE_ELIM 1
+#endif
+constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
+// Upper bound of architectural RAT entries naming one physical register (the reference counters are
+// bit_width_for_count(MOVE_ELIM_MAX_REFS + 1) bits wide); a move is only eliminated when the bound holds.
+#ifndef CFG_MOVE_ELIM_REFS
+#define CFG_MOVE_ELIM_REFS 7
+#endif
+constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 constexpr int CSR_NUM = 21;
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;

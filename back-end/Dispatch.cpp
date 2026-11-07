@@ -103,6 +103,7 @@ void Dispatch::comb_wake() {
     apply_wakeup_to_uop(u);
     for (int j = 0; j < i; j++) {
       if (!w.dis2rob.valid[j] || !inst_alloc[j].dest_en || inst_alloc[j]->dest_areg == 0) continue;
+      if (is_eliminated_move(inst_alloc[j])) continue;  // its register is its source's: no writer to wait for
       if (u->src1_en && u->src1_preg == inst_alloc[j].dest_preg) u.src1_busy = true;
       if (u->src2_en && u->src2_preg == inst_alloc[j].dest_preg) u.src2_busy = true;
     }
@@ -186,7 +187,8 @@ void Dispatch::comb_fire() {
     if (fire) pre_fire = true;
   }
   for (int i = 0; i < DECODE_WIDTH; i++)
-    if (w.dis2rob.dis_fire[i] && inst_r[i].dest_en) busy_table_1[inst_r[i].dest_preg] = true;
+    if (w.dis2rob.dis_fire[i] && inst_r[i].dest_en && !is_eliminated_move(inst_r[i]))
+      busy_table_1[inst_r[i].dest_preg] = true;
   w.dis2ren.ready = !pre_stall;
 
   // take back the issue requests of instructions that did not fire (ports were assigned in slot order)
@@ -304,6 +306,7 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   const int amo = inst->func7 >> 2;
   Piece pieces[MAX_UOPS_PER_INST];
   int n = 0;
+  if (is_eliminated_move(inst)) return 0;  // renamed away by move elimination: completes in the ROB at dispatch
   auto add = [&](int iq, int op, int s1 = -1, int s2 = -1, int dst = -1, bool imm4 = false, bool atomic = false) {
     pieces[n++] = {iq, op, s1, s2, dst, imm4, atomic};
   };

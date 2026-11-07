@@ -47,11 +47,13 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div pf-stress`
    (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 63 tests (62 + pf-stress, 2026-11-06), pass = cycles equal to baseline.csv (regenerated 2026-11-06 with the L1D prefetcher on; `PF_ENABLE=0` reproduces `baseline_nopf.csv`, the 2026-11-05 EXP-006 baseline, 62/62 + pf-stress).
+3. `scripts/run_gate.sh build/simulator results/gate`: 63 tests (62 + pf-stress), pass = cycles equal to baseline.csv (regenerated 2026-11-07 with the L1D prefetcher on, on top of move elimination (EXP-012); `PF_ENABLE=0` reproduces `baseline_nopf.csv`, which is main's move-elimination baseline of 2026-11-06 plus pf-stress: 62/62 equal to main, pf-stress 613,485).
 4. Big programs (binaries built with clang + stub libc headers, kept outside the repo in /tmp/big):
-   **L1D prefetcher on (default since EXP-009, 2026-11-06; `PF_ENABLE=0` turns it off):** dhrystone 64 runs 161,183; coremark 2 iterations 256,573 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
-   memory-stress 2,383,063; smc-div 11,348; smc-addi 11,218; memory-stress-small 334,635.
-   Prefetcher off (the EXP-006 baseline of 2026-11-05: no AXI subsystem divider (`FREQ_DIV` 1), DRAMsim3 DDR4-3200 behind SimDDR with 60 ns of fixed non-core latency (SOC 20 + CDC 12 + CTL 15 + PHY 13 from config.h; `DS3_EXTRA_NS` overrides), 1 GHz core): 162,033 / 255,335 / 2,428,470 / 11,348 / 11,218 / 347,305 (`results/baseline/baseline_nopf.csv` has all 63 tests).
+   **L1D prefetcher on (default since EXP-009; `PF_ENABLE=0` turns it off), with move elimination:** dhrystone 64 runs 161,183; coremark 2 iterations 251,535 (shortened builds fixed as the standard from 2026-11-04, binaries and sources in AI-Huma/rtl/programs/big);
+   memory-stress 2,380,486; smc-div 11,348; smc-addi 11,218; memory-stress-small 334,635.
+   Prefetcher off (equal to main before EXP-009): 162,033 / 252,400 / 2,425,220 / 11,348 / 11,218 / 347,305 (`results/baseline/baseline_nopf.csv` has all 63 tests).
+   Numbers are for the EXP-006 baseline of 2026-11-05: no AXI subsystem divider (`FREQ_DIV` 1), DRAMsim3 DDR4-3200 behind SimDDR with 60 ns of fixed non-core latency (SOC 20 + CDC 12 + CTL 15 + PHY 13 from config.h; `DS3_EXTRA_NS` overrides), 1 GHz core.
+   Before move elimination (EXP-012, `CFG_MOVE_ELIM` 1 from 2026-11-06): dhrystone 162,033; coremark 255,335; memory-stress 2,428,470; smc-div 11,348; smc-addi 11,218; memory-stress-small 347,305.
    Before (batch-3 configuration, divider 16, fixed 60-tick DDR latency, 500 MHz): 150,427 / 233,515 / 1,541,195 / 8,996 / 8,866 / 189,128. (First version of the new baseline, 32 ns extra latency: 158,756 / 250,658 / 2,425,029 / 11,096 / 10,966 / 343,975.)
 5. Small-LLC check (`scripts/llc_small_check.sh $PWD <abs path of baseline-sim/src>` (absolute paths required)): the default 8 MiB LLC never evicts in small tests.
    `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.
@@ -84,3 +86,18 @@ Frozen copies of the original modules live in `tests/*_ref`; the live modules we
 - zsh does not word-split unquoted variables: use bash scripts.
 - BSD sed has no `\|`; `git commit` needs an explicit identity in this environment.
 - Long runs go in the background with `SIM_MAX_CYCLES` set.
+
+## Move elimination (EXP-012; `CFG_MOVE_ELIM`, `CFG_MOVE_ELIM_REFS` in config.h)
+- `addi rd, rs, 0` (rd, rs real registers) is renamed away in Ren: rd takes rs's physical register, no free-list slot, no uop,
+  the ROB entry is complete at dispatch. A register is freed when no arch_RAT entry names it (`arch_cnt`, counted at commit,
+  so no counter is ever rolled back on a flush). Recovery is unchanged: an eliminated move allocates nothing, so the free-list
+  head checkpoint and `free_head_commit` (which skips eliminated moves) stay consistent.
+- Bound on the counters (`Ren::elim_refs_ok`): a move is eliminated only if its source comes straight from the speculative RAT
+  (no older instruction of the group writes it) and (spec RAT entries naming it) + (older instructions of the group with a
+  destination) + 1 <= `CFG_MOVE_ELIM_REFS` (default 7 = 3-bit counters). The architectural state after a move commits equals the
+  speculative RAT right after its rename, so the architectural count never exceeds the bound.
+- `ME_CHECK=1` (environment, run time): every cycle, arch_cnt equals the number of arch_RAT entries naming each register and no
+  physical register leaks; prints the maximum number of references seen.
+- Not handled: `add rd, rs, x0` (the toolchain emits no compressed `c.mv`). A commit with a destination in the same cycle
+  as a mispredict asserts in ME mode (the baseline free-list sanity check already treats it as unreachable; never hit in the gate,
+  the big programs, Linux or SPEC quick).

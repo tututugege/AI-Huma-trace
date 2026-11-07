@@ -17,6 +17,7 @@ public:
   void comb_alloc(); // 分配寄存器
   void comb_pipeline();
   void seq();
+  void me_check() const;
 
   // register
   Uop inst_r[DECODE_WIDTH];
@@ -24,6 +25,9 @@ public:
   reg<PRF_IDX_WIDTH> arch_RAT[ARF_NUM + 1];
   reg<PRF_IDX_WIDTH> spec_RAT[ARF_NUM + 1];
   reg<PRF_IDX_WIDTH> RAT_checkpoint[MAX_BR_NUM][ARF_NUM + 1];
+  // move elimination: number of arch_RAT entries that name each physical register (a register is freed at 0)
+  int arch_cnt[PRF_NUM];
+  bool elim_refs_ok(int i) const;
   reg<PRF_IDX_WIDTH> free_list[PRF_NUM];
   reg<PRF_IDX_WIDTH> free_head; // speculative head
   reg<PRF_IDX_WIDTH> free_head_commit;
