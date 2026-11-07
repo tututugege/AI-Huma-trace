@@ -356,14 +356,14 @@ constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
 #define CFG_MOVE_ELIM_REFS 7
 #endif
 constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
-// Staged LSU (LSU_PIPE, docs/LSU_PIPE.md), default on with CUT 63 and L2 115 (RTL: LP_CUT 131071 / LP_L2 1907): 0 = legacy LSU (back-end/Lsu/RealLsu.cpp), 1 = staged pipeline (RealLsuPipe.cpp).
+// Staged LSU (LSU_PIPE, docs/LSU_PIPE.md), default on with CUT 127 (B R D F G H + FM, bit 64) and L2 115 (RTL: LP_CUT 262143 / LP_L2 1907): 0 = legacy LSU (back-end/Lsu/RealLsu.cpp), 1 = staged pipeline (RealLsuPipe.cpp).
 // CFG_LSU_PIPE_CUT / CFG_LSU_PIPE_L2 are the critical-path cut masks (L1/L3 cuts and L2 cuts, see RealLsuPipe.cpp).
 // The environment overrides them at run time: LSU_PIPE=0|1, LSU_PIPE_CUT=<mask>, LSU_PIPE_L2=<mask> (LSU_PIPE=0 = legacy LSU for regression).
 #ifndef CFG_LSU_PIPE
 #define CFG_LSU_PIPE 1
 #endif
 #ifndef CFG_LSU_PIPE_CUT
-#define CFG_LSU_PIPE_CUT 63
+#define CFG_LSU_PIPE_CUT 127
 #endif
 #ifndef CFG_LSU_PIPE_L2
 #define CFG_LSU_PIPE_L2 115
