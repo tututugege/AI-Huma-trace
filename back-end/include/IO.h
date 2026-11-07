@@ -109,6 +109,7 @@ struct FtqCommitInfoResp {
   wire<1> loop_pred;
   tage_loop_meta_idx_t loop_idx;
   tage_loop_meta_tag_t loop_tag;
+  wire<8> ps_info;  // statistics only (BPA_STATS)
 
   FtqCommitInfoResp() { std::memset(this, 0, sizeof(FtqCommitInfoResp)); }
 };
@@ -283,8 +284,12 @@ struct ExuIdIO {
       ftq_idx; // FTQ index of mispredicting branch, for tail recovery
   wire<BR_MASK_WIDTH>
       clear_mask; // OR of all resolved branches' (1 << br_id) this cycle
+  wire<4> ftq_off;  // BPA_REPAIR: slot of the mispredicting branch in its fetch block
+  wire<3> br_type;  // BPA_REPAIR: its type (BR_* encoding of the BPU)
 
   ExuIdIO() {
+    ftq_off = 0;
+    br_type = 0;
     mispred = {};
     redirect_pc = {};
     redirect_rob_idx = {};

@@ -16,6 +16,10 @@ struct front_top_in {
   wire1_t itlb_flush;
   wire1_t fence_i;
   fetch_addr_t refetch_address;
+  wire1_t rf_valid;       // BPA_REPAIR: branch mispredict with block / slot / type of the branch
+  wire16_t rf_blk;
+  wire8_t rf_slot, rf_type;
+  pc_t rf_pc;
   pc_t predict_base_pc[COMMIT_WIDTH];
   wire1_t predict_dir[COMMIT_WIDTH];
   wire1_t actual_dir[COMMIT_WIDTH];
@@ -195,6 +199,7 @@ struct fetch_address_FIFO_in {
   wire1_t read_enable;
   wire1_t write_enable;
   fetch_addr_t fetch_address;
+  uint8_t drop_tail_n;  // BPU_PIPE: squash the n youngest entries (override of an older block)
 };
 
 struct fetch_address_FIFO_out {

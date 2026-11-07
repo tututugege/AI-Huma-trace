@@ -44,8 +44,10 @@ static void fetch_address_FIFO_comb_impl(const fetch_address_FIFO_in &inp, const
   out.push_en = do_write;
   out.push_data = inp.fetch_address;
   out.pop_en = do_read;
+  out.drop_tail_n = inp.refetch ? 0 : inp.drop_tail_n;
 
   int next_size = static_cast<int>(queue_size_before);
+  next_size -= out.drop_tail_n < next_size ? out.drop_tail_n : next_size;
   next_size += out.push_en ? 1 : 0;
   next_size -= out.pop_en ? 1 : 0;
   if (next_size < 0) {
@@ -68,6 +70,7 @@ public:
     rd.head_valid = (size_ > 0);
     if (rd.head_valid) {
       rd.head_entry = entries_[0];
+      rd.head_age = ages_[0];
     }
   }
 
@@ -79,6 +82,10 @@ public:
     }
     if (comb_out.clear_fifo) {
       next_rd = {};
+    }
+    if (comb_out.drop_tail_n) {
+      next_rd.size -= comb_out.drop_tail_n < next_rd.size ? comb_out.drop_tail_n : next_rd.size;
+      if (next_rd.size == 0) { next_rd.head_entry = 0; next_rd.head_valid = false; next_rd.head_age = 0; }
     }
     const fetch_addr_fifo_size_t size_before_ops = next_rd.size;
     if (comb_out.push_en) {
@@ -125,12 +132,20 @@ public:
     if (req.clear_fifo) {
       size_ = 0;
       std::memset(entries_, 0, sizeof(entries_));
+      std::memset(ages_, 0, sizeof(ages_));
     }
+    if (req.drop_tail_n) {
+      const fetch_addr_fifo_size_t n = req.drop_tail_n < size_ ? req.drop_tail_n : size_;
+      for (fetch_addr_fifo_size_t i = size_ - n; i < size_; ++i) { entries_[i] = 0; ages_[i] = 0; }
+      size_ -= n;
+    }
+    for (fetch_addr_fifo_size_t i = 0; i < size_; ++i) if (ages_[i] < 3) ages_[i]++;  // one cycle older
     if (req.push_en) {
       if (size_ >= FETCH_ADDR_FIFO_SIZE) {
         std::printf("[fetch_address_FIFO] ERROR: fifo overflow\n");
         std::exit(1);
       }
+      ages_[size_] = 0;
       entries_[size_++] = req.push_data;
     }
     if (req.pop_en) {
@@ -140,14 +155,17 @@ public:
       }
       for (fetch_addr_fifo_size_t i = 1; i < size_; ++i) {
         entries_[i - 1] = entries_[i];
+        ages_[i - 1] = ages_[i];
       }
       --size_;
       entries_[size_] = 0;
+      ages_[size_] = 0;
     }
   }
 
 private:
   fetch_addr_t entries_[FETCH_ADDR_FIFO_SIZE]{};
+  uint8_t ages_[FETCH_ADDR_FIFO_SIZE]{};
   fetch_addr_fifo_size_t size_ = 0;
 };
 

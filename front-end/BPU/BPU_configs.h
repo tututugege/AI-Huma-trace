@@ -129,6 +129,7 @@ static_assert(TC_ENTRY_NUM <= (1u << 16),
 #define BR_IDIRECT 3
 #define BR_NONCTL 4
 #define BR_JAL 5
+#define BR_ICALL 6 // BPA_ICALL (docs/BPU_ACC.md): jalr with rd = ra, not a return: indirect target (TC) plus a RAS push
 
 #define NLP_CONF_MAX ((1 << NLP_CONF_BITS) - 1)
 

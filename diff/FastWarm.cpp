@@ -21,6 +21,8 @@
 #include <vector>
 
 bpuf::Bpu &front_bpu_instance();
+void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target);
+void front_warm_finish();
 void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
 void icache_warm_install_itlb(const void *entries, int count, int repl_ptr);
 extern long long sim_time;
@@ -164,8 +166,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
     }
   }
 
-  bpuf::Bpu &bpu = front_bpu_instance();
-  bpu.warm_finish();  // no-op on a fresh BPU; keeps spec == arch
+  front_warm_finish();  // no-op on a fresh BPU; keeps spec == arch
   uint32_t last_iline = 0xffffffffu, last_ipa_line = 0;
   RefCpuState s{}, post{};
   for (uint64_t i = 0; i < steps; ++i) {
@@ -205,11 +206,11 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       bool dir = true;
       if (op == 0x63) { dir = info.br_taken; }
       else if (op == 0x6f) type = (bits(inst, 11, 7) == 1) ? BR_CALL : BR_JAL;
-      else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : BR_IDIRECT;
-      bpu.warm_commit(pc, type, dir, dir ? post.pc : pc + 4);
+      else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bpuf::cfg_icall() && bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
+      front_warm_commit(pc, type, dir, dir ? post.pc : pc + 4);
       ++st.branches;
     } else {
-      bpu.warm_commit(pc, BR_NONCTL, false, pc + 4);
+      front_warm_commit(pc, BR_NONCTL, false, pc + 4);
     }
     // data side
     const bool is_ld = op == 0x03, is_st = op == 0x23, is_amo = op == 0x2f;
@@ -255,7 +256,7 @@ void fast_warm_install(SimCpu &cpu) {
         refcpu_set_io_word(core, range.base + off, refcpu_get_io_word(rc, range.base + off));
     refcpu_sync_mmio_devices_from_backing(core);
   }
-  front_bpu_instance().warm_finish();
+  front_warm_finish();
   icache_warm_install(W.l1i.tag, W.l1i.valid);
   icache_warm_install_itlb(W.itlb.e.data(), int(W.itlb.e.size()), W.itlb.ptr);
   cpu.back.warm_dtlb(W.dtlb.e.data(), int(W.dtlb.e.size()), W.dtlb.ptr);
