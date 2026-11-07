@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "RealDcache.h"
 #include "types.h"
 #include <cassert>
@@ -154,7 +155,29 @@ void RealDcache::stage1_comb() {
     }
 
 
-    for (int i = 0; i < LSU_LDU_COUNT; i++) {
+    // Bank arbitration order. Default: port 0 first (fixed priority). With LSU_PIPE (RPRIO): a port that issues a hidden retry
+    // this cycle is granted first, so a retry cannot be starved by an endless stream on a lower-numbered port.
+    static const bool rprio = [] {
+        const char *b = std::getenv("LSU_PIPE_RPRIO");
+        return lsu_pipe_enabled() && !(b && std::atoi(b) == 0);
+    }();
+    int ld_order[LSU_LDU_COUNT];
+    {
+        int n = 0;
+        if (rprio) {
+            for (int i = 0; i < LSU_LDU_COUNT; i++) {
+                const bool lv = in.lsu2dcache->req_ports.load_ports[i].valid;
+                if (!lv && !bank_retry_load_blocked[i] && (bank_retry_cur.loads[i].valid || bank_retry_issue_wires.loads[i].valid)) ld_order[n++] = i;
+            }
+        }
+        for (int i = 0; i < LSU_LDU_COUNT; i++) {
+            bool in_first = false;
+            for (int k = 0; k < n; k++) in_first |= (ld_order[k] == i);
+            if (!in_first) ld_order[n++] = i;
+        }
+    }
+    for (int oi = 0; oi < LSU_LDU_COUNT; oi++) {
+        const int i = ld_order[oi];
         const LoadReq &lsu_req = in.lsu2dcache->req_ports.load_ports[i];
         const BankRetryLoad &pending_retry = bank_retry_cur.loads[i];
         const BankRetryLoad &new_retry = bank_retry_issue_wires.loads[i];
@@ -232,7 +255,23 @@ void RealDcache::stage1_comb() {
         }        
     }
 
-    for (int i = 0; i < LSU_STA_COUNT; i++) {
+    int st_order[LSU_STA_COUNT];
+    {
+        int n = 0;
+        if (rprio) {
+            for (int i = 0; i < LSU_STA_COUNT; i++) {
+                if (!in.lsu2dcache->req_ports.store_ports[i].valid && !bank_retry_store_blocked[i] &&
+                    (bank_retry_cur.stores[i].valid || bank_retry_issue_wires.stores[i].valid)) st_order[n++] = i;
+            }
+        }
+        for (int i = 0; i < LSU_STA_COUNT; i++) {
+            bool in_first = false;
+            for (int k = 0; k < n; k++) in_first |= (st_order[k] == i);
+            if (!in_first) st_order[n++] = i;
+        }
+    }
+    for (int oi = 0; oi < LSU_STA_COUNT; oi++) {
+        const int i = st_order[oi];
         const StoreReq &lsu_req = in.lsu2dcache->req_ports.store_ports[i];
         const BankRetryStore &pending_retry = bank_retry_cur.stores[i];
         const BankRetryStore &new_retry = bank_retry_issue_wires.stores[i];

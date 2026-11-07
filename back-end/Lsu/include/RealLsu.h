@@ -3,6 +3,7 @@
 #include "IO.h"
 #include "MemUtils.h"
 #include "RealLsuBsdConfig.h"
+#include "RealLsuPipe.h"
 #include "TlbMmu.h"
 #include "config.h"
 #include <cstdint>
@@ -139,8 +140,9 @@ public:
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   SimContext *ctx = nullptr;
 
-  void init() { cur = {}; nxt = {}; }
+  void init();
   void comb_cal();
+  void comb_spec_cancel();  // LSU_PIPE_L2: cancel of last cycle's speculative load wake-up (before the select)
   void comb_lsu2dis();
   void comb_lsu2rob();
   void comb_mmio_out();
@@ -159,7 +161,20 @@ public:
   void comb_flush();
   void comb_stlf();
   void comb_check();
-  void seq() { cur = nxt; }
+  void seq() {
+    cur = nxt;
+    if (pipe) pcur = pnxt;
+  }
+
+  // Staged LSU (switch LSU_PIPE / CFG_LSU_PIPE): same comb phases, see RealLsuPipe.cpp and docs/LSU_PIPE.md.
+  bool pipe = false;
+  lp::LsuPipeState pcur, pnxt;
+  lp::PCycle pw;
+  int lp_rp_ports = 2;      // replay ports (LSU_PIPE_RP)
+  int lp_bounce = 0;        // aged replay register bumps the last new load (LSU_PIPE_BOUNCE cycles, 0 = off)
+  int lp_rblk = 1;          // do not launch on a port with a pending DCache hidden retry (LSU_PIPE_RBLK)
+  int lp_gate = 1;          // DCache read enable qualified by the partial CAM (LSU_PIPE_GATE)
+  int lp_rp_reg = 1;        // replay selection registered before L1 (LSU_PIPE_RPREG)
 
   StqEntry get_stq_entry(int idx, bool flag);
 
@@ -169,4 +184,27 @@ private:
   void handle_store_addr(const MicroOp &inst);
   void handle_store_data(const MicroOp &inst);
   void handle_load_req(const MicroOp &inst);
+
+  // lp: the *_p phases replace the legacy ones when `pipe` is set
+  void comb_cal_p();
+  void comb_spec_cancel_p();
+  void comb_lsu2dis_p();
+  void comb_lsu2rob_p();
+  void comb_mmio_in_p();
+  void comb_tlb_out_p();
+  void comb_tlb_in_ldq_p();
+  void comb_tlb_in_stq_p();
+  void comb_exe2lsu_p();
+  void comb_dis2lsu_p();
+  void comb_lsu2dcache_ldq_p();
+  void comb_dcache2lsu_ldq_p();
+  void comb_lsu2dcache_stq_p();
+  void comb_dcache2lsu_stq_p();
+  void comb_lsu2exe_p();
+  void comb_stq_commit_p();
+  void comb_flush_p();
+  void comb_stlf_p();
+  void comb_check_p();
+  void comb_mmio_out_p();
+  void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
 };

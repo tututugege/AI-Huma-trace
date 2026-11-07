@@ -63,6 +63,7 @@ public:
   void comb_enq();   // 处理 dispatch 入队
   void comb_issue(); // 调度 + 发射 + 延迟处理
   void comb_awake(); // 汇总所有唤醒源
+  void comb_cancel(); // LSU_PIPE_L2: speculative load wake-up of the previous cycle was wrong
   void comb_calc_latency_next();
 
   // 辅助逻辑

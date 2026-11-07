@@ -119,6 +119,9 @@ void BackTop::comb_begin_all() {
 
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_stage_decode_and_resources() {
+  LSU(comb_spec_cancel);  // LSU_PIPE_L2: a speculative load wake-up of the previous cycle was wrong
+  ISU(comb_cancel);
+  DIS(comb_cancel);
   IDU(comb_branch);
   PRE(comb_accept_front);
   IDU(comb_decode);
@@ -248,6 +251,7 @@ void BackTop::clear_stage_ios() {
 
   prf2exe = {};
   prf_awake = {};
+  lsu_awake = {};
 
   exu2id = {};
   // Known issue path: ROB consumes exu2rob before EXU refreshes it in current

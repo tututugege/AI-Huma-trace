@@ -177,6 +177,16 @@ struct PrfAwakeIO {
   WakeInfo wake[LSU_LOAD_WB_WIDTH] = {};
 };
 
+// wake-up channels of the issue-queue bus: the ones of config.h (MAX_WAKEUP_PORTS) + the LSU_PIPE_L2 channels (2 per load port: [p] L2, [LD+p] L3)
+constexpr int LSU_EARLY_WAKE_PORTS = 2 * LSU_LOAD_WB_WIDTH;
+constexpr int WAKE_CH_ALL = MAX_WAKEUP_PORTS + LSU_EARLY_WAKE_PORTS;
+
+// LSU_PIPE_L2: wake-ups driven by the LSU itself (speculative at L2, or from the L3 register) and their cancel
+struct LsuAwakeIO {
+  WakeInfo wake[2 * LSU_LOAD_WB_WIDTH] = {};    // [p] L2 (speculative / oracle), [LD + p] L3 register
+  WakeInfo cancel[LSU_LOAD_WB_WIDTH] = {};      // speculative wake-up of the previous cycle was wrong: consumers busy again
+};
+
 struct DisIssIO {
 
   struct DisIssReq {
@@ -199,7 +209,7 @@ struct IssDisIO {
 
 struct IssAwakeIO {
 
-  WakeInfo wake[MAX_WAKEUP_PORTS] = {};
+  WakeInfo wake[WAKE_CH_ALL] = {};
 };
 
 struct RobBroadcastIO {
@@ -585,6 +595,10 @@ struct DcacheLsuIO {
   DCacheRespPorts resp_ports;
   wire<1> mshr_fill;
   wire<32> mshr_fill_addr;
+  // per load port: a hidden bank-conflict retry is latched in the DCache (registered bit). The LSU must leave the port idle,
+  // otherwise a new request wins the port every cycle and the retry starves (LSU_PIPE_RBLK).
+  wire<1> load_retry_busy[LSU_LDU_COUNT] = {};
+  wire<1> store_retry_busy[LSU_STA_COUNT] = {};  // same for the store ports
 };
 
 struct LsuDisIO {

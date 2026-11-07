@@ -728,6 +728,8 @@ void MemSubsystem::forward_pending_response_from_fill() {
 
 void MemSubsystem::publish_pending_dcache_response() {
   dcache_resp_route_ = dcache_resp_pending_;
+  for (int i = 0; i < LSU_LDU_COUNT; i++) dcache_resp_route_.load_retry_busy[i] = dcache_.load_retry_pending(i);
+  for (int i = 0; i < LSU_STA_COUNT; i++) dcache_resp_route_.store_retry_busy[i] = dcache_.store_retry_pending(i);
 }
 
 void MemSubsystem::clear_pending_dcache_response() {

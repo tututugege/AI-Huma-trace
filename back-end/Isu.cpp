@@ -15,7 +15,7 @@ void Isu::add_iq(const IssueQueueConfig &cfg) {
 
 // A register woken by this cycle's broadcast is no longer busy for an entering uop.
 void Isu::apply_wakeup_to_uop(Uop &uop) const {
-  for (int k = 0; k < MAX_WAKEUP_PORTS; k++) {
+  for (int k = 0; k < WAKE_CH_ALL; k++) {
     if (!wires->iss_awake.wake[k].valid) continue;
     const uint32_t preg = wires->iss_awake.wake[k].preg;
     if (uop->src1_en && uop->src1_preg == preg) uop.src1_busy = false;
@@ -168,7 +168,7 @@ void Isu::comb_calc_latency_next() {
 // cycle with single-cycle latency (fast, ALU ports only).
 void Isu::comb_awake() {
   auto &bus = wires->iss_awake.wake;
-  for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
+  for (int i = 0; i < WAKE_CH_ALL; i++) {
     bus[i].valid = false;
     bus[i].preg = 0;
   }
@@ -207,13 +207,29 @@ void Isu::comb_awake() {
       drive(fast_ch[i], e.uop.dest_preg, "Fast writeback collision");
   }
 
+  {  // LSU_PIPE_L2 channels: after the fast ones (L2 speculative, then L3 register)
+    const int early_base = MAX_WAKEUP_PORTS;  // config.h channels first
+    for (int i = 0; i < LSU_EARLY_WAKE_PORTS; i++)
+      if (wires->lsu_awake.wake[i].valid) {
+        bus[early_base + i].valid = true;
+        bus[early_base + i].preg = wires->lsu_awake.wake[i].preg;
+      }
+  }
   for (auto &q : iqs) {
-    for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
+    for (int i = 0; i < WAKE_CH_ALL; i++) {
       q.in.wake_valid[i] = bus[i].valid;
       q.in.wake_pregs[i] = bus[i].preg;
     }
     q.comb_wakeup();
   }
+}
+
+// Speculative load wake-up of the previous cycle was wrong (before the select of this cycle): woken entries wait again.
+extern uint64_t g_lp_cancel_entries;
+void Isu::comb_cancel() {
+  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
+    if (wires->lsu_awake.cancel[k].valid)
+      for (auto &q : iqs) g_lp_cancel_entries += q.cancel_wake(wires->lsu_awake.cancel[k].preg);
 }
 
 // Flush / mispredict / branch-resolve handling for the queues and the delayed wakeups. A flush empties everything,

@@ -65,6 +65,9 @@ public:
         }
     }
 
+    bool load_retry_pending(int i) const { return bank_retry_cur.loads[i].valid; }
+    bool store_retry_pending(int i) const { return bank_retry_cur.stores[i].valid; }
+
     bool idle_quiescent() const {
         if (s1s2_cur.fill_write.valid) return false;
         for (const auto &l : s1s2_cur.loads) if (l.valid) return false;

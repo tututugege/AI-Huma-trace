@@ -7,7 +7,7 @@
 bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
   for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++)
     if (wires->prf_awake.wake[w].valid && wires->prf_awake.wake[w].preg == preg) return true;
-  for (int w = 0; w < MAX_WAKEUP_PORTS; w++)
+  for (int w = 0; w < WAKE_CH_ALL; w++)
     if (wires->iss_awake.wake[w].valid && wires->iss_awake.wake[w].preg == preg) return true;
   return false;
 }
@@ -110,6 +110,12 @@ void Dispatch::comb_wake() {
   }
 }
 
+// A speculative load wake-up of the previous cycle was wrong: the destination register is busy again.
+void Dispatch::comb_cancel() {
+  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
+    if (wires->lsu_awake.cancel[k].valid) busy_table[wires->lsu_awake.cancel[k].preg] = true;
+}
+
 // Split each instruction into uops and place them in the issue-queue request ports, in slot order; the first
 // instruction that does not fit stops the group. What was placed is remembered so comb_fire can take it back.
 void Dispatch::comb_dispatch() {
@@ -171,7 +177,7 @@ void Dispatch::comb_fire() {
   std::memcpy(busy_table_1, busy_table, sizeof(busy_table_1));
   for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
     if (w.prf_awake.wake[k].valid) busy_table_1[w.prf_awake.wake[k].preg] = false;
-  for (int k = 0; k < MAX_WAKEUP_PORTS; k++)
+  for (int k = 0; k < WAKE_CH_ALL; k++)
     if (w.iss_awake.wake[k].valid) busy_table_1[w.iss_awake.wake[k].preg] = false;
 
   bool pre_stall = false, pre_fire = false;

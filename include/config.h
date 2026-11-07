@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 #include "base_types.h"
 #include "debug_config.h"
 
@@ -355,6 +356,26 @@ constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
 #define CFG_MOVE_ELIM_REFS 7
 #endif
 constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
+// Staged LSU (LSU_PIPE, docs/LSU_PIPE.md): 0 = legacy LSU (back-end/Lsu/RealLsu.cpp), 1 = staged pipeline (RealLsuPipe.cpp).
+// CFG_LSU_PIPE_CUT / CFG_LSU_PIPE_L2 are the critical-path cut masks (L1/L3 cuts and L2 cuts, see RealLsuPipe.cpp).
+// The environment overrides them at run time: LSU_PIPE=0|1, LSU_PIPE_CUT=<mask>, LSU_PIPE_L2=<mask> (LSU_PIPE=0 = legacy LSU for regression).
+#ifndef CFG_LSU_PIPE
+#define CFG_LSU_PIPE 0
+#endif
+#ifndef CFG_LSU_PIPE_CUT
+#define CFG_LSU_PIPE_CUT 0
+#endif
+#ifndef CFG_LSU_PIPE_L2
+#define CFG_LSU_PIPE_L2 0
+#endif
+inline bool lsu_pipe_enabled() {
+  static const bool v = [] { const char *e = std::getenv("LSU_PIPE"); return e && e[0] ? e[0] != '0' : CFG_LSU_PIPE != 0; }();
+  return v;
+}
+inline unsigned lsu_pipe_env_mask(const char *name, unsigned dflt) {
+  const char *e = std::getenv(name);
+  return e && e[0] ? (unsigned)std::atoi(e) : dflt;
+}
 constexpr int CSR_NUM = 21;
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;

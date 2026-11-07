@@ -113,6 +113,7 @@ void Prf::comb_awake() {
       if (is_squashed) {
         continue;
       }
+      if (inst_r[i].uop.early_woken) continue;  // the LSU already woke the consumers (LSU_PIPE_L2)
 
       if (awake_idx < LSU_LOAD_WB_WIDTH) {
         wires->prf_awake.wake[awake_idx].valid = true;

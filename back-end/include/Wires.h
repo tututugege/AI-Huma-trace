@@ -55,6 +55,7 @@ struct Wires {
   IssDisIO iss2dis;
   PrfExeIO prf2exe;
   PrfAwakeIO prf_awake;
+  LsuAwakeIO lsu_awake;
   ExuIdIO exu2id;
   ExuRobIO exu2rob;
   FtqPrfPcReqIO ftq_prf_pc_req;

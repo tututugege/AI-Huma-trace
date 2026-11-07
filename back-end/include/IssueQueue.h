@@ -37,8 +37,8 @@ struct IqStoredEntry {
 
 struct IssueQueueIn {
   std::vector<IqStoredEntry> enq_reqs;
-  uint32_t wake_pregs[MAX_WAKEUP_PORTS] = {};
-  wire<1> wake_valid[MAX_WAKEUP_PORTS] = {};
+  uint32_t wake_pregs[WAKE_CH_ALL] = {};
+  wire<1> wake_valid[WAKE_CH_ALL] = {};
   wire<1> issue_block = 0;
   wire<1> flush_all = 0;
   wire<1> flush_br = 0;
@@ -148,7 +148,7 @@ public:
     for (auto &grant : out.issue_grants) {
       grant.valid = false; // comb_issue() clears the payload before filling it
     }
-    for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
+    for (int i = 0; i < WAKE_CH_ALL; i++) {
       in.wake_pregs[i] = 0;
       in.wake_valid[i] = 0;
     }
@@ -177,7 +177,7 @@ public:
   }
 
   void comb_wakeup() {
-    for (int i = 0; i < MAX_WAKEUP_PORTS; i++) {
+    for (int i = 0; i < WAKE_CH_ALL; i++) {
       if (!in.wake_valid[i]) {
         continue;
       }
@@ -216,6 +216,29 @@ public:
         wake_matrix_src2_1[row_base + w] = 0;
       }
     }
+  }
+
+  // Speculative wake-up undone: entries waiting on `preg` that were woken (busy cleared) are busy again. Called at the start of
+  // the cycle, before the select: both the committed and the working copy change. Returns the number of entries.
+  int cancel_wake(uint32_t preg) {
+    int n = 0;
+    for (int i = 0; i < size; i++) {
+      if (!entry_1[i].valid) continue;
+      bool hit = false;
+      auto fix = [&](IqStoredEntry &e) {
+        if (e.uop->src1_en && !e.uop.src1_busy && e.uop->src1_preg == preg) { e.uop.src1_busy = true; hit = true; }
+        if (e.uop->src2_en && !e.uop.src2_busy && e.uop->src2_preg == preg) { e.uop.src2_busy = true; hit = true; }
+      };
+      fix(entry_1[i]);
+      if (!hit) continue;
+      hit = false;
+      fix(entry[i]);
+      set_dep_bits_for_slot(entry_1[i], i);
+      mark_slot(i);
+      refresh_ready(i);
+      n++;
+    }
+    return n;
   }
 
   void comb_issue() {

@@ -11,8 +11,23 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 
 using std::min;
+
+void RealLsu::init() {
+  cur = {};
+  nxt = {};
+  pcur = {};
+  pnxt = {};
+  pw = {};
+  pipe = lsu_pipe_enabled();
+  if (const char *r = std::getenv("LSU_PIPE_RP")) lp_rp_ports = std::max(1, std::min(lp::RP_MAX, std::atoi(r)));
+  if (const char *r = std::getenv("LSU_PIPE_BOUNCE")) lp_bounce = std::min(7, std::max(0, std::atoi(r)));
+  if (const char *r = std::getenv("LSU_PIPE_GATE")) lp_gate = std::atoi(r) != 0;
+  if (const char *r = std::getenv("LSU_PIPE_RBLK")) lp_rblk = std::atoi(r) != 0;
+  if (const char *r = std::getenv("LSU_PIPE_RPREG")) lp_rp_reg = std::atoi(r) != 0;
+}
 
 static uint32_t replay_delay_cycles(ReplayType replay) {
   return replay == ReplayType::MSHR_HIT || replay == ReplayType::MSHR_FULL ? LSU_PEPLAY_WAIT_CYCLES : 0;
@@ -70,7 +85,13 @@ static std::bitset<ROB_NUM> load_miss_mask(const LsuState &s) {
   return m;
 }
 
+void RealLsu::comb_spec_cancel() {
+  if (pipe) return comb_spec_cancel_p();
+  wires->lsu_awake = {};
+}
+
 void RealLsu::comb_cal() {
+  if (pipe) return comb_cal_p();
   ldq_allocated_ = ldq_empty_ = stq_allocated_ = 0;
   for (const LdqEntry &l : cur.ldq) {
     ldq_allocated_ += l.load_state == LoadState::Allocated;
@@ -81,12 +102,14 @@ void RealLsu::comb_cal() {
 }
 
 void RealLsu::comb_lsu2rob() {
+  if (pipe) return comb_lsu2rob_p();
   wires->lsu2rob = {};
   wires->lsu2rob.committed_store_pending = cur.stq_commit_count != 0;
   wires->lsu2rob.tma.miss_mask = load_miss_mask(cur);
 }
 
 void RealLsu::comb_lsu2dis() {
+  if (pipe) return comb_lsu2dis_p();
   wires->lsu2dis = {};
   wires->lsu2dis.stq_tail = stq_idx_after(cur.stq_head, cur.stq_count);
   wires->lsu2dis.stq_tail_flag = stq_tail_flag(cur.stq_head, cur.stq_count, cur.stq_head_flag);
@@ -106,6 +129,7 @@ void RealLsu::comb_lsu2dis() {
 }
 
 void RealLsu::comb_dis2lsu() {
+  if (pipe) return comb_dis2lsu_p();
   const DisLsuIO &d = wires->dis2lsu;
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
@@ -138,6 +162,7 @@ void RealLsu::comb_dis2lsu() {
 }
 
 void RealLsu::comb_exe2lsu() {
+  if (pipe) return comb_exe2lsu_p();
   const ExeLsuIO &x = wires->exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++)
     if (x.sdu_req[i].valid) handle_store_data(x.sdu_req[i].uop);
@@ -202,6 +227,7 @@ void RealLsu::handle_load_req(const MicroOp &inst) {
 }
 
 void RealLsu::comb_mmio_out() {
+  if (pipe) return comb_mmio_out_p();
   wires->out.peripheral_req = {};
   if (!wires->in.peripheral_resp.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
@@ -215,6 +241,7 @@ void RealLsu::comb_mmio_out() {
 }
 
 void RealLsu::comb_mmio_in() {
+  if (pipe) return comb_mmio_in_p();
   if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
@@ -232,6 +259,7 @@ void RealLsu::comb_mmio_in() {
 }
 
 void RealLsu::comb_tlb_out() {
+  if (pipe) return comb_tlb_out_p();
   wires->lsu2mmu_io = {};
   wires->lsu2mmu_io.csr_status = wires->csr_status;
 
@@ -266,6 +294,7 @@ void RealLsu::comb_tlb_out() {
 }
 
 void RealLsu::comb_tlb_in_ldq() {
+  if (pipe) return comb_tlb_in_ldq_p();
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
     const auto &resp = wires->mmu2lsu_io.ldq_resp[i];
     if (!resp.valid || resp.wait_idx >= LDQ_SIZE || resp.entry_idx >= LDQ_SIZE) continue;
@@ -321,6 +350,7 @@ void RealLsu::comb_tlb_in_ldq() {
 }
 
 void RealLsu::comb_tlb_in_stq() {
+  if (pipe) return comb_tlb_in_stq_p();
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     const auto &resp = wires->mmu2lsu_io.stq_resp[i];
     if (!resp.valid || resp.wait_idx >= STQ_SIZE || resp.entry_idx >= STQ_SIZE) continue;
@@ -364,6 +394,7 @@ void RealLsu::comb_tlb_in_stq() {
 // Store-to-load forwarding check. FIFO style: entries leaving the queue are popped first, then the
 // retried ones go back to the tail.
 void RealLsu::comb_stlf() {
+  if (pipe) return comb_stlf_p();
   auto &q = nxt.stlf_queue;
   const uint32_t issue = q.window(LSU_LOAD_WINDOW_WIDTH);
   wire<LDQ_IDX_WIDTH> retry[LSU_LOAD_WINDOW_WIDTH] = {};
@@ -453,6 +484,7 @@ void RealLsu::comb_stlf() {
 }
 
 void RealLsu::comb_lsu2dcache_ldq() {
+  if (pipe) return comb_lsu2dcache_ldq_p();
   auto &ports = wires->out.lsu2dcache.req_ports.load_ports;
   for (int i = 0; i < LSU_LDU_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
@@ -480,6 +512,7 @@ void RealLsu::comb_lsu2dcache_ldq() {
 }
 
 void RealLsu::comb_dcache2lsu_ldq() {
+  if (pipe) return comb_dcache2lsu_ldq_p();
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
     const auto &resp = wires->in.dcache2lsu.resp_ports.load_resps[i];
     if (!resp.valid) continue;
@@ -521,6 +554,7 @@ void RealLsu::comb_dcache2lsu_ldq() {
 }
 
 void RealLsu::comb_dcache2lsu_stq() {
+  if (pipe) return comb_dcache2lsu_stq_p();
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     const auto &resp = wires->in.dcache2lsu.resp_ports.store_resps[i];
     if (!resp.valid) continue;
@@ -543,6 +577,7 @@ void RealLsu::comb_dcache2lsu_stq() {
 }
 
 void RealLsu::comb_lsu2dcache_stq() {
+  if (pipe) return comb_lsu2dcache_stq_p();
   auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
@@ -589,6 +624,7 @@ void RealLsu::comb_lsu2dcache_stq() {
 }
 
 void RealLsu::comb_lsu2exe() {
+  if (pipe) return comb_lsu2exe_p();
   wires->lsu2exe = {};
   uint32_t issue_st = 0, issue_ld = 0;
 
@@ -672,6 +708,7 @@ void RealLsu::comb_lsu2exe() {
 }
 
 void RealLsu::comb_stq_commit() {
+  if (pipe) return comb_stq_commit_p();
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     if (!wires->rob_commit.commit_entry[i].valid) continue;
     const auto &u = wires->rob_commit.commit_entry[i].uop;
@@ -694,6 +731,7 @@ void RealLsu::comb_stq_commit() {
 }
 
 void RealLsu::comb_check() {  // retire finished stores from the STQ head
+  if (pipe) return comb_check_p();
   const uint32_t n = min<uint32_t>(min<uint32_t>(nxt.stq_commit_count, nxt.stq_count), LSU_STORE_WINDOW_WIDTH);
   for (uint32_t i = 0; i < n && nxt.stq[nxt.stq_head].store_state == StoreState::Done; i++) {
     nxt.stq_count--;
@@ -703,6 +741,7 @@ void RealLsu::comb_check() {  // retire finished stores from the STQ head
 }
 
 void RealLsu::comb_flush() {
+  if (pipe) return comb_flush_p();
   if (wires->rob_bcast.flush) {
     for (LdqEntry &l : nxt.ldq) l.load_state = LoadState::Empty;
     const uint32_t keep = min<uint32_t>(nxt.stq_commit_count, nxt.stq_count);
@@ -770,6 +809,25 @@ void RealLsu::comb_flush() {
 }
 
 StqEntry RealLsu::get_stq_entry(int idx, bool flag) {
+  if (pipe) {  // commit-time view of a store for the peripheral model (state of the registered STQ)
+    if (idx < 0 || idx >= STQ_SIZE) return {};
+    const uint32_t rank = (idx + STQ_SIZE - pcur.stq_head) % STQ_SIZE;
+    if (rank >= pcur.stq_count) return {};
+    const bool eflag = pcur.stq_head_flag ^ ((pcur.stq_head + rank) >= STQ_SIZE);
+    if (eflag != flag) return {};
+    const lp::PStq &p = pcur.stq[idx];
+    StqEntry e;
+    e.data_valid = p.data_v;
+    e.data = p.data;
+    e.func3 = p.func3;
+    e.paddr_valid = p.pa_v;
+    e.paddr = p.paddr;
+    e.suppress_write = p.suppress;
+    e.rob_idx = p.rob_idx;
+    e.rob_flag = p.rob_flag;
+    e.stq_flag = eflag;
+    return e;
+  }
   if (idx < 0 || idx >= STQ_SIZE) return {};
   const StqEntry &e = cur.stq[idx];
   if (e.stq_flag != flag || (idx + STQ_SIZE - cur.stq_head) % STQ_SIZE >= cur.stq_count) {
