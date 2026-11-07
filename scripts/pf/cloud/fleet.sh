@@ -36,6 +36,29 @@ case $cmd in
     echo "[$first] uploading compressed checkpoints ($(du -sh "$OUT/zst" | cut -f1)); the others get them over the private network"
     rsync -a --partial -e "$RSYNC_SSH" "$OUT/zst/" "root@$first:/root/spec/zst/" && echo "[$first] checkpoints uploaded" || { echo "upload FAILED"; exit 1; }
     "$0" fanout ;;
+  ckptpush) # ckptpush <bench> <file.gz>: (re)upload one SPEC checkpoint to every host, resumable (a truncated copy is completed)
+    b=${1:?benchmark dir}; f=${2:?file name}
+    for h in $HOSTS; do
+      rsync -a --partial --inplace -e "$RSYNC_SSH" "$SPEC/ckpt/$b/$f" "root@$h:/root/spec/ckpt/$b/$f" \
+        && ssh_ "$h" "gzip -t /root/spec/ckpt/$b/$f && echo '[$h] $f ok'" || echo "[$h] $f FAILED"
+    done ;;
+  linuxpush) # the 13 Linux segment checkpoints (s01..s13, ~0.2 GB) to every host: /root/rtlroot/linux/ckpt
+    L=${LINUX_CKPT:-$HOME/personal/AI-Huma-data/linux/ck_s01_13}
+    for h in $HOSTS; do
+      # one rsync per file, all in parallel (a single connection was limited to ~40 KB/s), resumable (--partial)
+      ssh_ "$h" 'mkdir -p /root/rtlroot/linux/ckpt' && ls "$L"/*.gz | xargs -P 4 -I{} rsync -aL --partial -e "$RSYNC_SSH" {} "root@$h:/root/rtlroot/linux/ckpt/" \
+        && echo "[$h] linux checkpoints done" || echo "[$h] linux checkpoints FAILED"
+    done ;;
+  rtlpush) # tracked files of ../rtl and ../function-model (git archive HEAD) to every host: /root/AI-Huma/rtl_new, function-model_new
+    A=$(cd "$HERE/../../../.." && pwd); T=$(mktemp -d)
+    git -C "$A/rtl" archive --format=tar.gz HEAD -o "$T/rtl.tgz"; git -C "$A/function-model" archive --format=tar.gz HEAD -o "$T/fm.tgz"
+    for h in $HOSTS; do
+      rsync -a -e "$RSYNC_SSH" "$T/rtl.tgz" "$T/fm.tgz" "root@$h:/root/" \
+        && ssh_ "$h" 'cd /root/AI-Huma && rm -rf rtl_new function-model_new && mkdir rtl_new function-model_new && tar xzf /root/rtl.tgz -C rtl_new && tar xzf /root/fm.tgz -C function-model_new && ls rtl_new | wc -l && ls function-model_new | wc -l' \
+        && ssh_ "$h" 'mkdir -p /root/rtlroot/rtl/build/lock_core_top' \
+        && rsync -a -e "$RSYNC_SSH" "$A/rtl/build/lock_core_top/core_top_fields.h" "root@$h:/root/rtlroot/rtl/build/lock_core_top/" \
+        && echo "[$h] rtl sources done" || echo "[$h] rtl sources FAILED"
+    done ;;
   pushall)
     # every checkpoint of $SPEC/ckpt as it is (gzip, ~62 GB for the 580 SPEC points) to every host, one benchmark at a time in the
     # order of scripts/pf/bench_order.txt (longest simulation first, so the slow programs can start while the rest uploads);
