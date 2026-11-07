@@ -517,3 +517,48 @@ Left on the experiment branch `exp/lsu-pipe` only: `LSU_MMU_DBG` / `LSU_MMU_DBG2
 Speculative wake-up (L2 bit 8 = d, with 128 = Y and 4 = oracle) is in the code and OFF (`LSU_PIPE_L2` 115 has none of them); it is entangled with the wake channels (`WAKE_CH_ALL`, `lsu_awake.cancel`) so it stays, default off.
 New defaults: gate 63/63 difftest Success, new `results/baseline/baseline.csv`; `LSU_PIPE=0` reproduces the old baselines (`legacy_lsu_baseline*.csv`). Big programs: see PROJECT.md gate item 4.
 Model-only: the LDQ/STQ watchdog (63 cycles stuck, off with `LSU_PIPE_NOWD=1`) is not in the RTL; it never fired in the gate programs (memory-stress differs by 4 cycles with and without it).
+
+### 10.1 SPEC, 30 points (COV 0.25 of 8 programs, exact warm-up, prefetcher on, default watchdog; 2026-11-07)
+
+Legacy LSU (`LSU_PIPE=0`, tag `tim_lp_legacy`) vs the new default (`LSU_PIPE=1 CUT=63 L2=115`, tag `tim_lp_new`); same simulator binary (`build_lm2`), checkpoints, `scripts/spec/replay_one.sh`, results in `~/personal/AI-Huma-data/spec-rv32imab/tm/tim_lp_*`. IPC change = (ins/cycles new) / (ins/cycles legacy) - 1. All 60 runs end with difftest Success, 0 mismatches, no crash or deadlock.
+
+| benchmark | point | cycles legacy | cycles new | IPC change |
+|---|---|---|---|---|
+| 400.perlbench | sp3_target157064 | 4539718 | 5194211 | -12.60% |
+| 400.perlbench | sp5_target244698 | 3183317 | 3583152 | -11.16% |
+| 403.gcc | sp10_target688 | 3063677 | 3123430 | -1.91% |
+| 403.gcc | sp16_target55459 | 3056633 | 3095347 | -1.25% |
+| 403.gcc | sp42_target76255 | 6836930 | 8040623 | -14.97% |
+| 429.mcf | sp16_target5282 | 28375784 | 27732030 | +2.32% |
+| 429.mcf | sp2_target1739 | 11957844 | 11465784 | +4.29% |
+| 429.mcf | sp32_target19545 | 26020048 | 25482844 | +2.11% |
+| 429.mcf | sp51_target22531 | 8044742 | 8142136 | -1.20% |
+| 429.mcf | sp60_target26087 | 28755916 | 27086611 | +6.16% |
+| 429.mcf | sp61_target1970 | 10503394 | 10089667 | +4.10% |
+| 429.mcf | sp70_target9981 | 5826180 | 5949409 | -2.07% |
+| 429.mcf | sp71_target13273 | 25193187 | 24710093 | +1.96% |
+| 445.gobmk | sp12_target148300 | 5897175 | 6136926 | -3.91% |
+| 445.gobmk | sp23_target156257 | 4448938 | 4801291 | -7.34% |
+| 445.gobmk | sp24_target141343 | 6137983 | 6356125 | -3.43% |
+| 445.gobmk | sp3_target20898 | 6458558 | 6668217 | -3.14% |
+| 456.hmmer | sp11_target56401 | 1938232 | 2124336 | -8.76% |
+| 456.hmmer | sp26_target5428 | 1829368 | 2017864 | -9.34% |
+| 456.hmmer | sp2_target25058 | 1881386 | 2053888 | -8.40% |
+| 456.hmmer | sp5_target75553 | 1769166 | 1925294 | -8.11% |
+| 458.sjeng | sp14_target208610 | 5601522 | 5833461 | -3.98% |
+| 458.sjeng | sp17_target162647 | 5714502 | 5939891 | -3.79% |
+| 458.sjeng | sp18_target41872 | 5567531 | 5887791 | -5.44% |
+| 458.sjeng | sp23_target208006 | 5561249 | 5818308 | -4.42% |
+| 464.h264ref | sp17_target116357 | 4232476 | 5040538 | -16.03% |
+| 464.h264ref | sp9_target161085 | 9503091 | 11492588 | -17.31% |
+| 473.astar | sp13_target7396 | 5823074 | 6314760 | -7.79% |
+| 473.astar | sp17_target36471 | 11266074 | 11399819 | -1.17% |
+| 473.astar | sp21_target9925 | 6271530 | 6749367 | -7.08% |
+
+Per benchmark (geomean of the points): perlbench -11.88% (2 points), gcc -6.26% (3), mcf +2.18% (8), gobmk -4.47% (4), hmmer -8.65% (4), sjeng -4.41% (4), h264ref -16.67% (2), astar -5.39% (3).
+**All 30 points: geomean -4.98%, arithmetic mean -4.79%, min -17.31% (h264ref sp9), max +6.16% (mcf sp60).** Only mcf (memory-bound) gains; the integer programs lose 4-17% IPC (the staged LSU adds load-to-use latency; the speculative wake-up that would win part of it back is not in this stage).
+
+
+### 10.2 Checks on the main-ready branch (2026-11-07)
+
+Linux from reset to `rv32 login:` (prefetcher on, default config, `SIM_MAX_CYCLES=400000000`): reached before 110 M cycles (no deadlock, watchdog on; log `~/personal/AI-Huma-data/linux/lsupipe_main/model_boot.log`). Small-LLC check (`llc_small_check.sh`, 64 KiB LLC) with `LSU_PIPE=0`: 5/5 equal to main; with the new default the 5 programs end with Success and 0 mismatches (memory-stress-small 621,167 vs 632,880 legacy).
