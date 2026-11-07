@@ -69,7 +69,8 @@ struct IttCfg {
   IttCfg() {
     const std::vector<int> l = env_list("BPA_ITTH", {});
     const char *v = std::getenv("BPA_ITTH");
-    if (v && *v) { n = 0; for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; } }
+    if (!v) { n = 1; h[0] = 1; }   // default (RTL-aligned configuration "S+R"): one table on TAGE history 1 (13 bits); BPA_ITTH="" turns it off
+    else if (*v) { n = 0; for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; } }
     (void)l;
     size = env_int("BPA_ITTN", 256); minconf = env_int("BPA_ITTCONF", 0);
     if (n && (size < 2 || size > ITT_NMAX || (size & (size - 1)))) { std::printf("[BPA] bad BPA_ITTN\n"); std::exit(1); }
@@ -84,8 +85,8 @@ inline uint32_t fh_len(int k, int i) { return tcfg().fl[k][i]; }
 inline int cfg_bubble() { static const int v = env_int("BPU_BUBBLE", 0); return v; }
 // BPO_HIST=1 (docs/BPU_OPT.md): the global history holds one symbol of BPO_HSYM bits (folded from pc and target) per TAKEN branch;
 // not-taken conditional branches push nothing. Default 0 = one direction bit per conditional branch.
-inline int cfg_hist() { static const int v = env_int("BPO_HIST", 0); return v; }
-inline int cfg_hsym() { static const int v = env_int("BPO_HSYM", 2); return v; }
+inline int cfg_hist() { static const int v = env_int("BPO_HIST", 1); return v; }
+inline int cfg_hsym() { static const int v = env_int("BPO_HSYM", 3); return v; }
 inline uint8_t hist_sym(pc_t bpc, pc_t tgt) {
   static const int hs = cfg_hsym();
   const uint32_t v = (bpc >> 2) ^ (tgt >> 2) ^ ((bpc >> 2) >> 7);
@@ -102,11 +103,11 @@ inline uint64_t &pd_flush_count() { static uint64_t n = 0; return n; }   // stat
 // block, predicted types of its slots) keyed by a block sequence number that travels in the PredMeta to the back end FTQ; the back end returns it with
 // the slot and type of the mispredicted branch, and the BPU rebuilds the history / RAS as: checkpoint + earlier (not taken) slots + the branch's actual outcome.
 // Default 0: spec history / RAS are copied from the committed state (which lacks every older in-flight branch, call and return).
-inline int cfg_repair() { static const int v = env_int("BPA_REPAIR", 0); return v; }
+inline int cfg_repair() { static const int v = env_int("BPA_REPAIR", 3); return v; }
 inline uint64_t *repair_stats() { static uint64_t n[2] = {0, 0}; return n; }   // [0] repaired, [1] record not found / mismatch
-inline int cfg_notc() { static const int v = env_int("BPA_NOTC", 0); return v; }   // 1: the BHT-indexed target cache / pre-TC are not used (indirect targets: ITT, else BTB)
-// BPU_ICALL=1: a jalr with rd = ra that is not a return is a call (BR_ICALL: indirect target + RAS push). Default 0 = such a jalr is BR_IDIRECT as before.
-inline int cfg_icall() { static const int v = env_int("BPU_ICALL", 0); return v; }
+inline int cfg_notc() { static const int v = env_int("BPA_NOTC", 1); return v; }   // 1: the BHT-indexed target cache / pre-TC are not used (indirect targets: ITT, else BTB)
+// BPU_ICALL=1: a jalr with rd = ra that is not a return is a call (BR_ICALL: indirect target + RAS push). 0 = such a jalr is BR_IDIRECT (old design).
+inline int cfg_icall() { static const int v = env_int("BPU_ICALL", 1); return v; }
 inline bool br_ind(int t) { return t == BR_IDIRECT || t == BR_ICALL; }
 inline bool br_call(int t) { return t == BR_CALL || t == BR_ICALL; }
 inline int cfg_ubtb() { static const int v = env_int("BPU_UBTB", 0); return v; }

@@ -18,7 +18,7 @@
 
 namespace bpuf {
 
-inline int cfg_pipe() { static const int v = env_int("BPU_PIPE", 0); return v; }
+inline int cfg_pipe() { static const int v = env_int("BPU_PIPE", 3); return v; }
 inline int cfg_s0_entries() { static const int v = env_int("BPU_S0_ENTRIES", 128); return v; }
 inline int cfg_s0_ways() { static const int v = env_int("BPU_S0_WAYS", 4); return v; }
 inline int cfg_main_lat() { static const int v = env_int("BPU_MAIN_LAT", 2); return v; }
@@ -27,16 +27,16 @@ inline int cfg_upd_ports() { static const int v = env_int("BPU_UPD_PORTS", 2); r
 inline int cfg_s0_train() { static const int v = env_int("BPU_S0_TRAIN", 1); return v; }  // 0: uBTB never trained (debug)
 
 // docs/BPU_OPT.md switches (all default off = bpu-pipe behaviour)
-inline int cfg_bankblk() { static const int v = env_int("BPO_BANKBLK", 0); return v; }     // N block banks (0: per-slot bank port model)
+inline int cfg_bankblk() { static const int v = env_int("BPO_BANKBLK", 4); return v; }     // N block banks (0: per-slot bank port model)
 inline int cfg_upd_merge() { static const int v = env_int("BPO_UPD_MERGE", 1); return v; } // with BANKBLK: updates to one row share a write
 inline int cfg_ub_main() { static const int v = env_int("BPO_UB_MAIN", 0); return v; }     // 1: also train uBTB/L1 from S_D result, 2: S_D only
-inline int cfg_l1_entries() { static const int v = env_int("BPO_L1_ENTRIES", 0); return v; }
+inline int cfg_l1_entries() { static const int v = env_int("BPO_L1_ENTRIES", 512); return v; }
 inline int cfg_l1_ways() { static const int v = env_int("BPO_L1_WAYS", 2); return v; }
 inline int cfg_ub_tag() { static const int v = env_int("BPO_UB_TAG", 10); return v; }
 inline int cfg_l1_hbits() { static const int v = env_int("BPO_L1_HBITS", 0); return v; }
 inline int cfg_ub_hbits() { static const int v = env_int("BPO_UB_HBITS", 0); return v; }   // uBTB / L1 index and tag use this many bits of recent history
 inline int cfg_loop() { static const int v = env_int("BPO_LOOP", 0); return v; }       // S0 single-block loop exit prediction (needs BPO_HIST=1)
-inline int cfg_pdckpt() { static const int v = env_int("BPO_PDCKPT", 0); return v; }   // checkpoint per PTAB entry: exact history / RAS restore at a predecode flush
+inline int cfg_pdckpt() { static const int v = env_int("BPO_PDCKPT", 1); return v; }   // checkpoint per PTAB entry: exact history / RAS restore at a predecode flush
 inline int cfg_tq() { static const int v = env_int("BPO_TQ", 4); return v; }
 
 constexpr int MAXW = 4;       // uBTB ways
