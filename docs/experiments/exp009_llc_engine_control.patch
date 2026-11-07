@@ -1,0 +1,135 @@
+diff --git a/MemSubSystem/RealDcache.cpp b/MemSubSystem/RealDcache.cpp
+index b3047cc..54661cd 100644
+--- a/MemSubSystem/RealDcache.cpp
++++ b/MemSubSystem/RealDcache.cpp
+@@ -632,6 +632,8 @@ void RealDcache::stage2_comb() {
+         }
+     }
+ 
++    static const int pf_res_llc_v = pf::param("RES_LLC", 0);   // experiment: MSHRs kept free for demand when an LLC-only prefetch probes
++    auto pf_res_llc = [&]() { return pf_res_llc_v; };
+     // ── Prefetch probe (lowest priority: after every demand request has taken its MSHR) ──────────
+     if (pf_slot >= 0) {
+         const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[pf_slot];
+@@ -648,7 +650,7 @@ void RealDcache::stage2_comb() {
+         if (in.wb2dcache->bypass_resp[pf_slot].valid) g_pf_stats.probe_wb++;
+         else if (hit_way >= 0 || fill_same) g_pf_stats.probe_hit++;
+         else if (in.mshr2dcache->find_resp[pf_slot].valid) g_pf_stats.probe_inflight++;
+-        else if (mshr_free_entries <= PF_MSHR_RESERVE) g_pf_stats.probe_mshr_full++;
++        else if (mshr_free_entries <= (pf_llc_only ? pf_res_llc() : PF_MSHR_RESERVE)) g_pf_stats.probe_mshr_full++;
+         else {
+             out.dcache2mshr->mshr_req[pf_slot].valid = true;
+             out.dcache2mshr->mshr_req[pf_slot].addr = slot.addr;
+diff --git a/MemSubSystem/include/DataPrefetcher.h b/MemSubSystem/include/DataPrefetcher.h
+index c03354d..e81a26a 100644
+--- a/MemSubSystem/include/DataPrefetcher.h
++++ b/MemSubSystem/include/DataPrefetcher.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <bitset>
+ // L1D data prefetcher, frozen design "h1" (EXP-009). This is the specification for the RTL (rtl/rtl/memsys/dcache/dcache_pf.sv).
+ //
+ // What it is: a single-entry global stride detector (one stream, no PC) trained on L1D load misses and on the first use of
+@@ -27,7 +28,7 @@ constexpr int PF_LINE_BITS = 32 - 6;  // physical line number (64 B lines, 32-bi
+ struct PfStats {  // model-only counters, not hardware
+   uint64_t train_events = 0, train_drop = 0, cand = 0, q_dup = 0, q_full = 0, q_pushed = 0, xpage_drop = 0;
+   uint64_t probe = 0, probe_hit = 0, probe_inflight = 0, probe_mshr_full = 0, probe_wb = 0, probe_conflict = 0;
+-  uint64_t issued = 0, filled = 0, useful = 0, late = 0, llc_only_done = 0, demand_miss = 0, demand_hit = 0;
++  uint64_t issued = 0, filled = 0, useful = 0, late = 0, llc_only_done = 0, llc_throttled = 0, demand_miss = 0, demand_hit = 0;
+ };
+ inline PfStats g_pf_stats;
+ 
+@@ -60,6 +61,12 @@ class DataPrefetcher {
+ 
+   DataPrefetcher()
+       : reqq("pf_reqq", 1), stride("pf_stride", PF_TRAIN_PORTS, PF_TRAIN_PORTS) {
++    duel_slice_ = pf::param("DUEL_SLICE", 0);       // 0: no dueling; else slice length in cycles
++    duel_expl_ = pf::param("DUEL_EXPLOIT", 8);
++    duel_bias_ = pf::param("DUEL_BIAS", 0);          // ON wins unless it is slower than OFF by more than bias/1024
++    llc_win_ = pf::param("LLC_WIN", 32);
++    llc_thr_ = pf::param("LLC_THR", 0);   // 0: no throttle (h1 as frozen)
++    llc_next_ = pf::param("LLC_NEXT", 1) != 0;   // experiment: 0 disables the LLC-only next-line engine
+     enabled_ = pf::param("ENABLE", 1) != 0;   // default on; PF_ENABLE=0 turns the prefetcher off
+     if (enabled_ && std::getenv("PF_STATS")) {
+       pf::StateReport r; report(r);
+@@ -74,14 +81,14 @@ class DataPrefetcher {
+       std::fprintf(stderr,
+                    "[PF-STATS] demand_miss=%llu demand_hit=%llu train=%llu train_drop=%llu cand=%llu q_dup=%llu q_full=%llu "
+                    "pushed=%llu probe=%llu probe_hit=%llu probe_inflight=%llu probe_wb=%llu probe_mshr_full=%llu "
+-                   "probe_conflict=%llu issued=%llu filled=%llu useful=%llu late=%llu xpage_drop=%llu llc_only_done=%llu\n",
++                   "probe_conflict=%llu issued=%llu filled=%llu useful=%llu late=%llu xpage_drop=%llu llc_only_done=%llu llc_throttled=%llu\n",
+                    (unsigned long long)s.demand_miss, (unsigned long long)s.demand_hit, (unsigned long long)s.train_events,
+                    (unsigned long long)s.train_drop, (unsigned long long)s.cand, (unsigned long long)s.q_dup,
+                    (unsigned long long)s.q_full, (unsigned long long)s.q_pushed, (unsigned long long)s.probe,
+                    (unsigned long long)s.probe_hit, (unsigned long long)s.probe_inflight, (unsigned long long)s.probe_wb,
+                    (unsigned long long)s.probe_mshr_full, (unsigned long long)s.probe_conflict, (unsigned long long)s.issued,
+                    (unsigned long long)s.filled, (unsigned long long)s.useful, (unsigned long long)s.late,
+-                   (unsigned long long)s.xpage_drop, (unsigned long long)s.llc_only_done);
++                   (unsigned long long)s.xpage_drop, (unsigned long long)s.llc_only_done, (unsigned long long)s.llc_throttled);
+     }
+   }
+ 
+@@ -99,6 +106,7 @@ class DataPrefetcher {
+     head_taken = false;
+     if (!enabled_) { clear_in(); return; }
+ 
++    duel_step();
+     // 1. the stride generator pushes one candidate per cycle (page-limited, de-duplicated against the FIFO)
+     bool port_used = false;
+     if (gen.valid) {
+@@ -136,6 +144,7 @@ class DataPrefetcher {
+       int taken = 0;
+       for (int i = 0; i < LSU_LDU_COUNT; i++) {
+         const PfAccess &a = acc[i];
++        if (a.valid) duel_prog_++;
+         if (!a.valid || !(a.miss || a.pf_hit)) continue;
+         g_pf_stats.train_events++;
+         if (taken >= PF_TRAIN_PORTS) { g_pf_stats.train_drop++; continue; }
+@@ -169,8 +178,18 @@ class DataPrefetcher {
+ 
+   void train(const PfAccess &a) {
+     const uint32_t line = (a.paddr >> 6) & pf::wmask(PF_LINE_BITS);
+-    if (a.miss) {  // LLC engine: the next PF_LLC_LINES lines of every load miss
+-      gen2.valid = true; gen2.base = line; gen2.next = (line + 1) & pf::wmask(PF_LINE_BITS); gen2.left = PF_LLC_LINES;
++    if (a.miss) {  // LLC engine: the next PF_LLC_LINES lines of every load miss, throttled by a shadow accuracy filter
++      // shadow filter: a 256-bit hash filter (cleared every window) of the lines the engine targeted (whether issued or not); a later demand miss on
++      // such a line counts as a hit.  Every WIN triggers the engine is on for the next window iff hits >= THR.
++      const uint32_t h = (line ^ (line >> 8)) & 255;
++      if (llc_filt_[h]) { llc_hits_++; llc_filt_[h] = false; }
++      if (llc_next_) {
++        const uint32_t nl = (line + 1) & pf::wmask(PF_LINE_BITS);
++        llc_filt_[(nl ^ (nl >> 8)) & 255] = true;
++        if (++llc_trig_ >= llc_win_) { llc_on_ = llc_hits_ >= llc_thr_; llc_trig_ = 0; llc_hits_ = 0; llc_filt_.reset(); }
++        if (llc_on_ && duel_on_) { gen2.valid = true; gen2.base = line; gen2.next = nl; gen2.left = PF_LLC_LINES; }
++        else g_pf_stats.llc_throttled++;
++      }
+     }
+     // single global stride entry: allocate on the first event, then compare the line distance with the stored stride
+     PfStrideE e = stride.rd(0);
+@@ -199,6 +218,26 @@ class DataPrefetcher {
+ 
+   PfAccess q_acc[PF_TRAIN_PORTS];   // registered training events (selected in the previous cycle)
+   struct Gen { bool valid = false; uint32_t next = 0, base = 0, pushed = 0; int32_t stride = 0; int left = 0; } gen;
++  // time-sliced dueling of the LLC engine: sample one slice ON and one OFF, keep the faster one for duel_expl_ slices
++  int duel_slice_ = 0, duel_expl_ = 8, duel_bias_ = 0;
++  bool duel_on_ = true, duel_winner_on_ = true;
++  int duel_phase_ = 0;                 // 0: sampling ON, 1: sampling OFF, 2: exploiting the winner
++  uint32_t duel_cyc_ = 0, duel_slices_ = 0;
++  uint64_t duel_prog_ = 0, duel_prog_on_ = 0;
++  void duel_step() {
++    if (duel_slice_ == 0) return;
++    if (++duel_cyc_ < uint32_t(duel_slice_)) return;
++    duel_cyc_ = 0;
++    if (duel_phase_ == 0) { duel_prog_on_ = duel_prog_; duel_phase_ = 1; duel_on_ = false; }
++    else if (duel_phase_ == 1) {
++      duel_winner_on_ = duel_prog_on_ * 1024 + duel_prog_on_ * 0 >= duel_prog_ * uint64_t(1024 - duel_bias_);
++      duel_phase_ = 2; duel_slices_ = 0; duel_on_ = duel_winner_on_;
++    } else if (++duel_slices_ >= uint32_t(duel_expl_)) { duel_phase_ = 0; duel_on_ = true; }
++    duel_prog_ = 0;
++  }
++  bool llc_next_ = true, llc_on_ = true;
++  std::bitset<256> llc_filt_;
++  uint32_t llc_hits_ = 0, llc_trig_ = 0, llc_win_ = 32, llc_thr_ = 0;
+   struct Gen2 { bool valid = false; uint32_t next = 0, base = 0; int left = 0; } gen2;
+   pf::Fifo<PfReqE, PF_QUEUE> reqq;
+   pf::Table<PfStrideE, 1> stride;

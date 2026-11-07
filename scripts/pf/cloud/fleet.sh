@@ -3,6 +3,7 @@
 #   fleet.sh pack                 stage sources + checkpoint list (calls pack.sh)
 #   fleet.sh push                 sources to every host; zstd checkpoints to the first host, then fanout over the private network
 #   fleet.sh fanout               (re)copy the checkpoints from the first host to the others
+#   fleet.sh pushall              every checkpoint of $SPEC/ckpt as is (gzip, ~62 GB) to every host, resumable
 #   fleet.sh setup                install deps, build, validate cycles on every host (parallel; prints PASS/FAIL per program)
 #   fleet.sh run <set> <cfg>...   start configs spread round-robin over the hosts, in the background on the hosts
 #                                 <set> = train | hold | all ; <cfg> = name:PF_ALGO=2,PF_THROTTLE=1,...
@@ -35,6 +36,16 @@ case $cmd in
     echo "[$first] uploading compressed checkpoints ($(du -sh "$OUT/zst" | cut -f1)); the others get them over the private network"
     rsync -a --partial -e "$RSYNC_SSH" "$OUT/zst/" "root@$first:/root/spec/zst/" && echo "[$first] checkpoints uploaded" || { echo "upload FAILED"; exit 1; }
     "$0" fanout ;;
+  pushall)
+    # every checkpoint of $SPEC/ckpt as it is (gzip, ~62 GB for the 580 SPEC points) to every host, one benchmark at a time in the
+    # order of scripts/pf/bench_order.txt (longest simulation first, so the slow programs can start while the rest uploads);
+    # files the host already has are kept, an interrupted transfer resumes
+    for h in $HOSTS; do
+      ( ssh_ "$h" 'mkdir -p /root/spec/ckpt' && for b in $(cat "$HERE/../bench_order.txt"); do
+          rsync -a --partial --ignore-existing -e "$RSYNC_SSH" "$SPEC/ckpt/$b/" "root@$h:/root/spec/ckpt/$b/" || exit 1
+          echo "[$h] $b uploaded $(date +%H:%M:%S)"; done \
+        && echo "[$h] all checkpoints uploaded" || echo "[$h] upload FAILED (rerun: it resumes)" ) &
+    done; wait ;;
   fanout)
     # first host -> the others over the VPC; the key never leaves this Mac: a throw-away ssh-agent is forwarded for this command only
     first=$(echo $HOSTS | awk '{print $1}')

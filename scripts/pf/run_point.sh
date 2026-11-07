@@ -11,7 +11,10 @@ else case $N in *nowarmup*) ARGS="-w 0 -c 10000000";; *) ARGS="-c 10000000";; es
 L=$OUT/$B/$N.log
 # FASTW=<n>: fast-warmup tier (EXP-009): the function model fast-forwards (interval - n) instructions, the DUT is restored from its
 # state (no front-door restore) and warms up for n instructions in detail; ~1.8x less simulation per point, an approximation.
-if [ -n "${FASTW:-}" ]; then STUBARG=""; ARGS="-w $FASTW -c ${MEAS:-10000000}"; else STUBARG="--restore-stub $STUBS/$N.stub"; fi
+STUBARG="--restore-stub $STUBS/$N.stub"
+# FASTWARM=<n>: EXP-011 --fast-warmup: functional replay of (interval - n) instructions into L1I/L1D/LLC/TLB/BPU, n instructions of detailed warm-up
+if [ -n "${FASTWARM:-}" ]; then case $N in *nowarmup*) ;; *) ARGS="--fast-warmup -w $FASTWARM -c ${MEAS:-10000000}";; esac; fi
+if [ -n "${FASTW:-}" ]; then STUBARG=""; ARGS="-w $FASTW -c ${MEAS:-10000000}"; fi
 PF_STATS=1 DS3_STATS=1 DS3_OUT=$OUT/$B/$N.ds3 "$SIM" --mode ckpt $STUBARG $ARGS "$C" > "$L" 2>&1
 rc=$?
 clean() { sed 's/\x1b\[[0-9;]*m//g' "$L"; }
