@@ -61,10 +61,12 @@ static STLFResult check_stlf(uint32_t load_addr, uint32_t load_func3, uint32_t s
   return STLFResult::Retry;  // partial overlap: conservatively a conflict
 }
 
-static uint64_t load_miss_mask(const LsuState &s) {
-  uint64_t m = 0;
+// ROB entries of the loads that missed L1D (top-down / PMU attribution only; the mask is ROB_NUM bits wide, a 64-bit
+// mask would lose the entries above 63 and shift out of range)
+static std::bitset<ROB_NUM> load_miss_mask(const LsuState &s) {
+  std::bitset<ROB_NUM> m;
   for (const LdqEntry &l : s.ldq)
-    if (l.cache_miss && l.load_state != LoadState::Empty) m |= 1ULL << l.rob_idx;
+    if (l.cache_miss && l.load_state != LoadState::Empty) m.set(l.rob_idx);
   return m;
 }
 
