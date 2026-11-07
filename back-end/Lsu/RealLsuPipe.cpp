@@ -173,6 +173,8 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 //   32 = H: the store drain only sees stores that were already committed at the cycle start
 //   16 = G: a store woken by an MSHR-full fill can be drained from the next cycle on (the wake is not seen by this cycle's drain)
 //   8 = F: write-back of waiting loads (WBP) picks only from WBP bits registered at the cycle start
+//   64 = FM: (with F) the load whose MMIO response arrives in this cycle may still be picked in this cycle (MMIO loads run one at a time and
+//       the next one waits for this one to finish, so the extra cycle of F lands on every MMIO load: h264ref sp9 has 2.8M of them, -16%)
 static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CUT);
 // L2 cuts (docs/LSU_PIPE.md section 7), bit mask in LSU_PIPE_L2, default CFG_LSU_PIPE_L2:
 //   1 = a: L3 register: the direct completion decided at L2 is written back one cycle later (LDQ state L_WB3, load-to-use +1)
@@ -264,6 +266,7 @@ void RealLsu::comb_mmio_in_p() {
     if (e.st == L_MMR) {
       e.result = wires->in.peripheral_resp.mmio_rdata;
       e.st = L_WBP;
+      pw.mmio_ld = idx;
     }
   } else if (pnxt.stq[idx].mmw) {
     pnxt.stq[idx].mmw = 0;
@@ -565,7 +568,7 @@ void RealLsu::comb_lsu2exe_p() {
   // 3. loads waiting for a port (forwarded after a data wait, MMIO data): lowest LDQ index first
   for (int i = 0; i < LDQ_SIZE; i++) {
     if (pnxt.ldq[i].st != L_WBP) continue;
-    if ((lp_cut & 8) && pcur.ldq[i].st != L_WBP) continue;
+    if ((lp_cut & 8) && pcur.ldq[i].st != L_WBP && !((lp_cut & 64) && pw.mmio_ld == i)) continue;
     int p = -1;
     for (int q = 0; q < LD && p < 0; q++)
       if (!busy[q]) p = q;

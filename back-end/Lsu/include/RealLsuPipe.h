@@ -167,6 +167,7 @@ struct PCycle {
   uint64_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)
   bool fill = false;
   uint32_t fill_addr = 0;
+  int mmio_ld = -1;              // LDQ entry whose MMIO response arrived this cycle (LSU_PIPE_CUT bit 64: exempt from the F cut)
 };
 
 }  // namespace lp
