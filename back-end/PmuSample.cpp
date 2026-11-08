@@ -1,5 +1,7 @@
 // PMU (EXP-013): builds one cycle of the event bus from the signals the modules already drive. Everything here only
 // reads; it runs after comb_stage_fire_and_recover(), when the handshakes of the cycle are final.
+#include <cstdlib>
+#include <cstdio>
 #include "BackTop.h"
 #include "DataPrefetcher.h"
 #include "Pmu.h"
@@ -120,6 +122,16 @@ void BackTop::pmu_sample() {
   // recovery state for the next cycle: a redirect starts it, the first valid instruction in the dispatch stage ends it
   bool any_valid = false;
   for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->inst_valid[i]);
+  {
+    static int dur = 0; static uint64_t hist[3][64]; static bool reg = false;
+    static const bool diag = std::getenv("FE_DIAG") != nullptr;
+    if (diag) {
+      if (!reg) { reg = true; std::atexit([] { for (int k = 0; k < 3; k++) { std::printf("[FE_DIAG] recov-dur kind=%d:", k); for (int i = 0; i < 64; i++) if (hist[k][i]) std::printf(" %d:%llu", i, (unsigned long long)hist[k][i]); std::printf("\n"); } }); }
+      if (p.recovering) dur++;
+      if (rob_bcast.flush || dec_bcast.mispred) { if (p.recovering && dur) hist[2][dur > 63 ? 63 : dur]++; dur = 0; }
+      else if (any_valid && p.recovering) { hist[p.recov_by_flush ? 1 : 0][dur > 63 ? 63 : dur]++; dur = 0; }
+    }
+  }
   if (rob_bcast.flush || dec_bcast.mispred) {
     p.recovering = true;
     p.recov_by_flush = rob_bcast.flush;

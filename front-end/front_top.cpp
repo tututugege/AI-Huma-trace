@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 // ============================================================================
 // Latched front-end state (registers)
@@ -263,6 +264,8 @@ struct FrontComb {
   bool f2b_read_enable = false;
   bpuf::OutputPayload bpu_output{};
   bool bpu_can_run = false;
+  bool bpu_done = false;      // FE_RFAST bit1: run_bpu() already ran inside read_fifos()
+  bool ptab_written = false;  // FE_RFAST bit1: the PTAB write was merged into the head read (write-to-read bypass)
   bpuf::PdInfo pd_next{};
   predecode_checker_out checker_out{};
 
@@ -306,9 +309,17 @@ void FrontComb::read_fifos() {
     pipe_head_ok = !(g_pipe_dec.ovr && fa.size <= g_pipe_dec.squash_n) && fa.head_age >= min_age;
     fetch_addr_in.drop_tail_n = g_pipe_dec.ovr ? g_pipe_dec.squash_n : 0;
   }
+  // FE_RFAST bit1: the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
+  bool ptab_bypass = false;
+  if (g_use_pipe && (bpuf::cfg_rfast() & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
+    run_bpu();
+    bpu_done = true;
+    ptab_bypass = bpu_output.PTAB_write_enable;
+    if (ptab_bypass) { front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in); ptab_in.write_enable = true; ptab_written = true; }
+  }
   const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.fetch_addr_fifo_empty_latch_snapshot &&
                                       !global_reset && !global_refetch && pipe_head_ok;
-  fifo_read_enable = !rd.fifo_empty_latch_snapshot && !rd.ptab_empty_latch_snapshot &&
+  fifo_read_enable = !rd.fifo_empty_latch_snapshot && (!rd.ptab_empty_latch_snapshot || ptab_bypass) &&
                      !rd.front2back_fifo_full_latch_snapshot && !global_reset && !global_refetch;
   f2b_read_enable = in.FIFO_read_enable;
 
@@ -344,6 +355,7 @@ void FrontComb::read_fifos() {
 
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
 void FrontComb::run_bpu() {
+  if (bpu_done) return;
   const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || (!g_use_pipe && rd.ptab_full_latch_snapshot);
   bpu_can_run = ((!bpu_stall && (g_use_pipe || !bpu_instance.bubble())) || global_reset || global_refetch);
 
@@ -462,7 +474,7 @@ void FrontComb::write_instruction_fifo() {
 void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_address) {
   const bool ptab_can_write =
       bpu_output.PTAB_write_enable && (g_use_pipe || !rd.ptab_full_latch_snapshot) && !global_reset && !global_refetch;
-  if (ptab_can_write) {
+  if (ptab_can_write && !ptab_written) {
     front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in);
     PTAB_out unused_out{};
     PtabCombOut step{};
@@ -533,6 +545,11 @@ void FrontComb::write_front2back() {
 
 // Latches for the next cycle, the predecode-flush request, and the output toward the back end.
 void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
+  { static const bool tr = std::getenv("FE_TRACE") != nullptr; static int budget = 24;
+    if (tr && budget > 0 && front_ctx->perf.cycle > 40000 && (global_refetch || budget < 24)) { budget--;
+      std::printf("[FE_TRACE] cyc=%llu refetch=%d bpu_issue=%d(pc=%x) ic_req=%d ic_done=%d fifo_w=%d f2b_w=%d out_valid=%d icrdy=%d faE=%d faSz=%d\n",
+        (unsigned long long)front_ctx->perf.cycle, (int)global_refetch, (int)(bpu_output.icache_read_valid && bpu_can_run), bpu_output.fetch_address,
+        (int)fetch_addr_head.read_valid, (int)ic_out.icache_read_complete, (int)fifo_in.write_enable, (int)f2b_in.write_enable || use_f2b_bypass, (int)(f2b_head.front2back_FIFO_valid || use_f2b_bypass), (int)ic_out.icache_read_ready, (int)rd.fetch_addr_fifo_empty_latch_snapshot, (int)rd.fetch_addr_fifo_rd_snapshot.size); } }
   PendingFrontState &state = req.front_state;
   state.valid = true;
   if (predecode_flush) {

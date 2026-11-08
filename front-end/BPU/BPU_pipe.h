@@ -37,6 +37,8 @@ inline int cfg_l1_hbits() { static const int v = env_int("BPO_L1_HBITS", 0); ret
 inline int cfg_ub_hbits() { static const int v = env_int("BPO_UB_HBITS", 0); return v; }   // uBTB / L1 index and tag use this many bits of recent history
 inline int cfg_loop() { static const int v = env_int("BPO_LOOP", 0); return v; }       // S0 single-block loop exit prediction (needs BPO_HIST=1)
 inline int cfg_pdckpt() { static const int v = env_int("BPO_PDCKPT", 1); return v; }   // checkpoint per PTAB entry: exact history / RAS restore at a predecode flush
+// FE_RFAST (FRONTEND_NOTES.md): bit0 = S0 issues the first block of a redirect in the refetch cycle itself (instead of one cycle later)
+inline int cfg_rfast() { static const int v = env_int("FE_RFAST", 0); return v; }
 inline int cfg_tq() { static const int v = env_int("BPO_TQ", 4); return v; }
 
 constexpr int MAXW = 4;       // uBTB ways
@@ -850,6 +852,35 @@ class BpuPipe {
       n.pq_n = st_.pq_n - 1;
     }
 
+    // S0: look up the block starting at pc with the given speculative history / RAS, enter it into S1 and push the fetch address
+    auto s0_issue = [&](pc_t pc, const HistRing &sp, const RasC &sr, uint8_t lpc) {
+      Blk b;
+      b.valid = true;
+      b.base = pc;
+      b.bnd = block_bnd(b.base);
+      b.hh = spec_hh(sp);
+      b.g = s0_lookup(ub0_, b.base, b.hh, b.bnd, sr.cnt, sr.top(), lpc);
+      b.ck = take_ckpt(sp, sr);
+      b.ck.lp_cnt = lpc;
+      if (repair_ == 2) b.rf = sr;
+      main_index(b, sp);
+      if (mode_ == 1) {
+        MainRaw raw;
+        main_read(b, raw);
+        count_reads(b, t);
+        main_select(b, raw, b.shadow);
+        push_bits(b.shadow.nbits, b.shadow.bits, b.shadow.ras_op, b.shadow.ras_val, n.spec, n.sras);
+      } else {
+        push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
+      }
+      n.R[0] = b;
+      n.pc = b.g.next;
+      n.lp_cnt = lp_next(lpc, b.base, b.g.taken, b.g.next, b.g.type);
+      out.icache_read_valid = true;
+      out.fetch_address = b.base;
+      t.s_block = 1; t.s_hit = b.g.hit; t.s_hit_taken = b.g.taken;
+    };
+
     // PTAB write: the block leaving S_D with the final prediction
     if (d.valid) {
       if (pdck_ && n.pq_n < PQ) n.pq[n.pq_n++] = d.blk.ck;
@@ -908,33 +939,7 @@ class BpuPipe {
       for (int k = 0; k < D_; k++) inflight += st_.R[k].valid;
       const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
       t.s_stall_ptab = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) {
-        Blk b;
-        b.valid = true;
-        b.base = st_.pc;
-        b.bnd = block_bnd(b.base);
-        b.hh = spec_hh(st_.spec);
-        b.g = s0_lookup(ub0_, b.base, b.hh, b.bnd, st_.sras.cnt, st_.sras.top(), st_.lp_cnt);
-        b.ck = take_ckpt(st_.spec, st_.sras);
-        b.ck.lp_cnt = st_.lp_cnt;
-        if (repair_ == 2) b.rf = st_.sras;
-        main_index(b, st_.spec);
-        if (mode_ == 1) {
-          MainRaw raw;
-          main_read(b, raw);
-          count_reads(b, t);
-          main_select(b, raw, b.shadow);
-          push_bits(b.shadow.nbits, b.shadow.bits, b.shadow.ras_op, b.shadow.ras_val, n.spec, n.sras);
-        } else {
-          push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
-        }
-        n.R[0] = b;
-        n.pc = b.g.next;
-        n.lp_cnt = lp_next(st_.lp_cnt, b.base, b.g.taken, b.g.next, b.g.type);
-        out.icache_read_valid = true;
-        out.fetch_address = b.base;
-        t.s_block = 1; t.s_hit = b.g.hit; t.s_hit_taken = b.g.taken;
-      }
+      if (in.icache_read_ready && !ptab_stall) s0_issue(st_.pc, st_.spec, st_.sras, st_.lp_cnt);
     }
 
     // ---- commit side ---------------------------------------------------------------------------------------------------------
@@ -957,6 +962,7 @@ class BpuPipe {
       } else { n.spec = n.arch; n.sras = n.aras; t.s_rep_miss = repair_ && in.rf_valid; n.epoch = st_.epoch + 1; }
       n.pq_n = 0;
       n.lp_cnt = 0;
+      if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
     if (mode_ >= 3) update_queue(in, n, t); else update_old(in, n, t);
     // uBTB training: head of the train queue is written, new events are appended behind it
