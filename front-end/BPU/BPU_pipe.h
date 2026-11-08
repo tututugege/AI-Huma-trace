@@ -39,7 +39,55 @@ inline int cfg_loop() { static const int v = env_int("BPO_LOOP", 0); return v; }
 inline int cfg_pdckpt() { static const int v = env_int("BPO_PDCKPT", 1); return v; }   // checkpoint per PTAB entry: exact history / RAS restore at a predecode flush
 // FE_RFAST (FRONTEND_NOTES.md): bit0 = S0 issues the first block of a redirect in the refetch cycle itself (instead of one cycle later)
 inline int cfg_rfast() { static const int v = env_int("FE_RFAST", 0); return v; }
+// FE_BFAST: bit0 = an S1-level (L1) override issues the corrected block in the same cycle (no bubble), bit1 = an S_D override issues the corrected block in the same cycle (1 bubble cycle less)
+inline int cfg_bfast() { static const int v = env_int("FE_BFAST", 0); return v; }
 inline int cfg_tq() { static const int v = env_int("BPO_TQ", 4); return v; }
+
+// FE_FUSE_DIAG: fetch-cycle count of the committed stream under three fetch rules (perfect prediction, no bubbles):
+//   R1 one basic block per cycle (current), R2 R1 plus continuing after a taken branch whose target is in the same 64 B line,
+//   R3 up to two basic blocks per cycle (any targets, total <= 8 slots, each cut at its own 64 B line end)
+struct FuseDiag {
+  uint64_t insts = 0, cyc[4] = {}, taken = 0, taken_same_line = 0;
+  // per-rule current group state
+  int n[4] = {}; int blocks[4] = {}; uint32_t line[4] = {}; uint32_t exp[4] = {}; bool open[4] = {};
+  bool on = false;
+  FuseDiag() { on = std::getenv("FE_FUSE_DIAG") != nullptr; if (on) std::atexit([] { fd().print(); }); }
+  static FuseDiag &fd() { static FuseDiag d; return d; }
+  void print() const {
+    std::printf("[FUSE_DIAG] insts=%llu taken=%llu (same 64B line %.1f%%) | insts/fetch-cycle: R1 %.2f  R2(intra-line fuse) %.2f  R3(2 blocks) %.2f\n",
+                (unsigned long long)insts, (unsigned long long)taken, taken ? 100.0 * taken_same_line / taken : 0.0,
+                cyc[1] ? double(insts) / cyc[1] : 0.0, cyc[2] ? double(insts) / cyc[2] : 0.0, cyc[3] ? double(insts) / cyc[3] : 0.0);
+  }
+  void feed(pc_t pc, bool taken_br, pc_t target) {
+    if (!on) return;
+    insts++;
+    const bool ctl_taken = taken_br;
+    if (ctl_taken) { taken++; if ((pc >> 6) == (target >> 6)) taken_same_line++; }
+    for (int r = 1; r <= 3; r++) {
+      // does this instruction fit in the open group?
+      bool fits = open[r] && pc == exp[r] && n[r] < 8 && (line[r] == (pc >> 6));
+      if (!fits && open[r] && pc != exp[r]) {
+        // discontinuity: only allowed continuation is handled below when the previous instruction was a taken branch
+      }
+      if (!fits) {  // start a new group (R2/R3 continuation cases were already resolved at the taken branch)
+        if (open[r] && !(pc == exp[r] && n[r] < 8)) {}
+        if (open[r] && !cont_[r]) { cyc[r]++; }
+        open[r] = true; n[r] = 0; blocks[r] = 1; line[r] = pc >> 6; cont_[r] = false;
+      }
+      cont_[r] = false;
+      n[r]++;
+      exp[r] = pc + 4;
+      if (ctl_taken) {
+        bool cont = false;
+        if (r == 2 && (pc >> 6) == (target >> 6) && n[r] < 8) cont = true;
+        if (r == 3 && blocks[r] < 2 && n[r] < 8) { cont = true; blocks[r]++; }
+        if (cont) { exp[r] = target; line[r] = target >> 6; cont_[r] = true; /* group stays open */ }
+        else { cyc[r]++; open[r] = false; }
+      } else if (n[r] >= 8 || ((pc + 4) >> 6) != (pc >> 6)) { cyc[r]++; open[r] = false; }
+    }
+  }
+  bool cont_[4] = {};
+};
 
 constexpr int MAXW = 4;       // uBTB ways
 constexpr int MAXD = 3;       // deepest main predictor (S1..S3)
@@ -464,6 +512,7 @@ class BpuPipe {
       const uint8_t slot = (pc - n.tr_start) >> 2;
       if (ty == BR_DIRECT && n.tr_nd < 8) n.tr_nd++;
       const bool taken = ty != BR_NONCTL && in.in_actual_dir[i];
+      FuseDiag::fd().feed(pc, taken, in.in_actual_targets[i]);
       UbEv e; e.start = n.tr_start; e.slot = slot; e.type = ty; e.nd = n.tr_nd; e.hh = n.tr_hh;
       ah_push(n, pc, taken, in.in_actual_targets[i], ty);   // history after this instruction = history at the start of the next block
       if (taken) {
@@ -917,6 +966,7 @@ class BpuPipe {
       push_bits(d.out.nbits, d.out.bits, d.out.ras_op, d.out.ras_val, n.spec, n.sras);
       n.pc = d.out.next;
       n.lp_cnt = lp_next(d.blk.ck.lp_cnt, d.blk.base, d.out.taken, d.out.next, d.out.type);
+      if ((cfg_bfast() & 2) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit1
       int why; disagree(d.out, d.blk.g, why);
       t.s_ovr_next = why == 1; t.s_ovr_hist = why == 2; t.s_ovr_ras = why == 3; t.s_ovr_miss = !d.blk.g.hit;
       if (why == 1) {
@@ -933,6 +983,7 @@ class BpuPipe {
       }
     } else if (l1_override(st_.R[0], n, t)) {
       // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
+      if ((cfg_bfast() & 1) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit0
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
       int inflight = 0;
