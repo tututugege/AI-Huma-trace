@@ -92,3 +92,8 @@ PMU_EV(OCC_IQ_STA,            occ,    7, "STA issue-queue entries in use")
 PMU_EV(OCC_IQ_STD,            occ,    5, "STD issue-queue entries in use")
 PMU_EV(OCC_IQ_BR,            occ,    6, "BR issue-queue entries in use")
 
+// ---- back-pressure causes (EXP-016; appended so the ids above do not move; trace-model only, not on the RTL bus) ----
+// "of which" parts of SLOT_FE_OTHER: the empty dispatch slot is empty because rename/IDU is stalled (cause sampled in the same cycle),
+// not because the frontend failed to deliver.
+PMU_EV(SLOT_FE_OTHER_NOPREG, slot,   4, "  of SLOT_FE_OTHER: rename stalled, no free physical register (PRF too small)")  // model-only
+PMU_EV(SLOT_FE_OTHER_NOBRTAG,slot,   4, "  of SLOT_FE_OTHER: IDU stalled, no free branch tag (MAX_BR_NUM too small)")  // model-only

@@ -57,7 +57,11 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
     if (recov) e.add(by_flush ? PMU_SLOT_FE_RECOV_FLUSH : PMU_SLOT_FE_RECOV_MISPRED);
     else if (g_pmu_front.icache_miss_busy) e.add(PMU_SLOT_FE_ICACHE);
     else if (g_pmu_front.itlb_miss) e.add(PMU_SLOT_FE_ITLB);
-    else e.add(PMU_SLOT_FE_OTHER);
+    else {
+      e.add(PMU_SLOT_FE_OTHER);
+      if (g_pmu_back.ren_no_preg) e.add(PMU_SLOT_FE_OTHER_NOPREG);
+      else if (g_pmu_back.idu_no_brtag) e.add(PMU_SLOT_FE_OTHER_NOBRTAG);
+    }
   }
 }
 
