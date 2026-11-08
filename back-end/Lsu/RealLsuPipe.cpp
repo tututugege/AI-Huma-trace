@@ -149,6 +149,9 @@ static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
 // the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
 // cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
 static const bool lp_mdp_hw = lsu_pipe_env_mask("LSU_MDP_HW", 1) != 0 && lp_mdp_mode == 0;
+// LSU_MS_SLOTS=N (default 0 = unlimited): at most N loads (entries with `spec` set that are not yet second-pass) may be speculative at a time, a
+// cheaper variant for the RTL (the violation CAM / SPD release scan only needs N tracking entries instead of every LDQ entry).
+static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", 0);
 static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
 static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
 static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
@@ -966,6 +969,9 @@ void RealLsu::comb_tlb_in_stq_p() {
 // L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_stlf_p() {
+  int live = 0;
+  if (lp_memspec && lp_ms_slots)
+    for (const PLdq &x : pnxt.ldq) live += x.st != L_EMPTY && x.spec && !x.second;
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v || !l.hit || l.mmio) continue;
@@ -975,7 +981,9 @@ void RealLsu::comb_stlf_p() {
     uint64_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= 1ULL << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
+    const bool slot_ok = !lp_ms_slots || e.spec || live < (int)lp_ms_slots;
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && slot_ok && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
+    if (lp_ms_slots) live += (int)c.unk - (int)e.spec;
     pnxt.ldq[l.ldq].spec = c.unk;
     l.cand_v = c.v;
     l.cand = c.idx;
