@@ -352,11 +352,10 @@ void RealLsu::comb_cal_p() {
   pw = {};
   if (lp_mdp_hw && lp_mdp_bits) mdp_write_pending();
   if (lp_mdp_hw2 && lp_mdp_bits) {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
-    for (int i = 0; i < LDQ_SIZE && g_trn; i++) {
-      if (!(g_trn >> i & 1)) continue;
-      g_trn &= ~(1ULL << i);
-      if (pcur.ldq[i].st != L_EMPTY) { g_mdp_pend.push_back(mdp_idx(pcur.ldq[i].pc)); break; }
-    }
+    for (int i = 0; i < LDQ_SIZE && g_trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
+      if ((g_trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) g_trn &= ~(1ULL << i);
+    for (int i = 0; i < LDQ_SIZE && g_trn; i++)
+      if (g_trn >> i & 1) { g_trn &= ~(1ULL << i); g_mdp_pend.push_back(mdp_idx(pcur.ldq[i].pc)); break; }
   }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
