@@ -770,7 +770,9 @@ void RealLsu::comb_exe2lsu_p() {
       for (int i = 0; i < LDQ_SIZE; i++) {
         PLdq &l = pnxt.ldq[i];
         if (!l.spec || l.vio || l.second) continue;
-        if (l.st != L_PIPE && l.st != L_DCW && l.st != L_WBP && l.st != L_WB3 && l.st != L_SPD) continue;
+        // L_RPW too: a load parked behind an older store (ADDR / HOLD / DATA) forwards from it when woken, without another CAM pass, and would
+        // miss a younger store whose address it passed (found by the RTL Linux check, s06: stale byte forwarded)
+        if (l.st != L_PIPE && l.st != L_DCW && l.st != L_WBP && l.st != L_WB3 && l.st != L_SPD && l.st != L_RPW) continue;
         const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
         const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
         if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
