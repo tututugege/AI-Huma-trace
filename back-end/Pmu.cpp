@@ -136,6 +136,7 @@ void Pmu::report(uint64_t instructions) {
   std::printf("Frontend Bound   : %6.2f%%\n", pct(fe));
   std::printf("  - Fetch latency  (ICache %.2f%% + ITLB %.2f%%)\n", pct(T(PMU_SLOT_FE_ICACHE)), pct(T(PMU_SLOT_FE_ITLB)));
   std::printf("  - Fetch bandwidth: %6.2f%%\n", pct(T(PMU_SLOT_FE_OTHER)));
+  std::printf("      of which rename no free preg: %6.2f%%  IDU no branch tag: %6.2f%%\n", pct(T(PMU_SLOT_FE_OTHER_NOPREG)), pct(T(PMU_SLOT_FE_OTHER_NOBRTAG)));
   std::printf("Backend Bound    : %6.2f%%\n", pct(be));
   const double mem = T(PMU_SLOT_BE_HEAD_MISS) + T(PMU_SLOT_BE_HEAD_MEM);
   std::printf("  by ROB head  : Memory %.2f%% (L1D miss %.2f%%, L1D hit/other %.2f%%)  Core %.2f%% (exec %.2f%%, head done %.2f%%)\n",

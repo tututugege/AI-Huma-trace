@@ -1,5 +1,6 @@
 #include "BeginCheck.h"
 #include "Csr.h"
+#include "Pmu.h"
 #include "Idu.h"
 #include "RISCV.h"
 #include "Wires.h"
@@ -88,6 +89,7 @@ void Idu::comb_decode() {
     running |= wire<BR_MASK_WIDTH>(1) << alloc_tag[br_num];
     br_num++;
   }
+  g_pmu_back.idu_no_brtag = stall;
   if (stall)
     for (; i < DECODE_WIDTH; i++) {
       w.dec2ren.valid[i] = false;
