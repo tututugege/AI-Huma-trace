@@ -125,17 +125,27 @@ static inline void ss_train(uint32_t lpc, uint32_t spc) {
   else if (!a && b) a = b;
   else a = b = std::min(a, b);
 }
+// Confidence counters (modes 0 and 1): a violation adds 1 (saturating at 3), a load that passed unknown-address stores without a violation
+// subtracts LSU_MDP_DEC; a load/set waits only while the counter is >= LSU_MDP_THR (THR=1, DEC=0: the original sticky 1-bit behaviour).
+static const unsigned lp_mdp_thr = lsu_pipe_env_mask("LSU_MDP_THR", 1);
+static const unsigned lp_mdp_dec = lsu_pipe_env_mask("LSU_MDP_DEC", 0);
 static std::vector<uint8_t> g_mdp;
 static long long g_mdp_next_clear = 0;
 static inline bool mdp_wait(uint32_t pc) {
   if (!lp_mdp_bits) return false;
   if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
-  return g_mdp[mdp_idx(pc)];
+  return g_mdp[mdp_idx(pc)] >= lp_mdp_thr;
 }
 static inline void mdp_train(uint32_t pc) {
   if (!lp_mdp_bits) return;
   if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
-  g_mdp[mdp_idx(pc)] = 1;
+  uint8_t &c = g_mdp[mdp_idx(pc)];
+  if (c < 3) c++;
+}
+static inline void mdp_clean(uint32_t pc) {
+  if (!lp_mdp_bits || !lp_mdp_dec || g_mdp.empty()) return;
+  uint8_t &c = g_mdp[mdp_idx(pc)];
+  c = c > lp_mdp_dec ? c - lp_mdp_dec : 0;
 }
 
 // youngest older store that may conflict (partial CAM on page offset + size; unknown address always conflicts).
@@ -636,6 +646,7 @@ void RealLsu::comb_lsu2exe_p() {
         unknown = !s.va_v && !s.suppress;
       }
       if (!unknown) {
+        if (lp_mdp_mode == 0 && !l.vio) mdp_clean(l.pc);
         l.second = 1;
         l.st = L_WBP;
         g_st.spec_released++;
