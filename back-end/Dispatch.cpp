@@ -225,6 +225,7 @@ void Dispatch::comb_fire() {
     w.dis2lsu.rob_flag[k] = u.rob_flag;
     w.dis2lsu.stq_flag[k] = u.stq_flag;
     w.dis2lsu.func3[k] = u->func3;
+    w.dis2lsu.st_pc[k] = u->dbg.pc;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
     const int i = ldq_port_owner[k];
@@ -235,6 +236,7 @@ void Dispatch::comb_fire() {
     w.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
     w.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
     w.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
+    w.dis2lsu.ldq_pc[k] = u->dbg.pc;
   }
 }
 

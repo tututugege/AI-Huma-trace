@@ -23,6 +23,8 @@
 #include "SimCpu.h"
 #include "config.h"
 #include "trace_hook.h"
+#include "MsData.h"
+#include "PhysMemory.h"
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
@@ -30,6 +32,32 @@
 #include <cstdlib>
 
 using namespace lp;
+
+// EXP-019: cost of a memory-order violation (LSU_PIPE_STATS prints the averages).  det[] = cycle of the detection per ROB index;
+// the ROB calls on_flush_commit() when the violating load commits and flushes, and on_commit() for every later commit.
+struct MsPenalty {
+  long long det[256], det_zero[256];
+  long long pending = -1;
+  uint64_t zero_cum = 0, ep_zero0 = 0;  // cycles without any commit so far / at the detection of the current episode
+  uint64_t n = 0, n_det = 0, det_flush_sum = 0, resume_sum = 0, resume_n = 0, flushed_sum = 0, idle_sum = 0;
+  MsPenalty() { for (auto &d : det) d = -1; }
+  void on_detect(unsigned rob_idx) { det[rob_idx & 255] = sim_time; det_zero[rob_idx & 255] = zero_cum; }
+  void on_flush_commit(unsigned rob_idx, long long younger) {
+    n++;
+    flushed_sum += younger;
+    long long &d = det[rob_idx & 255];
+    ep_zero0 = zero_cum;
+    if (d >= 0) { n_det++; det_flush_sum += sim_time - d; ep_zero0 = det_zero[rob_idx & 255]; d = -1; }
+    pending = sim_time;
+  }
+  void tick(bool committed) {  // once per cycle from the ROB
+    if (!committed) zero_cum++;
+    else if (pending >= 0 && sim_time > pending) { resume_sum += sim_time - pending; resume_n++; idle_sum += zero_cum - ep_zero0; pending = -1; }
+  }
+} g_msp;
+
+void g_msp_flush_commit(unsigned rob_idx, long long younger) { g_msp.on_flush_commit(rob_idx, younger); }
+void g_msp_tick(bool committed) { g_msp.tick(committed); }
 
 uint64_t g_lp_cancel_entries = 0;  // entries put back to waiting by a cancelled speculative wake-up (LSU_PIPE_L2 bit 8)
 
@@ -51,7 +79,7 @@ struct LpStats {
   uint64_t rp_tlb = 0, rp_addr = 0, rp_hold = 0, rp_data = 0, rp_dc = 0, rp_dc_conflict = 0, rp_dc_mshr = 0;
   uint64_t rdy_cycles_blocked = 0;
   uint64_t unk_wait_overlap = 0, unk_wait_disjoint = 0;
-  uint64_t order_violation = 0;
+  uint64_t order_violation = 0, spec_loads = 0, spec_released = 0, vio_multi = 0;
   uint64_t st_drain = 0, st_conflict = 0, st_replay = 0, st_merge_pair = 0;
   uint64_t sta_replay = 0, bounce = 0, wd_ld = 0, wd_st = 0, rblk = 0;
   uint64_t mmio_ld = 0;
@@ -67,10 +95,19 @@ struct LpStats {
                  (unsigned long long)cand, (unsigned long long)cand_false);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] replay: tlb=%llu addr=%llu hold=%llu data=%llu dc=%llu (conflict=%llu mshr=%llu) "
-                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu\n",
+                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu spec_loads=%llu spec_released=%llu vio_multi_cycles=%llu\n",
                  (unsigned long long)rp_tlb, (unsigned long long)rp_addr, (unsigned long long)rp_hold, (unsigned long long)rp_data,
                  (unsigned long long)rp_dc, (unsigned long long)rp_dc_conflict, (unsigned long long)rp_dc_mshr,
-                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation);
+                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released, (unsigned long long)vio_multi);
+    if (g_msp.n)
+      std::fprintf(stderr,
+                   "[MS_PENALTY] violations=%llu flush_commits=%llu detect_to_flush_commit_avg=%.2f flush_commit_to_next_commit_avg=%.2f "
+                   "total_avg=%.2f flushed_younger_avg=%.1f idle_commit_cycles_avg=%.2f\n",
+                   (unsigned long long)order_violation, (unsigned long long)g_msp.n,
+                   g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0,
+                   g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0,
+                   (g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0) + (g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0),
+                   (double)g_msp.flushed_sum / g_msp.n, g_msp.resume_n ? (double)g_msp.idle_sum / g_msp.resume_n : 0.0);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
     std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu spec_pred=%llu spec_ok=%llu spec_fail=%llu oracle_wake=%llu cancel_entries=%llu\n",
@@ -102,15 +139,89 @@ inline uint32_t replay_wait(ReplayType r) {
   return r == ReplayType::MSHR_HIT || r == ReplayType::MSHR_FULL ? LSU_PEPLAY_WAIT_CYCLES : 0;
 }
 
+static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
+// Wait table (Alpha 21264 style): 2^LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC violated, cleared every
+// LSU_MDP_CLR cycles (0 = never). A load whose bit is set does not pass unknown-address stores. LSU_MDP_BITS=0 disables the predictor.
+static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", CFG_LSU_MDP_BITS);
+static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", CFG_LSU_MDP_CLR);
+// Mode 1 = store sets (Chrysos/Emer): a violating (load, store) pair gets the same set id in a PC-indexed table (merging keeps the smaller id);
+// a load waits only for unknown-address older stores of its own set. Mode 0 = the wait table above.
+static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
+// LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
+// the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
+// cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
+static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", 2) : 0;
+static const bool lp_mdp_hw = lp_mdp_hwm != 0;
+// LSU_MDP_HW=2: the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
+// trains the table in the following cycle, so the table is written two cycles after the violation, from registers (no STA-arrival-to-table-write path)
+static const bool lp_mdp_hw2 = lp_mdp_hwm == 2;
+static uint64_t g_trn = 0;
+// LSU_MS_SLOTS=N (default 0 = unlimited): at most N loads (entries with `spec` set that are not yet second-pass) may be speculative at a time, a
+// cheaper variant for the RTL (the violation CAM / SPD release scan only needs N tracking entries instead of every LDQ entry).
+static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", 0);
+static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
+static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
+static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
+static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> 2) ^ (pc >> (2 + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }
+static std::vector<uint16_t> g_ssit;
+static unsigned g_ssit_next = 1;
+static inline uint16_t ss_get(uint32_t pc) {
+  if (g_ssit.empty()) g_ssit.assign(1u << lp_mdp_bits, 0);
+  return g_ssit[mdp_idx(pc)];
+}
+static inline void ss_train(uint32_t lpc, uint32_t spc) {
+  if (g_ssit.empty()) g_ssit.assign(1u << lp_mdp_bits, 0);
+  uint16_t &a = g_ssit[mdp_idx(lpc)], &b = g_ssit[mdp_idx(spc)];
+  if (!a && !b) { a = b = (uint16_t)g_ssit_next; g_ssit_next = g_ssit_next >= 65535 ? 1 : g_ssit_next + 1; }
+  else if (a && !b) b = a;
+  else if (!a && b) a = b;
+  else a = b = std::min(a, b);
+}
+// Confidence counters (modes 0 and 1): a violation adds 1 (saturating at 3), a load that passed unknown-address stores without a violation
+// subtracts LSU_MDP_DEC; a load/set waits only while the counter is >= LSU_MDP_THR (THR=1, DEC=0: the original sticky 1-bit behaviour).
+static const unsigned lp_mdp_thr = lsu_pipe_env_mask("LSU_MDP_THR", 1);
+static const unsigned lp_mdp_dec = lsu_pipe_env_mask("LSU_MDP_DEC", 0);
+static std::vector<uint8_t> g_mdp;
+static long long g_mdp_next_clear = 0;
+static inline bool mdp_wait(uint32_t pc) {
+  if (!lp_mdp_bits) return false;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  return g_mdp[mdp_idx(pc)] >= lp_mdp_thr;
+}
+static inline void mdp_write_pending();
+static inline void mdp_train(uint32_t pc) {
+  if (!lp_mdp_bits) return;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  uint8_t &c = g_mdp[mdp_idx(pc)];
+  if (c < 3) c++;
+}
+static inline void mdp_write_pending() {
+  if (g_mdp_pend.empty()) return;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  for (int ix : g_mdp_pend) {
+    uint8_t &c = g_mdp[ix];
+    if (c < 3) c++;
+  }
+  g_mdp_pend.clear();
+}
+static inline void mdp_clean(uint32_t pc) {
+  if (!lp_mdp_bits || !lp_mdp_dec || g_mdp.empty()) return;
+  uint8_t &c = g_mdp[mdp_idx(pc)];
+  c = c > lp_mdp_dec ? c - lp_mdp_dec : 0;
+}
+
 // youngest older store that may conflict (partial CAM on page offset + size; unknown address always conflicts).
 struct CamRes {
   bool v = false;
   uint8_t idx = 0;
+  bool unk = false;  // memory speculation: an older store younger than the candidate had no address (the load passes it)
+  uint64_t skip = 0; // LSU_MS_DATA: the unknown-address stores that were passed (bit = STQ index)
 };
 // `ov`: STQ entries whose STA arrives in this very cycle (AGU output): their vaddr/size bypass into the CAM (a 4x4
 // comparator set against the STA ports in hardware), so a load issued together with an older STA is not stalled.
-CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const PLdq &l, bool full) {
+CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const PLdq &l, bool full, bool spec_ok = false) {
   CamRes r;
+  int unk_rank = -1;
   const uint32_t head = s.stq_head;
   uint32_t older = 0;
   {  // distance(head tag, snapshot tag) on the 2N tag ring, clipped to the allocated count
@@ -129,6 +240,11 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
     const PStq &sv = (ov >> j & 1) ? n.stq[j] : st;  // address view with the STA bypass
     bool c;
     if (!sv.va_v) {
+      if (spec_ok && !(lp_mdp_mode == 1 && l.sset && st.sset == l.sset)) {  // pass the unknown-address store (checked when its address arrives)
+        unk_rank = std::max(unk_rank, (int)rank);
+        r.skip |= 1ULL << j;
+        continue;
+      }
       c = true;
     } else if (full && st.pa_v) {
       c = range_rel(l.paddr, lw, st.paddr, ld_width(st.func3), 32) != DISJOINT;
@@ -141,6 +257,7 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
       r.idx = j;
     }
   }
+  r.unk = unk_rank > best;
   return r;
 }
 
@@ -159,6 +276,45 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
   if (!s.data_v) return CF_DATA;
   if (s.lrsc && !s.sc_pass) return CF_HOLD;
   return CF_FWD;
+}
+
+// LSU_MS_DATA: the value a load returns when the stores in `l.skip` are not visible (apply_skip) or when everything older is visible.
+// Memory image = the word before the oldest STQ store that writes it (the cache content), or the core RAM when no STQ store writes it, with the
+// visible older STQ stores applied in age order (the youngest wins, as STLF does).  Returns false when it cannot say (MMIO, no trace info).
+bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, uint32_t &val) {
+  if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~3u, 4u)) return false;
+  const uint32_t W = l.paddr & ~3u, off = l.paddr & 3, lw = ld_width(l.func3);
+  const uint32_t head = S.stq_head;
+  uint32_t older;
+  {
+    const uint32_t h = (S.stq_head_flag ? STQ_SIZE : 0) + head;
+    const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+    older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), S.stq_count);
+  }
+  uint32_t word = 0;
+  bool have = false;
+  for (uint32_t rank = 0; rank < S.stq_count && !have; rank++) {
+    const PStq &t = S.stq[(head + rank) % STQ_SIZE];
+    if (!t.m_v || t.m_w != W || t.done || t.suppress) continue;
+    word = t.m_old;
+    have = true;
+  }
+  if (!have) word = tbhook::mem_read(W);
+  for (uint32_t rank = 0; rank < older; rank++) {
+    const uint32_t j = (head + rank) % STQ_SIZE;
+    const PStq &t = S.stq[j];
+    if (!t.m_v || t.m_w != W || t.done || t.suppress || t.m_atnt) continue;
+    if (apply_skip && (l.skip >> j & 1)) continue;
+    if (t.m_amo) {
+      word = t.m_new;
+    } else {
+      const uint32_t data = t.data_v ? (uint32_t)t.data : t.m_rs2;
+      for (uint32_t k = t.m_off; k < t.m_off + t.m_sz && k < 4; k++) word = (word & ~(0xffu << (8 * k))) | (((data >> (8 * (k - t.m_off))) & 0xffu) << (8 * k));
+    }
+  }
+  const uint32_t raw = lw >= 4 ? word : (word >> (8 * off)) & mem_mask_for_width(lw);
+  val = msd::load_extend(raw, l.func3);
+  return true;
 }
 
 }  // namespace
@@ -194,10 +350,34 @@ static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIP
 
 void RealLsu::comb_cal_p() {
   pw = {};
+  if (lp_mdp_hw && lp_mdp_bits) mdp_write_pending();
+  if (lp_mdp_hw2 && lp_mdp_bits) {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
+    for (int i = 0; i < LDQ_SIZE && g_trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
+      if ((g_trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) g_trn &= ~(1ULL << i);
+    for (int i = 0; i < LDQ_SIZE && g_trn; i++)
+      if (g_trn >> i & 1) { g_trn &= ~(1ULL << i); g_mdp_pend.push_back(mdp_idx(pcur.ldq[i].pc)); break; }
+  }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.sf[k] = {};
   for (auto &w : wires->lsu_awake.wake) w = {};
+  if (msd::on) {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
+    for (uint32_t k = 0; k < pnxt.stq_count; k++) {
+      PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+      if (t.m_init) continue;
+      t.m_init = true;
+      const tb::Fact *f = tbhook::fact_by_rob(t.rob_idx);
+      if (!f || !f->is_store || !f->has_mem_write || f->trapped || f->blocked != tb::Blocked::None) continue;
+      t.m_v = true;
+      t.m_amo = (f->inst & 0x7f) == 0x2f;
+      t.m_w = f->mem_waddr;
+      t.m_old = f->mem_old;
+      t.m_new = f->mem_wdata;
+      t.m_rs2 = f->rs2_value;
+      t.m_off = f->vaddr & 3;
+      t.m_sz = f->size;
+    }
+  }
 }
 
 // start of the cycle: the cancel registers of the previous cycle go to the issue queues / busy table (before the select)
@@ -479,7 +659,11 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.page_fault_load = l.pf;
   wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
-  bool early = l.sw;
+  const bool second = l.second;
+  const bool defer = lp_memspec && !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
+  bool early = l.sw || second;
+  if (defer) wb.rob_defer = true;
+  if (second) wb.flush_pipe = l.vio;
   if (!early && from_l3 && (lp_l2 & 2) && l.dest_preg != 0 && !wires->rob_bcast.flush &&
       !(wires->dec_bcast.mispred && (l.br_mask & wires->dec_bcast.br_mask) != 0)) {  // a2: wake from the L3 register
     wires->lsu_awake.wake[LD + port].valid = true;
@@ -500,7 +684,60 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
-  l.st = L_EMPTY;
+  if (msd::on && !l.pf && !l.mmio && !l.lrsc) {
+    const tb::Fact *f = tbhook::fact_by_rob(l.rob_idx);
+    const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
+    uint32_t v = 0;
+    if (l.atnt) {  // stale base register: the load reads the stale address, its value stays stale (the load is never re-executed with a good address)
+      msd::taint[l.dest_preg] = msd::TV{};
+      if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) {
+        msd::set_taint(l.dest_preg, true, v, 1);
+        msd::st.ld_addr_stale++;
+        if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale-address load preg=%d rob=%d pc=%x va=%x pa=%x value=%x true=%x\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value);
+      } else if (plain) {
+        msd::st.ld_addr_same++;
+      }
+    } else if (defer) {  // first write-back of a speculative load: the value of the load without the stores it passed
+      msd::taint[l.dest_preg] = msd::TV{};
+      if (plain && ms_load_value(pnxt, l, true, v)) {
+        msd::st.spec_wb++;
+        l.stale = v != f->rd_value;
+        if (l.stale) {
+          msd::st.stale++;
+          msd::set_taint(l.dest_preg, true, v, 0);
+          if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale load preg=%d rob=%d pc=%x va=%x pa=%x stale=%x true=%x vio=%d\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)l.vio);
+        } else {
+          msd::st.silent++;
+        }
+      }
+    } else {
+      if (second) {
+        if (l.vio) (l.stale ? msd::st.stale_vio : msd::st.silent_vio)++;
+        else if (l.stale) msd::st.stale_no_vio++;
+        l.stale = false;
+      }
+      msd::taint[l.dest_preg] = msd::TV{};  // the register holds the true value from here on
+      if ((msd::mode & 8) && plain && ms_load_value(pnxt, l, false, v)) {  // self check of the value logic
+        msd::st.loads_checked++;
+        if (v != f->rd_value) {
+          if (msd::st.loads_check_bad++ < 8)
+            std::fprintf(stderr, "[MS_DATA] load value mismatch t=%lld rob=%d pc=%x pa=%x got=%x want=%x second=%d vio=%d\n", (long long)sim_time, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)second, (int)l.vio);
+        }
+      }
+    }
+  }
+  if (lp_ms_trace && (defer || second)) std::fprintf(stderr, "MS t=%lld wb ldq=%d rob=%d defer=%d second=%d vio=%d\n", (long long)sim_time, idx, (int)l.rob_idx, (int)defer, (int)second, (int)l.vio);
+  if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
+    if (l.vio) {
+      l.second = 1;
+      l.st = L_RDY;
+    } else {
+      l.st = L_SPD;
+    }
+    g_st.spec_loads++;
+  } else {
+    l.st = L_EMPTY;
+  }
 }
 
 void RealLsu::comb_lsu2exe_p() {
@@ -565,6 +802,29 @@ void RealLsu::comb_lsu2exe_p() {
   }
   LP_PORT_CHECK(sta_n, LSU_STA_COUNT, "sta_wb");
 
+  // 2b. memory speculation: a written-back load whose older store addresses are all known now sends its completion
+  if (lp_memspec) {
+    for (int i = 0; i < LDQ_SIZE; i++) {
+      PLdq &l = pnxt.ldq[i];
+      if (l.st != L_SPD) continue;
+      const uint32_t h = (pnxt.stq_head_flag ? STQ_SIZE : 0) + pnxt.stq_head;
+      const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+      const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pnxt.stq_count);
+      bool unknown = false;
+      for (uint32_t k = 0; k < older && !unknown; k++) {
+        const PStq &s = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+        unknown = !s.va_v && !s.suppress;
+      }
+      if (!unknown) {
+        if (lp_mdp_mode == 0 && !l.vio) mdp_clean(l.pc);
+        l.second = 1;
+        l.st = L_WBP;
+        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld rel ldq=%d rob=%d\n", (long long)sim_time, i, (int)l.rob_idx);
+        g_st.spec_released++;
+      }
+    }
+  }
+
   // 3. loads waiting for a port (forwarded after a data wait, MMIO data): lowest LDQ index first
   for (int i = 0; i < LDQ_SIZE; i++) {
     if (pnxt.ldq[i].st != L_WBP) continue;
@@ -595,6 +855,8 @@ void RealLsu::comb_exe2lsu_p() {
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
   int ns = 0;
+  int vio_new = 0;  // loads marked as violating in this cycle
+  uint64_t vio_set = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
     if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA)) continue;
     const MicroOp &inst = x.agu_req[i].uop;
@@ -603,6 +865,10 @@ void RealLsu::comb_exe2lsu_p() {
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.va_v = 1;
     e.vaddr = inst.result;
+    if (msd::on && (msd::mode & 2)) {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
+      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      e.m_atnt = f && f->is_store && f->vaddr != (uint32_t)inst.result;
+    }
     e.pa_v = 0;
     e.paddr = 0;
     e.func3 = inst->func3;
@@ -614,6 +880,40 @@ void RealLsu::comb_exe2lsu_p() {
     pw.s1[ns].stq = inst.stq_idx;
     ns++;
     pw.ev_sta |= 1ULL << inst.stq_idx;  // the partial address is known from now on
+    if (lp_memspec) {  // memory-order check: younger loads that passed this store while its address was unknown
+      const uint32_t j = inst.stq_idx;
+      const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
+      const uint32_t sw = ld_width(inst->func3);
+      for (int i = 0; i < LDQ_SIZE; i++) {
+        PLdq &l = pnxt.ldq[i];
+        if (!l.spec || l.vio || l.second) continue;
+        // L_RPW too: a load parked behind an older store (ADDR / HOLD / DATA) forwards from it when woken, without another CAM pass, and would
+        // miss a younger store whose address it passed (found by the RTL Linux check, s06: stale byte forwarded)
+        if (l.st != L_PIPE && l.st != L_DCW && l.st != L_WBP && l.st != L_WB3 && l.st != L_SPD && l.st != L_RPW) continue;
+        const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+        const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
+        if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
+        if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
+        g_st.order_violation++;
+        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld vio ldq=%d rob=%d stq=%u st=%d\n", (long long)sim_time, i, (int)l.rob_idx, j, (int)l.st);
+        g_msp.on_detect(l.rob_idx);
+        if (lp_mdp_mode == 1) ss_train(l.pc, pnxt.stq[j].pc);
+        else if (lp_mdp_hw) { vio_new++; vio_set |= 1ULL << i; }
+        else mdp_train(l.pc);
+        l.vio = 1;
+        if (l.st == L_SPD) {  // already written back: re-execute with the store visible
+          l.second = 1;
+          l.st = L_RDY;
+        }
+      }
+    }
+  }
+  if (vio_new) {
+    if (vio_new > 1) g_st.vio_multi++;
+    if (lp_mdp_hw2) g_trn |= vio_set;
+    else if (lp_mdp_hw && lp_mdp_bits)
+      for (int i = 0, n = 0; i < LDQ_SIZE && n < (int)lp_mdp_ntr; i++)
+        if (vio_set >> i & 1) { g_mdp_pend.push_back(mdp_idx(pnxt.ldq[i].pc)); n++; }
   }
   int nl = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
@@ -623,6 +923,10 @@ void RealLsu::comb_exe2lsu_p() {
     PLdq &e = pnxt.ldq[inst.ldq_idx];
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.vaddr = inst.result;
+    if (msd::on && (msd::mode & 2)) {  // a load whose base register was stale reads the stale address
+      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      e.atnt = f && f->is_load && f->vaddr != (uint32_t)inst.result;
+    }
     e.dest_preg = inst.dest_preg;
     e.pa_v = 0;
     e.paddr = 0;
@@ -771,7 +1075,7 @@ void RealLsu::comb_tlb_in_stq_p() {
     // forwarded while this store address was unknown must replay. The default policy never lets a load pass an
     // unknown-address older store, so this CAM is an assertion-like detector (counts must stay 0).
     const uint32_t j = s1.stq;
-    for (int i = 0; i < LDQ_SIZE; i++) {
+    for (int i = 0; i < LDQ_SIZE && !lp_memspec; i++) {
       PLdq &l = pnxt.ldq[i];
       if (l.st != L_DCW && l.st != L_WBP) continue;
       const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
@@ -789,6 +1093,9 @@ void RealLsu::comb_tlb_in_stq_p() {
 // L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_stlf_p() {
+  int live = 0;
+  if (lp_memspec && lp_ms_slots)
+    for (const PLdq &x : pnxt.ldq) live += x.st != L_EMPTY && x.spec && !x.second;
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v || !l.hit || l.mmio) continue;
@@ -798,7 +1105,11 @@ void RealLsu::comb_stlf_p() {
     uint64_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= 1ULL << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb);
+    const bool slot_ok = !lp_ms_slots || e.spec || live < (int)lp_ms_slots;
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && slot_ok && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
+    if (lp_ms_slots) live += (int)c.unk - (int)e.spec;
+    pnxt.ldq[l.ldq].spec = c.unk;
+    pnxt.ldq[l.ldq].skip = c.skip;
     l.cand_v = c.v;
     l.cand = c.idx;
   }
@@ -836,6 +1147,16 @@ void RealLsu::comb_dis2lsu_p() {
     e.rob_idx = d.ldq_rob_idx[i];
     e.rob_flag = d.ldq_rob_flag[i];
     e.br_mask = d.ldq_br_mask[i];
+    e.pc = d.ldq_pc[i];
+    if (lp_memspec) {
+      if (lp_mdp_clr && (long long)sim_time >= g_mdp_next_clear) {
+        std::fill(g_mdp.begin(), g_mdp.end(), 0);
+        std::fill(g_ssit.begin(), g_ssit.end(), 0);
+        g_mdp_next_clear = (long long)sim_time + lp_mdp_clr;
+      }
+      if (lp_mdp_mode == 1) e.sset = ss_get(e.pc);
+      else e.wait = mdp_wait(e.pc);
+    }
     e.st = L_ALLOC;
   }
   for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) {
@@ -847,6 +1168,8 @@ void RealLsu::comb_dis2lsu_p() {
     e.rob_idx = d.rob_idx[i];
     e.rob_flag = d.rob_flag[i];
     e.br_mask = d.br_mask[i];
+    e.pc = d.st_pc[i];
+    if (lp_memspec && lp_mdp_mode == 1) e.sset = ss_get(e.pc);
     e.func3 = d.func3[i];
     pnxt.stq_count++;
   }
@@ -857,6 +1180,7 @@ void RealLsu::comb_dis2lsu_p() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_flush_p() {
   if (wires->rob_bcast.flush) {
+    if (msd::on) msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
             l.st = L_EMPTY;
     }
@@ -870,6 +1194,7 @@ void RealLsu::comb_flush_p() {
   }
 
   const DecBroadcastIO &dec = wires->dec_bcast;
+  if (lp_ms_trace && (dec.mispred || wires->rob_bcast.flush)) std::fprintf(stderr, "MS t=%lld %s\n", (long long)sim_time, wires->rob_bcast.flush ? "flush" : "mispred");
   if (dec.mispred) {
     for (PLdq &l : pnxt.ldq)
       if (l.st != L_EMPTY && (l.br_mask & dec.br_mask) != 0) {

@@ -3,6 +3,7 @@
 #include "IO.h"
 #include "config.h"
 #include "trace_hook.h"
+#include "MsData.h"
 #include "util.h"
 #include <deque>
 
@@ -210,6 +211,10 @@ private:
       break;
     default:
       break;
+    }
+    if (msd::on) {
+      msd::self_check(inst);
+      msd::exec(0, inst);
     }
     if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL ||
                            inst.op == UOP_DIV || inst.op == UOP_FP))

@@ -136,6 +136,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   const bool is_amo = (opcode == 0x2f);
   const bool is_lr = is_amo && bits(inst, 31, 27) == 2;
   e->f.rs2_value = st.gpr[rs2];
+  e->f.rs1_value = st.gpr[rs1];
   if (opcode == 0x73) {  // SYSTEM: save the whole CSR file
     e->full_csr = true;
     e->csr_full.assign(st.csr, st.csr + 21);
@@ -241,6 +242,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     e->f.has_mem_write = true;
     e->f.mem_waddr = after.store_addr & ~3u;
     e->f.mem_wdata = refcpu_load_word(ctx_, e->f.mem_waddr);
+    e->f.mem_old = e->has_undo && e->undo_addr == e->f.mem_waddr ? e->undo_old : e->f.mem_wdata;
   }
   chain_.push_back(e);
   return e->f;

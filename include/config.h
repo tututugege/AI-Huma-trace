@@ -368,6 +368,30 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_PIPE_L2
 #define CFG_LSU_PIPE_L2 115
 #endif
+// Memory-dependence speculation (EXP-018): 0 = a load never passes an older store whose address is unknown (default model);
+// 1 = loads pass unknown-address stores. A load that passed one writes its result back at once (consumers wake) but its ROB completion is
+// deferred until all older store addresses are known; a store address that overlaps such a load is a violation: the load is replayed with the
+// store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides.
+#ifndef CFG_LSU_MEMSPEC
+#define CFG_LSU_MEMSPEC 0
+#endif
+// Wait table of the memory-dependence predictor (LSU_MDP_MODE 0): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the
+// first load dispatch CFG_LSU_MDP_CLR cycles after the previous clear (0 = never). Env LSU_MDP_BITS / LSU_MDP_CLR override. Exported to the RTL.
+#ifndef CFG_LSU_MDP_BITS
+#define CFG_LSU_MDP_BITS 6
+#endif
+#ifndef CFG_LSU_MDP_CLR
+#define CFG_LSU_MDP_CLR 2000
+#endif
+// Value path of the speculative window (EXP-020, back-end/include/MsData.h): the model follows the stale value a speculative load reads, taints its
+// consumers and lets a branch resolved on a stale value mispredict like the RTL does. Needs LSU_MEMSPEC. Env LSU_MS_DATA overrides; 1 = branches +
+// store data, otherwise a bit mask: 1 branches, 2 stale addresses of loads/stores, 4 stale store data, 8 self checks (debug).
+#ifndef CFG_LSU_MS_DATA
+#define CFG_LSU_MS_DATA 0
+#endif
+constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
+constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
+constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
 //   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older

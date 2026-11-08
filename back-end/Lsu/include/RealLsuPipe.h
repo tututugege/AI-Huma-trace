@@ -32,6 +32,7 @@ enum PLd : uint8_t {
   L_MMW = 7,      // MMIO load waiting to be the oldest instruction
   L_MMR = 8,      // MMIO load on the bus
   L_WB3 = 9,      // LSU_PIPE_L2 bit 1: decided at L2, in the L3 register, writes back next cycle
+  L_SPD = 10,     // memory speculation: written back (consumers woken) but passed an unknown-address older store; ROB completion pending
 };
 // replay cause (3 bits)
 enum PRc : uint8_t {
@@ -66,9 +67,20 @@ struct PLdq {
   wire<EPOCH_W> epoch = 0;
   wire<6> wd = 0;             // DCache response watchdog (cycles in DCW)
   wire<1> sw = 0;             // LSU_PIPE_L2: consumers already woken at L2 (no second wake-up at write-back)
+  wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
+  wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
+  wire<32> pc = 0;            // load PC (memory-dependence predictor)
+  wire<16> sset = 0;          // store-set id of the load PC (predictor mode 1)
+  wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
+  wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
+  bool atnt = false;          // LSU_MS_DATA: the address came from a stale register
+  bool stale = false;         // LSU_MS_DATA: the first write-back carried a value different from the true one
+  uint64_t skip = 0;          // LSU_MS_DATA: STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
 };
 
 struct PStq {
+  wire<32> pc = 0;            // store PC (predictor mode 1)
+  wire<16> sset = 0;          // store-set id of the store PC
   wire<1> va_v = 0;           // STA arrived (vaddr[11:0] + size known: partial CAM can compare)
   wire<32> vaddr = 0;
   wire<1> pa_v = 0;           // DTLB hit: paddr known
@@ -91,6 +103,10 @@ struct PStq {
   wire<2> rtype = 0;
   wire<RWAIT_W> rwait = 0;
   wire<6> wd = 0;             // DCache response watchdog (cycles in iss)
+  // LSU_MS_DATA: what the trace says this store writes (captured the cycle after dispatch, the fact leaves the bridge at commit)
+  bool m_init = false, m_v = false, m_amo = false, m_atnt = false;
+  uint32_t m_w = 0, m_old = 0, m_new = 0, m_rs2 = 0;  // physical word, word before / after, true rs2
+  uint8_t m_off = 0, m_sz = 0;                         // byte lane inside the word
 };
 
 // L1 -> L2 pipeline register (one per load port)
