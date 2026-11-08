@@ -184,6 +184,23 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 //       the next one waits for this one to finish, so the extra cycle of F lands on every MMIO load: h264ref sp9 has 2.8M of them, -16%)
 static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CUT);
 static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
+// Wait table (Alpha 21264 style): 2^LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC violated, cleared every
+// LSU_MDP_CLR cycles (0 = never). A load whose bit is set does not pass unknown-address stores. LSU_MDP_BITS=0 disables the predictor.
+static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", 12);
+static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", 2000);
+static std::vector<uint8_t> g_mdp;
+static long long g_mdp_next_clear = 0;
+static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> 2) ^ (pc >> (2 + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }
+static inline bool mdp_wait(uint32_t pc) {
+  if (!lp_mdp_bits) return false;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  return g_mdp[mdp_idx(pc)];
+}
+static inline void mdp_train(uint32_t pc) {
+  if (!lp_mdp_bits) return;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  g_mdp[mdp_idx(pc)] = 1;
+}
 // L2 cuts (docs/LSU_PIPE.md section 7), bit mask in LSU_PIPE_L2, default CFG_LSU_PIPE_L2:
 //   1 = a: L3 register: the direct completion decided at L2 is written back one cycle later (LDQ state L_WB3, load-to-use +1)
 //   2 = a2: (needs 1) the consumers are woken from the L3 register in the cycle of the write-back request, not one cycle later from the
@@ -670,6 +687,7 @@ void RealLsu::comb_exe2lsu_p() {
         if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
         if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
         g_st.order_violation++;
+        mdp_train(l.pc);
         l.vio = 1;
         if (l.st == L_SPD) {  // already written back: re-execute with the store visible
           l.second = 1;
@@ -861,7 +879,7 @@ void RealLsu::comb_stlf_p() {
     uint64_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= 1ULL << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc);
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc && !e.wait);
     pnxt.ldq[l.ldq].spec = c.unk;
     l.cand_v = c.v;
     l.cand = c.idx;
@@ -900,6 +918,14 @@ void RealLsu::comb_dis2lsu_p() {
     e.rob_idx = d.ldq_rob_idx[i];
     e.rob_flag = d.ldq_rob_flag[i];
     e.br_mask = d.ldq_br_mask[i];
+    e.pc = d.ldq_pc[i];
+    if (lp_memspec) {
+      if (lp_mdp_clr && (long long)sim_time >= g_mdp_next_clear) {
+        std::fill(g_mdp.begin(), g_mdp.end(), 0);
+        g_mdp_next_clear = (long long)sim_time + lp_mdp_clr;
+      }
+      e.wait = mdp_wait(e.pc);
+    }
     e.st = L_ALLOC;
   }
   for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) {

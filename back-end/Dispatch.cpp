@@ -235,6 +235,7 @@ void Dispatch::comb_fire() {
     w.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
     w.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
     w.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
+    w.dis2lsu.ldq_pc[k] = u->dbg.pc;
   }
 }
 

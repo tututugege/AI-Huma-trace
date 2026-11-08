@@ -664,6 +664,7 @@ struct DisLsuIO {
   wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH];
   wire<ROB_IDX_WIDTH> ldq_rob_idx[MAX_LDQ_DISPATCH_WIDTH];
   wire<1> ldq_rob_flag[MAX_LDQ_DISPATCH_WIDTH];
+  wire<32> ldq_pc[MAX_LDQ_DISPATCH_WIDTH];  // load PC (memory-dependence predictor index / training)
 
   DisLsuIO() {
     for (auto &v : alloc_req)
@@ -687,6 +688,8 @@ struct DisLsuIO {
     for (auto &v : ldq_rob_idx)
       v = 0;
     for (auto &v : ldq_rob_flag)
+      v = 0;
+    for (auto &v : ldq_pc)
       v = 0;
   }
 };

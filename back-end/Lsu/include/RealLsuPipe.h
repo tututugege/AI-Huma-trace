@@ -69,6 +69,8 @@ struct PLdq {
   wire<1> sw = 0;             // LSU_PIPE_L2: consumers already woken at L2 (no second wake-up at write-back)
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
+  wire<32> pc = 0;            // load PC (memory-dependence predictor)
+  wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
 };
 
