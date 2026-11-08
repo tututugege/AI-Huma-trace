@@ -27,3 +27,15 @@ build, checked on gobmk sp3) and srv/base_c (server run of this build for xalanc
 | both | +5.1 | +5.6 | +6.3 | +10.1 | +7.1 | +0.5 | +0.8 | +3.0 | +0.7 | +4.3 |
 Gate (switches off) 63/63; with FE_RFAST=15 FE_BFAST=3 all 63 difftest Success.
 Remaining front-end stall (gobmk, after both): I$ miss busy 22% of front cycles, IFIFO empty 5%, refill 7%.
+
+## FE_PAIR: dual-block fetch (2 blocks per cycle across a predicted-taken branch)
+Design (everything stays one entry per cycle in every FIFO; a fetch group is the first block up to its taken branch followed by a second block, <= 8 slots):
+- BPU S0: when the uBTB guess of block A is a taken branch (same 4 KiB page, target != fall-through), the block at the target is looked up in the same cycle
+  (second uBTB read with the history / RAS after A, second main-predictor index set); it is paired only if it fits into the slots A leaves. S1 reads both,
+  S_D checks both (A first; if A changes, or the final B does not fit, the pair is dropped = override of A; if B differs, override of B). One PTAB entry carries
+  both blocks (explicit pc per slot, per-slot meta, B has its own block id / repair record).
+- fetch-address FIFO entry carries the second block (addr, lengths). ICache reads A normally and B functionally in the same cycle (same page, tag resident, no state change); if B cannot be
+  read the group is the first block only and the predecode checker flushes to B (never needed in the runs: failures 0 after the same-page rule).
+- predecode checker works segment by segment (a segment ends where the pc is not consecutive); back end: FTQ entry per group, the branch ending a segment has the next segment's first pc as its predicted target.
+- ICache: fetch_paddr exported; icache_fetch_second(), icache_peek_hit().
+Findings: a cond-branch-ended first block raises committed cond mispredicts 2.5x on sjeng (see results), other first-block types are neutral.
