@@ -22,6 +22,10 @@ private:
 
   // 记录每条指令 Dispatch 是否成功 (comb_dispatch -> comb_fire)
   bool dispatch_success_flags[DECODE_WIDTH];
+  // PMU only (EXP-014): the issue queue that stopped this slot in comb_dispatch (-1: none) and whether it was its enqueue
+  // width (true) or a lack of free entries (false)
+  int iq_blk[DECODE_WIDTH];
+  bool iq_blk_width[DECODE_WIDTH];
 
   // 记录每个端口分配到的指令槽位，-1 表示该端口本拍未分配。
   int stq_port_owner[MAX_STQ_DISPATCH_WIDTH];
