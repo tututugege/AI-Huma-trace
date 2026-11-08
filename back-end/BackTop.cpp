@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstdio>
 #include "trace_hook.h"
 #include "BackTop.h"
 #include "Csr.h"
@@ -306,8 +308,8 @@ void BackTop::comb_outputs() {
     out.rf_valid = dec_bcast.mispred;
     if (out.rf_valid) {
       const uint32_t fi = idu->br_latch.ftq_idx;
-      out.rf_blk = pre->ftq_blk_id(fi);
       out.rf_slot = idu->br_latch.ftq_off;
+      out.rf_blk = pre->ftq_blk_id(fi, out.rf_slot);
       out.rf_type = idu->br_latch.br_type;
       out.rf_pc = pre->ftq_slot_pc(fi, out.rf_slot);
     }

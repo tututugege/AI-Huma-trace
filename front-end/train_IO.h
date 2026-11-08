@@ -19,6 +19,7 @@ struct FetchAddrCombOut {
   wire1_t clear_fifo;
   wire1_t push_en;
   fetch_addr_t push_data;
+  FetchPair push_pair;
   wire1_t pop_en;
   uint8_t drop_tail_n;
 };
@@ -84,6 +85,11 @@ struct PendingFrontState {
   wire1_t next_ptab_empty = true;
   wire1_t next_front2back_fifo_full = false;
   wire1_t next_front2back_fifo_empty = true;
+  wire1_t next_pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
+  fetch_addr_t next_pend_addr = 0;
+  FetchPair next_pend_pair{};
+  int ipf_ncand = 0;                 // FE_IPF: fetch addresses the BPU pushed this cycle (prefetch candidates)
+  uint32_t ipf_cand[2] = {0, 0};
 };
 
 struct FrontReadData {
@@ -103,6 +109,9 @@ struct FrontReadData {
   wire1_t ptab_empty_latch_snapshot = true;
   wire1_t front2back_fifo_full_latch_snapshot = false;
   wire1_t front2back_fifo_empty_latch_snapshot = true;
+  wire1_t pend_valid_snapshot = false;
+  fetch_addr_t pend_addr_snapshot = 0;
+  FetchPair pend_pair_snapshot{};
 };
 
 struct FrontUpdateRequest {

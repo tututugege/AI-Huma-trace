@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "trace_hook.h"
 #include "include/icache_module.h"
 #include "PhysMemory.h"
@@ -284,14 +285,15 @@ void ICache::lookup(uint32_t index) {
   bool req_valid_next = io.regs.req_valid_r;
 
   if (kill_pipe) {
-    req_ready_w = false;
+    static const bool rfast_ready = (std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : CFG_FE_RFAST) & 4;   // FE_RFAST bit2: no dead cycle after a redirect
+    req_ready_w = rfast_ready && state_next == IDLE;
     req_valid_next = false;
     io.out.mmu_req_valid = false;
     io.reg_write.req_valid_r = false;
     io.reg_write.lookup_pending_r = false;
     io.reg_write.lookup_index_r = 0;
     io.reg_write.lookup_pc_r = 0;
-    io.reg_write.ifu_req_ready_r = false;
+    io.reg_write.ifu_req_ready_r = req_ready_w;
     return;
   }
 

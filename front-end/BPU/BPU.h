@@ -738,6 +738,13 @@ struct OutputPayload {
   wire1_t out_pred_dir[FW];
   PredMeta meta;
   pc_t out_pred_base_pc;
+  // FE_PAIR: a fetch group of two blocks (fetch across a predicted-taken branch). Fetch side (S0 push): second block of the entry.
+  wire1_t pair_valid;
+  fetch_addr_t pair_addr2;
+  uint8_t pair_a_len, pair_b_len;
+  // PTAB side (block leaving S_D): explicit pc of every slot (the second block's instructions follow the first block's taken branch)
+  wire1_t ptab_pcs_valid;
+  pc_t out_pred_pc[FW];
   wire1_t update_queue_full;  // the update queue drops instead of stalling: always 0
 };
 

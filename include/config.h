@@ -373,7 +373,7 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 // deferred until all older store addresses are known; a store address that overlaps such a load is a violation: the load is replayed with the
 // store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides.
 #ifndef CFG_LSU_MEMSPEC
-#define CFG_LSU_MEMSPEC 0
+#define CFG_LSU_MEMSPEC 1
 #endif
 // Wait table of the memory-dependence predictor (LSU_MDP_MODE 0): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the
 // first load dispatch CFG_LSU_MDP_CLR cycles after the previous clear (0 = never). Env LSU_MDP_BITS / LSU_MDP_CLR override. Exported to the RTL.
@@ -387,11 +387,33 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 // consumers and lets a branch resolved on a stale value mispredict like the RTL does. Needs LSU_MEMSPEC. Env LSU_MS_DATA overrides; 1 = branches +
 // store data, otherwise a bit mask: 1 branches, 2 stale addresses of loads/stores, 4 stale store data, 8 self checks (debug).
 #ifndef CFG_LSU_MS_DATA
-#define CFG_LSU_MS_DATA 0
+#define CFG_LSU_MS_DATA 1
+#endif
+// Defaults of the integrated model (exp/integ): LSU_MEMSPEC 1 with the LSU_MS_DATA value path, wait table 64 x 1 bit (MDP_MODE 0), cleared every 2000 cycles,
+// flag-register training (LSU_MDP_HW 2), unlimited speculative loads (LSU_MS_SLOTS 0). MODE / HW / SLOTS are model-only (envs LSU_MDP_MODE, LSU_MDP_HW, LSU_MS_SLOTS), not exported to the RTL.
+#ifndef CFG_LSU_MDP_MODE
+#define CFG_LSU_MDP_MODE 0
+#endif
+#ifndef CFG_LSU_MDP_HW
+#define CFG_LSU_MDP_HW 2
+#endif
+#ifndef CFG_LSU_MS_SLOTS
+#define CFG_LSU_MS_SLOTS 0
 #endif
 constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
 constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
 constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
+// Front-end fast paths (EXP-019, FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Integrated defaults: RFAST 15 (all four bits), BFAST 0; envs FE_RFAST / FE_BFAST override. FE_PAIR / FE_IPF are model-only, env only, default 0.
+//   FE_RFAST bit0 BPU issues the first block in the redirect cycle, bit1 PTAB write-to-read bypass, bit2 I-cache ready right after a
+//   redirect, bit3 pre-IDU buffer bypass.  FE_BFAST bit0 / bit1: the corrected block issues in the same cycle after an S1 (L1) / S_D override.
+#ifndef CFG_FE_RFAST
+#define CFG_FE_RFAST 15
+#endif
+#ifndef CFG_FE_BFAST
+#define CFG_FE_BFAST 0
+#endif
+constexpr int FE_RFAST = CFG_FE_RFAST;
+constexpr int FE_BFAST = CFG_FE_BFAST;
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
 //   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older

@@ -25,8 +25,9 @@ public:
 
   friend struct PreShadow;  // lockstep verification (PRE_SHADOW builds)
   // BPA_REPAIR: BPU block sequence number and slot pc of an FTQ entry (read by BackTop when a branch mispredict redirects the front end)
-  uint16_t ftq_blk_id(uint32_t idx) const { return ftq_train_meta_fifo[idx].meta.blk_id[0]; }
+  uint16_t ftq_blk_id(uint32_t idx, uint32_t off = 0) const { return ftq_train_meta_fifo[idx].meta.blk_id[off]; }
   uint32_t ftq_slot_pc(uint32_t idx, uint32_t off) const { return ftq_lookup_entries[idx].slot_pc[off]; }
+  const FTQEntry &dbg_entry(uint32_t idx) const { return ftq_lookup_entries[idx]; }
 private:
   SimContext *ctx = nullptr;
 

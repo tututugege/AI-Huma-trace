@@ -25,6 +25,7 @@ ICacheMemPortResp *icache_mem_resp_port = nullptr;
 axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;
 static SimContext *icache_ctx = nullptr;
 
+extern void (*g_icache_fill_hook)(uint32_t index, uint32_t tag);   // FE_IPF: demand fills are reported to the prefetcher (defined in ICacheTop.cpp)
 namespace {
 using LookupTimingPolicy =
     RegfileTablePolicy;
@@ -235,6 +236,7 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
   TagTable::WriteReq tag_write{};
   ValidTable::WriteReq valid_write{};
   if (icache.io.table_write.we) {
+    if (g_icache_fill_hook && icache.io.table_write.valid) g_icache_fill_hook(icache.io.table_write.index, icache.io.table_write.tag);
     tag_write.enable = true;
     valid_write.enable = true;
     tag_write.address = icache.io.table_write.index;
@@ -254,6 +256,38 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
 }
 
 void icache_seq_write() {}
+bool icache_peek_hit(uint32_t index, uint32_t ptag);
+
+// FE_IPF: install a prefetched line (tag + valid only; the I-cache keeps no data array). An invalid way is used first, else a rotating victim.
+bool icache_prefetch_install(uint32_t index, uint32_t ptag) {
+  if (icache_peek_hit(index, ptag)) return false;
+  static uint8_t rot[ICACHE_SET_NUM] = {};
+  TagTable &tt = g_tag_table();
+  ValidTable &vt = g_valid_table();
+  const auto &vp = vt.peek_row(index);
+  int way = -1;
+  for (int w = 0; w < ICACHE_WAY_NUM; ++w) if (!vp.chunks[w][0]) { way = w; break; }
+  if (way < 0) way = rot[index]++ % ICACHE_WAY_NUM;
+  TagTable::WriteReq tw{};
+  ValidTable::WriteReq vw{};
+  tw.enable = vw.enable = true;
+  tw.address = vw.address = index;
+  tw.payload.chunks[way][0] = ptag;
+  vw.payload.chunks[way][0] = 1;
+  tw.chunk_enable[way] = vw.chunk_enable[way] = true;
+  tt.seq(TagTable::ReadReq{}, tw);
+  vt.seq(ValidTable::ReadReq{}, vw);
+  return true;
+}
+
+// FE_PAIR: functional tag peek (no state change): is the line with this physical tag resident in set `index`?
+bool icache_peek_hit(uint32_t index, uint32_t ptag) {
+  const auto &tp = g_tag_table().peek_row(index);
+  const auto &vp = g_valid_table().peek_row(index);
+  for (int way = 0; way < ICACHE_WAY_NUM; ++way)
+    if (vp.chunks[way][0] && tp.chunks[way][0] == ptag) return true;
+  return false;
+}
 
 // Fast-warmup replay (EXP-011): load a ready-made L1I tag/valid state.
 void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]) {

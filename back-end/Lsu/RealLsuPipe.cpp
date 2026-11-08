@@ -146,11 +146,11 @@ static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", CFG_LSU_MD
 static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", CFG_LSU_MDP_CLR);
 // Mode 1 = store sets (Chrysos/Emer): a violating (load, store) pair gets the same set id in a PC-indexed table (merging keeps the smaller id);
 // a load waits only for unknown-address older stores of its own set. Mode 0 = the wait table above.
-static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
+static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", CFG_LSU_MDP_MODE);
 // LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
 // the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
 // cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
-static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", 2) : 0;
+static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", CFG_LSU_MDP_HW) : 0;
 static const bool lp_mdp_hw = lp_mdp_hwm != 0;
 // LSU_MDP_HW=2: the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
 // trains the table in the following cycle, so the table is written two cycles after the violation, from registers (no STA-arrival-to-table-write path)
@@ -158,7 +158,7 @@ static const bool lp_mdp_hw2 = lp_mdp_hwm == 2;
 static uint64_t g_trn = 0;
 // LSU_MS_SLOTS=N (default 0 = unlimited): at most N loads (entries with `spec` set that are not yet second-pass) may be speculative at a time, a
 // cheaper variant for the RTL (the violation CAM / SPD release scan only needs N tracking entries instead of every LDQ entry).
-static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", 0);
+static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", CFG_LSU_MS_SLOTS);
 static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
 static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
 static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one

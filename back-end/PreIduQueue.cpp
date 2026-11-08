@@ -4,10 +4,14 @@
 #include "types.h"
 
 #include <cstring>
+#include <cstdlib>
 
 // Instructions accepted from the front end this cycle (comb_accept_front), pushed into the buffer in comb_fire.
 static InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH];
 static int push_count = 0;
+// FE_RFAST bit3: with an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
+static bool g_bypass = false;
+static const bool g_bypass_on = ((std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : CFG_FE_RFAST) & 8) != 0;
 
 static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1> entry_valid, const FtqPcReadReq &req) {
   resp = {};
@@ -17,6 +21,9 @@ static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1>
   resp.pc = entry.slot_pc[req.ftq_offset];
   resp.pred_taken = entry.pred_taken_mask[req.ftq_offset];
   resp.next_pc = entry.next_pc;
+  // FE_PAIR: a taken branch followed by a slot of a different fetch block (the group continues at its target)
+  if (entry.pred_taken_mask[req.ftq_offset] && req.ftq_offset + 1 < entry.nslots && entry.slot_pc[req.ftq_offset + 1] != entry.slot_pc[req.ftq_offset] + 4)
+    resp.next_pc = entry.slot_pc[req.ftq_offset + 1];
 }
 
 // FTQ: ring of fetch blocks, allocated at the tail when a block is accepted, freed at the head when its last
@@ -82,6 +89,7 @@ void PreIduQueue::comb_begin() {
   wires->pre2front.ready = false;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) wires->pre2front.fire[i] = false;
   push_count = 0;
+  g_bypass = false;
 }
 
 // Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
@@ -100,9 +108,11 @@ void PreIduQueue::comb_accept_front() {
   FTQEntry &block = ftq_lookup_entries_1[ftq_idx];
   block = FTQEntry();
   block.next_pc = wires->in.predict_next_fetch_address[0];
+  block.nslots = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     block.slot_pc[i] = wires->in.pc[i];
     block.pred_taken_mask[i] = wires->in.predict_dir[i];
+    if (wires->in.valid[i]) block.nslots = i + 1;
   }
   ftq_train_meta_fifo_1[ftq_idx] = FTQTrainMetaEntry();
   ftq_train_meta_fifo_1[ftq_idx].meta = wires->in.meta;
@@ -127,6 +137,10 @@ void PreIduQueue::comb_accept_front() {
     e.ftq_is_last = (i == last);
     e.uop_id = uop_alloc();
   }
+  if (g_bypass_on && ibuf.count() == 0 && push_count > 0) {
+    g_bypass = true;
+    for (int i = 0; i < DECODE_WIDTH; i++) wires->pre_issue.entries[i] = i < push_count ? push_entries[i] : InstructionBufferEntry{};
+  }
 }
 
 // Instruction buffer: decode consumes from the front (a leading run of fired slots), the accepted block is appended;
@@ -148,9 +162,15 @@ void PreIduQueue::comb_fire() {
 
   int pop_count = 0;
   while (pop_count < DECODE_WIDTH && wires->idu_consume.fire[pop_count]) pop_count++;
+  int first_push = 0;
+  if (g_bypass) {  // the first pop_count pushed entries were consumed by decode in the cycle they arrived
+    first_push = pop_count < push_count ? pop_count : push_count;
+    pop_count = 0;
+    g_bypass = false;
+  }
   if (pop_count > 0) ibuf_1.pop_front(pop_count);
-  for (int i = 0; i < push_count; i++) ibuf_1.push_back(push_entries[i]);
-  if (pop_count > 0 || push_count > 0) ibuf_dirty = true;
+  for (int i = first_push; i < push_count; i++) ibuf_1.push_back(push_entries[i]);
+  if (pop_count > 0 || push_count > first_push) ibuf_dirty = true;
 
   int committed_blocks = 0;
   for (int i = 0; i < COMMIT_WIDTH; i++)
