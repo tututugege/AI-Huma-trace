@@ -31,6 +31,32 @@
 
 using namespace lp;
 
+// EXP-019: cost of a memory-order violation (LSU_PIPE_STATS prints the averages).  det[] = cycle of the detection per ROB index;
+// the ROB calls on_flush_commit() when the violating load commits and flushes, and on_commit() for every later commit.
+struct MsPenalty {
+  long long det[256], det_zero[256];
+  long long pending = -1;
+  uint64_t zero_cum = 0, ep_zero0 = 0;  // cycles without any commit so far / at the detection of the current episode
+  uint64_t n = 0, n_det = 0, det_flush_sum = 0, resume_sum = 0, resume_n = 0, flushed_sum = 0, idle_sum = 0;
+  MsPenalty() { for (auto &d : det) d = -1; }
+  void on_detect(unsigned rob_idx) { det[rob_idx & 255] = sim_time; det_zero[rob_idx & 255] = zero_cum; }
+  void on_flush_commit(unsigned rob_idx, long long younger) {
+    n++;
+    flushed_sum += younger;
+    long long &d = det[rob_idx & 255];
+    ep_zero0 = zero_cum;
+    if (d >= 0) { n_det++; det_flush_sum += sim_time - d; ep_zero0 = det_zero[rob_idx & 255]; d = -1; }
+    pending = sim_time;
+  }
+  void tick(bool committed) {  // once per cycle from the ROB
+    if (!committed) zero_cum++;
+    else if (pending >= 0 && sim_time > pending) { resume_sum += sim_time - pending; resume_n++; idle_sum += zero_cum - ep_zero0; pending = -1; }
+  }
+} g_msp;
+
+void g_msp_flush_commit(unsigned rob_idx, long long younger) { g_msp.on_flush_commit(rob_idx, younger); }
+void g_msp_tick(bool committed) { g_msp.tick(committed); }
+
 uint64_t g_lp_cancel_entries = 0;  // entries put back to waiting by a cancelled speculative wake-up (LSU_PIPE_L2 bit 8)
 
 #define LP_PORT_CHECK(used, max, what)                                                                  \
@@ -71,6 +97,15 @@ struct LpStats {
                  (unsigned long long)rp_tlb, (unsigned long long)rp_addr, (unsigned long long)rp_hold, (unsigned long long)rp_data,
                  (unsigned long long)rp_dc, (unsigned long long)rp_dc_conflict, (unsigned long long)rp_dc_mshr,
                  (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released, (unsigned long long)vio_multi);
+    if (g_msp.n)
+      std::fprintf(stderr,
+                   "[MS_PENALTY] violations=%llu flush_commits=%llu detect_to_flush_commit_avg=%.2f flush_commit_to_next_commit_avg=%.2f "
+                   "total_avg=%.2f flushed_younger_avg=%.1f idle_commit_cycles_avg=%.2f\n",
+                   (unsigned long long)order_violation, (unsigned long long)g_msp.n,
+                   g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0,
+                   g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0,
+                   (g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0) + (g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0),
+                   (double)g_msp.flushed_sum / g_msp.n, g_msp.resume_n ? (double)g_msp.idle_sum / g_msp.resume_n : 0.0);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
     std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu spec_pred=%llu spec_ok=%llu spec_fail=%llu oracle_wake=%llu cancel_entries=%llu\n",
@@ -739,6 +774,7 @@ void RealLsu::comb_exe2lsu_p() {
         if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
         g_st.order_violation++;
         if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld vio ldq=%d rob=%d stq=%u st=%d\n", (long long)sim_time, i, (int)l.rob_idx, j, (int)l.st);
+        g_msp.on_detect(l.rob_idx);
         if (lp_mdp_mode == 1) ss_train(l.pc, pnxt.stq[j].pc);
         else if (lp_mdp_hw) { vio_new++; vio_set |= 1ULL << i; }
         else mdp_train(l.pc);

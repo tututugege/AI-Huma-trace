@@ -9,6 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 
+void g_msp_flush_commit(unsigned rob_idx, long long younger);  // RealLsuPipe.cpp: violation penalty statistics (EXP-019)
+void g_msp_tick(bool committed);
+
 namespace {
 inline bool rob_is_store(const Uop &u) { return u.tma.mem_commit_is_store; }
 inline bool rob_is_load(const Uop &u) { return u.tma.mem_commit_is_load; }
@@ -235,9 +238,21 @@ void Rob::comb_commit() {
       else if (t == CSR) w.rob2csr.commit = true;
       else if (t == SFENCE_VMA) bc.fence = true;
       else if (t == FENCE_I) bc.fence_i = true;
-      else if (u.flush_pipe) bc.pc = pc;  // MMIO-triggered flush: no CSR/MMU action
+      else if (u.flush_pipe) {  // memory-order violator (LSU_MEMSPEC): no CSR/MMU action, refetch from pc+4
+        bc.pc = pc;
+        long long younger = -1;
+        for (int b = 0; b < ROB_BANK_NUM; b++)
+          for (int l = 0; l < ROB_LINE_NUM; l++) younger += entry[b][l].valid;
+        g_msp_flush_commit(u.rob_idx, younger);
+      }
       else Assert(0 && "Rob: unexpected single-commit instruction");
     }
+  }
+
+  {
+    bool any = false;
+    for (int i = 0; i < ROB_BANK_NUM; i++) any |= (bool)w.rob_commit.commit_entry[i].valid;
+    g_msp_tick(any);
   }
 
   w.rob2dis.enq_idx = enq_ptr;
