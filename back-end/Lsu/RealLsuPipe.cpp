@@ -23,6 +23,8 @@
 #include "SimCpu.h"
 #include "config.h"
 #include "trace_hook.h"
+#include "MsData.h"
+#include "PhysMemory.h"
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
@@ -208,6 +210,7 @@ struct CamRes {
   bool v = false;
   uint8_t idx = 0;
   bool unk = false;  // memory speculation: an older store younger than the candidate had no address (the load passes it)
+  uint64_t skip = 0; // LSU_MS_DATA: the unknown-address stores that were passed (bit = STQ index)
 };
 // `ov`: STQ entries whose STA arrives in this very cycle (AGU output): their vaddr/size bypass into the CAM (a 4x4
 // comparator set against the STA ports in hardware), so a load issued together with an older STA is not stalled.
@@ -234,6 +237,7 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
     if (!sv.va_v) {
       if (spec_ok && !(lp_mdp_mode == 1 && l.sset && st.sset == l.sset)) {  // pass the unknown-address store (checked when its address arrives)
         unk_rank = std::max(unk_rank, (int)rank);
+        r.skip |= 1ULL << j;
         continue;
       }
       c = true;
@@ -267,6 +271,45 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
   if (!s.data_v) return CF_DATA;
   if (s.lrsc && !s.sc_pass) return CF_HOLD;
   return CF_FWD;
+}
+
+// LSU_MS_DATA: the value a load returns when the stores in `l.skip` are not visible (apply_skip) or when everything older is visible.
+// Memory image = the word before the oldest STQ store that writes it (the cache content), or the core RAM when no STQ store writes it, with the
+// visible older STQ stores applied in age order (the youngest wins, as STLF does).  Returns false when it cannot say (MMIO, no trace info).
+bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, uint32_t &val) {
+  if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~3u, 4u)) return false;
+  const uint32_t W = l.paddr & ~3u, off = l.paddr & 3, lw = ld_width(l.func3);
+  const uint32_t head = S.stq_head;
+  uint32_t older;
+  {
+    const uint32_t h = (S.stq_head_flag ? STQ_SIZE : 0) + head;
+    const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+    older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), S.stq_count);
+  }
+  uint32_t word = 0;
+  bool have = false;
+  for (uint32_t rank = 0; rank < S.stq_count && !have; rank++) {
+    const PStq &t = S.stq[(head + rank) % STQ_SIZE];
+    if (!t.m_v || t.m_w != W || t.done || t.suppress) continue;
+    word = t.m_old;
+    have = true;
+  }
+  if (!have) word = tbhook::mem_read(W);
+  for (uint32_t rank = 0; rank < older; rank++) {
+    const uint32_t j = (head + rank) % STQ_SIZE;
+    const PStq &t = S.stq[j];
+    if (!t.m_v || t.m_w != W || t.done || t.suppress || t.m_atnt) continue;
+    if (apply_skip && (l.skip >> j & 1)) continue;
+    if (t.m_amo) {
+      word = t.m_new;
+    } else {
+      const uint32_t data = t.data_v ? (uint32_t)t.data : t.m_rs2;
+      for (uint32_t k = t.m_off; k < t.m_off + t.m_sz && k < 4; k++) word = (word & ~(0xffu << (8 * k))) | (((data >> (8 * (k - t.m_off))) & 0xffu) << (8 * k));
+    }
+  }
+  const uint32_t raw = lw >= 4 ? word : (word >> (8 * off)) & mem_mask_for_width(lw);
+  val = msd::load_extend(raw, l.func3);
+  return true;
 }
 
 }  // namespace
@@ -307,6 +350,23 @@ void RealLsu::comb_cal_p() {
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.sf[k] = {};
   for (auto &w : wires->lsu_awake.wake) w = {};
+  if (msd::on) {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
+    for (uint32_t k = 0; k < pnxt.stq_count; k++) {
+      PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+      if (t.m_init) continue;
+      t.m_init = true;
+      const tb::Fact *f = tbhook::fact_by_rob(t.rob_idx);
+      if (!f || !f->is_store || !f->has_mem_write || f->trapped || f->blocked != tb::Blocked::None) continue;
+      t.m_v = true;
+      t.m_amo = (f->inst & 0x7f) == 0x2f;
+      t.m_w = f->mem_waddr;
+      t.m_old = f->mem_old;
+      t.m_new = f->mem_wdata;
+      t.m_rs2 = f->rs2_value;
+      t.m_off = f->vaddr & 3;
+      t.m_sz = f->size;
+    }
+  }
 }
 
 // start of the cycle: the cancel registers of the previous cycle go to the issue queues / busy table (before the select)
@@ -613,6 +673,48 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
+  if (msd::on && !l.pf && !l.mmio && !l.lrsc) {
+    const tb::Fact *f = tbhook::fact_by_rob(l.rob_idx);
+    const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
+    uint32_t v = 0;
+    if (l.atnt) {  // stale base register: the load reads the stale address, its value stays stale (the load is never re-executed with a good address)
+      msd::taint[l.dest_preg] = msd::TV{};
+      if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) {
+        msd::set_taint(l.dest_preg, true, v, 1);
+        msd::st.ld_addr_stale++;
+        if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale-address load preg=%d rob=%d pc=%x va=%x pa=%x value=%x true=%x\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value);
+      } else if (plain) {
+        msd::st.ld_addr_same++;
+      }
+    } else if (defer) {  // first write-back of a speculative load: the value of the load without the stores it passed
+      msd::taint[l.dest_preg] = msd::TV{};
+      if (plain && ms_load_value(pnxt, l, true, v)) {
+        msd::st.spec_wb++;
+        l.stale = v != f->rd_value;
+        if (l.stale) {
+          msd::st.stale++;
+          msd::set_taint(l.dest_preg, true, v, 0);
+          if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale load preg=%d rob=%d pc=%x va=%x pa=%x stale=%x true=%x vio=%d\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)l.vio);
+        } else {
+          msd::st.silent++;
+        }
+      }
+    } else {
+      if (second) {
+        if (l.vio) (l.stale ? msd::st.stale_vio : msd::st.silent_vio)++;
+        else if (l.stale) msd::st.stale_no_vio++;
+        l.stale = false;
+      }
+      msd::taint[l.dest_preg] = msd::TV{};  // the register holds the true value from here on
+      if ((msd::mode & 8) && plain && ms_load_value(pnxt, l, false, v)) {  // self check of the value logic
+        msd::st.loads_checked++;
+        if (v != f->rd_value) {
+          if (msd::st.loads_check_bad++ < 8)
+            std::fprintf(stderr, "[MS_DATA] load value mismatch t=%lld rob=%d pc=%x pa=%x got=%x want=%x second=%d vio=%d\n", (long long)sim_time, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)second, (int)l.vio);
+        }
+      }
+    }
+  }
   if (lp_ms_trace && (defer || second)) std::fprintf(stderr, "MS t=%lld wb ldq=%d rob=%d defer=%d second=%d vio=%d\n", (long long)sim_time, idx, (int)l.rob_idx, (int)defer, (int)second, (int)l.vio);
   if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
     if (l.vio) {
@@ -752,6 +854,10 @@ void RealLsu::comb_exe2lsu_p() {
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.va_v = 1;
     e.vaddr = inst.result;
+    if (msd::on && (msd::mode & 2)) {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
+      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      e.m_atnt = f && f->is_store && f->vaddr != (uint32_t)inst.result;
+    }
     e.pa_v = 0;
     e.paddr = 0;
     e.func3 = inst->func3;
@@ -805,6 +911,10 @@ void RealLsu::comb_exe2lsu_p() {
     PLdq &e = pnxt.ldq[inst.ldq_idx];
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.vaddr = inst.result;
+    if (msd::on && (msd::mode & 2)) {  // a load whose base register was stale reads the stale address
+      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      e.atnt = f && f->is_load && f->vaddr != (uint32_t)inst.result;
+    }
     e.dest_preg = inst.dest_preg;
     e.pa_v = 0;
     e.paddr = 0;
@@ -987,6 +1097,7 @@ void RealLsu::comb_stlf_p() {
     const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && slot_ok && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
     if (lp_ms_slots) live += (int)c.unk - (int)e.spec;
     pnxt.ldq[l.ldq].spec = c.unk;
+    pnxt.ldq[l.ldq].skip = c.skip;
     l.cand_v = c.v;
     l.cand = c.idx;
   }
@@ -1057,6 +1168,7 @@ void RealLsu::comb_dis2lsu_p() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_flush_p() {
   if (wires->rob_bcast.flush) {
+    if (msd::on) msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
             l.st = L_EMPTY;
     }

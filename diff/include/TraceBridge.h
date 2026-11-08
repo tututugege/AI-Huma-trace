@@ -37,6 +37,8 @@ struct Fact {
   uint8_t size = 0;
   uint32_t store_data = 0;     // size-masked
   uint32_t rs2_value = 0;      // full rs2 (what the model carries as store data)
+  uint32_t rs1_value = 0;      // full rs1 before the instruction (EXP-020: stale-value evaluation of the speculative window)
+  uint32_t mem_old = 0;        // the word at mem_waddr before the store (valid with has_mem_write)
   bool has_mem_write = false;  // an executed store/AMO that changes RAM: word address and the word after it
   uint32_t mem_waddr = 0, mem_wdata = 0;
   uint32_t csr_wdata = 0;      // SYSTEM csrr*: rs1 value or zimm

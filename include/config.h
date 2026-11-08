@@ -383,6 +383,12 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_MDP_CLR
 #define CFG_LSU_MDP_CLR 2000
 #endif
+// Value path of the speculative window (EXP-020, back-end/include/MsData.h): the model follows the stale value a speculative load reads, taints its
+// consumers and lets a branch resolved on a stale value mispredict like the RTL does. Needs LSU_MEMSPEC. Env LSU_MS_DATA overrides; 1 = branches +
+// store data, otherwise a bit mask: 1 branches, 2 stale addresses of loads/stores, 4 stale store data, 8 self checks (debug).
+#ifndef CFG_LSU_MS_DATA
+#define CFG_LSU_MS_DATA 0
+#endif
 constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
 constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
 constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
