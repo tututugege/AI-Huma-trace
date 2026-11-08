@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPECint2006 checkpoint replay on the trace model (front-door restore, warmup = checkpoint interval, measure 10M insts).
-#   replay.sh quick   fast iteration: 6 programs (perlbench gcc mcf hmmer sjeng h264ref), SimPoints covering 90% weight (129 points, ~20 min @ 8 parallel)
+#   replay.sh quick   fast iteration: 6 programs (perlbench gcc mcf hmmer sjeng h264ref), SimPoints covering 90% weight (178 points; count it with select_points.py, it changes with the checkpoint set)
 #   replay.sh full    all 12 programs, all SimPoints (496 points, ~75 min @ 8 parallel)
 # env: SPEC=~/personal/AI-Huma-data/spec-rv32imab (ckpt/<bench>/*.gz and sp/<bench>.weights)  OUT=results dir  JOBS=8  SIM=simulator binary
 # Results go to $OUT/<bench>/<ckpt>.ok (done points are skipped); failures to $OUT/fail.txt. Then agg.py prints weighted IPC.
