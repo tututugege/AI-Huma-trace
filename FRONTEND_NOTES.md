@@ -39,3 +39,14 @@ Design (everything stays one entry per cycle in every FIFO; a fetch group is the
 - predecode checker works segment by segment (a segment ends where the pc is not consecutive); back end: FTQ entry per group, the branch ending a segment has the next segment's first pc as its predicted target.
 - ICache: fetch_paddr exported; icache_fetch_second(), icache_peek_hit().
 Findings: a cond-branch-ended first block raises committed cond mispredicts 2.5x on sjeng (see results), other first-block types are neutral.
+
+## Results round 2 (25 points, precise warm-up; IPC change vs the exp/frontend build with FE_RFAST=15 FE_BFAST=3 = tag r15b3; last row vs main)
+| switches on top of RFAST=15 BFAST=3 | perl | gcc | gobmk | sjeng | astar | h264 | hmmer | xalan | bzip2 | geomean |
+|---|---|---|---|---|---|---|---|---|---|---|
+| FE_IPF=1 (I-cache prefetch) | +3.2 | +0.2 | +8.3 | -0.4 | +0.1 | +0.3 | +0.5 | +3.9 | 0.0 | +1.75 |
+| FE_PAIR=1 (dual-block fetch) | -1.0 | +3.1 | +1.6 | +12.4 | +0.7 | +0.3 | 0.0 | +9.5 | +0.1 | +2.88 |
+| FE_PAIR=1 FE_IPF=1 | +5.3 | +3.5 | +11.1 | +12.9 | +0.8 | +0.4 | +0.5 | +13.6 | +0.1 | +5.22 |
+| same, vs main | | | | | | | | | | +9.75 |
+FE_PAIR needed a 512-bit history ring (two blocks per cycle overflowed the 256-bit one and corrupted long-history TAGE indices: committed cond mispredicts x2.5 on sjeng).
+FE_IPF caveats: the prefetch only starts for lines that were filled by a demand miss before (proxy for "line is in the LLC"), latency FE_IPF_LAT=12 cycles,
+max 4 in flight, no LLC / bus bandwidth modelled, install = tag+valid into a rotating victim way (pollution is modelled).
