@@ -99,7 +99,8 @@ constexpr int MAXBB = 8;      // block banks
 constexpr int PQ = 64;        // PTAB checkpoint records (BPO_PDCKPT)
 constexpr int TQ = 16;        // uBTB train queue capacity (BPO_TQ, default 4)
 constexpr int MAXP = 4;       // update write ports (drain width) upper bound
-constexpr int HR_BITS = 256;  // circular global-history buffer
+constexpr int HR_BITS = 512;  // circular global-history buffer storage; the ring is HR_BITS_USED long (256, or 512 with FE_PAIR: two blocks per cycle keep twice as many speculative history bits in flight)
+inline uint32_t hr_mask() { static const uint32_t m = (cfg_pair() ? 512u : 256u) - 1u; return m; }
 
 constexpr uint32_t mask_of(int bits) { return bits >= 32 ? 0xffffffffu : ((1u << bits) - 1u); }
 // uBTB entry field widths: every field is truncated to its declared width on write.
@@ -112,7 +113,7 @@ struct HistRing {
   uint64_t bits[HR_BITS / 64] = {};
   uint32_t head = 0;  // 8 b: next write position
   uint32_t fh[FH_N_MAX][TN] = {};
-  bool back(uint32_t k) const { const uint32_t p = (head - 1 - k) & (HR_BITS - 1); return (bits[p >> 6] >> (p & 63)) & 1; }
+  bool back(uint32_t k) const { const uint32_t p = (head - 1 - k) & hr_mask(); return (bits[p >> 6] >> (p & 63)) & 1; }
   void push(bool dir) {
     for (int k = 0; k < FH_N_MAX; k++)
       for (int i = 0; i < TN; i++) {
@@ -125,7 +126,7 @@ struct HistRing {
       }
     const uint32_t p = head;
     bits[p >> 6] = (bits[p >> 6] & ~(1ull << (p & 63))) | (uint64_t(dir) << (p & 63));
-    head = (head + 1) & (HR_BITS - 1);
+    head = (head + 1) & hr_mask();
   }
 };
 
@@ -647,6 +648,8 @@ class BpuPipe {
     e.type = in.in_actual_br_type[i]; e.target = in.in_actual_targets[i];
     e.pcpn = in.in_pcpn[i]; e.altpcpn = in.in_altpcpn[i];
     for (int k = 0; k < TN; k++) { e.tag[k] = in.in_tage_tags[i][k]; e.idx[k] = in.in_tage_idxs[i][k]; }
+    { static const char *w = std::getenv("FE_PCDBG2"); static int n = w ? 8000 : 0; static const uint32_t want = w ? uint32_t(std::strtoul(w, nullptr, 16)) : 0;
+      if (n > 0 && e.pc == want) { n--; std::printf("[UPD] pc=%x actual=%d pred=%d pcpn=%d idx=%u,%u,%u,%u tag=%u,%u,%u,%u\n", e.pc, (int)e.dir, (int)e.pred, (int)e.pcpn, (unsigned)e.idx[0], (unsigned)e.idx[1], (unsigned)e.idx[2], (unsigned)e.idx[3], (unsigned)e.tag[0], (unsigned)e.tag[1], (unsigned)e.tag[2], (unsigned)e.tag[3]); } }
     return e;
   }
   void apply_table_update(const UpdEnt &e, Txn &t) const {
