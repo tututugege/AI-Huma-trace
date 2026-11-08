@@ -368,6 +368,13 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_PIPE_L2
 #define CFG_LSU_PIPE_L2 115
 #endif
+// Memory-dependence speculation (EXP-018): 0 = a load never passes an older store whose address is unknown (default model);
+// 1 = loads pass unknown-address stores. A load that passed one writes its result back at once (consumers wake) but its ROB completion is
+// deferred until all older store addresses are known; a store address that overlaps such a load is a violation: the load is replayed with the
+// store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides.
+#ifndef CFG_LSU_MEMSPEC
+#define CFG_LSU_MEMSPEC 0
+#endif
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
 //   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older

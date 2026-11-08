@@ -32,6 +32,7 @@ enum PLd : uint8_t {
   L_MMW = 7,      // MMIO load waiting to be the oldest instruction
   L_MMR = 8,      // MMIO load on the bus
   L_WB3 = 9,      // LSU_PIPE_L2 bit 1: decided at L2, in the L3 register, writes back next cycle
+  L_SPD = 10,     // memory speculation: written back (consumers woken) but passed an unknown-address older store; ROB completion pending
 };
 // replay cause (3 bits)
 enum PRc : uint8_t {
@@ -66,6 +67,9 @@ struct PLdq {
   wire<EPOCH_W> epoch = 0;
   wire<6> wd = 0;             // DCache response watchdog (cycles in DCW)
   wire<1> sw = 0;             // LSU_PIPE_L2: consumers already woken at L2 (no second wake-up at write-back)
+  wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
+  wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
+  wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
 };
 
 struct PStq {

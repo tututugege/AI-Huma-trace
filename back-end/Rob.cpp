@@ -262,6 +262,7 @@ void Rob::comb_complete() {
     const auto bit = rob_cplt_mask_from_issue_port(i);
     Uop &u = entry_1[bank][line].uop;
     touch(bank, line);
+    if (wb.rob_defer) continue;  // speculative load write-back: the completion bit is set by its second write-back
     Assert((u.cplt_mask & bit) == 0 && "ROB: duplicate completion bit set");
     u.cplt_mask |= bit;
     Assert((u.cplt_mask & ~u.expect_mask) == 0 && "ROB: completion bit outside expected mask");

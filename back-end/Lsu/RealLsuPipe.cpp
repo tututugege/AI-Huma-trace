@@ -51,7 +51,7 @@ struct LpStats {
   uint64_t rp_tlb = 0, rp_addr = 0, rp_hold = 0, rp_data = 0, rp_dc = 0, rp_dc_conflict = 0, rp_dc_mshr = 0;
   uint64_t rdy_cycles_blocked = 0;
   uint64_t unk_wait_overlap = 0, unk_wait_disjoint = 0;
-  uint64_t order_violation = 0;
+  uint64_t order_violation = 0, spec_loads = 0, spec_released = 0;
   uint64_t st_drain = 0, st_conflict = 0, st_replay = 0, st_merge_pair = 0;
   uint64_t sta_replay = 0, bounce = 0, wd_ld = 0, wd_st = 0, rblk = 0;
   uint64_t mmio_ld = 0;
@@ -67,10 +67,10 @@ struct LpStats {
                  (unsigned long long)cand, (unsigned long long)cand_false);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] replay: tlb=%llu addr=%llu hold=%llu data=%llu dc=%llu (conflict=%llu mshr=%llu) "
-                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu\n",
+                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu spec_loads=%llu spec_released=%llu\n",
                  (unsigned long long)rp_tlb, (unsigned long long)rp_addr, (unsigned long long)rp_hold, (unsigned long long)rp_data,
                  (unsigned long long)rp_dc, (unsigned long long)rp_dc_conflict, (unsigned long long)rp_dc_mshr,
-                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation);
+                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
     std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu spec_pred=%llu spec_ok=%llu spec_fail=%llu oracle_wake=%llu cancel_entries=%llu\n",
@@ -106,11 +106,13 @@ inline uint32_t replay_wait(ReplayType r) {
 struct CamRes {
   bool v = false;
   uint8_t idx = 0;
+  bool unk = false;  // memory speculation: an older store younger than the candidate had no address (the load passes it)
 };
 // `ov`: STQ entries whose STA arrives in this very cycle (AGU output): their vaddr/size bypass into the CAM (a 4x4
 // comparator set against the STA ports in hardware), so a load issued together with an older STA is not stalled.
-CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const PLdq &l, bool full) {
+CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const PLdq &l, bool full, bool spec_ok = false) {
   CamRes r;
+  int unk_rank = -1;
   const uint32_t head = s.stq_head;
   uint32_t older = 0;
   {  // distance(head tag, snapshot tag) on the 2N tag ring, clipped to the allocated count
@@ -129,6 +131,10 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
     const PStq &sv = (ov >> j & 1) ? n.stq[j] : st;  // address view with the STA bypass
     bool c;
     if (!sv.va_v) {
+      if (spec_ok) {  // pass the unknown-address store (checked when its address arrives)
+        unk_rank = std::max(unk_rank, (int)rank);
+        continue;
+      }
       c = true;
     } else if (full && st.pa_v) {
       c = range_rel(l.paddr, lw, st.paddr, ld_width(st.func3), 32) != DISJOINT;
@@ -141,6 +147,7 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
       r.idx = j;
     }
   }
+  r.unk = unk_rank > best;
   return r;
 }
 
@@ -176,6 +183,7 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 //   64 = FM: (with F) the load whose MMIO response arrives in this cycle may still be picked in this cycle (MMIO loads run one at a time and
 //       the next one waits for this one to finish, so the extra cycle of F lands on every MMIO load: h264ref sp9 has 2.8M of them, -16%)
 static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CUT);
+static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
 // L2 cuts (docs/LSU_PIPE.md section 7), bit mask in LSU_PIPE_L2, default CFG_LSU_PIPE_L2:
 //   1 = a: L3 register: the direct completion decided at L2 is written back one cycle later (LDQ state L_WB3, load-to-use +1)
 //   2 = a2: (needs 1) the consumers are woken from the L3 register in the cycle of the write-back request, not one cycle later from the
@@ -479,7 +487,11 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.page_fault_load = l.pf;
   wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
-  bool early = l.sw;
+  const bool second = l.second;
+  const bool defer = lp_memspec && !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
+  bool early = l.sw || second;
+  if (defer) wb.rob_defer = true;
+  if (second) wb.flush_pipe = l.vio;
   if (!early && from_l3 && (lp_l2 & 2) && l.dest_preg != 0 && !wires->rob_bcast.flush &&
       !(wires->dec_bcast.mispred && (l.br_mask & wires->dec_bcast.br_mask) != 0)) {  // a2: wake from the L3 register
     wires->lsu_awake.wake[LD + port].valid = true;
@@ -500,7 +512,17 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
-  l.st = L_EMPTY;
+  if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
+    if (l.vio) {
+      l.second = 1;
+      l.st = L_RDY;
+    } else {
+      l.st = L_SPD;
+    }
+    g_st.spec_loads++;
+  } else {
+    l.st = L_EMPTY;
+  }
 }
 
 void RealLsu::comb_lsu2exe_p() {
@@ -565,6 +587,27 @@ void RealLsu::comb_lsu2exe_p() {
   }
   LP_PORT_CHECK(sta_n, LSU_STA_COUNT, "sta_wb");
 
+  // 2b. memory speculation: a written-back load whose older store addresses are all known now sends its completion
+  if (lp_memspec) {
+    for (int i = 0; i < LDQ_SIZE; i++) {
+      PLdq &l = pnxt.ldq[i];
+      if (l.st != L_SPD) continue;
+      const uint32_t h = (pnxt.stq_head_flag ? STQ_SIZE : 0) + pnxt.stq_head;
+      const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+      const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pnxt.stq_count);
+      bool unknown = false;
+      for (uint32_t k = 0; k < older && !unknown; k++) {
+        const PStq &s = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+        unknown = !s.va_v && !s.suppress;
+      }
+      if (!unknown) {
+        l.second = 1;
+        l.st = L_WBP;
+        g_st.spec_released++;
+      }
+    }
+  }
+
   // 3. loads waiting for a port (forwarded after a data wait, MMIO data): lowest LDQ index first
   for (int i = 0; i < LDQ_SIZE; i++) {
     if (pnxt.ldq[i].st != L_WBP) continue;
@@ -614,6 +657,26 @@ void RealLsu::comb_exe2lsu_p() {
     pw.s1[ns].stq = inst.stq_idx;
     ns++;
     pw.ev_sta |= 1ULL << inst.stq_idx;  // the partial address is known from now on
+    if (lp_memspec) {  // memory-order check: younger loads that passed this store while its address was unknown
+      const uint32_t j = inst.stq_idx;
+      const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
+      const uint32_t sw = ld_width(inst->func3);
+      for (int i = 0; i < LDQ_SIZE; i++) {
+        PLdq &l = pnxt.ldq[i];
+        if (!l.spec || l.vio || l.second) continue;
+        if (l.st != L_PIPE && l.st != L_DCW && l.st != L_WBP && l.st != L_WB3 && l.st != L_SPD) continue;
+        const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
+        const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
+        if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
+        if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
+        g_st.order_violation++;
+        l.vio = 1;
+        if (l.st == L_SPD) {  // already written back: re-execute with the store visible
+          l.second = 1;
+          l.st = L_RDY;
+        }
+      }
+    }
   }
   int nl = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
@@ -771,7 +834,7 @@ void RealLsu::comb_tlb_in_stq_p() {
     // forwarded while this store address was unknown must replay. The default policy never lets a load pass an
     // unknown-address older store, so this CAM is an assertion-like detector (counts must stay 0).
     const uint32_t j = s1.stq;
-    for (int i = 0; i < LDQ_SIZE; i++) {
+    for (int i = 0; i < LDQ_SIZE && !lp_memspec; i++) {
       PLdq &l = pnxt.ldq[i];
       if (l.st != L_DCW && l.st != L_WBP) continue;
       const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
@@ -798,7 +861,8 @@ void RealLsu::comb_stlf_p() {
     uint64_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= 1ULL << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb);
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc);
+    pnxt.ldq[l.ldq].spec = c.unk;
     l.cand_v = c.v;
     l.cand = c.idx;
   }
