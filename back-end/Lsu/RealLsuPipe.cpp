@@ -150,7 +150,12 @@ static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
 // LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
 // the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
 // cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
-static const bool lp_mdp_hw = lsu_pipe_env_mask("LSU_MDP_HW", 1) != 0 && lp_mdp_mode == 0;
+static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", 1) : 0;
+static const bool lp_mdp_hw = lp_mdp_hwm != 0;
+// LSU_MDP_HW=2: the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
+// trains the table in the following cycle, so the table is written two cycles after the violation, from registers (no STA-arrival-to-table-write path)
+static const bool lp_mdp_hw2 = lp_mdp_hwm == 2;
+static uint64_t g_trn = 0;
 // LSU_MS_SLOTS=N (default 0 = unlimited): at most N loads (entries with `spec` set that are not yet second-pass) may be speculative at a time, a
 // cheaper variant for the RTL (the violation CAM / SPD release scan only needs N tracking entries instead of every LDQ entry).
 static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", 0);
@@ -346,6 +351,13 @@ static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIP
 void RealLsu::comb_cal_p() {
   pw = {};
   if (lp_mdp_hw && lp_mdp_bits) mdp_write_pending();
+  if (lp_mdp_hw2 && lp_mdp_bits) {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
+    for (int i = 0; i < LDQ_SIZE && g_trn; i++) {
+      if (!(g_trn >> i & 1)) continue;
+      g_trn &= ~(1ULL << i);
+      if (pcur.ldq[i].st != L_EMPTY) { g_mdp_pend.push_back(mdp_idx(pcur.ldq[i].pc)); break; }
+    }
+  }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.sf[k] = {};
@@ -899,7 +911,8 @@ void RealLsu::comb_exe2lsu_p() {
   }
   if (vio_new) {
     if (vio_new > 1) g_st.vio_multi++;
-    if (lp_mdp_hw && lp_mdp_bits)
+    if (lp_mdp_hw2) g_trn |= vio_set;
+    else if (lp_mdp_hw && lp_mdp_bits)
       for (int i = 0, n = 0; i < LDQ_SIZE && n < (int)lp_mdp_ntr; i++)
         if (vio_set >> i & 1) { g_mdp_pend.push_back(mdp_idx(pnxt.ldq[i].pc)); n++; }
   }
