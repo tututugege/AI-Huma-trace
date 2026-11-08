@@ -23,6 +23,7 @@ struct fetch_address_FIFO_read_data {
   fetch_addr_fifo_size_t size;
   wire1_t head_valid;
   fetch_addr_t head_entry;
+  FetchPair head_pair;
   uint8_t head_age;  // BPU_PIPE: cycles since the head was pushed (saturates at 3)
 };
 
@@ -87,6 +88,7 @@ void icache_seq_read(struct icache_in *in, struct icache_out *out);
 void icache_peek_ready(struct icache_in *in, struct icache_out *out);
 void icache_comb_calc(struct icache_in *in, struct icache_out *out);
 void icache_seq_write();
+bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
 void icache_set_context(SimContext *ctx);
 void front_set_context(SimContext *ctx);
 void icache_set_ptw_mem_port(PtwMemPort *port);

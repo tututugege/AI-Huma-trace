@@ -8,6 +8,14 @@
 
 struct CsrStatusIO;
 
+// FE_PAIR: a fetch-address entry may carry a second fetch block that is read in the same cycle (fetch across a predicted-taken branch).
+// The first block holds a_len instructions (up to and including its taken branch), the second b_len instructions starting at addr2.
+struct FetchPair {
+  bool valid = false;
+  uint32_t addr2 = 0;
+  uint8_t a_len = 0, b_len = 0;
+};
+
 struct front_top_in {
   wire1_t reset;
   // from back-end
@@ -105,6 +113,9 @@ struct icache_out {
   wire1_t inst_valid_2[FETCH_WIDTH];
   pc_t fetch_pc; // PC address of the cache line (the address used to fetch instructions from icache)
   pc_t fetch_pc_2;
+  pc_t fetch_paddr;           // FE_PAIR: physical address of fetch_pc
+  wire1_t fetch_single_word;
+  wire1_t fetch_page_fault;
 };
 
 struct instruction_FIFO_in {
@@ -200,6 +211,7 @@ struct fetch_address_FIFO_in {
   wire1_t write_enable;
   fetch_addr_t fetch_address;
   uint8_t drop_tail_n;  // BPU_PIPE: squash the n youngest entries (override of an older block)
+  FetchPair pair;       // FE_PAIR: second block of the entry
 };
 
 struct fetch_address_FIFO_out {
@@ -207,6 +219,7 @@ struct fetch_address_FIFO_out {
   wire1_t empty;
   wire1_t read_valid;      // 这一拍是否真的弹出了一条地址
   fetch_addr_t fetch_address;
+  FetchPair pair;
 };
 
 #endif

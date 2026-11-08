@@ -102,6 +102,9 @@ struct TrueGlueOutput {
   bool inst_valid_2[FETCH_WIDTH] = {false};
   uint32_t fetch_pc = 0;
   uint32_t fetch_pc_2 = 0;
+  uint32_t fetch_paddr = 0;
+  bool fetch_single_word = false;
+  bool fetch_page_fault = false;
 };
 
 
@@ -137,6 +140,9 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
   if (resp_fire) {
     out.icache_read_complete = true;
     out.fetch_pc = in.module_ifu_resp_pc;
+    out.fetch_paddr = in.module_resp_paddr;
+    out.fetch_single_word = in.module_ifu_resp_single_word;
+    out.fetch_page_fault = in.module_ifu_page_fault;
     const uint32_t mask = ICACHE_LINE_SIZE - 1u;
     const int base_idx = static_cast<int>((in.module_ifu_resp_pc & mask) / 4u);
     if (in.module_ifu_resp_single_word) {
@@ -553,6 +559,9 @@ void apply_true_glue_output(struct icache_out *dst,
   }
   dst->fetch_pc = src.fetch_pc;
   dst->fetch_pc_2 = src.fetch_pc_2;
+  dst->fetch_paddr = src.fetch_paddr;
+  dst->fetch_single_word = src.fetch_single_word;
+  dst->fetch_page_fault = src.fetch_page_fault;
 }
 
 template <typename HW>
@@ -908,6 +917,25 @@ private:
 
 
 } // namespace
+
+void (*g_icache_fill_hook)(uint32_t index, uint32_t tag) = nullptr;
+bool icache_peek_hit(uint32_t index, uint32_t ptag);
+// FE_PAIR: second fetch block of a fetch group read in the same cycle as the first one. Only if it lies in the same 4 KiB page as the first block
+// (same translation) and its line is resident in the I-cache; no state is changed. Returns false when it cannot be served.
+bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words) {
+  if ((a_vpc >> 12) != (b_vpc >> 12)) return false;
+  const uint32_t pb = (a_paddr & ~0xFFFu) | (b_vpc & 0xFFFu);
+  const uint32_t index = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
+  if (!icache_peek_hit(index, pb >> 12)) return false;
+  for (int i = 0; i < nwords; ++i) words[i] = tbhook::mem_read(pb + 4u * i);
+  return true;
+}
+
+bool icache_peek_translate(uint32_t v_addr, CsrStatusIO *status, uint32_t &p_addr) {
+  auto &runtime = true_icache_runtime<icache_module_n::ICache, ExternalReadPortAdapter>();
+  if (runtime.mmu_model == nullptr) return false;
+  return runtime.mmu_model->peek_translate(p_addr, v_addr, 0, status);
+}
 
 ICacheTop *get_icache_instance() {
   static std::unique_ptr<ICacheTop> instance = nullptr;

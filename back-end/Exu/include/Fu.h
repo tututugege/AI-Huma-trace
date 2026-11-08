@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdlib>
+#include <cstdio>
 #include "ExuTypes.h"
 #include "IO.h"
 #include "config.h"
@@ -234,6 +236,11 @@ private:
     const uint32_t pred_target = pred_taken ? inst->ftq_next_pc : inst_pc + 4;
     inst.mispred = !((br_taken && pred_taken && pred_target == pc_br) ||
                      (!br_taken && !pred_taken));
+    { static const bool dg = std::getenv("FE_DIAG") != nullptr; static uint64_t c[4]; static bool rg = false;
+      if (dg) { if (!rg) { rg = true; std::atexit([] { std::printf("[FE_DIAG] BRU resolves with a fact: dir-mispredict(pred T, actual NT)=%llu (pred NT, actual T)=%llu target-only mispredict(both taken, wrong target)=%llu ok=%llu\n", (unsigned long long)c[0], (unsigned long long)c[1], (unsigned long long)c[2], (unsigned long long)c[3]); }); }
+        if (tbhook::fact_by_rob(inst.rob_idx)) { if (br_taken && pred_taken && pred_target != pc_br) c[2]++; else if (pred_taken && !br_taken) c[0]++; else if (!pred_taken && br_taken) c[1]++; else c[3]++; } } }
+    { static int n = std::getenv("FE_PCDBG") ? 30 : 0; static const uint32_t want = std::getenv("FE_PCDBG") ? uint32_t(std::strtoul(std::getenv("FE_PCDBG"), nullptr, 16)) : 0;
+      if (n > 0 && inst_pc == want && inst.mispred && tbhook::fact_by_rob(inst.rob_idx)) { n--; std::printf("[PCDBG] pc=%x off=%d pred_taken=%d taken=%d next_pc=%x pc_br=%x mispred=%d\n", inst_pc, (int)inst->ftq_offset, (int)pred_taken, (int)br_taken, (unsigned)inst->ftq_next_pc, pc_br, (int)inst.mispred); } }
     inst.br_taken = br_taken;
     inst.diag_val = br_taken ? pc_br : (inst_pc + 4);
   }

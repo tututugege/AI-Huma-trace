@@ -7,6 +7,7 @@ struct FTQEntry {
   wire<32> slot_pc[BACKEND_FETCH_WIDTH];
   wire<32> next_pc; // Predicted Target of the block
   wire<1> pred_taken_mask[BACKEND_FETCH_WIDTH];
+  uint8_t nslots = 0; // slots of the fetch group that carry instructions (FE_PAIR: tells a fetch-block boundary after a taken branch)
 
   FTQEntry() {
     for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
@@ -14,6 +15,7 @@ struct FTQEntry {
       pred_taken_mask[i] = false;
     }
     next_pc = 0;
+    nslots = 0;
   }
 };
 

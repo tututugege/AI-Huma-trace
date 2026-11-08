@@ -854,6 +854,17 @@ TlbMmu::Result TlbMmu::walk_and_refill_shared(uint32_t &p_addr, uint32_t v_addr,
   return Result::OK;
 }
 
+bool TlbMmu::peek_translate(uint32_t &p_addr, uint32_t v_addr, uint32_t type, CsrStatusIO *status) const {
+  const TranslateContext ctx_view = build_translate_context(type, status);
+  const uint32_t satp = ctx_view.satp;
+  if (ctx_view.eff_priv == 3 || ((satp & 0x80000000u) == 0)) { p_addr = v_addr; return true; }
+  TlbEntry hit = {};
+  if (!lookup(v_addr, sv32_asid(satp), hit)) return false;
+  if (!check_perm(hit.perm, type, ctx_view.eff_priv, ctx_view.sum, ctx_view.mxr)) return false;
+  p_addr = compose_paddr(v_addr, hit);
+  return true;
+}
+
 TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, uint32_t v_addr,
                                  uint32_t type, CsrStatusIO *status) {
   last_retry_reason_ = RetryReason::NONE;

@@ -1,5 +1,7 @@
 // PMU (EXP-013): builds one cycle of the event bus from the signals the modules already drive. Everything here only
 // reads; it runs after comb_stage_fire_and_recover(), when the handshakes of the cycle are final.
+#include <cstdlib>
+#include <cstdio>
 #include "BackTop.h"
 #include "DataPrefetcher.h"
 #include "Pmu.h"
@@ -81,6 +83,7 @@ void BackTop::pmu_sample() {
     if (!ce.valid || rob_bcast.interrupt) continue;
     committed++;
     const Uop &u = ce.uop;
+    { static const bool ct = std::getenv("FE_COMMIT_TRACE") != nullptr; if (ct) std::printf("[CT] %x %x %x c=%llu\n", (unsigned)u->dbg.pc, (unsigned)u.result, (unsigned)u.diag_val, (unsigned long long)ctx->perf.cycle); }
     const InstType t = decode_inst_type(u->type);
     const bool is_ret = u.tma.is_ret;
     if (t == LOAD || t == AMO) e.add(PMU_COMMIT_LOAD);
@@ -113,6 +116,7 @@ void BackTop::pmu_sample() {
     s.type = static_cast<uint8_t>(decode_inst_type(head->type));
   }
 
+  { static const bool ct = std::getenv("FE_COMMIT_TRACE") != nullptr; if (ct && (dec_bcast.mispred || rob_bcast.flush)) std::printf("[CT] EV %s redirect=%x\n", rob_bcast.flush ? "flush" : "mispred", (unsigned)out.redirect_pc); }
   // ---- control flow / recovery ----
   if (dec_bcast.mispred) e.add(PMU_BR_MISPRED);
   if (rob_bcast.flush) e.add(rob_bcast.exception ? PMU_FLUSH_EXCEPTION : PMU_FLUSH_OTHER);
@@ -120,6 +124,16 @@ void BackTop::pmu_sample() {
   // recovery state for the next cycle: a redirect starts it, the first valid instruction in the dispatch stage ends it
   bool any_valid = false;
   for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->inst_valid[i]);
+  {
+    static int dur = 0; static uint64_t hist[3][64]; static bool reg = false;
+    static const bool diag = std::getenv("FE_DIAG") != nullptr;
+    if (diag) {
+      if (!reg) { reg = true; std::atexit([] { for (int k = 0; k < 3; k++) { std::printf("[FE_DIAG] recov-dur kind=%d:", k); for (int i = 0; i < 64; i++) if (hist[k][i]) std::printf(" %d:%llu", i, (unsigned long long)hist[k][i]); std::printf("\n"); } }); }
+      if (p.recovering) dur++;
+      if (rob_bcast.flush || dec_bcast.mispred) { if (p.recovering && dur) hist[2][dur > 63 ? 63 : dur]++; dur = 0; }
+      else if (any_valid && p.recovering) { hist[p.recov_by_flush ? 1 : 0][dur > 63 ? 63 : dur]++; dur = 0; }
+    }
+  }
   if (rob_bcast.flush || dec_bcast.mispred) {
     p.recovering = true;
     p.recov_by_flush = rob_bcast.flush;

@@ -722,6 +722,9 @@ void SimCpu::front_comb_before_back() {
 
     bool no_taken = true;
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
+      // FE_PAIR: a fetch group may continue with a second block after a predicted-taken branch (pc discontinuity)
+      if (j > 0 && !no_taken && back.in.valid[j - 1] && front.out.inst_valid[j] && front.out.pc[j] != front.out.pc[j - 1] + 4 && front.out.predict_dir[j - 1])
+        no_taken = true;
       back.in.valid[j] =
           no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
       back.in.pc[j] = front.out.pc[j];
