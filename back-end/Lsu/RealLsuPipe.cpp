@@ -51,7 +51,7 @@ struct LpStats {
   uint64_t rp_tlb = 0, rp_addr = 0, rp_hold = 0, rp_data = 0, rp_dc = 0, rp_dc_conflict = 0, rp_dc_mshr = 0;
   uint64_t rdy_cycles_blocked = 0;
   uint64_t unk_wait_overlap = 0, unk_wait_disjoint = 0;
-  uint64_t order_violation = 0, spec_loads = 0, spec_released = 0;
+  uint64_t order_violation = 0, spec_loads = 0, spec_released = 0, vio_multi = 0;
   uint64_t st_drain = 0, st_conflict = 0, st_replay = 0, st_merge_pair = 0;
   uint64_t sta_replay = 0, bounce = 0, wd_ld = 0, wd_st = 0, rblk = 0;
   uint64_t mmio_ld = 0;
@@ -67,10 +67,10 @@ struct LpStats {
                  (unsigned long long)cand, (unsigned long long)cand_false);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] replay: tlb=%llu addr=%llu hold=%llu data=%llu dc=%llu (conflict=%llu mshr=%llu) "
-                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu spec_loads=%llu spec_released=%llu\n",
+                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu spec_loads=%llu spec_released=%llu vio_multi_cycles=%llu\n",
                  (unsigned long long)rp_tlb, (unsigned long long)rp_addr, (unsigned long long)rp_hold, (unsigned long long)rp_data,
                  (unsigned long long)rp_dc, (unsigned long long)rp_dc_conflict, (unsigned long long)rp_dc_mshr,
-                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released);
+                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released, (unsigned long long)vio_multi);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
     std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu spec_pred=%llu spec_ok=%llu spec_fail=%llu oracle_wake=%llu cancel_entries=%llu\n",
@@ -105,11 +105,18 @@ inline uint32_t replay_wait(ReplayType r) {
 static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
 // Wait table (Alpha 21264 style): 2^LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC violated, cleared every
 // LSU_MDP_CLR cycles (0 = never). A load whose bit is set does not pass unknown-address stores. LSU_MDP_BITS=0 disables the predictor.
-static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", 12);
-static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", 2000);
+static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", CFG_LSU_MDP_BITS);
+static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", CFG_LSU_MDP_CLR);
 // Mode 1 = store sets (Chrysos/Emer): a violating (load, store) pair gets the same set id in a PC-indexed table (merging keeps the smaller id);
 // a load waits only for unknown-address older stores of its own set. Mode 0 = the wait table above.
 static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
+// LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
+// the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
+// cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
+static const bool lp_mdp_hw = lsu_pipe_env_mask("LSU_MDP_HW", 1) != 0 && lp_mdp_mode == 0;
+static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
+static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
+static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
 static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> 2) ^ (pc >> (2 + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }
 static std::vector<uint16_t> g_ssit;
 static unsigned g_ssit_next = 1;
@@ -136,11 +143,21 @@ static inline bool mdp_wait(uint32_t pc) {
   if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
   return g_mdp[mdp_idx(pc)] >= lp_mdp_thr;
 }
+static inline void mdp_write_pending();
 static inline void mdp_train(uint32_t pc) {
   if (!lp_mdp_bits) return;
   if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
   uint8_t &c = g_mdp[mdp_idx(pc)];
   if (c < 3) c++;
+}
+static inline void mdp_write_pending() {
+  if (g_mdp_pend.empty()) return;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
+  for (int ix : g_mdp_pend) {
+    uint8_t &c = g_mdp[ix];
+    if (c < 3) c++;
+  }
+  g_mdp_pend.clear();
 }
 static inline void mdp_clean(uint32_t pc) {
   if (!lp_mdp_bits || !lp_mdp_dec || g_mdp.empty()) return;
@@ -247,6 +264,7 @@ static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIP
 
 void RealLsu::comb_cal_p() {
   pw = {};
+  if (lp_mdp_hw && lp_mdp_bits) mdp_write_pending();
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.sf[k] = {};
@@ -557,6 +575,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
+  if (lp_ms_trace && (defer || second)) std::fprintf(stderr, "MS t=%lld wb ldq=%d rob=%d defer=%d second=%d vio=%d\n", (long long)sim_time, idx, (int)l.rob_idx, (int)defer, (int)second, (int)l.vio);
   if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
     if (l.vio) {
       l.second = 1;
@@ -649,6 +668,7 @@ void RealLsu::comb_lsu2exe_p() {
         if (lp_mdp_mode == 0 && !l.vio) mdp_clean(l.pc);
         l.second = 1;
         l.st = L_WBP;
+        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld rel ldq=%d rob=%d\n", (long long)sim_time, i, (int)l.rob_idx);
         g_st.spec_released++;
       }
     }
@@ -684,6 +704,8 @@ void RealLsu::comb_exe2lsu_p() {
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
   int ns = 0;
+  int vio_new = 0;  // loads marked as violating in this cycle
+  uint64_t vio_set = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
     if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA)) continue;
     const MicroOp &inst = x.agu_req[i].uop;
@@ -716,7 +738,10 @@ void RealLsu::comb_exe2lsu_p() {
         if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
         if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
         g_st.order_violation++;
-        if (lp_mdp_mode == 1) ss_train(l.pc, pnxt.stq[j].pc); else mdp_train(l.pc);
+        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld vio ldq=%d rob=%d stq=%u st=%d\n", (long long)sim_time, i, (int)l.rob_idx, j, (int)l.st);
+        if (lp_mdp_mode == 1) ss_train(l.pc, pnxt.stq[j].pc);
+        else if (lp_mdp_hw) { vio_new++; vio_set |= 1ULL << i; }
+        else mdp_train(l.pc);
         l.vio = 1;
         if (l.st == L_SPD) {  // already written back: re-execute with the store visible
           l.second = 1;
@@ -724,6 +749,12 @@ void RealLsu::comb_exe2lsu_p() {
         }
       }
     }
+  }
+  if (vio_new) {
+    if (vio_new > 1) g_st.vio_multi++;
+    if (lp_mdp_hw && lp_mdp_bits)
+      for (int i = 0, n = 0; i < LDQ_SIZE && n < (int)lp_mdp_ntr; i++)
+        if (vio_set >> i & 1) { g_mdp_pend.push_back(mdp_idx(pnxt.ldq[i].pc)); n++; }
   }
   int nl = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
@@ -993,6 +1024,7 @@ void RealLsu::comb_flush_p() {
   }
 
   const DecBroadcastIO &dec = wires->dec_bcast;
+  if (lp_ms_trace && (dec.mispred || wires->rob_bcast.flush)) std::fprintf(stderr, "MS t=%lld %s\n", (long long)sim_time, wires->rob_bcast.flush ? "flush" : "mispred");
   if (dec.mispred) {
     for (PLdq &l : pnxt.ldq)
       if (l.st != L_EMPTY && (l.br_mask & dec.br_mask) != 0) {

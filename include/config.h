@@ -375,6 +375,17 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_MEMSPEC
 #define CFG_LSU_MEMSPEC 0
 #endif
+// Wait table of the memory-dependence predictor (LSU_MDP_MODE 0): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the
+// first load dispatch CFG_LSU_MDP_CLR cycles after the previous clear (0 = never). Env LSU_MDP_BITS / LSU_MDP_CLR override. Exported to the RTL.
+#ifndef CFG_LSU_MDP_BITS
+#define CFG_LSU_MDP_BITS 12
+#endif
+#ifndef CFG_LSU_MDP_CLR
+#define CFG_LSU_MDP_CLR 2000
+#endif
+constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
+constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
+constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
 //   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older
