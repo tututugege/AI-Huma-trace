@@ -573,6 +573,36 @@ void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
 
   front_output_comb(f2b_head, f2b_bypass, use_f2b_bypass, out);
   out.commit_stall = bpu_output.update_queue_full;
+  // FE_DIAG: why the front end delivered no fetch group to the back end this cycle (only counted while the back end could read)
+  {
+    static const bool diag = std::getenv("FE_DIAG") != nullptr;
+    static uint64_t cnt[16]; static bool reg = false; static int since_refetch = 99;
+    if (diag) {
+      if (!reg) { reg = true; std::atexit([] {
+        static const char *nm[] = {"delivered", "refetch-cycle", "post-redirect refill (<=6 cyc)", "icache miss busy", "fetch-addr FIFO empty: S_D override bubble", "fetch-addr FIFO empty: L1 override bubble",
+                                   "fetch-addr FIFO empty: PTAB credit stall", "fetch-addr FIFO empty: other", "icache-side busy/not ready", "IFIFO empty", "PTAB empty (lag)", "f2b/backend side", "predecode flush cycle"};
+        uint64_t tot = 0; for (int i = 0; i < 13; i++) tot += cnt[i];
+        for (int i = 0; i < 13; i++) std::printf("[FE_DIAG] front cycles %-46s %10llu %5.1f%%\n", nm[i], (unsigned long long)cnt[i], tot ? 100.0 * cnt[i] / tot : 0.0); }); }
+      since_refetch = global_refetch ? 0 : since_refetch + 1;
+      int k;
+      if (out.FIFO_valid) k = 0;
+      else if (global_refetch) k = 1;
+      else if (since_refetch <= 6) k = 2;
+      else if (ic_out.perf_miss_busy) k = 3;
+      else if (predecode_flush) k = 12;
+      else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
+        if (g_use_pipe && g_pipe_dec.ovr) k = 4;
+        else if (g_use_pipe && g_pipe_txn.s_l1_ovr) k = 5;
+        else if (rd.fetch_addr_fifo_full_latch_snapshot || (g_use_pipe && g_pipe_txn.s_stall_ptab)) k = 6;
+        else k = 7;
+      }
+      else if (!ic_out.icache_read_ready) k = 8;
+      else if (rd.fifo_empty_latch_snapshot) k = 9;
+      else if (rd.ptab_empty_latch_snapshot) k = 10;
+      else k = 11;
+      cnt[k]++;
+    }
+  }
 }
 
 } // namespace
