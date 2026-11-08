@@ -70,11 +70,14 @@ struct PLdq {
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
   wire<32> pc = 0;            // load PC (memory-dependence predictor)
+  wire<16> sset = 0;          // store-set id of the load PC (predictor mode 1)
   wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
 };
 
 struct PStq {
+  wire<32> pc = 0;            // store PC (predictor mode 1)
+  wire<16> sset = 0;          // store-set id of the store PC
   wire<1> va_v = 0;           // STA arrived (vaddr[11:0] + size known: partial CAM can compare)
   wire<32> vaddr = 0;
   wire<1> pa_v = 0;           // DTLB hit: paddr known
