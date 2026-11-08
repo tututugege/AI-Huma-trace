@@ -21,6 +21,9 @@ static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1>
   resp.pc = entry.slot_pc[req.ftq_offset];
   resp.pred_taken = entry.pred_taken_mask[req.ftq_offset];
   resp.next_pc = entry.next_pc;
+  // FE_PAIR: a taken branch followed by a slot of a different fetch block (the group continues at its target)
+  if (entry.pred_taken_mask[req.ftq_offset] && req.ftq_offset + 1 < entry.nslots && entry.slot_pc[req.ftq_offset + 1] != entry.slot_pc[req.ftq_offset] + 4)
+    resp.next_pc = entry.slot_pc[req.ftq_offset + 1];
 }
 
 // FTQ: ring of fetch blocks, allocated at the tail when a block is accepted, freed at the head when its last
@@ -105,9 +108,11 @@ void PreIduQueue::comb_accept_front() {
   FTQEntry &block = ftq_lookup_entries_1[ftq_idx];
   block = FTQEntry();
   block.next_pc = wires->in.predict_next_fetch_address[0];
+  block.nslots = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     block.slot_pc[i] = wires->in.pc[i];
     block.pred_taken_mask[i] = wires->in.predict_dir[i];
+    if (wires->in.valid[i]) block.nslots = i + 1;
   }
   ftq_train_meta_fifo_1[ftq_idx] = FTQTrainMetaEntry();
   ftq_train_meta_fifo_1[ftq_idx].meta = wires->in.meta;

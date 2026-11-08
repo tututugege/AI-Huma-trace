@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unordered_set>
+#include <vector>
 #include <cstdlib>
 
 // ============================================================================
@@ -30,6 +32,63 @@ static bool ptab_full_latch = false;
 static bool ptab_empty_latch = true;
 static bool front2back_fifo_full_latch = false;
 static bool front2back_fifo_empty_latch = true;
+// ---- FE_IPF: I-cache prefetch driven by the BPU run-ahead. Every fetch address the BPU pushes into the fetch-address FIFO is a candidate: if its line
+// is not in the I-cache, has been filled before (so it is assumed to sit in the LLC) and no prefetch of it is in flight, a prefetch is started and the
+// line is installed into the I-cache after FE_IPF_LAT cycles (tag + valid only; LLC / bus traffic of the prefetch is not modelled).
+bool icache_peek_translate(uint32_t v_addr, CsrStatusIO *status, uint32_t &p_addr);
+bool icache_prefetch_install(uint32_t index, uint32_t ptag);
+bool icache_peek_hit(uint32_t index, uint32_t ptag);
+extern void (*g_icache_fill_hook)(uint32_t index, uint32_t tag);
+namespace ipf {
+static const int on = std::getenv("FE_IPF") ? std::atoi(std::getenv("FE_IPF")) : 0;
+static const int lat = std::getenv("FE_IPF_LAT") ? std::atoi(std::getenv("FE_IPF_LAT")) : 12;
+static const size_t maxfl = std::getenv("FE_IPF_MAX") ? size_t(std::atoi(std::getenv("FE_IPF_MAX"))) : 4;
+struct Fl { uint32_t index, tag; uint64_t ready; };
+static std::vector<Fl> fl;
+static std::unordered_set<uint32_t> seen, pfd;   // key = tag << 8 | index
+static uint64_t n_issue = 0, n_install = 0, n_res = 0, n_unseen = 0, n_noxl = 0, n_full = 0, n_dup = 0, n_useful = 0, n_demand = 0;
+static inline uint32_t key(uint32_t index, uint32_t tag) { return (tag << 8) | index; }
+static void note_fill(uint32_t index, uint32_t tag) { seen.insert(key(index, tag)); }
+static void init() {
+  static bool done = false;
+  if (done || !on) return;
+  done = true;
+  g_icache_fill_hook = note_fill;
+  std::atexit([] { std::printf("[FE_IPF] lat=%d max=%zu issued=%llu installed=%llu useful=%llu (demand line fetches %llu) | skipped: resident=%llu unseen=%llu dup=%llu full=%llu no-xlate=%llu\n", lat, maxfl,
+    (unsigned long long)n_issue, (unsigned long long)n_install, (unsigned long long)n_useful, (unsigned long long)n_demand, (unsigned long long)n_res, (unsigned long long)n_unseen, (unsigned long long)n_dup, (unsigned long long)n_full, (unsigned long long)n_noxl); });
+}
+static void demand(uint32_t paddr) {
+  if (!on) return;
+  n_demand++;
+  const uint32_t k = key((paddr >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u), paddr >> 12);
+  if (pfd.erase(k)) n_useful++;
+}
+static void tick(uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
+  if (!on) return;
+  init();
+  for (size_t i = 0; i < fl.size();) {
+    if (fl[i].ready <= now) { if (icache_prefetch_install(fl[i].index, fl[i].tag)) { n_install++; pfd.insert(key(fl[i].index, fl[i].tag)); } fl.erase(fl.begin() + i); }
+    else i++;
+  }
+  for (int c = 0; c < n; c++) {
+    uint32_t pa;
+    if (!icache_peek_translate(cand[c], csr, pa)) { n_noxl++; continue; }
+    const uint32_t index = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u), tag = pa >> 12;
+    if (icache_peek_hit(index, tag)) { n_res++; continue; }
+    if (!seen.count(key(index, tag))) { n_unseen++; continue; }
+    bool dup = false;
+    for (const Fl &f : fl) if (f.index == index && f.tag == tag) dup = true;
+    if (dup) { n_dup++; continue; }
+    if (fl.size() >= maxfl) { n_full++; continue; }
+    fl.push_back({index, tag, now + uint64_t(lat)});
+    n_issue++;
+  }
+}
+}  // namespace ipf
+
+static bool pend_valid = false;           // FE_PAIR: ICache request in flight and its second block
+static uint32_t pend_addr = 0;
+static FetchPair pend_pair{};
 static SimContext *front_ctx = nullptr;
 
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
@@ -74,7 +133,7 @@ static void front_ptab_write_comb(const bpuf::OutputPayload &bpu_output, wire1_t
   ptab_in.write_enable = true;
   for (int i = 0; i < FETCH_WIDTH; i++) {
     ptab_in.predict_dir[i] = bpu_output.out_pred_dir[i];
-    ptab_in.predict_base_pc[i] = bpu_output.out_pred_base_pc + (i * 4);
+    ptab_in.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * 4);
   }
   ptab_in.meta = bpu_output.meta;
   ptab_in.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
@@ -99,13 +158,13 @@ static void front_front2back_write_comb(const instruction_FIFO_out &fifo_out, co
   for (int i = 0; i < FETCH_WIDTH; i++) {
     fifo_in.fetch_group[i] = fifo_out.instructions[i];
     fifo_in.page_fault_inst[i] = fifo_out.page_fault_inst[i];
-    fifo_in.inst_valid[i] = fifo_out.inst_valid[i];
+    fifo_in.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
     fifo_in.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
     fifo_in.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     if (bypass) {
       bypass_out.fetch_group[i] = fifo_out.instructions[i];
       bypass_out.page_fault_inst[i] = fifo_out.page_fault_inst[i];
-      bypass_out.inst_valid[i] = fifo_out.inst_valid[i];
+      bypass_out.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
       bypass_out.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
       bypass_out.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     }
@@ -163,6 +222,7 @@ static void accumulate_fetch_addr_req(FetchAddrCombOut &acc,
         }
         acc.push_en = true;
         acc.push_data = step.push_data;
+        acc.push_pair = step.push_pair;
     }
 }
 
@@ -409,6 +469,11 @@ void FrontComb::write_fetch_addr() {
   fetch_addr_in.drop_tail_n = 0;
   fetch_addr_in.write_enable = true;
   fetch_addr_in.fetch_address = bpu_output.fetch_address;
+  req.front_state.ipf_ncand = 0;
+  req.front_state.ipf_cand[req.front_state.ipf_ncand++] = bpu_output.fetch_address;
+  if (bpu_output.pair_valid) req.front_state.ipf_cand[req.front_state.ipf_ncand++] = bpu_output.pair_addr2;
+  fetch_addr_in.pair = FetchPair{};
+  if (bpu_output.pair_valid) { fetch_addr_in.pair.valid = true; fetch_addr_in.pair.addr2 = bpu_output.pair_addr2; fetch_addr_in.pair.a_len = bpu_output.pair_a_len; fetch_addr_in.pair.b_len = bpu_output.pair_b_len; }
   fetch_address_FIFO_out unused_out{};
   FetchAddrCombOut step{};
   fetch_address_FIFO_comb_calc(&fetch_addr_in, &fetch_addr_rd, &unused_out, &fetch_addr_rd, &step);
@@ -443,13 +508,35 @@ void FrontComb::write_instruction_fifo() {
   if (rd.fifo_full_latch_snapshot || !ic_out.icache_read_complete || global_reset || global_refetch) return;
 
   fifo_in.write_enable = true;
+  // FE_PAIR: the second block of the request that completes now (if the entry had one and its line can be read in the same cycle)
+  FetchPair pr{};
+  if (fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc) pr = fetch_addr_head.pair;
+  else if (rd.pend_valid_snapshot && rd.pend_addr_snapshot == ic_out.fetch_pc) pr = rd.pend_pair_snapshot;
+  inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire1_t gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
+  for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * 4); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
+  ipf::demand(ic_out.fetch_paddr);
+  bool fused = false;
+  if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1]) {
+    uint32_t w2[FETCH_WIDTH];
+    const bool ok = icache_fetch_second(ic_out.fetch_pc, ic_out.fetch_paddr, pr.addr2, pr.b_len, w2);
+    { static uint64_t nok = 0, nbad = 0, npg = 0; static bool rg = false;
+      if (!rg) { rg = true; std::atexit([] { std::printf("[FE_PAIR] second-block fetch: ok=%llu failed=%llu (different page: %llu)\n", (unsigned long long)nok, (unsigned long long)nbad, (unsigned long long)npg); }); }
+      if (ok) nok++; else { nbad++; if ((ic_out.fetch_pc >> 12) != (pr.addr2 >> 12)) npg++; } }
+    for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
+      const int j = i - pr.a_len;
+      gpc[i] = pr.addr2 + 4u * j;
+      gv[i] = ok && j < pr.b_len; gpf[i] = false; grp[i] = ok && j < pr.b_len ? w2[j] : INST_NOP;
+    }
+    fused = ok;
+    if (!ok) for (int i = pr.a_len; i < FETCH_WIDTH; i++) gv[i] = false;   // the group stays the first block only; the PTAB entry (with the second block) then fails the check below
+  }
   for (int i = 0; i < FETCH_WIDTH; i++) {
-    fifo_in.fetch_group[i] = ic_out.fetch_group[i];
-    fifo_in.pc[i] = ic_out.fetch_pc + (i * 4);
-    fifo_in.page_fault_inst[i] = ic_out.page_fault_inst[i];
-    fifo_in.inst_valid[i] = ic_out.inst_valid[i];
-    if (ic_out.inst_valid[i]) {
-      predecode_in predecode_inp{ic_out.fetch_group[i], ic_out.fetch_pc + (i * 4)};
+    fifo_in.fetch_group[i] = grp[i];
+    fifo_in.pc[i] = gpc[i];
+    fifo_in.page_fault_inst[i] = gpf[i];
+    fifo_in.inst_valid[i] = gv[i];
+    if (gv[i]) {
+      predecode_in predecode_inp{grp[i], gpc[i]};
       predecode_read_data predecode_rd{};
       PredecodeResult result{};
       predecode_seq_read(&predecode_inp, &predecode_rd);
@@ -461,6 +548,12 @@ void FrontComb::write_instruction_fifo() {
       fifo_in.predecode_target_address[i] = 0;
     }
   }
+  if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && ic_out.inst_valid[pr.a_len - 1] && !ic_out.fetch_single_word) {   // FE_PAIR: next pc after the last valid slot
+    int last = -1;
+    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_in.inst_valid[i]) last = i;
+    fifo_in.seq_next_pc = fifo_in.pc[last] + 4u;
+    (void)fused;
+  } else
   fifo_in.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
 
   instruction_FIFO_out unused_out{};
@@ -483,6 +576,22 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
   }
 
   if (!fifo_read_enable) return;
+  static const bool pair_on = bpuf::cfg_pair() != 0;
+  bool multi = false;
+  if (pair_on) {
+    // FE_PAIR: only the slots whose pc agrees with the PTAB entry are usable (the BPU may have replaced the second block / the first block's end)
+    bool cut = false;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      if (!cut && fifo_head.inst_valid[i] && fifo_head.pc[i] != ptab_head.predict_base_pc[i]) cut = true;
+      if (cut) { fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0; }
+    }
+    for (int i = 1; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && fifo_head.pc[i] != fifo_head.pc[i - 1] + 4) multi = true;
+    if (cut) {  // the group lost slots: its sequential continuation is the pc after the last usable slot
+      int last = -1;
+      for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i]) last = i;
+      if (last >= 0) fifo_head.seq_next_pc = fifo_head.pc[last] + 4u;
+    }
+  } else
   for (int i = 0; i < FETCH_WIDTH; i++) {
     if (fifo_head.pc[i] != ptab_head.predict_base_pc[i]) {
       printf("ERROR: fifo pc[%d]: %x != ptab pc[%d]: %x\n", i, fifo_head.pc[i], i, ptab_head.predict_base_pc[i]);
@@ -491,10 +600,15 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
   }
   predecode_checker_in checker_in;
   front_checker_input_comb(fifo_head, ptab_head, checker_in);
+  checker_in.multi = multi;
+  for (int i = 0; i < FETCH_WIDTH; i++) { checker_in.pc[i] = fifo_head.pc[i]; checker_in.inst_valid[i] = fifo_head.inst_valid[i]; }
   predecode_checker_read_data checker_rd{};
   predecode_checker_seq_read(&checker_in, &checker_rd);
   predecode_checker_comb(checker_rd, checker_out);
   if (checker_out.predecode_flush_enable) {
+    static const bool dg = std::getenv("FE_DIAG") != nullptr;
+    if (dg && multi) { static uint64_t c[4][2]; static bool rg = false; if (!rg) { rg = true; std::atexit([] { std::printf("[FE_PAIR] predecode flushes of two-block groups: first-seg branch leads elsewhere=%llu/%llu no-branch-where-predicted=%llu/%llu last-seg mismatch=%llu/%llu (seg0/seg1)\n", (unsigned long long)c[1][0], (unsigned long long)c[1][1], (unsigned long long)c[2][0], (unsigned long long)c[2][1], (unsigned long long)c[3][0], (unsigned long long)c[3][1]); }); }
+      c[checker_out.reason & 3][checker_out.seg ? 1 : 0]++; }
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
   }
@@ -512,13 +626,16 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
         const uint32_t pc = fifo_head.pc[i], inst = fifo_head.instructions[i];
         const bool taken = checker_out.predict_dir_corrected[i];
         const uint32_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];
+        if (multi && i >= checker_out.keep_n) break;
         if (ty == PREDECODE_DIRECT_JUMP_NO_JAL && !hist) { pd.bits |= uint8_t(taken) << pd.nbits; pd.nbits++; }
         if (!taken) continue;
-        if (hist) { pd.nbits = bpuf::cfg_hsym(); pd.bits = bpuf::hist_sym(pc, tgt); }
+        if (hist) { pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::cfg_hsym(); }
         const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
-        if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + 4; }
-        else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) pd.ras_op = 2;
-        break;
+        if (pd.ras_op == 0) {
+          if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + 4; }
+          else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) pd.ras_op = 2;
+        }
+        if (!multi || i + 1 >= int(checker_out.keep_n)) break;
       }
     }
   }
@@ -557,6 +674,14 @@ void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
     invalidate_in.invalidate_req = true;
     invalidate_in.csr_status = in.csr_status;
     icache_comb_calc(&invalidate_in, &ic_out);
+  }
+  {   // FE_PAIR: remember the second block of the ICache request that is still in flight
+    bool nv = rd.pend_valid_snapshot; fetch_addr_t na = rd.pend_addr_snapshot; FetchPair np = rd.pend_pair_snapshot;
+    const bool head_done = ic_out.icache_read_complete && fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc;
+    if (ic_out.icache_read_complete && nv && rd.pend_addr_snapshot == ic_out.fetch_pc) nv = false;
+    if (fetch_addr_head.read_valid && !head_done) { nv = true; na = fetch_addr_head.fetch_address; np = fetch_addr_head.pair; }
+    if (global_refetch || global_reset) nv = false;
+    state.next_pend_valid = nv; state.next_pend_addr = na; state.next_pend_pair = np;
   }
   state.next_predecode_refetch = predecode_flush;
   state.next_pd = pd_next;
@@ -638,6 +763,7 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   rd.ptab_empty_latch_snapshot = ptab_empty_latch;
   rd.front2back_fifo_full_latch_snapshot = front2back_fifo_full_latch;
   rd.front2back_fifo_empty_latch_snapshot = front2back_fifo_empty_latch;
+  rd.pend_valid_snapshot = pend_valid; rd.pend_addr_snapshot = pend_addr; rd.pend_pair_snapshot = pend_pair;
 
   fetch_address_FIFO_in fetch_addr_in;
   instruction_FIFO_in fifo_in;
@@ -677,6 +803,7 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   predecode_checker_seq_write();
   icache_seq_write();
 
+  ipf::tick(front_ctx ? front_ctx->perf.cycle : 0, req.front_state.ipf_cand, req.front_state.valid ? req.front_state.ipf_ncand : 0, inp.csr_status);
   if (req.front_state.valid) {
     front_sim_time = req.front_state.next_front_sim_time;
     predecode_refetch = req.front_state.next_predecode_refetch;
@@ -690,6 +817,7 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
     ptab_empty_latch = req.front_state.next_ptab_empty;
     front2back_fifo_full_latch = req.front_state.next_front2back_fifo_full;
     front2back_fifo_empty_latch = req.front_state.next_front2back_fifo_empty;
+    pend_valid = req.front_state.next_pend_valid; pend_addr = req.front_state.next_pend_addr; pend_pair = req.front_state.next_pend_pair;
   }
 }
 

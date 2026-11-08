@@ -200,6 +200,8 @@ public:
   Result translate(uint32_t &p_addr, uint32_t v_addr, uint32_t type,
                    CsrStatusIO *status);
   void translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp);
+  // FE_IPF: translation without any side effect (no walk, no TLB update); false when the TLB cannot translate it right now
+  bool peek_translate(uint32_t &p_addr, uint32_t v_addr, uint32_t type, CsrStatusIO *status) const;
   void flush();
   void seq();
   void cancel_pending_walk();

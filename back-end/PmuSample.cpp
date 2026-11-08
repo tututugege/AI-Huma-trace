@@ -83,6 +83,7 @@ void BackTop::pmu_sample() {
     if (!ce.valid || rob_bcast.interrupt) continue;
     committed++;
     const Uop &u = ce.uop;
+    { static const bool ct = std::getenv("FE_COMMIT_TRACE") != nullptr; if (ct) std::printf("[CT] %x %x %x c=%llu\n", (unsigned)u->dbg.pc, (unsigned)u.result, (unsigned)u.diag_val, (unsigned long long)ctx->perf.cycle); }
     const InstType t = decode_inst_type(u->type);
     const bool is_ret = u.tma.is_ret;
     if (t == LOAD || t == AMO) e.add(PMU_COMMIT_LOAD);
@@ -115,6 +116,7 @@ void BackTop::pmu_sample() {
     s.type = static_cast<uint8_t>(decode_inst_type(head->type));
   }
 
+  { static const bool ct = std::getenv("FE_COMMIT_TRACE") != nullptr; if (ct && (dec_bcast.mispred || rob_bcast.flush)) std::printf("[CT] EV %s redirect=%x\n", rob_bcast.flush ? "flush" : "mispred", (unsigned)out.redirect_pc); }
   // ---- control flow / recovery ----
   if (dec_bcast.mispred) e.add(PMU_BR_MISPRED);
   if (rob_bcast.flush) e.add(rob_bcast.exception ? PMU_FLUSH_EXCEPTION : PMU_FLUSH_OTHER);

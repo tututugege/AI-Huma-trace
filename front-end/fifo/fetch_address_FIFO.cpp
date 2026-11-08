@@ -14,6 +14,7 @@ static void fetch_address_FIFO_comb_impl(const fetch_address_FIFO_in &inp, const
   out.out_regs.empty = true;
   out.out_regs.read_valid = false;
   out.out_regs.fetch_address = 0;
+  out.out_regs.pair = FetchPair{};
 
   if (inp.reset) {
     out.clear_fifo = true;
@@ -39,10 +40,12 @@ static void fetch_address_FIFO_comb_impl(const fetch_address_FIFO_in &inp, const
     out.out_regs.read_valid = true;
     out.out_regs.fetch_address =
         has_data_before_read ? rd.head_entry : inp.fetch_address;
+    out.out_regs.pair = has_data_before_read ? rd.head_pair : inp.pair;
   }
 
   out.push_en = do_write;
   out.push_data = inp.fetch_address;
+  out.push_pair = inp.pair;
   out.pop_en = do_read;
   out.drop_tail_n = inp.refetch ? 0 : inp.drop_tail_n;
 
@@ -70,6 +73,7 @@ public:
     rd.head_valid = (size_ > 0);
     if (rd.head_valid) {
       rd.head_entry = entries_[0];
+      rd.head_pair = pairs_[0];
       rd.head_age = ages_[0];
     }
   }
@@ -95,6 +99,7 @@ public:
       }
       if (next_rd.size == 0) {
         next_rd.head_entry = comb_out.push_data;
+        next_rd.head_pair = comb_out.push_pair;
         next_rd.head_valid = true;
       }
       ++next_rd.size;
@@ -113,6 +118,7 @@ public:
         next_rd.head_valid = false;
       } else if (comb_out.push_en) {
         next_rd.head_entry = comb_out.push_data;
+        next_rd.head_pair = comb_out.push_pair;
         next_rd.head_valid = true;
       }
     }
@@ -132,11 +138,12 @@ public:
     if (req.clear_fifo) {
       size_ = 0;
       std::memset(entries_, 0, sizeof(entries_));
+      for (auto &q : pairs_) q = FetchPair{};
       std::memset(ages_, 0, sizeof(ages_));
     }
     if (req.drop_tail_n) {
       const fetch_addr_fifo_size_t n = req.drop_tail_n < size_ ? req.drop_tail_n : size_;
-      for (fetch_addr_fifo_size_t i = size_ - n; i < size_; ++i) { entries_[i] = 0; ages_[i] = 0; }
+      for (fetch_addr_fifo_size_t i = size_ - n; i < size_; ++i) { entries_[i] = 0; pairs_[i] = FetchPair{}; ages_[i] = 0; }
       size_ -= n;
     }
     for (fetch_addr_fifo_size_t i = 0; i < size_; ++i) if (ages_[i] < 3) ages_[i]++;  // one cycle older
@@ -146,6 +153,7 @@ public:
         std::exit(1);
       }
       ages_[size_] = 0;
+      pairs_[size_] = req.push_pair;
       entries_[size_++] = req.push_data;
     }
     if (req.pop_en) {
@@ -155,16 +163,19 @@ public:
       }
       for (fetch_addr_fifo_size_t i = 1; i < size_; ++i) {
         entries_[i - 1] = entries_[i];
+        pairs_[i - 1] = pairs_[i];
         ages_[i - 1] = ages_[i];
       }
       --size_;
       entries_[size_] = 0;
+      pairs_[size_] = FetchPair{};
       ages_[size_] = 0;
     }
   }
 
 private:
   fetch_addr_t entries_[FETCH_ADDR_FIFO_SIZE]{};
+  FetchPair pairs_[FETCH_ADDR_FIFO_SIZE]{};
   uint8_t ages_[FETCH_ADDR_FIFO_SIZE]{};
   fetch_addr_fifo_size_t size_ = 0;
 };
