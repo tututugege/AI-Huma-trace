@@ -1,6 +1,7 @@
 #include "Wires.h"
 #include "BeginCheck.h"
 #include "Ren.h"
+#include "Pmu.h"
 #include "config.h"
 #include <algorithm>
 #include <cstdlib>
@@ -114,6 +115,7 @@ void Ren::comb_alloc() {
       stall = true;
     }
   }
+  g_pmu_back.ren_no_preg = stall;
 }
 
 // Source/old-destination lookup in spec_RAT; an older instruction of the same group that writes the same architectural

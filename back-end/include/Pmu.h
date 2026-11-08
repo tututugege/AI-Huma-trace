@@ -41,6 +41,10 @@ struct PmuFrontSignals {
 };
 inline PmuFrontSignals g_pmu_front;
 
+// Model-only back-pressure flags (EXP-016): written by the comb stage of Ren / Idu, read by the sampler.
+struct PmuBackSignals { bool ren_no_preg = false, idu_no_brtag = false; };
+inline PmuBackSignals g_pmu_back;
+
 // What blocks commit, per static instruction (model-only).
 struct PmuPcStat {
   uint64_t commits = 0;

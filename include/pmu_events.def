@@ -69,6 +69,10 @@ PMU_EV(PF_ISSUED,            mem,    1, "L1D prefetches issued")
 PMU_EV(PF_USEFUL,            mem,    1, "demand hits on prefetched lines")
 PMU_EV(PF_LATE,              mem,    1, "demand loads that merged into an in-flight prefetch")
 // ---- occupancy (summed every cycle: average = event / CYCLES) ---------------------------------------------------------------
+// ---- model-only back-pressure causes (EXP-016 DSE; not on the RTL bus). "of which" parts of SLOT_FE_OTHER: the empty dispatch slot is empty because
+//      rename/IDU is stalled (cause sampled in the same cycle), not because the frontend failed to deliver. ----
+PMU_EV(SLOT_FE_OTHER_NOPREG, slot,   4, "  of SLOT_FE_OTHER: rename stalled, no free physical register (PRF too small)")
+PMU_EV(SLOT_FE_OTHER_NOBRTAG,slot,   4, "  of SLOT_FE_OTHER: IDU stalled, no free branch tag (MAX_BR_NUM too small)")
 PMU_EV(OCC_ROB,              occ,    8, "ROB entries in use (valid instructions)")
 PMU_EV(OCC_LDQ,              occ,    7, "load-queue entries in use")
 PMU_EV(OCC_STQ,              occ,    7, "store-queue entries in use")
