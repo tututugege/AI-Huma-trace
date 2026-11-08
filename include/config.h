@@ -375,6 +375,17 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_MEMSPEC
 #define CFG_LSU_MEMSPEC 0
 #endif
+// Front-end fast paths (EXP-019, FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Defaults off; envs FE_RFAST / FE_BFAST override.
+//   FE_RFAST bit0 BPU issues the first block in the redirect cycle, bit1 PTAB write-to-read bypass, bit2 I-cache ready right after a
+//   redirect, bit3 pre-IDU buffer bypass.  FE_BFAST bit0 / bit1: the corrected block issues in the same cycle after an S1 (L1) / S_D override.
+#ifndef CFG_FE_RFAST
+#define CFG_FE_RFAST 0
+#endif
+#ifndef CFG_FE_BFAST
+#define CFG_FE_BFAST 0
+#endif
+constexpr int FE_RFAST = CFG_FE_RFAST;
+constexpr int FE_BFAST = CFG_FE_BFAST;
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
 //   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older

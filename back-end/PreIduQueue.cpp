@@ -11,7 +11,7 @@ static InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH];
 static int push_count = 0;
 // FE_RFAST bit3: with an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
 static bool g_bypass = false;
-static const bool g_bypass_on = ((std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : 0) & 8) != 0;
+static const bool g_bypass_on = ((std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : CFG_FE_RFAST) & 8) != 0;
 
 static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1> entry_valid, const FtqPcReadReq &req) {
   resp = {};

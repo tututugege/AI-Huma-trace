@@ -38,9 +38,9 @@ inline int cfg_ub_hbits() { static const int v = env_int("BPO_UB_HBITS", 0); ret
 inline int cfg_loop() { static const int v = env_int("BPO_LOOP", 0); return v; }       // S0 single-block loop exit prediction (needs BPO_HIST=1)
 inline int cfg_pdckpt() { static const int v = env_int("BPO_PDCKPT", 1); return v; }   // checkpoint per PTAB entry: exact history / RAS restore at a predecode flush
 // FE_RFAST (FRONTEND_NOTES.md): bit0 = S0 issues the first block of a redirect in the refetch cycle itself (instead of one cycle later)
-inline int cfg_rfast() { static const int v = env_int("FE_RFAST", 0); return v; }
+inline int cfg_rfast() { static const int v = env_int("FE_RFAST", CFG_FE_RFAST); return v; }
 // FE_BFAST: bit0 = an S1-level (L1) override issues the corrected block in the same cycle (no bubble), bit1 = an S_D override issues the corrected block in the same cycle (1 bubble cycle less)
-inline int cfg_bfast() { static const int v = env_int("FE_BFAST", 0); return v; }
+inline int cfg_bfast() { static const int v = env_int("FE_BFAST", CFG_FE_BFAST); return v; }
 // FE_PAIR=1: dual-block fetch. When the S0 guess of a block is a taken branch, the block at its target is looked up in the same cycle
 // (second uBTB read, second set of main-predictor reads in S1) and both are fetched as one group (<= FETCH_WIDTH slots in total).
 inline int cfg_pair() { static const int v = env_int("FE_PAIR", 0); return v; }

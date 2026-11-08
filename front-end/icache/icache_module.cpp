@@ -285,7 +285,7 @@ void ICache::lookup(uint32_t index) {
   bool req_valid_next = io.regs.req_valid_r;
 
   if (kill_pipe) {
-    static const bool rfast_ready = (std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : 0) & 4;   // FE_RFAST bit2: no dead cycle after a redirect
+    static const bool rfast_ready = (std::getenv("FE_RFAST") ? std::atoi(std::getenv("FE_RFAST")) : CFG_FE_RFAST) & 4;   // FE_RFAST bit2: no dead cycle after a redirect
     req_ready_w = rfast_ready && state_next == IDLE;
     req_valid_next = false;
     io.out.mmu_req_valid = false;
