@@ -378,7 +378,7 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 // Wait table of the memory-dependence predictor (LSU_MDP_MODE 0): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the
 // first load dispatch CFG_LSU_MDP_CLR cycles after the previous clear (0 = never). Env LSU_MDP_BITS / LSU_MDP_CLR override. Exported to the RTL.
 #ifndef CFG_LSU_MDP_BITS
-#define CFG_LSU_MDP_BITS 12
+#define CFG_LSU_MDP_BITS 6
 #endif
 #ifndef CFG_LSU_MDP_CLR
 #define CFG_LSU_MDP_CLR 2000

@@ -150,7 +150,7 @@ static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", 0);
 // LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
 // the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
 // cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
-static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", 1) : 0;
+static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", 2) : 0;
 static const bool lp_mdp_hw = lp_mdp_hwm != 0;
 // LSU_MDP_HW=2: the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
 // trains the table in the following cycle, so the table is written two cycles after the violation, from registers (no STA-arrival-to-table-write path)
