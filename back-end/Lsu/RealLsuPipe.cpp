@@ -490,10 +490,6 @@ void RealLsu::comb_lsu2dis_p() {
   for (const PLdq &l : pcur.ldq) empty += l.st == L_EMPTY;
   wires->lsu2dis.ldq_free = empty;
   wires->lsu2dis.stq_free = STQ_SIZE - count;
-  if (STQ_UNC_LIMIT < STQ_SIZE) {  // EXP-024: committed stores do not take dispatch capacity (only allocated-but-uncommitted ones count)
-    const uint32_t unc = count - std::min<uint32_t>(pcur.stq_ccount, count);
-    wires->lsu2dis.stq_free = std::min<uint32_t>(STQ_SIZE - count, unc >= (uint32_t)STQ_UNC_LIMIT ? 0 : STQ_UNC_LIMIT - unc);
-  }
   uint32_t n = 0;
   for (int i = 0; i < LDQ_SIZE && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
     if (pcur.ldq[i].st == L_EMPTY) {

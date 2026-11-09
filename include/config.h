@@ -659,12 +659,6 @@ constexpr int FTQ_ROB_PC_PORT_NUM = 1;
 #endif
 static_assert(CONFIG_STQ_SIZE > 0, "CONFIG_STQ_SIZE must be positive");
 constexpr int STQ_SIZE = CONFIG_STQ_SIZE;
-// EXP-024 upper bound for a post-commit write buffer: with CFG_STQ_UNC=N (< STQ_SIZE) dispatch sees only the allocated-but-uncommitted
-// stores (limit N); committed stores keep a physical STQ entry (so forwarding, conflict CAM and drain are unchanged) but take no dispatch capacity.
-#ifndef CFG_STQ_UNC
-#define CFG_STQ_UNC 0
-#endif
-constexpr int STQ_UNC_LIMIT = CFG_STQ_UNC > 0 ? CFG_STQ_UNC : CONFIG_STQ_SIZE;
 #ifndef CFG_LDQ_SIZE
 #define CFG_LDQ_SIZE 64
 #endif
