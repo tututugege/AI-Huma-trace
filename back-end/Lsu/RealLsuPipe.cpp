@@ -215,11 +215,11 @@ struct CamRes {
   bool v = false;
   uint8_t idx = 0;
   bool unk = false;  // memory speculation: an older store younger than the candidate had no address (the load passes it)
-  uint64_t skip = 0; // LSU_MS_DATA: the unknown-address stores that were passed (bit = STQ index)
+  stq_mask_t skip = 0; // LSU_MS_DATA: the unknown-address stores that were passed (bit = STQ index)
 };
 // `ov`: STQ entries whose STA arrives in this very cycle (AGU output): their vaddr/size bypass into the CAM (a 4x4
 // comparator set against the STA ports in hardware), so a load issued together with an older STA is not stalled.
-CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const PLdq &l, bool full, bool spec_ok = false) {
+CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, stq_mask_t ov, const PLdq &l, bool full, bool spec_ok = false) {
   CamRes r;
   int unk_rank = -1;
   const uint32_t head = s.stq_head;
@@ -242,7 +242,7 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, uint64_t ov, const 
     if (!sv.va_v) {
       if (spec_ok && !(lp_mdp_mode == 1 && l.sset && st.sset == l.sset)) {  // pass the unknown-address store (checked when its address arrives)
         unk_rank = std::max(unk_rank, (int)rank);
-        r.skip |= 1ULL << j;
+        r.skip |= (stq_mask_t)1 << j;
         continue;
       }
       c = true;
@@ -406,6 +406,10 @@ void RealLsu::comb_lsu2dis_p() {
   for (const PLdq &l : pcur.ldq) empty += l.st == L_EMPTY;
   wires->lsu2dis.ldq_free = empty;
   wires->lsu2dis.stq_free = STQ_SIZE - count;
+  if (STQ_UNC_LIMIT < STQ_SIZE) {  // EXP-024: committed stores do not take dispatch capacity (only allocated-but-uncommitted ones count)
+    const uint32_t unc = count - std::min<uint32_t>(pcur.stq_ccount, count);
+    wires->lsu2dis.stq_free = std::min<uint32_t>(STQ_SIZE - count, unc >= (uint32_t)STQ_UNC_LIMIT ? 0 : STQ_UNC_LIMIT - unc);
+  }
   uint32_t n = 0;
   for (int i = 0; i < LDQ_SIZE && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
     if (pcur.ldq[i].st == L_EMPTY) {
@@ -633,7 +637,7 @@ void RealLsu::comb_dcache2lsu_stq_p() {
       if (s.rtype == (uint8_t)ReplayType::MSHR_HIT && cache_line_match(s.paddr, dc.mshr_fill_addr)) {
         s.rwait = 0;
       } else if (s.rtype == (uint8_t)ReplayType::MSHR_FULL && full < (uint32_t)LSU_STA_COUNT) {
-        pw.st_fullwake |= 1ULL << ((pnxt.stq_head + k) % STQ_SIZE);
+        pw.st_fullwake |= (stq_mask_t)1 << ((pnxt.stq_head + k) % STQ_SIZE);
         pw.st_rwpre[(pnxt.stq_head + k) % STQ_SIZE] = s.rwait;
         s.rwait = 0;
         full++;
@@ -1102,9 +1106,9 @@ void RealLsu::comb_stlf_p() {
     const PLdq &e = pnxt.ldq[l.ldq];
     PLdq tmp = e;
     tmp.paddr = l.paddr;
-    uint64_t ov = 0;
+    stq_mask_t ov = 0;
     for (int q = 0; q < STA; q++)
-      if (pw.s1[q].v && !pw.s1[q].replay) ov |= 1ULL << pw.s1[q].stq;
+      if (pw.s1[q].v && !pw.s1[q].replay) ov |= (stq_mask_t)1 << pw.s1[q].stq;
     const bool slot_ok = !lp_ms_slots || e.spec || live < (int)lp_ms_slots;
     const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && slot_ok && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
     if (lp_ms_slots) live += (int)c.unk - (int)e.spec;
@@ -1474,7 +1478,7 @@ void RealLsu::comb_check_p() {
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_RPW) continue;
-    const uint64_t b = 1ULL << e.blk_idx;
+    const stq_mask_t b = (stq_mask_t)1 << e.blk_idx;
     switch (e.rcause) {
     case RC_TLB:
       if (e.rwait > 0) e.rwait--;

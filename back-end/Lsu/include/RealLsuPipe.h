@@ -8,6 +8,7 @@
 #include <cstdint>
 
 namespace lp {
+typedef unsigned __int128 stq_mask_t;  // one bit per STQ entry (STQ_SIZE may exceed 64 in the EXP-024 write-buffer upper-bound runs)
 
 constexpr int LD = LSU_LDU_COUNT;      // load pipelines (L1/L2)
 constexpr int STA = LSU_STA_COUNT;     // STA ports (AGU + DTLB)
@@ -18,7 +19,7 @@ constexpr int RETIRE_PORTS = 4;        // STQ head entries freed per cycle
 constexpr int EPOCH_W = 4;             // per-LDQ-entry request epoch (stale-response filter), never reset
 constexpr int RWAIT_W = 3;             // replay countdown (0..LSU_PEPLAY_WAIT_CYCLES)
 static_assert(LSU_PEPLAY_WAIT_CYCLES < (1 << RWAIT_W), "replay countdown width");
-static_assert(LDQ_SIZE <= 64 && STQ_SIZE <= 64, "64-bit masks");
+static_assert(LDQ_SIZE <= 64 && STQ_SIZE <= 128, "LDQ 64-bit masks, STQ 128-bit masks");
 
 // LDQ entry state (4 bits)
 enum PLd : uint8_t {
@@ -75,7 +76,7 @@ struct PLdq {
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
   bool atnt = false;          // LSU_MS_DATA: the address came from a stale register
   bool stale = false;         // LSU_MS_DATA: the first write-back carried a value different from the true one
-  uint64_t skip = 0;          // LSU_MS_DATA: STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
+  stq_mask_t skip = 0;        // LSU_MS_DATA: STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
 };
 
 struct PStq {
@@ -178,9 +179,9 @@ struct PCycle {
   PSta s1[STA];
   bool wbd_v[LD] = {};           // L2 direct completion on load port p
   uint8_t wbd_ldq[LD] = {};
-  uint64_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); LSU_PIPE_CUT bit 16
-  uint8_t st_rwpre[64] = {};     // their replay wait before the wake
-  uint64_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)
+  stq_mask_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); LSU_PIPE_CUT bit 16
+  uint8_t st_rwpre[STQ_SIZE] = {};     // their replay wait before the wake
+  stq_mask_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)
   bool fill = false;
   uint32_t fill_addr = 0;
   int mmio_ld = -1;              // LDQ entry whose MMIO response arrived this cycle (LSU_PIPE_CUT bit 64: exempt from the F cut)
