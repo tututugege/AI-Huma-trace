@@ -359,10 +359,10 @@ static const bool lp_mspec = lsu_pipe_env_mask("LSU_PIPE_MSPEC", 0) != 0;
 // EXP-024 write buffer (LSU_PIPE_WBUF = entries, 0 = off; needs LSU_PIPE_MGRAN = granule, 64 = one cache line): committed stores of one granule merge in
 // commit order into the tail entry (if it has not been sent yet), the oldest entries are sent as ONE DCache request each (their stores complete
 // together with the response).  LSU_PIPE_WBINS = stores inserted per cycle, LSU_PIPE_WBSCAN = entries looked at per cycle, LSU_PIPE_WBMAX = stores per entry.
-static const int lp_wbuf = std::min<int>(WB_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_WBUF", 0));
-static const int lp_wbins = (int)lsu_pipe_env_mask("LSU_PIPE_WBINS", 4);
-static const int lp_wbscan = (int)lsu_pipe_env_mask("LSU_PIPE_WBSCAN", 4);
-static const int lp_wmax = std::min<int>(WB_MEM, (int)lsu_pipe_env_mask("LSU_PIPE_WBMAX", 16));
+static const int lp_wbuf = std::min<int>(WB_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_WBUF", CFG_LSU_PIPE_WBUF));
+static const int lp_wbins = (int)lsu_pipe_env_mask("LSU_PIPE_WBINS", CFG_LSU_PIPE_WBINS);
+static const int lp_wbscan = (int)lsu_pipe_env_mask("LSU_PIPE_WBSCAN", CFG_LSU_PIPE_WBSCAN);
+static const int lp_wmax = std::min<int>(WB_MEM, (int)lsu_pipe_env_mask("LSU_PIPE_WBMAX", CFG_LSU_PIPE_WBMAX));
 static const int lp_mgran_sh = [] { unsigned g = lsu_pipe_env_mask("LSU_PIPE_MGRAN", 64); int sh = 2; while ((1u << sh) < g && sh < 6) sh++; return sh; }();
 
 // ---- EXP-024 write buffer helpers ----
@@ -386,7 +386,7 @@ static void wb_insert(LsuPipeState &S, const LsuPipeState &C, uint32_t n, const 
     if (s.wbi != 0 || !s.cmt) continue;
     budget--;
     if (s.mmio || s.done) { s.wbi = 2; continue; }  // MMIO and suppressed stores do not use the buffer
-    const bool mergeable = !s.lrsc && !s.m_amo;
+    const bool mergeable = !s.lrsc;
     const uint32_t line = s.paddr >> lp_mgran_sh;
     int tail = -1;  // youngest entry: registered ones and the ones started in this cycle
     for (int e = 0; e < WB_MAX; e++) {

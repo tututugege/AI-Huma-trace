@@ -420,8 +420,23 @@ constexpr int FE_BFAST = CFG_FE_BFAST;
 //                       overlapping store does NOT take a port (env LSU_PIPE_DCAND; 0 = the first-version drain: N = DRAIN, a blocked
 //                       candidate keeps its port idle)
 //   CFG_LSU_PIPE_RP     load replay registers (1..4); env LSU_PIPE_RP
+// EXP-024 write buffer of the committed-store drain (default on): CFG_LSU_PIPE_WBUF entries (0 = off: the drain looks at CFG_LSU_PIPE_DCAND candidates as before,
+// then CFG_LSU_PIPE_DRAIN should be 3), CFG_LSU_PIPE_WBMAX stores per entry, CFG_LSU_PIPE_WBINS stores inserted per cycle, CFG_LSU_PIPE_WBSCAN entries looked at
+// per cycle; env LSU_PIPE_WBUF / WBMAX / WBINS / WBSCAN; the entry granule is LSU_PIPE_MGRAN bytes (64 = one cache line).  RTL: lp_wbuf (NWB = 4, two stores).
+#ifndef CFG_LSU_PIPE_WBUF
+#define CFG_LSU_PIPE_WBUF 4
+#endif
+#ifndef CFG_LSU_PIPE_WBMAX
+#define CFG_LSU_PIPE_WBMAX 2
+#endif
+#ifndef CFG_LSU_PIPE_WBINS
+#define CFG_LSU_PIPE_WBINS 4
+#endif
+#ifndef CFG_LSU_PIPE_WBSCAN
+#define CFG_LSU_PIPE_WBSCAN 4
+#endif
 #ifndef CFG_LSU_PIPE_DRAIN
-#define CFG_LSU_PIPE_DRAIN 3
+#define CFG_LSU_PIPE_DRAIN 2
 #endif
 #ifndef CFG_LSU_PIPE_DCAND
 #define CFG_LSU_PIPE_DCAND 4
