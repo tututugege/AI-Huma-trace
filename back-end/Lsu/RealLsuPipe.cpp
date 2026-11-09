@@ -350,6 +350,8 @@ static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIP
 // EXP-024: LSU_PIPE_MERGE=N (default 1 = off): up to N committed stores of the same cache line, not overlapping an older not-done store,
 // share ONE store port in a cycle (write-combining upper bound: the combined request carries the leader's address/strobe only, no extra port, no extra DCache work)
 static const int lp_merge = (int)lsu_pipe_env_mask("LSU_PIPE_MERGE", 1);
+// LSU_PIPE_MGRAN: merge granule in bytes (power of two, 4..64, default 64 = a cache line): stores in the same granule may share a port (= width of the DCache store write)
+static const int lp_mgran_sh = [] { unsigned g = lsu_pipe_env_mask("LSU_PIPE_MGRAN", 64); int sh = 2; while ((1u << sh) < g && sh < 6) sh++; return sh; }();
 
 void RealLsu::comb_cal_p() {
   pw = {};
@@ -1363,7 +1365,7 @@ void RealLsu::comb_lsu2dcache_stq_p() {
     if (lp_merge > 1) {  // write combining: join a leader of this cycle on the same cache line
       bool joined = false;
       for (int t = 0; t < nlead && !joined; t++) {
-        if (lead_cnt[t] >= (uint32_t)lp_merge || !cache_line_match(pnxt.stq[lead_j[t]].paddr, s.paddr)) continue;
+        if (lead_cnt[t] >= (uint32_t)lp_merge || (pnxt.stq[lead_j[t]].paddr >> lp_mgran_sh) != (s.paddr >> lp_mgran_sh)) continue;
         lead_cnt[t]++;
         s.iss = 1;
         s.mf = 1;
