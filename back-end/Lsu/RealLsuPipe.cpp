@@ -351,7 +351,86 @@ static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIP
 // share ONE store port in a cycle (write-combining upper bound: the combined request carries the leader's address/strobe only, no extra port, no extra DCache work)
 static const int lp_merge = (int)lsu_pipe_env_mask("LSU_PIPE_MERGE", 1);
 // LSU_PIPE_MGRAN: merge granule in bytes (power of two, 4..64, default 64 = a cache line): stores in the same granule may share a port (= width of the DCache store write)
+// LSU_PIPE_MADJ=N (default 0 = any earlier leader): a follower may only join a leader at most N scan positions before it
+static const int lp_madj = (int)lsu_pipe_env_mask("LSU_PIPE_MADJ", 0);
+// LSU_PIPE_MSPEC=1: with merging, the pairing is decided before the overlap CAM (blocked candidates still count for ranks, leaders and
+// followers); a blocked leader leaves its port idle and drops its follower, a blocked follower is dropped (RTL: the CAM only masks the result)
+static const bool lp_mspec = lsu_pipe_env_mask("LSU_PIPE_MSPEC", 0) != 0;
+// EXP-024 write buffer (LSU_PIPE_WBUF = entries, 0 = off; needs LSU_PIPE_MGRAN = granule, 64 = one cache line): committed stores of one granule merge in
+// commit order into the tail entry (if it has not been sent yet), the oldest entries are sent as ONE DCache request each (their stores complete
+// together with the response).  LSU_PIPE_WBINS = stores inserted per cycle, LSU_PIPE_WBSCAN = entries looked at per cycle, LSU_PIPE_WBMAX = stores per entry.
+static const int lp_wbuf = std::min<int>(WB_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_WBUF", 0));
+static const int lp_wbins = (int)lsu_pipe_env_mask("LSU_PIPE_WBINS", 4);
+static const int lp_wbscan = (int)lsu_pipe_env_mask("LSU_PIPE_WBSCAN", 4);
+static const int lp_wmax = std::min<int>(WB_MEM, (int)lsu_pipe_env_mask("LSU_PIPE_WBMAX", 16));
 static const int lp_mgran_sh = [] { unsigned g = lsu_pipe_env_mask("LSU_PIPE_MGRAN", 64); int sh = 2; while ((1u << sh) < g && sh < 6) sh++; return sh; }();
+
+// ---- EXP-024 write buffer helpers ----
+static int wb_tail(const LsuPipeState &S) {
+  int t = -1;
+  for (int e = 0; e < WB_MAX; e++)
+    if (S.wb[e].v && (t < 0 || S.wb[e].seq > S.wb[t].seq)) t = e;
+  return t;
+}
+// Insertion after the drain decision of the same cycle (the decision only reads the registered buffer C = state at the cycle start):
+// up to lp_wbins uncommitted-to-buffer stores (committed at the cycle start, oldest first; MMIO / suppressed ones are consumed too) are
+// merged into the youngest entry when it is still waiting (not sent in this cycle), else they start a new entry (free slot, registered occupancy).
+static void wb_insert(LsuPipeState &S, const LsuPipeState &C, uint32_t n, const bool *issued_now) {
+  int budget = lp_wbins;
+  int allocated = 0;
+  int used = 0;
+  for (int k = 0; k < WB_MAX; k++) used += C.wb[k].v;
+  for (uint32_t rank = 0; rank < n && budget > 0; rank++) {
+    const uint32_t j = (S.stq_head + rank) % STQ_SIZE;
+    PStq &s = S.stq[j];
+    if (s.wbi != 0 || !s.cmt) continue;
+    budget--;
+    if (s.mmio || s.done) { s.wbi = 2; continue; }  // MMIO and suppressed stores do not use the buffer
+    const bool mergeable = !s.lrsc && !s.m_amo;
+    const uint32_t line = s.paddr >> lp_mgran_sh;
+    int tail = -1;  // youngest entry: registered ones and the ones started in this cycle
+    for (int e = 0; e < WB_MAX; e++) {
+      const bool reg = C.wb[e].v, now = !C.wb[e].v && S.wb[e].v;
+      if (!reg && !now) continue;
+      const uint64_t sq_e = reg ? C.wb[e].seq : S.wb[e].seq;
+      if (tail < 0 || sq_e > (C.wb[tail].v ? C.wb[tail].seq : S.wb[tail].seq)) tail = e;
+    }
+    int e = -1;
+    if (tail >= 0) {
+      const bool reg = C.wb[tail].v;
+      const bool waiting = reg ? (C.wb[tail].st == 0 && !issued_now[tail]) : true;
+      const PWbE &t = S.wb[tail];
+      if (mergeable && waiting && t.mergeable && t.line == line && t.cnt < lp_wmax) e = tail;
+    }
+    if (e < 0) {
+      int fr = -1;
+      for (int k = 0; k < WB_MAX && fr < 0; k++) if (!C.wb[k].v && !S.wb[k].v) fr = k;
+      if (used + allocated >= lp_wbuf || fr < 0) break;  // full: this and the younger stores wait in the STQ
+      e = fr;
+      PWbE &w = S.wb[e];
+      w = PWbE{};
+      w.v = true;
+      w.seq = ++S.wb_seq;
+      w.line = line;
+      w.mergeable = mergeable;
+      allocated++;
+    }
+    PWbE &w = S.wb[e];
+    w.mem[w.cnt++] = j;
+    s.wbi = 1;
+    s.wbe = e;
+  }
+}
+// the buffer completes with the response of its first store
+static void wb_response(LsuPipeState &S, uint32_t leader, bool hit) {
+  PStq &s = S.stq[leader];
+  if (s.wbi != 1) return;
+  PWbE &w = S.wb[s.wbe];
+  if (!w.v || w.mem[0] != leader) return;
+  if (hit) w = PWbE{};
+  else w.st = 0;
+}
+
 
 void RealLsu::comb_cal_p() {
   pw = {};
@@ -632,8 +711,10 @@ void RealLsu::comb_dcache2lsu_stq_p() {
       s.rwait = replay_wait(r.replay);
       g_st.st_replay++;
     }
+    { static const char *tr = std::getenv("LSU_PIPE_WBTRACE"); if (tr && (long long)sim_time >= std::atoll(tr)) std::fprintf(stderr, "WB t=%lld resp id=%d replay=%d\n", (long long)sim_time, (int)r.req_id, (int)r.replay); }
+    if (lp_wbuf > 0) wb_response(pnxt, r.req_id, r.replay == ReplayType::HIT);
   }
-  if (lp_merge > 1) {  // merged followers complete with their leader's response
+  if (lp_merge > 1 || lp_wbuf > 0) {  // merged followers complete with their leader's response
     for (int i = 0; i < LSU_STA_COUNT; i++) {
       const auto &r = dc.resp_ports.store_resps[i];
       if (!r.valid || r.req_id >= STQ_SIZE) continue;
@@ -1338,8 +1419,60 @@ void RealLsu::comb_lsu2dcache_stq_p() {
   int free_port[DRAIN_MAX], nfree = 0;
   for (int t = 0; t < lp_drain; t++)
     if (!(lp_rblk && wires->in.dcache2lsu.store_retry_busy[t])) free_port[nfree++] = t;
+  if (lp_wbuf > 0) {  // EXP-024: the committed stores go through the write buffer
+    bool issued_now[WB_MAX] = {};
+    const LsuPipeState &C = pcur;  // the decision reads the registered buffer only
+    int order[WB_MAX], no = 0;
+    for (int e = 0; e < WB_MAX; e++) if (C.wb[e].v) order[no++] = e;
+    std::sort(order, order + no, [&](int a, int b) { return C.wb[a].seq < C.wb[b].seq; });
+    int used = 0;
+    for (int k = 0; k < no && k < lp_wbscan && used < nfree; k++) {
+      const PWbE &w = C.wb[order[k]];
+      if (w.st != 0) continue;
+      bool ready = true, blocked = false;
+      for (int x = 0; x < w.cnt && ready; x++) {
+        const uint32_t jx = w.mem[x], rx = stq_rank(jx, pnxt.stq_head);
+        if (rx >= n || !rdy[rx]) { ready = false; break; }
+        const PStq &sx = pnxt.stq[jx];
+        const uint8_t stx = get_store_strb(sx.paddr, sx.func3);
+        for (int k2 = 0; k2 < k && !blocked; k2++) {  // older registered entries (not done: they are still valid)
+          const PWbE &o = C.wb[order[k2]];
+          for (int y = 0; y < o.cnt && !blocked; y++) {
+            const PStq &sy = pnxt.stq[o.mem[y]];
+            if (CheckAddr(sy.paddr, get_store_strb(sy.paddr, sy.func3), sx.paddr, stx)) blocked = true;
+          }
+        }
+      }
+      if (!ready) continue;
+      if (blocked) { g_st.st_conflict++; continue; }
+      PStq &lead = pnxt.stq[w.mem[0]];
+      auto &p = ports[free_port[used++]];
+      p.valid = true;
+      p.addr = lead.paddr;
+      p.strb = get_store_strb(lead.paddr, lead.func3);
+      p.req_id = w.mem[0];
+      p.replay = lead.rtype != (uint8_t)ReplayType::HIT;
+      lead.mf = 0;
+      lead.iss = 1;
+      for (int x = 1; x < w.cnt; x++) {
+        PStq &f = pnxt.stq[w.mem[x]];
+        f.iss = 1;
+        f.mf = 1;
+        f.ml = w.mem[0];
+        g_st.st_merge_pair++;
+      }
+      { static const char *tr = std::getenv("LSU_PIPE_WBTRACE"); if (tr && (long long)sim_time >= std::atoll(tr)) std::fprintf(stderr, "WB t=%lld issue e=%d lead=%d cnt=%d port=%d\n", (long long)sim_time, order[k], (int)w.mem[0], (int)w.cnt, free_port[used - 1]); }
+      pnxt.wb[order[k]].st = 1;
+      issued_now[order[k]] = true;
+      g_st.st_drain++;
+    }
+    wb_insert(pnxt, C, n, issued_now);
+    return;
+  }
   int m = 0, seen = 0;
   uint32_t lead_j[DRAIN_MAX] = {}, lead_cnt[DRAIN_MAX] = {};
+  int lead_pos[DRAIN_MAX] = {};
+  bool lead_dead[DRAIN_MAX] = {};
   int nlead = 0;
   for (uint32_t rank = 0; rank < n && (m < lp_drain || (lp_merge > 1 && nlead > 0)); rank++) {
     const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
@@ -1358,20 +1491,25 @@ void RealLsu::comb_lsu2dcache_stq_p() {
       if (o.done || !o.cmt) continue;
       if (CheckAddr(o.paddr, get_store_strb(o.paddr, o.func3), s.paddr, strb)) blocked = true;
     }
-    if (blocked) {
+    const bool spec = lp_mspec && lp_merge > 1 && lp_dcand > 0;
+    if (blocked && !spec) {
       g_st.st_conflict++;
       continue;
     }
     if (lp_merge > 1) {  // write combining: join a leader of this cycle on the same cache line
       bool joined = false;
       for (int t = 0; t < nlead && !joined; t++) {
-        if (lead_cnt[t] >= (uint32_t)lp_merge || (pnxt.stq[lead_j[t]].paddr >> lp_mgran_sh) != (s.paddr >> lp_mgran_sh)) continue;
+        if ((lp_madj > 0 && (seen - 1) - lead_pos[t] > lp_madj) || lead_cnt[t] >= (uint32_t)lp_merge || (pnxt.stq[lead_j[t]].paddr >> lp_mgran_sh) != (s.paddr >> lp_mgran_sh)) continue;
         lead_cnt[t]++;
+        joined = true;
+        if (blocked || lead_dead[t]) {  // MSPEC: dropped, but it used the follower slot
+          if (blocked) g_st.st_conflict++;
+          break;
+        }
         s.iss = 1;
         s.mf = 1;
         s.ml = lead_j[t];
         g_st.st_merge_pair++;
-        joined = true;
       }
       if (joined) continue;
       if (m >= lp_drain) continue;
@@ -1380,7 +1518,11 @@ void RealLsu::comb_lsu2dcache_stq_p() {
       cm = m++;
       if (cm >= nfree) continue;
     }
-    if (lp_merge > 1 && nlead < DRAIN_MAX) { lead_j[nlead] = j; lead_cnt[nlead] = 1; nlead++; }
+    if (lp_merge > 1 && nlead < DRAIN_MAX) { lead_j[nlead] = j; lead_cnt[nlead] = 1; lead_pos[nlead] = seen - 1; lead_dead[nlead] = blocked; nlead++; }
+    if (blocked) {  // MSPEC: a blocked leader keeps its port idle
+      g_st.st_conflict++;
+      continue;
+    }
     s.mf = 0;
     auto &p = ports[free_port[cm]];
     p.valid = true;
@@ -1421,6 +1563,8 @@ void RealLsu::comb_check_p() {
       }
       std::fprintf(stderr, "STQ head=%d/%d cnt=%d ccnt=%d commit=%d unc=%d\n", (int)pnxt.stq_head, (int)pnxt.stq_head_flag, (int)pnxt.stq_count,
                    (int)pnxt.stq_ccount, (int)pnxt.stq_commit, (int)nxt.uncached_unit.valid);
+      for (int e = 0; e < WB_MAX; e++)
+        if (pnxt.wb[e].v) std::fprintf(stderr, "WBE[%d] st=%d line=%x seq=%llu cnt=%d mem=%d,%d mergeable=%d\n", e, (int)pnxt.wb[e].st, (unsigned)pnxt.wb[e].line, (unsigned long long)pnxt.wb[e].seq, (int)pnxt.wb[e].cnt, (int)pnxt.wb[e].mem[0], (int)pnxt.wb[e].mem[1], (int)pnxt.wb[e].mergeable);
       for (uint32_t k = 0; k < pnxt.stq_count; k++) {
         const PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
         std::fprintf(stderr, "STQ[%d] rob=%d va=%d pa=%d d=%d pf=%d trp=%d wbp=%d wbd=%d cmt=%d iss=%d mmw=%d done=%d sup=%d mmio=%d lrsc=%d paddr=0x%x rw=%d\n",
@@ -1442,7 +1586,7 @@ void RealLsu::comb_check_p() {
   for (int j = 0; j < STQ_SIZE; j++) {
     PStq &t = pnxt.stq[j];
     if (!t.iss) { t.wd = 0; continue; }
-    if (++t.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] store stq=%d stuck issued at cycle %lld\n", j, (long long)sim_time); } else { t.wd = 0; t.iss = 0; t.rwait = 0; g_st.wd_st++; } }
+    if (++t.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] store stq=%d stuck issued at cycle %lld\n", j, (long long)sim_time); } else { t.wd = 0; t.iss = 0; t.rwait = 0; g_st.wd_st++; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } } }
   }
   if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);

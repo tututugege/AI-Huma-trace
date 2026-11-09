@@ -96,6 +96,8 @@ struct PStq {
   wire<1> cmt = 0;            // committed by the ROB
   wire<1> iss = 0;            // sent to the DCache, response pending
   wire<1> mmw = 0;            // on the MMIO bus
+  wire<2> wbi = 0;            // EXP-024 write buffer: 0 not processed, 1 in a write-buffer entry, 2 bypasses it (MMIO / suppressed)
+  wire<5> wbe = 0;            // its write-buffer entry
   wire<1> mf = 0;             // EXP-024 LSU_PIPE_MERGE: sent as a follower of the leader store `ml` (shares its port and response)
   wire<STQ_IDX_WIDTH> ml = 0;
   wire<1> done = 0;           // written (or cancelled): may retire
@@ -141,9 +143,24 @@ struct PRp {
   wire<3> age = 0;            // cycles the register waited for a free L1 slot (saturating)
 };
 
+constexpr int WB_MAX = 32;      // write-buffer entries at most (runtime value LSU_PIPE_WBUF)
+constexpr int WB_MEM = 32;      // stores per entry at most
+// EXP-024 write buffer: committed stores of one cache line merged in commit order into one entry; the entry drains as one DCache request.
+struct PWbE {
+  bool v = false;
+  uint8_t st = 0;               // 0 waiting, 1 sent to the DCache
+  bool mergeable = true;
+  uint32_t line = 0;
+  uint64_t seq = 0;             // age
+  uint8_t cnt = 0;
+  uint8_t mem[WB_MEM] = {};     // STQ indices, oldest first
+};
+
 struct LsuPipeState {
   PLdq ldq[LDQ_SIZE];
   PStq stq[STQ_SIZE];
+  PWbE wb[WB_MAX];
+  uint64_t wb_seq = 0;
   wire<STQ_IDX_WIDTH> stq_head = 0;
   wire<1> stq_head_flag = 0;
   wire<STQ_IDX_WIDTH + 1> stq_count = 0;   // allocated
