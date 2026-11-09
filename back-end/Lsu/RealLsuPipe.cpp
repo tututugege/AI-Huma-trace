@@ -788,7 +788,7 @@ void RealLsu::comb_lsu2exe_p() {
         wb.result = pass ? 0 : 1;
         wb.dest_preg = s.dest_preg;
         wb.dest_en = s.dest_preg != 0;
-        pw.ev_sc |= 1ULL << j;
+        pw.ev_sc |= (stq_mask_t)1 << j;
       }
       busy[p] = true;
       sc_n++;
@@ -855,7 +855,7 @@ void RealLsu::comb_exe2lsu_p() {
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.data = inst.result;
     e.data_v = 1;
-    pw.ev_data |= 1ULL << inst.stq_idx;
+    pw.ev_data |= (stq_mask_t)1 << inst.stq_idx;
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
   int ns = 0;
@@ -883,7 +883,7 @@ void RealLsu::comb_exe2lsu_p() {
     pw.s1[ns].v = true;
     pw.s1[ns].stq = inst.stq_idx;
     ns++;
-    pw.ev_sta |= 1ULL << inst.stq_idx;  // the partial address is known from now on
+    pw.ev_sta |= (stq_mask_t)1 << inst.stq_idx;  // the partial address is known from now on
     if (lp_memspec) {  // memory-order check: younger loads that passed this store while its address was unknown
       const uint32_t j = inst.stq_idx;
       const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
@@ -1073,7 +1073,7 @@ void RealLsu::comb_tlb_in_stq_p() {
       nxt.lrsc_unit.reserve_valid = false;
       if (!s.wbp && !s.wbd) s.wbp = 1;
     }
-    pw.ev_sta |= 1ULL << s1.stq;
+    pw.ev_sta |= (stq_mask_t)1 << s1.stq;
     if (s1.replay) continue;
     // memory-order check: CAM over the LDQ with the partial address; a younger load that already read the cache /
     // forwarded while this store address was unknown must replay. The default policy never lets a load pass an
@@ -1358,7 +1358,7 @@ void RealLsu::comb_check_p() {
   int ret = 0;
   while (ret < RETIRE_PORTS && pnxt.stq_ccount > 0 && pnxt.stq_count > 0 && pnxt.stq[pnxt.stq_head].done &&
          (!(lp_cut & 2) || ((uint32_t)ret < pcur.stq_ccount && (uint32_t)ret < pcur.stq_count && pcur.stq[pnxt.stq_head].done))) {
-    pw.ev_ret |= 1ULL << pnxt.stq_head;
+    pw.ev_ret |= (stq_mask_t)1 << pnxt.stq_head;
     pnxt.stq_count--;
     pnxt.stq_ccount--;
     pnxt.stq_head = (pnxt.stq_head + 1) % STQ_SIZE;
