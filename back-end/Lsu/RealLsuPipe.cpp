@@ -347,6 +347,9 @@ static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CU
 static const unsigned lp_l2 = lsu_pipe_env_mask("LSU_PIPE_L2", CFG_LSU_PIPE_L2);
 static const int lp_drain = std::max(1, std::min<int>(DRAIN_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_DRAIN", CFG_LSU_PIPE_DRAIN)));
 static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIPE_DCAND);
+// EXP-024: LSU_PIPE_MERGE=N (default 1 = off): up to N committed stores of the same cache line, not overlapping an older not-done store,
+// share ONE store port in a cycle (write-combining upper bound: the combined request carries the leader's address/strobe only, no extra port, no extra DCache work)
+static const int lp_merge = (int)lsu_pipe_env_mask("LSU_PIPE_MERGE", 1);
 
 void RealLsu::comb_cal_p() {
   pw = {};
@@ -626,6 +629,26 @@ void RealLsu::comb_dcache2lsu_stq_p() {
     } else {
       s.rwait = replay_wait(r.replay);
       g_st.st_replay++;
+    }
+  }
+  if (lp_merge > 1) {  // merged followers complete with their leader's response
+    for (int i = 0; i < LSU_STA_COUNT; i++) {
+      const auto &r = dc.resp_ports.store_resps[i];
+      if (!r.valid || r.req_id >= STQ_SIZE) continue;
+      for (uint32_t k = 0; k < pnxt.stq_count; k++) {
+        PStq &f = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+        if (!f.iss || !f.mf || f.ml != r.req_id) continue;
+        f.iss = 0;
+        f.mf = 0;
+        f.rtype = (uint8_t)r.replay;
+        if (r.replay == ReplayType::HIT) {
+          f.done = 1;
+          f.rwait = 0;
+        } else {
+          f.rwait = replay_wait(r.replay);
+          g_st.st_replay++;
+        }
+      }
     }
   }
   if (pw.fill || (dc.mshr_fill && LSU_WAIT_MSHR_FILL)) {
@@ -1314,7 +1337,9 @@ void RealLsu::comb_lsu2dcache_stq_p() {
   for (int t = 0; t < lp_drain; t++)
     if (!(lp_rblk && wires->in.dcache2lsu.store_retry_busy[t])) free_port[nfree++] = t;
   int m = 0, seen = 0;
-  for (uint32_t rank = 0; rank < n && m < lp_drain; rank++) {
+  uint32_t lead_j[DRAIN_MAX] = {}, lead_cnt[DRAIN_MAX] = {};
+  int nlead = 0;
+  for (uint32_t rank = 0; rank < n && (m < lp_drain || (lp_merge > 1 && nlead > 0)); rank++) {
     const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
     PStq &s = pnxt.stq[j];
     if (!rdy[rank] || s.mmio) continue;
@@ -1335,10 +1360,26 @@ void RealLsu::comb_lsu2dcache_stq_p() {
       g_st.st_conflict++;
       continue;
     }
+    if (lp_merge > 1) {  // write combining: join a leader of this cycle on the same cache line
+      bool joined = false;
+      for (int t = 0; t < nlead && !joined; t++) {
+        if (lead_cnt[t] >= (uint32_t)lp_merge || !cache_line_match(pnxt.stq[lead_j[t]].paddr, s.paddr)) continue;
+        lead_cnt[t]++;
+        s.iss = 1;
+        s.mf = 1;
+        s.ml = lead_j[t];
+        g_st.st_merge_pair++;
+        joined = true;
+      }
+      if (joined) continue;
+      if (m >= lp_drain) continue;
+    }
     if (lp_dcand > 0) {  // the m-th unblocked candidate uses the m-th free port
       cm = m++;
       if (cm >= nfree) continue;
     }
+    if (lp_merge > 1 && nlead < DRAIN_MAX) { lead_j[nlead] = j; lead_cnt[nlead] = 1; nlead++; }
+    s.mf = 0;
     auto &p = ports[free_port[cm]];
     p.valid = true;
     p.addr = s.paddr;

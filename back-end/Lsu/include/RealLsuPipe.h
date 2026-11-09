@@ -96,6 +96,8 @@ struct PStq {
   wire<1> cmt = 0;            // committed by the ROB
   wire<1> iss = 0;            // sent to the DCache, response pending
   wire<1> mmw = 0;            // on the MMIO bus
+  wire<1> mf = 0;             // EXP-024 LSU_PIPE_MERGE: sent as a follower of the leader store `ml` (shares its port and response)
+  wire<STQ_IDX_WIDTH> ml = 0;
   wire<1> done = 0;           // written (or cancelled): may retire
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<ROB_IDX_WIDTH> rob_idx = 0;
