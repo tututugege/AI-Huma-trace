@@ -18,6 +18,7 @@ goldbach.bin,0,0.09,3196
 if-else.bin,0,0.1,1272
 illegal-instruction-trap.bin,0,0.09,1165
 interrupt-vectored.bin,0,0.12,3674
+itt-dispatch.bin,0,1.70,222445
 leap-year.bin,0,0.1,1617
 load-store-aligned.bin,0,0.1,1943
 load-store.bin,0,0.11,1724

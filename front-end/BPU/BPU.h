@@ -62,17 +62,23 @@ struct TageCfg {
   }
 };
 // BPA_ITT: history-indexed indirect target tables (ITTAGE-like) added to the BTB bank. BPA_ITTH="2" (or "1,3"): the TAGE history table(s) whose index/tag
-// are reused (ascending history length), BPA_ITTN=256 entries per table and bank, BPA_ITTCONF=0 minimum confidence to use a hit.
+// are reused (ascending history length), BPA_ITTN entries per table and bank, BPA_ITTCONF=0 minimum confidence to use a hit.
+// Default (EXP-025, the RTL design): three tables on TAGE history tables 1, 2, 3 (13 / 32 / 119 bits), 64 entries each per bank (192 entries, 42 bits each:
+// 64.5 Kb for 8 banks; the single 256-entry table it replaces was 86 Kb). Compile-time defaults CFG_ITT_H / CFG_ITT_SIZE, env still overrides.
+#ifndef CFG_ITT_H
+#define CFG_ITT_H "1,2,3"
+#endif
+#ifndef CFG_ITT_SIZE
+#define CFG_ITT_SIZE 64
+#endif
 constexpr int ITT_MAX = 3, ITT_NMAX = 1024;
 struct IttCfg {
-  int n = 0, size = 256, minconf = 0, h[ITT_MAX] = {};
+  int n = 0, size = CFG_ITT_SIZE, minconf = 0, h[ITT_MAX] = {};
   IttCfg() {
-    const std::vector<int> l = env_list("BPA_ITTH", {});
-    const char *v = std::getenv("BPA_ITTH");
-    if (!v) { n = 1; h[0] = 1; }   // default (RTL-aligned configuration "S+R"): one table on TAGE history 1 (13 bits); BPA_ITTH="" turns it off
-    else if (*v) { n = 0; for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; } }
-    (void)l;
-    size = env_int("BPA_ITTN", 256); minconf = env_int("BPA_ITTCONF", 0);
+    const char *v = std::getenv("BPA_ITTH");   // unset: the compile-time default; empty string: ITT off
+    if (!v) v = CFG_ITT_H;
+    for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; }
+    size = env_int("BPA_ITTN", CFG_ITT_SIZE); minconf = env_int("BPA_ITTCONF", 0);
     if (n && (size < 2 || size > ITT_NMAX || (size & (size - 1)))) { std::printf("[BPA] bad BPA_ITTN\n"); std::exit(1); }
     for (int i = 0; i < n; i++) if (h[i] < 0 || h[i] >= TN) { std::printf("[BPA] bad BPA_ITTH\n"); std::exit(1); }
   }
