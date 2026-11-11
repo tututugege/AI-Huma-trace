@@ -118,6 +118,14 @@ public:
            in_range(paddr, OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE);
   }
 
+  // 64-bit value of a load (rv64 ld reads two aligned words; everything else is read_load())
+  uint64_t read_load64(uint32_t paddr, uint8_t func3) const {
+    if ((func3 & 0x3u) == 0x3u) {
+      return static_cast<uint64_t>(read_load(paddr, 2)) | (static_cast<uint64_t>(read_load(paddr + 4u, 2)) << 32);
+    }
+    return read_load(paddr, func3);
+  }
+
   uint32_t read_load(uint32_t paddr, uint8_t func3) const {
     if (!is_modeled_mmio(paddr)) {
       return 0;
@@ -169,10 +177,17 @@ public:
     return data;
   }
 
-  void on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3) {
+  void on_commit_store(uint32_t paddr, uint64_t data64, uint8_t func3) {
     if (csr_interrupt_inject == nullptr || !is_modeled_mmio(paddr)) {
       return;
     }
+    // rv64 sd: the devices have 32-bit registers, an 8-byte store is two aligned word stores (OpenSBI writes mtimecmp with one)
+    if ((func3 & 0x3u) == 0x3u) {
+      on_commit_store(paddr, static_cast<uint32_t>(data64), 2);
+      on_commit_store(paddr + 4u, static_cast<uint32_t>(data64 >> 32), 2);
+      return;
+    }
+    const uint32_t data = static_cast<uint32_t>(data64);
 
     if (paddr == OPENSBI_TIMER_LOW_ADDR || paddr == OPENSBI_TIMER_HIGH_ADDR) {
       const uint64_t current_timer = effective_timer_value();

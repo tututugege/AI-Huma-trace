@@ -140,6 +140,11 @@ void on_commit(uint64_t uid) {
   // dispatched after the mispredict): undo them and re-execute the younger ones before the fact is used.
   if (const size_t k = g_bridge->kill_older_than(uid)) g_c.commit_front_miss += k;
   apply_mem_write(g_bridge->find(uid));
+  // TB_SAMPLE_PC=N: print the pc of every N-th committed instruction (where is a long run spending its time?)
+  if (static const long long every = std::getenv("TB_SAMPLE_PC") ? std::atoll(std::getenv("TB_SAMPLE_PC")) : 0; every > 0) {
+    static long long n = 0;
+    if (++n % every == 0) if (const tb::Fact *sf = g_bridge->find(uid)) std::fprintf(stderr, "[SAMPLE] cyc=%lld commits=%lld pc=0x%llx inst=0x%08x\n", (long long)sim_time, n, (unsigned long long)sf->pc, sf->inst);
+  }
   if (static const bool tr = std::getenv("TB_TRACE_COMMIT") != nullptr; tr) { const tb::Fact *tf = g_bridge->find(uid); if (tf) std::fprintf(stderr, "[COMMIT] cyc=%lld pc=0x%08llx inst=0x%08x rd=%d v=0x%08llx\n", (long long)sim_time, (unsigned long long)tf->pc, tf->inst, tf->rd_valid ? tf->rd : -1, (unsigned long long)tf->rd_value); }
   g_c.commit++;
   g_bridge->commit(uid);
@@ -168,7 +173,7 @@ void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending) {
 // The model's results are 32-bit values (not widened yet): a load result is the sign (or, for lwu, zero) extension of
 // that value to the register width, everything else is zero-extended.
 static xlen_t widen_result(const ExecObs &o, uint32_t inst) {
-  if (XLEN == 64 && o.op == UOP_LOAD && ((inst >> 12) & 7) != 6)
+  if (XLEN == 64 && o.op == UOP_LOAD && ((inst >> 12) & 7) <= 2)   // lb / lh / lw: sign-extended 32-bit pattern; lbu/lhu/lwu zero, ld full width
     return static_cast<xlen_t>(static_cast<sxlen_t>(static_cast<int32_t>(o.result)));
   return o.result;
 }

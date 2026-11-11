@@ -582,7 +582,7 @@ void MemSubsystem::init() {
 #endif
 }
 
-void MemSubsystem::on_commit_store(uint32_t paddr, uint32_t data, uint8_t func3) {
+void MemSubsystem::on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3) {
   peripheral_model_.on_commit_store(paddr, data, func3);
 }
 

@@ -429,7 +429,7 @@ struct PeripheralReqIO {
 struct PeripheralRespIO {
   wire<1> is_mmio = {};
   wire<1> ready = {};
-  wire<32> mmio_rdata = {};
+  wire<XLEN> mmio_rdata = {};
 };
 enum class ReplayType : wire<2> {
   HIT = 0,
