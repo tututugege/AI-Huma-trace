@@ -663,8 +663,20 @@ constexpr int STQ_SIZE = CONFIG_STQ_SIZE;
 #define CFG_LDQ_SIZE 64
 #endif
 constexpr int LDQ_SIZE = CFG_LDQ_SIZE;  // backend DSE (EXP-016) knob
-constexpr int MUL_MAX_LATENCY = 2;
-constexpr int DIV_MAX_LATENCY = 16;
+// Multiplier: pipelined, fixed latency; divider: iterative, fixed latency.  The divider does 2 restoring steps per cycle
+// (RTL div_core: STEPS = XLEN / LAT), so the latency grows with the operand width: 16 cycles for 32 bits, 32 for 64 bits.  The
+// 64x64 multiplier gets one more pipeline stage than the 32x32 one.  The *W instructions use the same units and latencies.
+#ifndef CONFIG_MUL_LATENCY
+#define CONFIG_MUL_LATENCY (XLEN == 64 ? 3 : 2)
+#endif
+#ifndef CONFIG_DIV_LATENCY
+#define CONFIG_DIV_LATENCY (XLEN == 64 ? 32 : 16)
+#endif
+constexpr int MUL_MAX_LATENCY = CONFIG_MUL_LATENCY;
+constexpr int DIV_MAX_LATENCY = CONFIG_DIV_LATENCY;
+// A *W divide (divw/divuw/remw/remuw) only has 32 significant bits: it starts at the low half of the dividend and needs half the
+// iterations (rv32: no such instructions).
+constexpr int div_latency(bool word) { return (XLEN == 64 && word) ? DIV_MAX_LATENCY / 2 : DIV_MAX_LATENCY; }
 
 // LSU / TLB config derived from issue port layout.
 constexpr int LSU_STA_COUNT = count_ports_with_mask(OP_MASK_STA);

@@ -179,7 +179,7 @@ private:
 
   // Latency of an iterative unit: the divider takes DIV_MAX_LATENCY, the FPU by operation.
   int iter_latency(const ExuInst &inst) const {
-    if (kind == FuKind::DIV) return DIV_MAX_LATENCY;
+    if (kind == FuKind::DIV) return div_latency(inst->is_word);
     constexpr int FADD = 0b00000, FSUB = 0b00001, FMUL = 0b00010, FDIV = 0b00011;
     constexpr int FSQRT = 0x2C, FCVT_W_S = 0x60, FCVT_S_W = 0x68;
     constexpr int LAT_FADD = 5, LAT_FMUL = 3, LAT_FDIV = 10, LAT_FCVT = 3;

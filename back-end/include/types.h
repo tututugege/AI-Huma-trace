@@ -104,6 +104,7 @@ struct UopS {
   wire<1> src2_is_imm;
   wire<3> func3;
   wire<7> func7;
+  wire<1> is_word;      // rv64 *W instruction (OP-IMM-32 / OP-32): a 32-bit operation (the divider needs half the iterations)
   wire<1> is_atomic;
   wire<PRF_IDX_WIDTH> old_dest_preg;
   wire<XLEN> pc;

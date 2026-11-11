@@ -74,7 +74,7 @@ public:
 
 private:
   void add_iq(const IssueQueueConfig &cfg);
-  int get_latency(UopType uop_type, wire<7> func7);
+  int get_latency(UopType uop_type, wire<7> func7, bool word = false);
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
