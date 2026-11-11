@@ -475,9 +475,9 @@ void RealLsu::comb_spec_cancel_p() {
 void RealLsu::comb_lsu2rob_p() {
   wires->lsu2rob = {};
   wires->lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
-  uint64_t m = 0;
+  std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 (same fix as RealLsu::load_miss_mask)
   for (const PLdq &l : pcur.ldq)
-    if (l.miss && l.st != L_EMPTY) m |= 1ULL << l.rob_idx;
+    if (l.miss && l.st != L_EMPTY) m.set(l.rob_idx);
   wires->lsu2rob.tma.miss_mask = m;
 }
 
