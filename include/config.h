@@ -464,7 +464,7 @@ constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
 // longest completed prefix, commit credits from the BPU update / uBTB train queue occupancy (registered). 0 = line ROB.
 // The environment variable ROB_COMPACT=1 also turns it on at run time (model experiments only).
 #ifndef CFG_ROB_COMPACT
-#define CFG_ROB_COMPACT 0
+#define CFG_ROB_COMPACT 1
 #endif
 constexpr int ROB_COMPACT = CFG_ROB_COMPACT;
 
