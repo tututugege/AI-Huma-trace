@@ -15,13 +15,13 @@ extern uint64_t inject_miss;
 uint32_t mem_read(uint32_t paddr);
 // Bookkeeping of overrides: kind 0 branch dir, 1 jump target, 2 agu addr, 3 store data, 4 csr wdata.
 void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_idx);
-void on_dispatch(uint64_t uid, uint32_t pc, uint32_t inst, uint32_t rob_idx);
+void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx);
 void on_mispredict(uint64_t branch_uid);          // keep entries with uid <= branch_uid
 void on_commit(uint64_t uid);
 // Global pipeline flush caused by committing instruction `uid` (-1: none valid), or by an interrupt
 // (not committed; on_interrupt follows with the cause).
 void on_flush(int64_t uid, bool interrupt);
-void on_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending);
+void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending);
 // Execution results as seen on the exu->rob interface.
 struct ExecObs {
   uint32_t rob_idx;          // the LSU path loses dbg.inst_idx: identity is rob_idx -> uid

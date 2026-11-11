@@ -109,7 +109,7 @@ struct ICache_lookup_in_t {
 struct ICache_regs_t {
   // Registered request context for the current in-flight lookup/fill.
   reg<1> req_valid_r = false;
-  reg<32> req_pc_r = 0;
+  reg<XLEN> req_pc_r = 0;
   reg<ICACHE_INDEX_BITS> req_index_r = 0;
   // Registered frontend acceptance state.
   reg<1> ifu_req_ready_r = true;

@@ -342,12 +342,12 @@ void difftest_ref_set_next_csr_read(uint32_t csr_addr, xlen_t value) {
   refcpu_set_next_csr_read(ref_cpu_ctx, csr_addr, value);
 }
 
-void difftest_take_interrupt(uint32_t cause, uint8_t target_privilege,
+void difftest_take_interrupt(xlen_t cause, uint8_t target_privilege,
                              uint32_t pending_snapshot) {
   ensure_ref_cpu();
   dut_privilege = target_privilege;
   const bool taken = refcpu_take_forced_interrupt(
-      ref_cpu_ctx, cause_to_xlen(cause), target_privilege, pending_snapshot);
+      ref_cpu_ctx, cause, target_privilege, pending_snapshot);
   Assert(taken && "reference rejected DUT forced interrupt");
   checkregs();
 }

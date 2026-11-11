@@ -4,8 +4,12 @@
 #include "DebugPtwTrace.h"
 #include "config.h"
 #include "ref.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace {
+// TB_TRACE_TRAP=1 prints every trap the CSR model takes (cause, epc, tval, target)
+bool trace_traps() { static const bool on = std::getenv("TB_TRACE_TRAP") != nullptr; return on; }
 // mstatus bits visible through sstatus / writable (as in the function model: rv64 has no SD tracking, UXL = SXL = 2 are read-only)
 #if XLEN == 64
 constexpr xlen_t kSstatusMask = 0x00000003000DE133ull;
@@ -148,6 +152,7 @@ void Csr::comb_exception() {
                        : 0;
     CSR_RegFile_1[csr_mcause] = cause;
     wires->csr2front.trap_pc = trap_target(mtvec, cause);
+    if (trace_traps()) std::fprintf(stderr, "[TRAP] M cause=0x%llx epc=0x%llx tval=0x%llx target=0x%llx priv=%u\n", (unsigned long long)cause, (unsigned long long)rb.pc, (unsigned long long)rb.trap_val, (unsigned long long)wires->csr2front.trap_pc, (unsigned)privilege);
 
     mstatus = (mstatus & ~MSTATUS_MPP) | ((privilege & 0x3) << 11);  // MPP = privilege
     mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);  // MPIE = MIE
@@ -171,6 +176,7 @@ void Csr::comb_exception() {
                                       : 0;
     CSR_RegFile_1[csr_scause] = cause;
     wires->csr2front.trap_pc = trap_target(stvec, cause);
+    if (trace_traps()) std::fprintf(stderr, "[TRAP] S cause=0x%llx epc=0x%llx tval=0x%llx target=0x%llx priv=%u\n", (unsigned long long)cause, (unsigned long long)rb.pc, (unsigned long long)rb.trap_val, (unsigned long long)wires->csr2front.trap_pc, (unsigned)privilege);
 
     sstatus = privilege == 1 ? (sstatus | MSTATUS_SPP) : (sstatus & ~MSTATUS_SPP);  // SPP = privilege
     sstatus = (sstatus & MSTATUS_SIE) ? (sstatus | MSTATUS_SPIE) : (sstatus & ~MSTATUS_SPIE);  // SPIE = SIE

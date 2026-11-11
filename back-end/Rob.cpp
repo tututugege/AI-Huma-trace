@@ -18,7 +18,7 @@ inline bool rob_is_load(const Uop &u) { return u.tma.mem_commit_is_load; }
 inline bool rob_is_page_fault(const Uop &u) { return u.page_fault_inst || u.page_fault_load || u.page_fault_store; }
 // RISC-V semihosting marker: slli x0,x0,0x1f ; ebreak ; srai x0,x0,7. OpenSBI's generic platform probes it and expects a breakpoint
 // trap into M mode; every other ebreak still ends the simulation (the bare-metal tests' exit). Same rule as the function model.
-inline bool is_semihost_marker(uint32_t pc) {
+inline bool is_semihost_marker(xlen_t pc) {
   return tbhook::mem_read(pc - 4) == 0x01f01013u && tbhook::mem_read(pc + 4) == 0x40705013u;
 }
 inline bool rob_is_complete(const Uop &u) { return u.cplt_mask == u.expect_mask; }
@@ -214,7 +214,7 @@ void Rob::comb_commit() {
     // what a single-retired instruction triggers
     const bool flush_inst = rob_is_flush_inst(u), wfi = rob_is_wfi(u), intr = w.rob2csr.interrupt_resp;
     if (flush_inst || intr || wfi) {
-      uint32_t pc = 0;
+      xlen_t pc = 0;
       if (flush_inst || intr) {
         Assert(w.ftq_rob_pc_resp.resp[0].valid);
         pc = w.ftq_rob_pc_resp.resp[0].pc;

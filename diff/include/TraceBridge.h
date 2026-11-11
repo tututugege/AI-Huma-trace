@@ -65,7 +65,7 @@ public:
   void commit_flush(uint64_t uid);
   // Interrupt taken at a commit boundary (before the oldest uncommitted instruction): drop every
   // in-flight entry, then the core takes the interrupt with the cause the model chose.
-  bool take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot);
+  bool take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot);
   uint64_t oldest_uid() const;
   void drop_oldest();
   // Entries older than `uid` that are still in flight were killed without a rewind (wrong path): undo their effects

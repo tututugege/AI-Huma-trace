@@ -346,11 +346,11 @@ void Bridge::commit_flush(uint64_t uid) {
   while (!chain_.empty()) { delete chain_.front(); chain_.pop_front(); }
 }
 
-bool Bridge::take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
+bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
   rewind_after(-1);
   stats.rewinds--;
   stats.interrupts++;
-  return refcpu_take_forced_interrupt(ctx_, cause_to_xlen(cause), target_priv, pending_snapshot);
+  return refcpu_take_forced_interrupt(ctx_, cause, target_priv, pending_snapshot);
 }
 
 uint64_t Bridge::oldest_uid() const { return chain_.front()->f.uid; }

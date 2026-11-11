@@ -510,7 +510,7 @@ void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
   if (tbhook::enabled) {
     const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
-    const uint32_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
+    const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
                                           : cpu->back.csr->CSR_RegFile_1[csr_scause];
     tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
   }

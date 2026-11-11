@@ -73,7 +73,7 @@ void ensure() {
 }
 } // namespace
 
-void on_dispatch(uint64_t uid, uint32_t pc, uint32_t inst, uint32_t rob_idx) {
+void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx) {
   ensure();
   g_rob_uid[rob_idx & 4095] = uid;
   if (g_resync) {
@@ -84,7 +84,7 @@ void on_dispatch(uint64_t uid, uint32_t pc, uint32_t inst, uint32_t rob_idx) {
     if (difftest_get_ref_state(&s)) refcpu_set_state(g_ctx, &s);
     g_resync = false;
   }
-  if (pc >= 0x80000000u && inst != pmem_read(pc) && std::getenv("TB_DEBUG_FLUSH")) { static int n = 0; if (n++ < 4) std::fprintf(stderr, "[BAD-FETCH] uid=%llu pc=0x%x inst=0x%08x pmem=0x%08x\n", (unsigned long long)uid, pc, inst, pmem_read(pc)); }
+  if (pc >= 0x80000000u && pc < 0x100000000ull && inst != pmem_read(static_cast<uint32_t>(pc)) && std::getenv("TB_DEBUG_FLUSH")) { static int n = 0; if (n++ < 4) std::fprintf(stderr, "[BAD-FETCH] uid=%llu pc=0x%x inst=0x%08x pmem=0x%08x\n", (unsigned long long)uid, static_cast<unsigned>(pc), inst, pmem_read(static_cast<uint32_t>(pc))); }
   g_bridge->dispatch(uid, pc, inst);
   g_c.dispatch++;
 }
@@ -156,11 +156,13 @@ void on_flush(int64_t uid, bool interrupt) {
   g_bridge->commit_flush((uint64_t)uid);
 }
 
-void on_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending) {
+void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending) {
   ensure();
   static const bool use_ref = std::getenv("TB_RESYNC_REF") != nullptr;
   if (use_ref) return;
-  if (!g_bridge->take_interrupt(cause, target_priv, pending)) g_c.interrupt_rejected++;
+  const bool taken = g_bridge->take_interrupt(cause, target_priv, pending);
+  if (!taken) g_c.interrupt_rejected++;
+  if (std::getenv("TB_TRACE_TRAP")) std::fprintf(stderr, "[IRQ] cause=0x%llx target_priv=%u pending=0x%x -> function model %s\n", (unsigned long long)cause, (unsigned)target_priv, pending, taken ? "took it" : "REJECTED it");
 }
 
 // The model's results are 32-bit values (not widened yet): a load result is the sign (or, for lwu, zero) extension of
