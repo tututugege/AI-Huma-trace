@@ -301,9 +301,7 @@ void PreIduQueueRef::comb_commit_info() {
       Assert(ftq_idx == train_meta_cursor);
       const auto &meta = ftq_train_meta_fifo[train_meta_cursor];
       resp.alt_pred = meta.meta.alt_pred[ftq_offset];
-      resp.altpcpn = meta.meta.altpcpn[ftq_offset];
       resp.pcpn = meta.meta.pcpn[ftq_offset];
-      resp.sc_used = meta.meta.sc_used[ftq_offset];
       resp.sc_pred = meta.meta.sc_pred[ftq_offset];
       resp.sc_sum = meta.meta.sc_sum[ftq_offset];
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {

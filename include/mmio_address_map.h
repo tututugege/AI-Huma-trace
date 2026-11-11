@@ -25,16 +25,6 @@ inline constexpr SimMmioRange kCheckpointMmioRanges[] = {
     {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
 };
 
-inline constexpr SimMmioRange kSimulatorMmioRanges[] = {
-    {BOOT_IO_BASE, BOOT_IO_SIZE},
-    {UART_ADDR_BASE, UART_MMIO_SIZE},
-    {XPS_INTC_ADDR_BASE, XPS_INTC_MMIO_SIZE},
-    {TIMER_BASE, 0x00000010u},
-    {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
-    {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE},
-    {SIM_UNCACHE_HIGH_BASE, SIM_UNCACHE_HIGH_SIZE},
-};
-
 static constexpr bool simulator_addr_in_range(uint32_t addr,
                                               const SimMmioRange &range) {
   const auto start = static_cast<uint64_t>(range.base);
@@ -45,23 +35,8 @@ static constexpr bool simulator_addr_in_range(uint32_t addr,
 
 
 static inline bool simulator_is_cache_addr(uint32_t addr) {
-  return (addr >= SIM_CACHE_ADDR_1_MIN && addr < SIM_CACHE_ADDR_1_MAX) ||
-         (addr >= SIM_CACHE_ADDR_2_MIN && addr < SIM_CACHE_ADDR_2_MAX);
+  return (addr >= SIM_CACHE_ADDR_1_MIN && addr < SIM_CACHE_ADDR_1_MAX) || addr >= SIM_CACHE_ADDR_2_MIN;
 }
 
 
-static inline bool simulator_is_mmio_addr(uint32_t addr) {
-  // for (const auto &range : kSimulatorMmioRanges) {
-  //   if (simulator_addr_in_range(addr, range)) {
-  //     return true;
-  //   }
-  // }
-  // return false;
-  return !simulator_is_cache_addr(addr);
-}
-static inline bool simulator_is_uncached_memory_addr(uint32_t addr) {
-  return simulator_addr_in_range(
-             addr, {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE}) ||
-         simulator_addr_in_range(
-             addr, {SIM_UNCACHE_HIGH_BASE, SIM_UNCACHE_HIGH_SIZE});
-}
+static inline bool simulator_is_mmio_addr(uint32_t addr) { return !simulator_is_cache_addr(addr); }

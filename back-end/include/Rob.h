@@ -1,6 +1,7 @@
 #pragma once
 #include "IO.h"
 #include "config.h"
+#include <cstdlib>
 
 struct RobCommitExtra {
   wire<AREG_IDX_WIDTH> src1_areg;
@@ -12,6 +13,12 @@ struct RobCommitExtra {
 struct RobOut {
   RobCommitExtra commit_extra[COMMIT_WIDTH];
 };
+
+// Compact ROB (EXP-028, CFG_ROB_COMPACT=1): entries are allocated one after another (rob_idx = ring position,
+// bank = rob_idx % 8, line = rob_idx / 8, same storage), a dispatch group no longer takes a whole line, commit takes the
+// longest completed prefix from the head (max COMMIT_WIDTH, cut by the BPU commit credits), a
+// mispredict pulls the tail back to the entry after the branch.
+constexpr bool rob_compact() { return ROB_COMPACT != 0; }
 
 struct RobStoredEntry {
   wire<1> valid;
@@ -60,8 +67,19 @@ public:
   wire<1> enq_flag_1;
   wire<1> deq_flag_1;
 
+  // compact mode state (head entry, number of valid entries, wrap flag of the head)
+  int c_head = 0, c_count = 0; bool c_hflag = false;
+  int c_head_1 = 0, c_count_1 = 0; bool c_hflag_1 = false;
+  // control-flow instructions / fetch-block ends committed last cycle (still on their way to the BPU queues)
+  int c_prev_ctl = 0, c_prev_blk = 0, c_prev_ctl_1 = 0, c_prev_blk_1 = 0;
+  RobStoredEntry &cent(int idx) { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
+  RobStoredEntry &cent_1(int idx) { return entry_1[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
+  void ctouch(int idx) { touch(idx % ROB_BANK_NUM, idx / ROB_BANK_NUM); }
+  void comb_commit_compact();
+  void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
+
 private:
   int stall_cycle = 0;
-  bool is_empty() { return (enq_ptr == deq_ptr) && (enq_flag == deq_flag); };
-  bool is_full() { return (enq_ptr == deq_ptr) && (enq_flag != deq_flag); };
+  bool is_empty() { return rob_compact() ? c_count == 0 : (enq_ptr == deq_ptr) && (enq_flag == deq_flag); };
+  bool is_full() { return rob_compact() ? c_count == ROB_NUM : (enq_ptr == deq_ptr) && (enq_flag != deq_flag); };
 };

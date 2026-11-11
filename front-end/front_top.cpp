@@ -437,12 +437,10 @@ void FrontComb::run_bpu() {
     bpu_input.in_pred_dir[i] = in.predict_dir[i];
     bpu_input.in_alt_pred[i] = in.alt_pred[i];
     bpu_input.in_pcpn[i] = in.pcpn[i];
-    bpu_input.in_altpcpn[i] = in.altpcpn[i];
     for (int j = 0; j < 4; j++) {
       bpu_input.in_tage_tags[i][j] = in.tage_tag[i][j];
       bpu_input.in_tage_idxs[i][j] = in.tage_idx[i][j];
     }
-    bpu_input.in_sc_used[i] = in.sc_used[i];
     bpu_input.in_loop_used[i] = in.loop_used[i];
   }
 
@@ -606,9 +604,6 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
   predecode_checker_seq_read(&checker_in, &checker_rd);
   predecode_checker_comb(checker_rd, checker_out);
   if (checker_out.predecode_flush_enable) {
-    static const bool dg = std::getenv("FE_DIAG") != nullptr;
-    if (dg && multi) { static uint64_t c[4][2]; static bool rg = false; if (!rg) { rg = true; std::atexit([] { std::printf("[FE_PAIR] predecode flushes of two-block groups: first-seg branch leads elsewhere=%llu/%llu no-branch-where-predicted=%llu/%llu last-seg mismatch=%llu/%llu (seg0/seg1)\n", (unsigned long long)c[1][0], (unsigned long long)c[1][1], (unsigned long long)c[2][0], (unsigned long long)c[2][1], (unsigned long long)c[3][0], (unsigned long long)c[3][1]); }); }
-      c[checker_out.reason & 3][checker_out.seg ? 1 : 0]++; }
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
   }
@@ -698,34 +693,45 @@ void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
 
   front_output_comb(f2b_head, f2b_bypass, use_f2b_bypass, out);
   out.commit_stall = bpu_output.update_queue_full;
-  // FE_DIAG: why the front end delivered no fetch group to the back end this cycle (only counted while the back end could read)
+  out.commit_upd_free = bpu_output.upd_free;
+  out.commit_tq_free = bpu_output.tq_free;
+  // PMU frontend delivery split (EXP-025): how many instructions of this cycle's fetch group the back end gets, and why the other slots are empty
   {
-    static const bool diag = std::getenv("FE_DIAG") != nullptr;
-    static uint64_t cnt[16]; static bool reg = false; static int since_refetch = 99;
-    if (diag) {
-      if (!reg) { reg = true; std::atexit([] {
-        static const char *nm[] = {"delivered", "refetch-cycle", "post-redirect refill (<=6 cyc)", "icache miss busy", "fetch-addr FIFO empty: S_D override bubble", "fetch-addr FIFO empty: L1 override bubble",
-                                   "fetch-addr FIFO empty: PTAB credit stall", "fetch-addr FIFO empty: other", "icache-side busy/not ready", "IFIFO empty", "PTAB empty (lag)", "f2b/backend side", "predecode flush cycle"};
-        uint64_t tot = 0; for (int i = 0; i < 13; i++) tot += cnt[i];
-        for (int i = 0; i < 13; i++) std::printf("[FE_DIAG] front cycles %-46s %10llu %5.1f%%\n", nm[i], (unsigned long long)cnt[i], tot ? 100.0 * cnt[i] / tot : 0.0); }); }
-      since_refetch = global_refetch ? 0 : since_refetch + 1;
-      int k;
-      if (out.FIFO_valid) k = 0;
-      else if (global_refetch) k = 1;
-      else if (since_refetch <= 6) k = 2;
-      else if (ic_out.perf_miss_busy) k = 3;
-      else if (predecode_flush) k = 12;
-      else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
-        if (g_use_pipe && g_pipe_dec.ovr) k = 4;
-        else if (g_use_pipe && g_pipe_txn.s_l1_ovr) k = 5;
-        else if (rd.fetch_addr_fifo_full_latch_snapshot || (g_use_pipe && g_pipe_txn.s_stall_ptab)) k = 6;
-        else k = 7;
+    static uint64_t last_refetch = ~0ull;
+    const uint64_t cyc = front_ctx ? front_ctx->perf.cycle : 0;
+    if (global_refetch) last_refetch = cyc;
+    PmuFrontSignals &pf = g_pmu_front;
+    pf.feo_ready = in.FIFO_read_enable;
+    pf.feo_n = 0;
+    pf.feo_cause = 0;
+    if (pf.feo_ready) {
+      int last = -1;
+      bool no_taken = true;
+      for (int j = 0; j < FETCH_WIDTH; j++) {   // the same cut as SimCpu::front_comb_before_back
+        if (j > 0 && !no_taken && out.inst_valid[j - 1] && out.inst_valid[j] && out.pc[j] != out.pc[j - 1] + 4 && out.predict_dir[j - 1]) no_taken = true;
+        const bool v = no_taken && out.FIFO_valid && out.inst_valid[j];
+        if (v) { pf.feo_n++; last = j; if (out.predict_dir[j]) no_taken = false; }
       }
-      else if (!ic_out.icache_read_ready) k = 8;
-      else if (rd.fifo_empty_latch_snapshot) k = 9;
-      else if (rd.ptab_empty_latch_snapshot) k = 10;
-      else k = 11;
-      cnt[k]++;
+      if (pf.feo_n > 0) {
+        if (pf.feo_n < FETCH_WIDTH) {
+          const uint32_t line = ICACHE_LINE_SIZE;
+          if (out.predict_dir[last]) pf.feo_cause = PMU_FEO_LOSS_TAKEN;
+          else if (((out.pc[last] + 4u) & ~(line - 1u)) != (out.pc[last] & ~(line - 1u))) pf.feo_cause = PMU_FEO_LOSS_LINE;
+          else pf.feo_cause = PMU_FEO_LOSS_SHORTOTH;
+        }
+      } else if (global_refetch || cyc - last_refetch <= 6) pf.feo_cause = PMU_FEO_LOSS_REFETCH;
+      else if (ic_out.perf_miss_busy) pf.feo_cause = PMU_FEO_LOSS_ICMISS;
+      else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
+      else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
+        if (g_use_pipe && g_pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
+        else if (g_use_pipe && g_pipe_txn.s_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
+        else if (rd.fetch_addr_fifo_full_latch_snapshot || (g_use_pipe && g_pipe_txn.s_stall_ptab)) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
+        else pf.feo_cause = PMU_FEO_LOSS_BPUOTHER;
+      }
+      else if (!ic_out.icache_read_ready) pf.feo_cause = PMU_FEO_LOSS_ICNOTRDY;
+      else if (rd.fifo_empty_latch_snapshot) pf.feo_cause = PMU_FEO_LOSS_IFIFO;
+      else if (rd.ptab_empty_latch_snapshot) pf.feo_cause = PMU_FEO_LOSS_PTABLAG;
+      else pf.feo_cause = PMU_FEO_LOSS_F2B;
     }
   }
 }

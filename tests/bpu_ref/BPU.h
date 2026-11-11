@@ -709,7 +709,7 @@ public:
           req.tage_pred_calc_idxs_latch_next[i][k] =
               tage_out[bank_sel].tage_idx_flat_out[k];
         }
-        out.meta.sc_used[i] = tage_valid ? tage_out[bank_sel].sc_used_out : false;
+        // sc_used is no longer part of the shared prediction metadata (the statistical corrector was removed)
         out.meta.sc_pred[i] = tage_valid ? tage_out[bank_sel].sc_pred_out : false;
         out.meta.sc_sum[i] = tage_valid ? tage_out[bank_sel].sc_sum_out : 0;
         for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
@@ -739,7 +739,7 @@ public:
       out.out_pred_dir[i] = req.final_pred_dir[i];
       out.meta.alt_pred[i] = req.tage_calc_altpred_latch_next[i];
       out.meta.pcpn[i] = req.tage_calc_pcpn_latch_next[i];
-      out.meta.altpcpn[i] = req.tage_calc_altpcpn_latch_next[i];
+      // altpcpn is no longer part of the shared prediction metadata (EXP-028: stored but never read)
       for (int k = 0; k < TN_MAX; ++k) {
         out.meta.tage_tag[i][k] = req.tage_pred_calc_tags_latch_next[i][k];
         out.meta.tage_idx[i][k] = req.tage_pred_calc_idxs_latch_next[i][k];

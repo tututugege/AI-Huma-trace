@@ -217,10 +217,8 @@ void PreIduQueue::comb_commit_info() {
       Assert(idx == cursor);
       const auto &m = ftq_train_meta_fifo[cursor].meta;
       resp.alt_pred = m.alt_pred[off];
-      resp.altpcpn = m.altpcpn[off];
       resp.pcpn = m.pcpn[off];
       resp.ps_info = m.ps_info[off];
-      resp.sc_used = m.sc_used[off];
       resp.sc_pred = m.sc_pred[off];
       resp.sc_sum = m.sc_sum[off];
       for (int t = 0; t < BPU_SCL_META_NTABLE; t++) resp.sc_idx[t] = m.sc_idx[off][t];

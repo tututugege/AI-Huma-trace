@@ -39,7 +39,7 @@ recursion.bin,0,0.12,2878
 select-sort.bin,0,0.12,4853
 shift.bin,0,0.1,1700
 shuixianhua.bin,0,0.13,4977
-software-interrupt-vectored.bin,0,0.11,2254
+software-interrupt-vectored.bin,0,0.11,2356
 stlf-overlap-boundary.bin,0,0.1,1040
 sub-longlong.bin,0,0.08,1868
 sum.bin,0,0.08,1164

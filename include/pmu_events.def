@@ -97,3 +97,24 @@ PMU_EV(OCC_IQ_BR,            occ,    6, "BR issue-queue entries in use")
 // not because the frontend failed to deliver.
 PMU_EV(SLOT_FE_OTHER_NOPREG, slot,   4, "  of SLOT_FE_OTHER: rename stalled, no free physical register (PRF too small)")  // model-only
 PMU_EV(SLOT_FE_OTHER_NOBRTAG,slot,   4, "  of SLOT_FE_OTHER: IDU stalled, no free branch tag (MAX_BR_NUM too small)")  // model-only
+
+// ---- frontend delivery split (EXP-025; trace-model only). Sampled at the front-end -> back-end interface, in slots of one fetch group (FETCH_WIDTH),
+// only in cycles where the back end can read (front.in.FIFO_read_enable). Independent of backend stalls, so the sum is "what the frontend failed to deliver".
+// FEO_SLOTS = FEO_CYC * FETCH_WIDTH = FEO_INSTS + all FEO_LOSS_* slots.
+PMU_EV(FEO_CYC,              front,  1, "cycles the back end could read a fetch group")  // model-only
+PMU_EV(FEO_GROUPS,           front,  1, "fetch groups delivered (>=1 valid instruction)")  // model-only
+PMU_EV(FEO_INSTS,            front,  4, "instructions delivered")  // model-only
+PMU_EV(FEO_LOSS_TAKEN,       slot,   4, "  lost slots in a delivered group: it ends at a predicted-taken branch/jump")  // model-only
+PMU_EV(FEO_LOSS_LINE,        slot,   4, "  lost slots in a delivered group: it ends at the end of the 64 B I-cache line")  // model-only
+PMU_EV(FEO_LOSS_SHORTOTH,    slot,   4, "  lost slots in a delivered group: other (page fault, predecode cut, partial read)")  // model-only
+PMU_EV(FEO_LOSS_REFETCH,     slot,   4, "  empty cycle: redirect (refetch) cycle or refill within 6 cycles of one")  // model-only
+PMU_EV(FEO_LOSS_ICMISS,      slot,   4, "  empty cycle: I-cache refill in progress")  // model-only
+PMU_EV(FEO_LOSS_PDFLUSH,     slot,   4, "  empty cycle: predecode flush")  // model-only
+PMU_EV(FEO_LOSS_OVR_SD,      slot,   4, "  empty cycle: BPU last-stage (S_D) override bubble")  // model-only
+PMU_EV(FEO_LOSS_OVR_L1,      slot,   4, "  empty cycle: BPU S1 (L1) override bubble")  // model-only
+PMU_EV(FEO_LOSS_PTABSTALL,   slot,   4, "  empty cycle: BPU stalled by PTAB credits / fetch-address FIFO full")  // model-only
+PMU_EV(FEO_LOSS_BPUOTHER,    slot,   4, "  empty cycle: fetch-address FIFO empty, BPU issued nothing (other)")  // model-only
+PMU_EV(FEO_LOSS_ICNOTRDY,    slot,   4, "  empty cycle: I-cache not ready")  // model-only
+PMU_EV(FEO_LOSS_IFIFO,       slot,   4, "  empty cycle: instruction FIFO empty (I-cache latency)")  // model-only
+PMU_EV(FEO_LOSS_PTABLAG,     slot,   4, "  empty cycle: PTAB empty (prediction lags the fetch)")  // model-only
+PMU_EV(FEO_LOSS_F2B,         slot,   4, "  empty cycle: front-to-back FIFO / predecode check stage")  // model-only

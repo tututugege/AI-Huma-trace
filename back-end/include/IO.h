@@ -37,6 +37,7 @@ struct FrontPreIO {
   wire<32> pc[BACKEND_FETCH_WIDTH] = {};
   wire<1> valid[BACKEND_FETCH_WIDTH] = {};
   wire<1> front_stall = {};
+  int front_upd_free = 255, front_tq_free = 255;  // free entries at the start of the cycle (registered)  // BPU update / uBTB train queue free entries (compact ROB credits, EXP-028)
   wire<1> predict_dir[BACKEND_FETCH_WIDTH] = {};
 
   PredMetaT<BACKEND_FETCH_WIDTH> meta = {};
@@ -96,11 +97,9 @@ struct FtqCommitInfoResp {
   wire<32> pc;
   wire<1> pred_taken;
   wire<1> alt_pred;
-  pcpn_t altpcpn;
   pcpn_t pcpn;
   tage_idx_t tage_idx[4];
   tage_tag_t tage_tag[4];
-  wire<1> sc_used;
   wire<1> sc_pred;
   tage_scl_meta_sum_t sc_sum;
   tage_scl_meta_idx_t sc_idx[BPU_SCL_META_NTABLE];
@@ -153,6 +152,7 @@ struct RobDisIO {
   wire<1> stall = {};
   wire<ROB_IDX_WIDTH> enq_idx = {};
   wire<1> rob_flag = {};
+  int free_cnt = 0;  // compact ROB (ROB_COMPACT=1): free entries; enq_idx is then the tail entry, not a line
 };
 
 struct DisRobIO {

@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
         in.in_pred_dir[i] = ho.out_pred_dir[lane];
         in.in_alt_pred[i] = ho.meta.alt_pred[lane];
         in.in_pcpn[i] = ho.meta.pcpn[lane];
-        in.in_altpcpn[i] = ho.meta.altpcpn[lane];
+        in.in_altpcpn[i] = 0;   // no longer carried in the metadata; the reference only reads it under BPA_ALTUPD
         for (int k = 0; k < TN_MAX; k++) { in.in_tage_tags[i][k] = ho.meta.tage_tag[lane][k]; in.in_tage_idxs[i][k] = ho.meta.tage_idx[lane][k]; }
       } else {
         in.in_pred_dir[i] = rng.chance(50);
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
         in.in_altpcpn[i] = rng.below(TN_MAX + 1);
         for (int k = 0; k < TN_MAX; k++) { in.in_tage_tags[i][k] = rng.next(); in.in_tage_idxs[i][k] = rng.chance(95) ? rng.below(TN_ENTRY_NUM) : rng.next(); }
       }
-      in.in_sc_used[i] = rng.chance(3);
+      in.in_sc_used[i] = false;   // the statistical corrector is gone from the model under test
       in.in_loop_used[i] = rng.chance(3);
       in.in_sc_pred[i] = rng.chance(50);
       in.in_sc_sum[i] = rng.next();
@@ -109,9 +109,9 @@ int main(int argc, char **argv) {
       nin.in_update_base_pc[i] = in.in_update_base_pc[i]; nin.in_upd_valid[i] = in.in_upd_valid[i];
       nin.in_actual_dir[i] = in.in_actual_dir[i]; nin.in_actual_br_type[i] = in.in_actual_br_type[i];
       nin.in_actual_targets[i] = in.in_actual_targets[i]; nin.in_pred_dir[i] = in.in_pred_dir[i];
-      nin.in_alt_pred[i] = in.in_alt_pred[i]; nin.in_pcpn[i] = in.in_pcpn[i]; nin.in_altpcpn[i] = in.in_altpcpn[i];
+      nin.in_alt_pred[i] = in.in_alt_pred[i]; nin.in_pcpn[i] = in.in_pcpn[i];
       for (int k = 0; k < TN_MAX; k++) { nin.in_tage_tags[i][k] = in.in_tage_tags[i][k]; nin.in_tage_idxs[i][k] = in.in_tage_idxs[i][k]; }
-      nin.in_sc_used[i] = in.in_sc_used[i]; nin.in_loop_used[i] = in.in_loop_used[i];
+      nin.in_loop_used[i] = in.in_loop_used[i];
     }
     old_bpu.bpu_seq_read(in, rd);
     old_bpu.bpu_comb_calc(in, rd, o_old, req);
@@ -129,8 +129,8 @@ int main(int argc, char **argv) {
                o_old.predict_next_fetch_address, o_new.predict_next_fetch_address, o_old.icache_read_valid, o_new.icache_read_valid,
                o_old.PTAB_write_enable, o_new.PTAB_write_enable, o_old.out_pred_base_pc, o_new.out_pred_base_pc);
         for (int i = 0; i < FETCH_WIDTH; i++)
-          printf("  slot%d dir %d/%d alt %d/%d pcpn %d/%d altpcpn %d/%d\n", i, o_old.out_pred_dir[i], o_new.out_pred_dir[i],
-                 o_old.meta.alt_pred[i], o_new.meta.alt_pred[i], o_old.meta.pcpn[i], o_new.meta.pcpn[i], o_old.meta.altpcpn[i], o_new.meta.altpcpn[i]);
+          printf("  slot%d dir %d/%d alt %d/%d pcpn %d/%d\n", i, o_old.out_pred_dir[i], o_new.out_pred_dir[i],
+                 o_old.meta.alt_pred[i], o_new.meta.alt_pred[i], o_old.meta.pcpn[i], o_new.meta.pcpn[i]);
       }
       mism++;
       if (mism >= 5) break;

@@ -273,11 +273,9 @@ static constexpr bpu_bank_sel_ext_t BPU_BANK_SEL_INVALID = BPU_BANK_NUM;
 template <int N>
 struct PredMetaT {
   wire1_t alt_pred[N];
-  pcpn_t altpcpn[N];
   pcpn_t pcpn[N];
   tage_idx_t tage_idx[N][TN_MAX];
   tage_tag_t tage_tag[N][TN_MAX];
-  wire1_t sc_used[N];
   wire1_t sc_pred[N];
   tage_scl_meta_sum_t sc_sum[N];
   tage_scl_meta_idx_t sc_idx[N][BPU_SCL_META_NTABLE];
@@ -295,13 +293,11 @@ struct PredMetaT {
     static_assert(M <= N, "source bundle wider than destination");
     for (int i = 0; i < M; i++) {
       alt_pred[i] = s.alt_pred[i];
-      altpcpn[i] = s.altpcpn[i];
       pcpn[i] = s.pcpn[i];
       for (int j = 0; j < TN_MAX; j++) {
         tage_idx[i][j] = s.tage_idx[i][j];
         tage_tag[i][j] = s.tage_tag[i][j];
       }
-      sc_used[i] = s.sc_used[i];
       sc_pred[i] = s.sc_pred[i];
       sc_sum[i] = s.sc_sum[i];
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) sc_idx[i][t] = s.sc_idx[i][t];
@@ -321,7 +317,6 @@ struct PredMetaT {
     constexpr uint32_t kTageIdxMask = (1u << tage_idx_t_BITS) - 1u;
     constexpr uint32_t kTageTagMask = (1u << tage_tag_t_BITS) - 1u;
     for (int i = 0; i < N; i++) {
-      altpcpn[i] = static_cast<pcpn_t>(altpcpn[i] & kPcpnMask);
       pcpn[i] = static_cast<pcpn_t>(pcpn[i] & kPcpnMask);
       for (int j = 0; j < TN_MAX; j++) {
         tage_idx[i][j] = static_cast<tage_idx_t>(tage_idx[i][j] & kTageIdxMask);

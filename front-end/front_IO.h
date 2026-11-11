@@ -34,11 +34,9 @@ struct front_top_in {
   br_type_t actual_br_type[COMMIT_WIDTH];
   target_addr_t actual_target[COMMIT_WIDTH];
   wire1_t alt_pred[COMMIT_WIDTH];
-  pcpn_t altpcpn[COMMIT_WIDTH];
   pcpn_t pcpn[COMMIT_WIDTH];
   tage_idx_t tage_idx[COMMIT_WIDTH][4]; // TN_MAX = 4
   tage_tag_t tage_tag[COMMIT_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_used[COMMIT_WIDTH];
   wire1_t sc_pred[COMMIT_WIDTH];
   tage_scl_meta_sum_t sc_sum[COMMIT_WIDTH];
   tage_scl_meta_idx_t sc_idx[COMMIT_WIDTH][BPU_SCL_META_NTABLE];
@@ -56,6 +54,7 @@ struct front_top_out {
   // FETCH_WIDTH are kept invalid by front_output_comb().
   wire1_t FIFO_valid;
   wire1_t commit_stall;
+  uint8_t commit_upd_free = 255, commit_tq_free = 255;  // BPU update / uBTB train queue free entries (EXP-028)
   pc_t pc[BACKEND_FETCH_WIDTH];
   inst_word_t instructions[BACKEND_FETCH_WIDTH];
   wire1_t predict_dir[BACKEND_FETCH_WIDTH];

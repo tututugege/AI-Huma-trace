@@ -4,50 +4,6 @@
 #include "config.h"
 #include "mmio_address_map.h"
 
-namespace {
-uint8_t uncached_access_size_bytes(uint8_t func3) {
-  switch (func3 & 0x3u) {
-  case 0:
-    return 1;
-  case 1:
-    return 2;
-  default:
-    return 4;
-  }
-}
-
-uint32_t extract_uncached_read_data(uint32_t raw, uint8_t func3) {
-  switch (func3) {
-  case 0b000: {
-    uint32_t val = raw & 0xFFu;
-    return (val & 0x80u) ? (val | 0xFFFFFF00u) : val;
-  }
-  case 0b001: {
-    uint32_t val = raw & 0xFFFFu;
-    return (val & 0x8000u) ? (val | 0xFFFF0000u) : val;
-  }
-  case 0b100:
-    return raw & 0xFFu;
-  case 0b101:
-    return raw & 0xFFFFu;
-  default:
-    return raw;
-  }
-}
-
-uint32_t read_uncached_ram(uint32_t addr, uint8_t func3) {
-  const uint8_t size = uncached_access_size_bytes(func3);
-  uint32_t raw = 0;
-  for (uint8_t i = 0; i < size; i++) {
-    const uint32_t byte_addr = addr + i;
-    const uint32_t word = pmem_read(byte_addr & ~0x3u);
-    const uint32_t shift = (byte_addr & 0x3u) * 8u;
-    raw |= ((word >> shift) & 0xFFu) << (i * 8u);
-  }
-  return extract_uncached_read_data(raw, func3);
-}
-} // namespace
-
 void PeripheralAxi::init() {
   in = {};
   out = {};
@@ -164,24 +120,6 @@ void PeripheralAxi::comb_inputs() {
 
   if (!cur.busy) {
     if (peripheral_req != nullptr && peripheral_req->is_mmio) {
-      if (simulator_is_uncached_memory_addr(peripheral_req->mmio_addr)) {
-        nxt.busy = false;
-        nxt.write = peripheral_req->wen;
-        nxt.req_accepted = false;
-        nxt.resp_valid = true;
-        nxt.addr = peripheral_req->mmio_addr;
-        nxt.wdata = peripheral_req->mmio_wdata;
-        nxt.func3 = peripheral_req->mmio_fun3;
-        nxt.rdata = peripheral_req->wen
-                        ? 0
-                        : read_uncached_ram(peripheral_req->mmio_addr,
-                                            peripheral_req->mmio_fun3);
-        // No write: the core's own RAM is the only memory and the reference already performed this store when it was
-        // dispatched. Writing the store data here (at execution, later than the dispatch) put an old value back over
-        // the newer stores the reference had run ahead (xalancbmk: data in the former 0x87f00000 uncached window).
-        nxt.req_id = 0;
-        return;
-      }
       if (peripheral_model != nullptr &&
           PeripheralModel::is_modeled_mmio(peripheral_req->mmio_addr)) {
         nxt.busy = false;

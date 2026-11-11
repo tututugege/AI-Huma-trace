@@ -738,13 +738,13 @@ void SimCpu::front_comb_before_back() {
         no_taken = false;
     }
     back.in.meta = front.out.meta;
-    back.in.front_stall = static_cast<bool>(front.out.commit_stall);
+    back.in.front_stall = static_cast<bool>(front.out.commit_stall); back.in.front_upd_free = front.out.commit_upd_free; back.in.front_tq_free = front.out.commit_tq_free;
   } else {
     front.in.FIFO_read_enable = false;
     front.in.refetch = false;
     front.seq_read_bpu();
     front.comb_bpu();
-    back.in.front_stall = static_cast<bool>(front.out.commit_stall);
+    back.in.front_stall = static_cast<bool>(front.out.commit_stall); back.in.front_upd_free = front.out.commit_upd_free; back.in.front_tq_free = front.out.commit_tq_free;
   }
 }
 
@@ -783,7 +783,6 @@ void SimCpu::back2front_comb() {
     for (int j = 0; j < 4; j++) {
       front.back2front_1.tage_tag[i][j] = 0;
     }
-    front.back2front_1.sc_used[i] = false;
     front.back2front_1.sc_pred[i] = false;
     front.back2front_1.sc_sum[i] = 0;
     for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
@@ -825,9 +824,7 @@ void SimCpu::back2front_comb() {
 
       front.back2front_1.actual_br_type[i] = br_type;
       front.back2front_1.alt_pred[i] = ftq_info.alt_pred;
-      front.back2front_1.altpcpn[i] = ftq_info.altpcpn;
       front.back2front_1.pcpn[i] = ftq_info.pcpn;
-      front.back2front_1.sc_used[i] = ftq_info.sc_used;
       front.back2front_1.sc_pred[i] = ftq_info.sc_pred;
       front.back2front_1.sc_sum[i] = ftq_info.sc_sum;
       for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {

@@ -38,6 +38,10 @@ struct PmuVec {
 struct PmuFrontSignals {
   bool icache_req_fire = false, icache_miss_issue = false, icache_miss_busy = false;
   bool itlb_access = false, itlb_miss = false;
+  // frontend delivery split (EXP-025): set by FrontComb::finish(), read by BackTop::pmu_sample()
+  bool feo_ready = false;      // the back end could read a fetch group this cycle
+  int feo_n = 0;               // valid instructions delivered (0 = none)
+  int feo_cause = 0;           // PmuEvent of the lost-slot bucket for the empty slots of this cycle (0 = none lost)
 };
 inline PmuFrontSignals g_pmu_front;
 

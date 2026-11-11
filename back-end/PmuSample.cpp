@@ -128,16 +128,6 @@ void BackTop::pmu_sample() {
   // recovery state for the next cycle: a redirect starts it, the first valid instruction in the dispatch stage ends it
   bool any_valid = false;
   for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->inst_valid[i]);
-  {
-    static int dur = 0; static uint64_t hist[3][64]; static bool reg = false;
-    static const bool diag = std::getenv("FE_DIAG") != nullptr;
-    if (diag) {
-      if (!reg) { reg = true; std::atexit([] { for (int k = 0; k < 3; k++) { std::printf("[FE_DIAG] recov-dur kind=%d:", k); for (int i = 0; i < 64; i++) if (hist[k][i]) std::printf(" %d:%llu", i, (unsigned long long)hist[k][i]); std::printf("\n"); } }); }
-      if (p.recovering) dur++;
-      if (rob_bcast.flush || dec_bcast.mispred) { if (p.recovering && dur) hist[2][dur > 63 ? 63 : dur]++; dur = 0; }
-      else if (any_valid && p.recovering) { hist[p.recov_by_flush ? 1 : 0][dur > 63 ? 63 : dur]++; dur = 0; }
-    }
-  }
   if (rob_bcast.flush || dec_bcast.mispred) {
     p.recovering = true;
     p.recov_by_flush = rob_bcast.flush;
@@ -146,6 +136,11 @@ void BackTop::pmu_sample() {
   }
 
   // ---- frontend ----
+  if (g_pmu_front.feo_ready) {
+    e.add(PMU_FEO_CYC);
+    if (g_pmu_front.feo_n > 0) { e.add(PMU_FEO_GROUPS); e.add(PMU_FEO_INSTS, g_pmu_front.feo_n); }
+    if (g_pmu_front.feo_cause) e.add(static_cast<PmuEvent>(g_pmu_front.feo_cause), FETCH_WIDTH - g_pmu_front.feo_n);
+  }
   if (g_pmu_front.icache_req_fire) e.add(PMU_ICACHE_ACCESS);
   if (g_pmu_front.icache_miss_issue) e.add(PMU_ICACHE_MISS);
   if (g_pmu_front.icache_miss_busy) e.add(PMU_CYC_ICACHE_MISS_BUSY);

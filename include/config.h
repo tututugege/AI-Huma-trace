@@ -460,6 +460,13 @@ constexpr int ROB_BANK_NUM = DECODE_WIDTH;
 #endif
 constexpr int ROB_NUM = CFG_ROB_NUM;
 constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
+// Compact ROB (EXP-028): entries allocated one after another instead of one dispatch group per line, commit takes the
+// longest completed prefix, commit credits from the BPU update / uBTB train queue occupancy (registered). 0 = line ROB.
+// The environment variable ROB_COMPACT=1 also turns it on at run time (model experiments only).
+#ifndef CFG_ROB_COMPACT
+#define CFG_ROB_COMPACT 0
+#endif
+constexpr int ROB_COMPACT = CFG_ROB_COMPACT;
 
 // ============================================================
 // FTQ/INST BUFFER
@@ -900,17 +907,10 @@ constexpr uint32_t OPENSBI_TIMERCMP_LOW_ADDR = TIMER_CMP_LOW_ADDR;
 constexpr uint32_t OPENSBI_TIMERCMP_HIGH_ADDR = TIMER_CMP_HIGH_ADDR;
 constexpr uint32_t OCSDC_ADDR_BASE = 0x1fe10000;
 constexpr uint32_t OCSDC_MMIO_SIZE = 0x00000100;
-constexpr uint32_t SIM_UNCACHE_SDRAM_BASE = 0x4ff00000;
-constexpr uint32_t SIM_UNCACHE_SDRAM_SIZE = 0x00100000;
-constexpr uint32_t SIM_UNCACHE_HIGH_BASE = 0xfff00000;
-constexpr uint32_t SIM_UNCACHE_HIGH_SIZE = 0x00100000;
-
-
+// Cacheable memory: the whole SDRAM window [0x40000000, 0x50000000) and the whole DDR window [0x80000000, 2^32);
+// everything else is MMIO. The uncached-RAM windows (0x4ff00000, 0x87f00000 and 0xfff00000, 1 MB each, left over from an
+// SoC DMA / cache coherence workaround and accessed as MMIO) are gone: Linux handed such pages to user programs.
 constexpr uint32_t SIM_CACHE_ADDR_1_MIN = 0x40000000;
-constexpr uint32_t SIM_CACHE_ADDR_1_MAX = 0x4ff00000;
-
-// DDR is cacheable up to the high uncached window. The old 0x87f00000-0x87ffffff uncached window (left over from an SoC DMA /
-// cache coherence workaround) is gone: Linux handed those pages to user programs and their loads ran as MMIO.
-constexpr uint32_t SIM_CACHE_ADDR_2_MIN = 0x80000000;
-constexpr uint32_t SIM_CACHE_ADDR_2_MAX = 0xfff00000;
+constexpr uint32_t SIM_CACHE_ADDR_1_MAX = 0x50000000;
+constexpr uint32_t SIM_CACHE_ADDR_2_MIN = 0x80000000;  // up to the end of the 32-bit space
 #include "types.h"

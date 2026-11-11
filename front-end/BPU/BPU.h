@@ -20,11 +20,11 @@ constexpr int NB = BPU_BANK_NUM, FW = FETCH_WIDTH, CW = COMMIT_WIDTH, TN = TN_MA
 // 1-cycle target table (tag 12 b) hides the bubble when it holds the same target. Both default to 0 (= old zero-bubble model).
 inline int env_int(const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; }
 
-// ---- docs/BPU_ACC.md: TAGE parameters (runtime, all defaults = the original predictor) ----------------------------------------------
-// BPA_HLEN="8,13,32,119"  history length per tagged table (<= 255 bits)      BPA_TAGW="8,8,8,8"  tag width per table (needs a build with
-// -DTAGE_TAG_WIDTH >= the largest)   BPA_CNTW=3  tagged counter width (2..4)   BPA_UW=2  useful width (1..2)   BPA_WEAK=0  1: both weak
-// states of the provider count as weak   BPA_UALT=1  number of use-alt counters (indexed by pc)   BPA_ALLOC=0  allocation policy (see Tage::update)
-// BPA_URST=11  useful-bit reset sweep: one row every 2^N updates   BPA_ALTUPD=0  1: a weak new provider also trains the alternate prediction
+// ---- docs/BPU_ACC.md: TAGE parameters ---------------------------------------------------------------------------------------------
+// BPA_HLEN="8,13,32,119"  history length per tagged table (<= 255 bits; run time). The other parameters are fixed to the RTL design:
+// TAGE_TAG_WIDTH-bit tags, 3-bit tagged counters, 2-bit useful counters, one use-alt counter, allocation in the lowest free table or (1/3)
+// the next one, one useful-bit reset row every 2^11 updates. (The run-time sweeps BPA_TAGW / CNTW / UW / WEAK / UALT / ALLOC / URST and the
+// statistical corrector BPA_SC* found no gain and were removed with EXP-028's switch clean-up.)
 inline std::vector<int> env_list(const char *n, std::vector<int> d) {
   const char *v = std::getenv(n);
   if (!v || !*v) return d;
@@ -35,16 +35,14 @@ inline std::vector<int> env_list(const char *n, std::vector<int> d) {
 }
 struct TageCfg {
   uint32_t ghr[TN] = {}, fl[FH_N_MAX][TN] = {}, tagw[TN] = {}, tagmask[TN] = {};
-  int cntw = 3, uw = 2, weak2 = 0, ualt = 1, alloc = 0, urst = 11, altupd = 0, cmax = 7, chalf = 4;
+  static constexpr int uw = 2, ualt = 1, urst = 11, cmax = 7, chalf = 4;   // 3-bit counters, 2-bit useful
   int hlen_max = 0;
-  int sc = 0, scn = 256, scw = 6, scth = 8, sct = 3;   // BPA_SC (0 off, 1 always, 2 only when the provider is weak / base), BPA_SCN, BPA_SCW, BPA_SCTH, BPA_SCT (history tables used: 1..3)
-  int scmax = 31, scmin = -32;
   TageCfg() {
     const std::vector<int> dh = (TN == 4) ? std::vector<int>{8, 13, 32, 119} : (TN == 5) ? std::vector<int>{5, 9, 17, 40, 119} : (TN == 6) ? std::vector<int>{4, 7, 12, 22, 42, 119} : (TN == 3) ? std::vector<int>{8, 24, 119} : (TN == 2) ? std::vector<int>{13, 119} : std::vector<int>(TN, 32);
-    const std::vector<int> h = env_list("BPA_HLEN", dh), tw = env_list("BPA_TAGW", std::vector<int>(TN, TAGE_TAG_WIDTH));
+    const std::vector<int> h = env_list("BPA_HLEN", dh);
     for (int i = 0; i < TN; i++) {
-      ghr[i] = h[i]; tagw[i] = tw[i];
-      if (ghr[i] < 1 || ghr[i] > 255 || int(tagw[i]) > TAGE_TAG_WIDTH || tagw[i] < 2) { std::printf("[BPA] bad BPA_HLEN / BPA_TAGW (tag width <= %d)\n", TAGE_TAG_WIDTH); std::exit(1); }
+      ghr[i] = h[i]; tagw[i] = TAGE_TAG_WIDTH;
+      if (ghr[i] < 1 || ghr[i] > 255) { std::printf("[BPA] bad BPA_HLEN\n"); std::exit(1); }
       tagmask[i] = (1u << tagw[i]) - 1;
       if (int(ghr[i]) > hlen_max) hlen_max = ghr[i];
       // folded lengths: index fold 11 b (or the history length if shorter), tag folds = tag width and tag width - 1 (8 and 7 with the default 8-bit tags)
@@ -52,13 +50,6 @@ struct TageCfg {
       fl[1][i] = ghr[i] < tagw[i] ? ghr[i] : tagw[i];
       fl[2][i] = ghr[i] < tagw[i] - 1 ? ghr[i] : tagw[i] - 1;
     }
-    cntw = env_int("BPA_CNTW", 3); uw = env_int("BPA_UW", 2); weak2 = env_int("BPA_WEAK", 0); ualt = env_int("BPA_UALT", 1);
-    alloc = env_int("BPA_ALLOC", 0); urst = env_int("BPA_URST", 11); altupd = env_int("BPA_ALTUPD", 0);
-    if (cntw < 2 || cntw > 4 || uw < 1 || uw > 2 || ualt < 1 || (ualt & (ualt - 1))) { std::printf("[BPA] bad BPA_CNTW / BPA_UW / BPA_UALT\n"); std::exit(1); }
-    cmax = (1 << cntw) - 1; chalf = 1 << (cntw - 1);
-    sc = env_int("BPA_SC", 0); scn = env_int("BPA_SCN", 256); scw = env_int("BPA_SCW", 6); scth = env_int("BPA_SCTH", 8); sct = env_int("BPA_SCT", 3);
-    if (sc && (scn < 2 || scn > 1024 || (scn & (scn - 1)) || scw < 3 || scw > 7 || sct < 1 || sct > 3 || TN < 3)) { std::printf("[BPA] bad BPA_SCN / BPA_SCW / BPA_SCT\n"); std::exit(1); }
-    scmax = (1 << (scw - 1)) - 1; scmin = -(1 << (scw - 1));
   }
 };
 // BPA_ITT: history-indexed indirect target tables (ITTAGE-like) added to the BTB bank. BPA_ITTH="2" (or "1,3"): the TAGE history table(s) whose index/tag
@@ -100,10 +91,6 @@ inline uint8_t hist_sym(pc_t bpc, pc_t tgt) {
   for (int i = 0; i < 32; i += hs) r ^= (v >> i) & ((1u << hs) - 1);
   return uint8_t(r);
 }
-// docs/BPU_ACC.md diagnostics (default 0 = unchanged behaviour). BPA_NOCMTSYNC=1: the zero-bubble model does not copy the architectural history
-// over the speculative one when a mispredicted conditional branch commits (BPU_PIPE has no such copy). BPA_CMTSYNC=1: BPU_PIPE does it.
-inline int cfg_nocmtsync() { static const int v = env_int("BPA_NOCMTSYNC", 0); return v; }
-inline int cfg_cmtsync() { static const int v = env_int("BPA_CMTSYNC", 0); return v; }
 inline uint64_t &pd_flush_count() { static uint64_t n = 0; return n; }   // statistics only: predecode-checker flushes seen by the BPU
 // BPA_REPAIR=1: exact history / RAS repair at a backend branch mispredict. The BPU keeps a checkpoint record per fetch block (state before the
 // block, predicted types of its slots) keyed by a block sequence number that travels in the PredMeta to the back end FTQ; the back end returns it with
@@ -111,7 +98,6 @@ inline uint64_t &pd_flush_count() { static uint64_t n = 0; return n; }   // stat
 // Default 0: spec history / RAS are copied from the committed state (which lacks every older in-flight branch, call and return).
 inline int cfg_repair() { static const int v = env_int("BPA_REPAIR", 3); return v; }
 inline uint64_t *repair_stats() { static uint64_t n[2] = {0, 0}; return n; }   // [0] repaired, [1] record not found / mismatch
-inline int cfg_notc() { static const int v = env_int("BPA_NOTC", 1); return v; }   // 1: the BHT-indexed target cache / pre-TC are not used (indirect targets: ITT, else BTB)
 // BPU_ICALL=1: a jalr with rd = ra that is not a return is a call (BR_ICALL: indirect target + RAS push). 0 = such a jalr is BR_IDIRECT (old design).
 inline int cfg_icall() { static const int v = env_int("BPU_ICALL", 1); return v; }
 inline bool br_ind(int t) { return t == BR_IDIRECT || t == BR_ICALL; }
@@ -177,29 +163,23 @@ struct TageWr {
   uint32_t reset_row = 0;
   uint8_t cnt_v[TN] = {}, useful_v[TN] = {}, reset_v[TN] = {};
   tage_tag_t tag_v[TN] = {};
-  uint8_t sc_we = 0;                 // BPA_SC: bits 0..2 history tables, bit 3 bias
-  uint32_t sc_i[3] = {}, sc_bi = 0;
-  int8_t sc_v[3] = {}, sc_bv = 0;
-  bool sc_bt = false;
 };
 
 struct TagePred {
   bool pred, alt;
-  uint8_t pcpn, altpcpn;
+  uint8_t pcpn;
   tage_tag_t tag[TN];
   tage_idx_t idx[TN];
   bool used_alt;   // statistics only (BPA_STATS): the weak-provider use-alt rule replaced the provider's prediction
-  bool sc_used;    // BPA_SC: the statistical corrector overrode the TAGE prediction (travels in the meta as sc_used)
 };
 
 struct TageUpd {
   pc_t bank_pc;
   bool real_dir, pred, alt;
   int pcpn;
-  int altpcpn;
   tage_tag_t tag[TN];
   tage_idx_t idx[TN];
-  bool sc_used, loop_used;
+  bool loop_used;
 };
 
 class Tage {
@@ -209,34 +189,21 @@ class Tage {
   uint8_t lsfr_ = 8;  // bit i = LSFR[i]; reset value {0,0,0,1}
   uint32_t reset_cnt_ = 0;
   tage_use_alt_ctr_t use_alt_[64];
-  int8_t sc_[3][1024];       // BPA_SC: signed counters indexed by the TAGE index of history table j (low bits)
-  int8_t scb_[1024][2];      // BPA_SC: bias counters indexed by pc and the TAGE prediction
 
   static uint8_t inc2(uint8_t v) { return v >= 3 ? 3 : v + 1; }
   static uint8_t dec2(uint8_t v) { return v == 0 ? 0 : v - 1; }
   static uint8_t incu(uint8_t v) { const uint8_t m = uint8_t((1u << tcfg().uw) - 1); return v >= m ? m : v + 1; }
   static uint8_t decu(uint8_t v) { return v == 0 ? 0 : v - 1; }
   static bool taken(uint8_t c) { return c >= tcfg().chalf; }
-  static bool weak(uint8_t c) { const TageCfg &k = tcfg(); return c == k.chalf - 1 || (k.weak2 && c == k.chalf); }
+  static bool weak(uint8_t c) { return c == TageCfg::chalf - 1; }
   static uint8_t cinc(uint8_t c) { return c >= tcfg().cmax ? c : c + 1; }
   static uint8_t cdec(uint8_t c) { return c == 0 ? 0 : c - 1; }
   static constexpr tage_use_alt_ctr_t kUaInit = static_cast<tage_use_alt_ctr_t>(TAGE_USE_ALT_CTR_INIT);
   tage_use_alt_ctr_t ua(uint32_t base_idx) const { return use_alt_[base_idx & (tcfg().ualt - 1)]; }
-  static int sc_sum(const int8_t c[3], int8_t b) { int s = 2 * b + 1; for (int j = 0; j < tcfg().sct; j++) s += 2 * c[j] + 1; return s; }
-  // decide the override: returns true and flips pred when the corrector disagrees with a confident enough margin
-  static bool sc_apply(const int8_t c[3], int8_t b, bool provider_weak, bool &pred) {
-    const TageCfg &K = tcfg();
-    if (!K.sc) return false;
-    if (K.sc == 2 && !provider_weak) return false;
-    const int sum = sc_sum(c, b);
-    const bool sp = sum >= 0;
-    if (sp != pred && (sum >= 0 ? sum : -sum) >= K.scth) { pred = sp; return true; }
-    return false;
-  }
 
  public:
   struct Idx { uint32_t base; tage_idx_t idx[TN]; tage_tag_t tag[TN]; };
-  struct Raw { uint8_t base_cnt; tage_tag_t tag[TN]; uint8_t cnt[TN], useful[TN]; int8_t scc[3]; int8_t scb[2]; };
+  struct Raw { uint8_t base_cnt; tage_tag_t tag[TN]; uint8_t cnt[TN], useful[TN]; };
   Tage() { std::memset(this, 0, sizeof(*this)); lsfr_ = 8; for (auto &u : use_alt_) u = kUaInit; }
   static bool provider_weak(int pcpn, uint8_t cnt) { return pcpn >= TN || weak(cnt); }
 
@@ -257,27 +224,13 @@ class Tage {
     const bool base_pred = base_[b] >= 2;
     o.alt = altpcpn >= TN ? base_pred : taken(cnt[altpcpn]);
     o.pcpn = pcpn;
-    o.altpcpn = altpcpn;
-    o.used_alt = false; o.sc_used = false;
-    if (pcpn >= TN) { o.pred = base_pred; sc_stage(o, b, 0, nullptr); return; }
+    o.used_alt = false;
+    if (pcpn >= TN) { o.pred = base_pred; return; }
     o.pred = taken(cnt[pcpn]);
     if (weak(cnt[pcpn]) && useful[pcpn] <= TAGE_USE_ALT_USEFUL_THRESHOLD &&
         ua(b) <= static_cast<tage_use_alt_ctr_t>(TAGE_USE_ALT_CTR_USE_ALT_THRESHOLD))
     { o.pred = o.alt; o.used_alt = true; }
-    sc_stage(o, b, pcpn < TN ? cnt[pcpn] : 0, nullptr);
   }
-  // corrector on top of the TAGE prediction in o (reads the counters directly, or the S1 copy in raw)
-  void sc_stage(TagePred &o, uint32_t base_idx, uint8_t pcnt, const Raw *raw) const {
-    o.sc_used = false;
-    if (!tcfg().sc) return;
-    const TageCfg &K = tcfg();
-    int8_t c[3] = {0, 0, 0}, b;
-    if (raw) { for (int j = 0; j < 3; j++) c[j] = raw->scc[j]; b = raw->scb[o.pred]; }
-    else { for (int j = 0; j < K.sct; j++) c[j] = sc_[j][o.idx[j] & (K.scn - 1)]; b = scb_[base_idx & (K.scn - 1)][o.pred]; }
-    bool p = o.pred;
-    if (sc_apply(c, b, provider_weak(o.pcpn, pcnt), p)) { o.pred = p; o.sc_used = true; }
-  }
-
   // Pipelined access (BPU_PIPE): index generation (comb, S0), array read (S1), compare/select (comb, S2).
   static void index(pc_t pc, const uint32_t fh[FH_N_MAX][TN], Idx &o) {
     const uint32_t w = pc >> 2;
@@ -290,7 +243,6 @@ class Tage {
   void read(const Idx &x, Raw &r) const {  // 1 read port: base[1], tag/cnt/useful[TN]
     r.base_cnt = base_[x.base];
     for (int i = 0; i < TN; i++) { r.tag[i] = tag_[i][x.idx[i]]; r.cnt[i] = cnt_[i][x.idx[i]]; r.useful[i] = useful_[i][x.idx[i]]; }
-    if (tcfg().sc) { const TageCfg &K = tcfg(); for (int j = 0; j < 3; j++) r.scc[j] = j < K.sct ? sc_[j][x.idx[j] & (K.scn - 1)] : 0; r.scb[0] = scb_[x.base & (K.scn - 1)][0]; r.scb[1] = scb_[x.base & (K.scn - 1)][1]; }
   }
   void select(const Idx &x, const Raw &r, TagePred &o) const {
     int pcpn = TN, altpcpn = TN;
@@ -302,14 +254,12 @@ class Tage {
     const bool base_pred = r.base_cnt >= 2;
     o.alt = altpcpn >= TN ? base_pred : taken(r.cnt[altpcpn]);
     o.pcpn = pcpn;
-    o.altpcpn = altpcpn;
-    o.used_alt = false; o.sc_used = false;
-    if (pcpn >= TN) { o.pred = base_pred; sc_stage(o, x.base, 0, &r); return; }
+    o.used_alt = false;
+    if (pcpn >= TN) { o.pred = base_pred; return; }
     o.pred = taken(r.cnt[pcpn]);
     if (weak(r.cnt[pcpn]) && r.useful[pcpn] <= TAGE_USE_ALT_USEFUL_THRESHOLD &&
         ua(x.base) <= static_cast<tage_use_alt_ctr_t>(TAGE_USE_ALT_CTR_USE_ALT_THRESHOLD))
     { o.pred = o.alt; o.used_alt = true; }
-    sc_stage(o, x.base, r.cnt[pcpn], &r);
   }
 
   void update(const TageUpd &u, TageWr &w) const {
@@ -318,7 +268,7 @@ class Tage {
     w.upd = true;
     const bool dir = u.real_dir;
     const int pcpn = u.pcpn;
-    const bool tpred = (K.sc && u.sc_used) ? !u.pred : u.pred;   // the TAGE prediction before the corrector
+    const bool tpred = u.pred;
     uint8_t cnt[TN], useful[TN];
     for (int i = 0; i < TN; i++) {
       w.idx[i] = u.idx[i] & TAGE_IDX_MASK;
@@ -336,7 +286,7 @@ class Tage {
 
     if (pcpn < TN) {
       const bool praw = taken(cnt[pcpn]);
-      const bool provider_used = !(u.sc_used || u.loop_used);
+      const bool provider_used = !u.loop_used;
       const bool alt_used = provider_used && (tpred == u.alt);
       uint8_t nu = useful[pcpn];
       bool wu = false;
@@ -353,10 +303,6 @@ class Tage {
         w.ua_we = true;
         w.ua_idx = bidx & (K.ualt - 1);
         w.ua_val = u.alt == dir ? (cur == 0 ? 0 : cur - 1) : (cur >= kMax ? kMax : cur + 1);
-      }
-      if (K.altupd && weak(cnt[pcpn]) && useful[pcpn] == 0) {   // BPA_ALTUPD: a weak, never-useful provider also trains the alternate prediction
-        if (u.altpcpn < TN) { w.cnt_we |= 1u << u.altpcpn; w.cnt_v[u.altpcpn] = dir ? cinc(cnt[u.altpcpn]) : cdec(cnt[u.altpcpn]); }
-        else { w.base_we = true; w.base_idx = bidx; w.base_val = dir ? inc2(base_cnt) : dec2(base_cnt); }
       }
     } else {
       w.base_we = true;
@@ -380,25 +326,10 @@ class Tage {
           w.cnt_we |= 1u << t;  w.cnt_v[t] = dir ? K.chalf : K.chalf - 1;
           w.useful_we |= 1u << t; w.useful_v[t] = 0;
         };
-        if (K.alloc == 1) alloc_at(j);                       // always the lowest free table
-        else if (K.alloc == 2) { alloc_at(j); if (k >= 0) alloc_at(k); }   // up to two tables
-        else alloc_at((k >= 0 && rnd % 3 == 0) ? k : j);
+        alloc_at((k >= 0 && rnd % 3 == 0) ? k : j);
       }
     }
 
-    if (K.sc) {   // corrector training: recompute its sum from the current counters, train on a miss or a small margin
-      int8_t c[3] = {0, 0, 0};
-      for (int j = 0; j < K.sct; j++) { w.sc_i[j] = u.idx[j] & (K.scn - 1); c[j] = sc_[j][w.sc_i[j]]; }
-      w.sc_bi = bidx & (K.scn - 1); w.sc_bt = tpred;
-      const int8_t b = scb_[w.sc_bi][tpred];
-      const int sum = sc_sum(c, b);
-      const bool sp = sum >= 0;
-      if (sp != dir || (sum >= 0 ? sum : -sum) < K.scth * 2) {
-        auto step = [&](int8_t v) { return int8_t(dir ? (v < K.scmax ? v + 1 : v) : (v > K.scmin ? v - 1 : v)); };
-        for (int j = 0; j < K.sct; j++) { w.sc_v[j] = step(c[j]); w.sc_we |= 1u << j; }
-        w.sc_bv = step(b); w.sc_we |= 8;
-      }
-    }
 
     // periodic useful-bit reset sweep
     if ((reset_cnt_ & ((1u << K.urst) - 1)) == 0) {
@@ -420,8 +351,6 @@ class Tage {
     reset_cnt_ = w.reset_cnt_next;
     if (w.ua_we) use_alt_[w.ua_idx] = w.ua_val;
     if (w.base_we) base_[w.base_idx] = w.base_val;
-    for (int j = 0; j < 3; j++) if (w.sc_we >> j & 1) sc_[j][w.sc_i[j]] = w.sc_v[j];
-    if (w.sc_we & 8) scb_[w.sc_bi][w.sc_bt] = w.sc_bv;
     for (int i = 0; i < TN; i++) {
       if (w.cnt_we >> i & 1) cnt_[i][w.idx[i]] = w.cnt_v[i];
       if (w.useful_we >> i & 1) useful_[i][w.idx[i]] = w.useful_v[i];
@@ -432,27 +361,18 @@ class Tage {
 };
 
 // ---------------------------------------------------------------------------
-// BTB + indirect target cache (one per bank)
+// BTB + indirect target tables (ITT) (one per bank)
 // ---------------------------------------------------------------------------
 struct IttEnt { target_addr_t target; uint16_t tag; uint8_t conf, useful; bool valid; };
 struct BtbWr {
   uint8_t itt_we = 0; uint32_t itt_idx[ITT_MAX] = {}; IttEnt itt_v[ITT_MAX] = {};
-  bool bht_we = false, btb_we = false, tc_we = false, mode_we = false;
-  uint32_t bht_idx = 0;  bht_hist_t bht_v = 0;
+  bool btb_we = false;
   uint32_t btb_way = 0, btb_idx = 0;  btb_tag_t btb_tag = 0;  target_addr_t btb_bta = 0;  uint8_t btb_useful = 0;
-  uint32_t tc_way = 0, tc_idx = 0, pre_way = 0, pre_idx = 0;
-  tc_tag_t tc_tag = 0;  target_addr_t tc_target = 0;  uint8_t tc_useful = 0, pre_useful = 0;
-  uint32_t mode_idx = 0;  wire3_t mode_v = 0;
 };
 
 class Btb {
-  static constexpr wire3_t kModeBias = 3, kModeInit = 2, kModeMax = 6;
   struct Way { btb_tag_t tag; target_addr_t bta; bool valid; wire3_t useful; };
-  struct Tc { target_addr_t target; tc_tag_t tag; bool valid; wire3_t useful; };
   Way btb_[BTB_ENTRY_NUM][BTB_WAY_NUM];
-  bht_hist_t bht_[BHT_ENTRY_NUM];
-  wire3_t mode_[BHT_ENTRY_NUM];
-  Tc tc_[TC_ENTRY_NUM][TC_WAY_NUM], pre_[TC_ENTRY_NUM][TC_WAY_NUM];
   IttEnt itt_[ITT_MAX][ITT_NMAX];
 
   static constexpr int width(uint32_t m) { int w = 0; while (m) { w++; m >>= 1; } return w; }
@@ -465,21 +385,8 @@ class Btb {
     return (x ^ salt) & mask;
   }
   static uint32_t btb_idx(pc_t pc) { return hash(pc >> 2, BTB_IDX_MASK, 0x9e3779b9u); }
-  static uint32_t bht_idx(pc_t pc) { return hash(pc >> 2, BHT_IDX_MASK, 0x6a5d39e1u); }
   static btb_tag_t btb_tag(pc_t pc) { return ((pc >> 2) >> ceil_log2_u32(BTB_ENTRY_NUM)) & BTB_TAG_MASK; }
-  static uint32_t tc_idx(pc_t pc, bht_hist_t b) {
-    const uint32_t h = b ^ (b >> 7) ^ (b >> 13) ^ (uint32_t(b) << 9);
-    return hash((pc >> 2) ^ h ^ (uint32_t(b) >> 19), TC_ENTRY_MASK, 0x51ed270bu);
-  }
-  static tc_tag_t tc_tag(pc_t pc) { return hash(pc >> 2, TC_TAG_MASK, 0x3c6ef372u); }
   static uint8_t useful_next(uint8_t v, bool ok) { return ok ? (v < 7 ? v + 1 : v) : (v > 0 ? v - 1 : 0); }
-  static bht_hist_t bht_next(bht_hist_t cur, br_type_t t, bool dir, target_addr_t tgt) {
-    if (br_ind(t)) {
-      const uint32_t tw = tgt >> 2, tf = tw ^ (tw >> 11) ^ (tw >> 19);
-      return (cur ^ (uint32_t(cur) << 5) ^ (cur >> 2)) ^ tf ^ 0x9e3779b9u;
-    }
-    return (uint32_t(cur) << 1) | dir;
-  }
   template <class S, int N>
   static int hit_way(const S (&set)[N], uint32_t tag) {
     for (int w = 0; w < N; w++) if (set[w].valid && set[w].tag == tag) return w;
@@ -494,7 +401,7 @@ class Btb {
   }
 
  public:
-  Btb() { std::memset(this, 0, sizeof(*this)); for (auto &m : mode_) m = kModeInit; }
+  Btb() { std::memset(this, 0, sizeof(*this)); }
   // ITT lookup: the longest-history hit (index and tag come from the TAGE index generation, tags/indices carried in the prediction meta)
   const IttEnt *itt_hit(const tage_idx_t *idx, const tage_tag_t *tag, int *which = nullptr) const {
     const IttCfg &c = icfg();
@@ -505,26 +412,18 @@ class Btb {
     return nullptr;
   }
 
-  // Pipelined access: one read of the BTB set, BHT/mode, then the (BHT-indexed) TC / pre-TC sets; select is pure compare.
-  struct Raw { Way btb[BTB_WAY_NUM]; bht_hist_t bht; wire3_t mode; Tc tc[TC_WAY_NUM], pre[TC_WAY_NUM]; IttEnt it[ITT_MAX]; };
+  // Pipelined access: one read of the BTB set and the ITT entries; select is pure compare.
+  struct Raw { Way btb[BTB_WAY_NUM]; IttEnt it[ITT_MAX]; };
   void read(pc_t pc, Raw &r, const tage_idx_t *tidx = nullptr) const {
     if (tidx) for (int k = 0; k < icfg().n; k++) r.it[k] = itt_[k][tidx[icfg().h[k]] & (icfg().size - 1)];
-    const uint32_t bi = bht_idx(pc);
     for (int w = 0; w < BTB_WAY_NUM; w++) r.btb[w] = btb_[btb_idx(pc)][w];
-    r.bht = bht_[bi]; r.mode = mode_[bi];
-    const uint32_t ti = tc_idx(pc, r.bht);
-    for (int w = 0; w < TC_WAY_NUM; w++) { r.tc[w] = tc_[ti][w]; r.pre[w] = pre_[ti][w]; }
   }
-  // src (statistics only): 1 BTB hit, 2 BTB miss (pc+4), 3 TC, 4 pre-TC, 5 indirect fallback to BTB, 6 indirect miss (pc+4)
+  // src (statistics only): 1 BTB hit, 2 BTB miss (pc+4), 3 ITT, 5 indirect fallback to BTB, 6 indirect miss (pc+4)
   static target_addr_t select(pc_t pc, br_type_t type, const Raw &r, int *src = nullptr, const tage_tag_t *ttag = nullptr, bool *itt = nullptr) {
     const int h = hit_way(r.btb, btb_tag(pc));
     if (br_ind(type)) {
       if (ttag) for (int k = icfg().n - 1; k >= 0; k--)
         if (r.it[k].valid && r.it[k].tag == ttag[icfg().h[k]] && r.it[k].conf >= icfg().minconf) { if (itt) *itt = true; if (src) *src = 3; return r.it[k].target; }
-      const tc_tag_t tg = tc_tag(pc);
-      const int a = cfg_notc() ? -1 : hit_way(r.tc, tg), p = cfg_notc() ? -1 : hit_way(r.pre, tg);
-      if (p >= 0 && (a < 0 || r.mode >= kModeBias)) { if (src) *src = 4; return r.pre[p].target; }
-      if (a >= 0) { if (src) *src = 3; return r.tc[a].target; }
       if (src) *src = h >= 0 ? 5 : 6;
       return h >= 0 ? r.btb[h].bta : pc + 4;
     }
@@ -541,11 +440,6 @@ class Btb {
     const int h = hit_way(set, btb_tag(pc));
     if (br_ind(type)) {
       if (tidx && icfg().n) { const IttEnt *e = itt_hit(tidx, ttag); if (e && e->conf >= icfg().minconf) { if (itt) *itt = true; if (src) *src = 3; return e->target; } }
-      const uint32_t bi = bht_idx(pc), ti = tc_idx(pc, bht_[bi]);
-      const tc_tag_t tg = tc_tag(pc);
-      const int a = cfg_notc() ? -1 : hit_way(tc_[ti], tg), p = cfg_notc() ? -1 : hit_way(pre_[ti], tg);
-      if (p >= 0 && (a < 0 || mode_[bi] >= kModeBias)) { if (src) *src = 4; return pre_[ti][p].target; }
-      if (a >= 0) { if (src) *src = 3; return tc_[ti][a].target; }
       if (src) *src = h >= 0 ? 5 : 6;
       return h >= 0 ? set[h].bta : pc + 4;
     }
@@ -558,11 +452,6 @@ class Btb {
 
   void update(pc_t pc, br_type_t type, bool dir, target_addr_t addr, BtbWr &w, const tage_idx_t *tidx = nullptr, const tage_tag_t *ttag = nullptr) const {
     w = BtbWr{};
-    const uint32_t bi = bht_idx(pc);
-    const bht_hist_t cur = bht_[bi];
-    const bht_hist_t nxt = type != BR_NONCTL ? bht_next(cur, type, dir, addr) : cur;
-    if (type != BR_NONCTL) { w.bht_we = true; w.bht_idx = bi; w.bht_v = nxt; }
-
     const bool writes = type == BR_DIRECT || type == BR_CALL || type == BR_RET || type == BR_JAL || br_ind(type);
     if (dir && writes) {
       const uint32_t ei = btb_idx(pc);
@@ -595,41 +484,10 @@ class Btb {
         e.useful = 0; w.itt_we |= 1u << k; w.itt_idx[k] = i; w.itt_v[k] = e;
       }
     }
-    if (dir && br_ind(type) && !cfg_notc()) {
-      const uint32_t pi = tc_idx(pc, cur), wi = tc_idx(pc, nxt);
-      const tc_tag_t tg = tc_tag(pc);
-      const Tc(&ws)[TC_WAY_NUM] = tc_[wi];
-      const int wh = hit_way(ws, tg);
-      const int wway = wh >= 0 ? wh : victim(ws);
-      w.tc_we = true;
-      w.tc_way = wway; w.tc_idx = wi; w.tc_tag = tg; w.tc_target = addr;
-      w.tc_useful = wh >= 0 ? useful_next(ws[wway].useful, ws[wway].target == addr) : INDIRECT_TC_INIT_USEFUL;
-
-      const Tc(&ps)[TC_WAY_NUM] = pre_[pi];
-      const int ph = hit_way(ps, tg);
-      const int pway = ph >= 0 ? ph : victim(ps);
-      const bool pre_ok = ph >= 0 && ps[pway].target == addr;
-      w.pre_way = pway; w.pre_idx = pi;
-      w.pre_useful = ph >= 0 ? useful_next(ps[pway].useful, pre_ok) : INDIRECT_TC_INIT_USEFUL;
-
-      const int mh = hit_way(tc_[pi], tg);
-      const bool main_ok = mh >= 0 && tc_[pi][mh].target == addr;
-      if (main_ok != pre_ok) {
-        const wire3_t m = mode_[bi];
-        w.mode_we = true; w.mode_idx = bi;
-        w.mode_v = pre_ok ? (m < kModeMax ? m + 1 : kModeMax) : (m > 0 ? m - 1 : 0);
-      }
-    }
   }
 
   void commit(const BtbWr &w) {
     for (int k = 0; k < ITT_MAX; k++) if (w.itt_we >> k & 1) itt_[k][w.itt_idx[k]] = w.itt_v[k];
-    if (w.bht_we) bht_[w.bht_idx] = w.bht_v;
-    if (w.tc_we) {
-      tc_[w.tc_idx][w.tc_way] = {w.tc_target, w.tc_tag, true, w.tc_useful};
-      pre_[w.pre_idx][w.pre_way] = {w.tc_target, w.tc_tag, true, w.pre_useful};
-    }
-    if (w.mode_we) mode_[w.mode_idx] = w.mode_v;
     if (w.btb_we) btb_[w.btb_idx][w.btb_way] = {w.btb_tag, w.btb_bta, true, w.btb_useful};
   }
 };
@@ -724,10 +582,8 @@ struct InputPayload {
   wire1_t in_pred_dir[CW];
   wire1_t in_alt_pred[CW];
   pcpn_t in_pcpn[CW];
-  pcpn_t in_altpcpn[CW];
   tage_tag_t in_tage_tags[CW][TN];
   tage_idx_t in_tage_idxs[CW][TN];
-  wire1_t in_sc_used[CW];
   wire1_t in_loop_used[CW];
   uint8_t ptab_size;  // BPU_PIPE: PTAB occupancy (credit for the blocks in flight)
   PdInfo pd;
@@ -752,6 +608,9 @@ struct OutputPayload {
   wire1_t ptab_pcs_valid;
   pc_t out_pred_pc[FW];
   wire1_t update_queue_full;  // the update queue drops instead of stalling: always 0
+  // free entries of the update queue / uBTB train queue at the start of the cycle (registered): compact ROB commit
+  // credits (EXP-028); 255 = no limit
+  uint8_t upd_free = 255, tq_free = 255;
 };
 
 struct RecB {   // baseline BPU checkpoint record of one fetch block (BPA_REPAIR)
@@ -762,10 +621,10 @@ class Bpu {
  public:
   struct QEntry {
     pc_t pc;
-    bool dir, pred, alt, sc_used, loop_used;
+    bool dir, pred, alt, loop_used;
     br_type_t type;
     target_addr_t target;
-    pcpn_t pcpn, altpcpn;
+    pcpn_t pcpn;
     tage_tag_t tag[TN];
     tage_idx_t idx[TN];
   };
@@ -863,10 +722,8 @@ class Bpu {
         out.out_pred_dir[i] = taken;
         out.meta.alt_pred[i] = tp.alt;
         out.meta.pcpn[i] = tp.pcpn;
-        out.meta.altpcpn[i] = tp.altpcpn;
         for (int k = 0; k < TN; k++) { out.meta.tage_tag[i][k] = tp.tag[k]; out.meta.tage_idx[i][k] = tp.idx[k]; }
         out.meta.ps_info[i] = ps_pack(ty, 0, tp.used_alt);
-        out.meta.sc_used[i] = tp.sc_used;
         if (taken && !taken_found) {
           int src = 0; bool itt = false;
           target_addr_t tgt = btb_[b].predict(bpc, ty, &src, tp.idx, tp.tag, &itt);
@@ -920,9 +777,9 @@ class Bpu {
       if (e.type == BR_DIRECT) {
         TageUpd u;
         u.bank_pc = bpc; u.real_dir = e.dir; u.pred = e.pred; u.alt = e.alt;
-        u.pcpn = e.pcpn; u.altpcpn = e.altpcpn;
+        u.pcpn = e.pcpn;
         for (int k = 0; k < TN; k++) { u.tag[k] = e.tag[k]; u.idx[k] = e.idx[k]; }
-        u.sc_used = e.sc_used; u.loop_used = e.loop_used;
+        u.loop_used = e.loop_used;
         tage_[b].update(u, t.tage[b]);
       }
       if (e.type != BR_NONCTL) btb_[b].update(bpc, e.type, e.dir, e.target, t.btb[b], e.idx, e.tag);
@@ -950,9 +807,9 @@ class Bpu {
       QEntry &e = t.push_e[i];
       e.pc = in.in_update_base_pc[i];
       e.dir = in.in_actual_dir[i]; e.pred = in.in_pred_dir[i]; e.alt = in.in_alt_pred[i];
-      e.sc_used = in.in_sc_used[i]; e.loop_used = in.in_loop_used[i];
+      e.loop_used = in.in_loop_used[i];
       e.type = in.in_actual_br_type[i]; e.target = in.in_actual_targets[i];
-      e.pcpn = in.in_pcpn[i]; e.altpcpn = in.in_altpcpn[i];
+      e.pcpn = in.in_pcpn[i];
       for (int k = 0; k < TN; k++) { e.tag[k] = in.in_tage_tags[i][k]; e.idx[k] = in.in_tage_idxs[i][k]; }
     }
   }
@@ -978,7 +835,7 @@ class Bpu {
     if (type == BR_DIRECT) {
       TageUpd u;
       std::memset(&u, 0, sizeof(u));
-      u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn; u.altpcpn = tp.altpcpn;
+      u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn;
       for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
       TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
       if (!cfg_hist()) arch_.push(dir);
@@ -1009,7 +866,7 @@ class Bpu {
       }
       if (ty == BR_DIRECT) {
         if (!cfg_hist()) arch_.push(in.in_actual_dir[i]);
-        if (in.in_pred_dir[i] != in.in_actual_dir[i] && !cfg_nocmtsync()) spec_ = arch_;
+        if (in.in_pred_dir[i] != in.in_actual_dir[i]) spec_ = arch_;
       } else if (br_call(ty)) arch_ras_.push(in.in_update_base_pc[i] + 4);
       else if (ty == BR_RET) arch_ras_.pop();
     }

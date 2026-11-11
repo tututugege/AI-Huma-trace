@@ -46,51 +46,6 @@ inline int cfg_bfast() { static const int v = env_int("FE_BFAST", CFG_FE_BFAST);
 inline int cfg_pair() { static const int v = env_int("FE_PAIR", 0); return v; }
 inline int cfg_tq() { static const int v = env_int("BPO_TQ", 4); return v; }
 
-// FE_FUSE_DIAG: fetch-cycle count of the committed stream under three fetch rules (perfect prediction, no bubbles):
-//   R1 one basic block per cycle (current), R2 R1 plus continuing after a taken branch whose target is in the same 64 B line,
-//   R3 up to two basic blocks per cycle (any targets, total <= 8 slots, each cut at its own 64 B line end)
-struct FuseDiag {
-  uint64_t insts = 0, cyc[4] = {}, taken = 0, taken_same_line = 0;
-  // per-rule current group state
-  int n[4] = {}; int blocks[4] = {}; uint32_t line[4] = {}; uint32_t exp[4] = {}; bool open[4] = {};
-  bool on = false;
-  FuseDiag() { on = std::getenv("FE_FUSE_DIAG") != nullptr; if (on) std::atexit([] { fd().print(); }); }
-  static FuseDiag &fd() { static FuseDiag d; return d; }
-  void print() const {
-    std::printf("[FUSE_DIAG] insts=%llu taken=%llu (same 64B line %.1f%%) | insts/fetch-cycle: R1 %.2f  R2(intra-line fuse) %.2f  R3(2 blocks) %.2f\n",
-                (unsigned long long)insts, (unsigned long long)taken, taken ? 100.0 * taken_same_line / taken : 0.0,
-                cyc[1] ? double(insts) / cyc[1] : 0.0, cyc[2] ? double(insts) / cyc[2] : 0.0, cyc[3] ? double(insts) / cyc[3] : 0.0);
-  }
-  void feed(pc_t pc, bool taken_br, pc_t target) {
-    if (!on) return;
-    insts++;
-    const bool ctl_taken = taken_br;
-    if (ctl_taken) { taken++; if ((pc >> 6) == (target >> 6)) taken_same_line++; }
-    for (int r = 1; r <= 3; r++) {
-      // does this instruction fit in the open group?
-      bool fits = open[r] && pc == exp[r] && n[r] < 8 && (line[r] == (pc >> 6));
-      if (!fits && open[r] && pc != exp[r]) {
-        // discontinuity: only allowed continuation is handled below when the previous instruction was a taken branch
-      }
-      if (!fits) {  // start a new group (R2/R3 continuation cases were already resolved at the taken branch)
-        if (open[r] && !(pc == exp[r] && n[r] < 8)) {}
-        if (open[r] && !cont_[r]) { cyc[r]++; }
-        open[r] = true; n[r] = 0; blocks[r] = 1; line[r] = pc >> 6; cont_[r] = false;
-      }
-      cont_[r] = false;
-      n[r]++;
-      exp[r] = pc + 4;
-      if (ctl_taken) {
-        bool cont = false;
-        if (r == 2 && (pc >> 6) == (target >> 6) && n[r] < 8) cont = true;
-        if (r == 3 && blocks[r] < 2 && n[r] < 8) { cont = true; blocks[r]++; }
-        if (cont) { exp[r] = target; line[r] = target >> 6; cont_[r] = true; /* group stays open */ }
-        else { cyc[r]++; open[r] = false; }
-      } else if (n[r] >= 8 || ((pc + 4) >> 6) != (pc >> 6)) { cyc[r]++; open[r] = false; }
-    }
-  }
-  bool cont_[4] = {};
-};
 
 constexpr int MAXW = 4;       // uBTB ways
 constexpr int MAXD = 3;       // deepest main predictor (S1..S3)
@@ -249,10 +204,10 @@ struct Decision {                // outcome of the last stage, computed from reg
 
 struct UpdEnt {
   pc_t pc = 0;
-  bool dir = false, pred = false, alt = false, sc_used = false, loop_used = false;
+  bool dir = false, pred = false, alt = false, loop_used = false;
   br_type_t type = BR_NONCTL;
   target_addr_t target = 0;
-  pcpn_t pcpn = 0, altpcpn = 0;
+  pcpn_t pcpn = 0;
   tage_tag_t tag[TN] = {};
   tage_idx_t idx[TN] = {};
 };
@@ -466,10 +421,8 @@ class BpuPipe {
       o.dir[i] = taken;
       o.meta.alt_pred[i] = tp.alt;
       o.meta.pcpn[i] = tp.pcpn;
-      o.meta.altpcpn[i] = tp.altpcpn;
       for (int k = 0; k < TN; k++) { o.meta.tage_tag[i][k] = tp.tag[k]; o.meta.tage_idx[i][k] = tp.idx[k]; }
       o.meta.ps_info[i] = ps_pack(ty, 0, tp.used_alt);
-      o.meta.sc_used[i] = tp.sc_used;
       if (taken && !taken_found) {
         int src = 0; bool itt = false;
         target_addr_t tgt = Btb::select(bpc, ty, r.bt[i], &src, tp.tag, &itt);
@@ -533,7 +486,6 @@ class BpuPipe {
       const uint8_t slot = (pc - n.tr_start) >> 2;
       if (ty == BR_DIRECT && n.tr_nd < 8) n.tr_nd++;
       const bool taken = ty != BR_NONCTL && in.in_actual_dir[i];
-      FuseDiag::fd().feed(pc, taken, in.in_actual_targets[i]);
       UbEv e; e.start = n.tr_start; e.slot = slot; e.type = ty; e.nd = n.tr_nd; e.hh = n.tr_hh;
       ah_push(n, pc, taken, in.in_actual_targets[i], ty);   // history after this instruction = history at the start of the next block
       if (taken) {
@@ -626,8 +578,6 @@ class BpuPipe {
     const RecP &rc = rec_[in.rf_blk & 255];
     const uint32_t rslot = (in.rf_pc - rc.base) >> 2;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
     if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == st_.epoch && rslot < FW && rc.base + 4u * rslot == in.rf_pc)) return false;
-    static int dbg = env_int("BPA_REPAIR_DBG", 0);
-    if (dbg > 0) { dbg--; std::printf("[REP] id=%u base=%x slot=%d type=%d next=%x | ck.head=%u spec.head=%u arch.head=%u ptypes=", in.rf_blk, rc.base, in.rf_slot, in.rf_type, in.refetch_address, rc.ck.head, st_.spec.head, st_.arch.head); for (uint32_t i = 0; i <= rslot; i++) std::printf("%d", rc.ptype[i]); std::printf("\n"); }
     restore(rc.ck, n.spec, n.sras);
     if (repair_ == 2) n.sras = rc.rf;
     if (repair_ == 3) n.sras = n.aras;   // history repair only, RAS from the committed state
@@ -644,12 +594,10 @@ class BpuPipe {
     UpdEnt e;
     e.pc = in.in_update_base_pc[i];
     e.dir = in.in_actual_dir[i]; e.pred = in.in_pred_dir[i]; e.alt = in.in_alt_pred[i];
-    e.sc_used = in.in_sc_used[i]; e.loop_used = in.in_loop_used[i];
+    e.loop_used = in.in_loop_used[i];
     e.type = in.in_actual_br_type[i]; e.target = in.in_actual_targets[i];
-    e.pcpn = in.in_pcpn[i]; e.altpcpn = in.in_altpcpn[i];
+    e.pcpn = in.in_pcpn[i];
     for (int k = 0; k < TN; k++) { e.tag[k] = in.in_tage_tags[i][k]; e.idx[k] = in.in_tage_idxs[i][k]; }
-    { static const char *w = std::getenv("FE_PCDBG2"); static int n = w ? 8000 : 0; static const uint32_t want = w ? uint32_t(std::strtoul(w, nullptr, 16)) : 0;
-      if (n > 0 && e.pc == want) { n--; std::printf("[UPD] pc=%x actual=%d pred=%d pcpn=%d idx=%u,%u,%u,%u tag=%u,%u,%u,%u\n", e.pc, (int)e.dir, (int)e.pred, (int)e.pcpn, (unsigned)e.idx[0], (unsigned)e.idx[1], (unsigned)e.idx[2], (unsigned)e.idx[3], (unsigned)e.tag[0], (unsigned)e.tag[1], (unsigned)e.tag[2], (unsigned)e.tag[3]); } }
     return e;
   }
   void apply_table_update(const UpdEnt &e, Txn &t) const {
@@ -657,9 +605,9 @@ class BpuPipe {
     const pc_t bpc = bank_pc_of(e.pc);
     if (e.type == BR_DIRECT) {
       TageUpd u;
-      u.bank_pc = bpc; u.real_dir = e.dir; u.pred = e.pred; u.alt = e.alt; u.pcpn = e.pcpn; u.altpcpn = e.altpcpn;
+      u.bank_pc = bpc; u.real_dir = e.dir; u.pred = e.pred; u.alt = e.alt; u.pcpn = e.pcpn;
       for (int k = 0; k < TN; k++) { u.tag[k] = e.tag[k]; u.idx[k] = e.idx[k]; }
-      u.sc_used = e.sc_used; u.loop_used = e.loop_used;
+      u.loop_used = e.loop_used;
       tage_[b].update(u, t.tage[b]);
       t.p_tg[b].wr++;
     }
@@ -772,7 +720,7 @@ class BpuPipe {
       if (type == BR_DIRECT) {
         TageUpd u;
         std::memset(&u, 0, sizeof(u));
-        u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn; u.altpcpn = tp.altpcpn;
+        u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn;
         for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
         TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
       } else if (br_call(type)) n.aras.push(pc + 4);
@@ -1011,9 +959,9 @@ class BpuPipe {
         for (int j = 0; lenA + j < FW; j++) {
           const int di = lenA + j;
           out.out_pred_dir[di] = d.outB.dir[j];
-          out.meta.alt_pred[di] = d.outB.meta.alt_pred[j]; out.meta.altpcpn[di] = d.outB.meta.altpcpn[j]; out.meta.pcpn[di] = d.outB.meta.pcpn[j];
+          out.meta.alt_pred[di] = d.outB.meta.alt_pred[j]; out.meta.pcpn[di] = d.outB.meta.pcpn[j];
           for (int k = 0; k < TN; k++) { out.meta.tage_tag[di][k] = d.outB.meta.tage_tag[j][k]; out.meta.tage_idx[di][k] = d.outB.meta.tage_idx[j][k]; }
-          out.meta.ps_info[di] = d.outB.meta.ps_info[j]; out.meta.sc_used[di] = d.outB.meta.sc_used[j];
+          out.meta.ps_info[di] = d.outB.meta.ps_info[j];
         }
         out.predict_next_fetch_address = d.outB.next;
         t.s_pair = 1;
@@ -1063,13 +1011,9 @@ class BpuPipe {
         if (g.taken && !d.oout.taken) t.s_ov_t2n = 1;
         else if (!g.taken && d.oout.taken) t.s_ov_n2t = 1;
         else if (br_ind(d.oout.type)) t.s_ov_ind = 1;
-        else if (d.oout.type == BR_RET) { t.s_ov_ret = 1;
-          static int dbgr = env_int("FE_PAIR_DBG", 0) ? 25 : 0;
-          if (dbgr > 0) { dbgr--; std::printf("[RET_OVR] %s base=%x guess next=%x slot=%d | main next=%x slot=%d | ck ras cnt=%d top=%x ptr=%d\n", d.ovr_b ? "B" : "A", d.obase, g.next, g.slot, d.oout.next, d.oout.slot, d.ock.ras_cnt, d.ock.ras_top, d.ock.ras_ptr); } }
+        else if (d.oout.type == BR_RET) { t.s_ov_ret = 1; }
         else {
           t.s_ov_oth = 1;
-          static int dbg = env_int("BPU_PIPE_DBG", 0);
-          if (dbg > 0) { dbg--; std::printf("[OVR] base=%x s0 slot=%d type=%d next=%x | main slot=%d type=%d next=%x\n", d.obase, g.slot, g.type, g.next, d.oout.slot, d.oout.type, d.oout.next); }
         }
       }
     } else if (l1_override(st_.R[0], n, t)) {
@@ -1092,7 +1036,6 @@ class BpuPipe {
       push_arch(n.arch, in.in_update_base_pc[i], ty != BR_NONCTL && in.in_actual_dir[i], in.in_actual_targets[i], ty);
       if (br_call(ty)) n.aras.push(in.in_update_base_pc[i] + 4);
       else if (ty == BR_RET) n.aras.pop();
-      if (cfg_cmtsync() && ty == BR_DIRECT && in.in_pred_dir[i] != in.in_actual_dir[i]) { n.spec = n.arch; n.epoch = st_.epoch + 1; }   // BPA_CMTSYNC: same copy as the zero-bubble model
     }
     if (refetch) {
       if (pdck_ && in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {   // predecode flush: exact repair from the checked block's checkpoint
@@ -1119,6 +1062,8 @@ class BpuPipe {
     }
     if (!refetch) sd_event(d, n, t);
     if (ubmain_ != 2) ub_track(in, n, t.tc);
+    out.upd_free = mode_ >= 3 ? uint8_t(UQ_ - st_.uq_n) : 255;   // EXP-028 compact ROB commit credits (registered)
+    out.tq_free = uint8_t(tqd_ - st_.tq_n);
   }
 
   void commit(const Txn &t) {

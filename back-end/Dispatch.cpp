@@ -1,5 +1,6 @@
 #include "BeginCheck.h"
 #include "Dispatch.h"
+#include "Rob.h"
 #include "Wires.h"
 #include "config.h"
 #include "util.h"
@@ -56,12 +57,20 @@ void Dispatch::comb_alloc() {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) { iq_blk[i] = -1; iq_blk_width[i] = false; }
+  int rob_k = 0;  // compact ROB: position of this slot among the valid slots of the group
   for (int i = 0; i < DECODE_WIDTH; i++) {
     Uop &u = inst_alloc[i];
     u = inst_r[i];
     u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
-    u.rob_idx = make_rob_idx(w.rob2dis.enq_idx, i);
-    u.rob_flag = w.rob2dis.rob_flag;
+    if (rob_compact()) {
+      const int pos = static_cast<int>(w.rob2dis.enq_idx) + rob_k;
+      u.rob_idx = pos % ROB_NUM;
+      u.rob_flag = static_cast<bool>(w.rob2dis.rob_flag) ^ (pos >= ROB_NUM);
+      if (inst_valid[i]) rob_k++;
+    } else {
+      u.rob_idx = make_rob_idx(w.rob2dis.enq_idx, i);
+      u.rob_flag = w.rob2dis.rob_flag;
+    }
     u.expect_mask = 0;
     u.cplt_mask = 0;
     w.dis2rob.valid[i] = inst_valid[i];
@@ -187,10 +196,12 @@ void Dispatch::comb_fire() {
     if (w.iss_awake.wake[k].valid) busy_table_1[w.iss_awake.wake[k].preg] = false;
 
   bool pre_stall = false, pre_fire = false;
+  int rob_used = 0;  // compact ROB: entries taken by the older slots of this group
   for (int i = 0; i < DECODE_WIDTH; i++) {
     const InstType type = inst_valid[i] ? decode_inst_type(inst_r[i]->type) : NOP;
     const bool atomic = type == AMO, wfi = type == WFI;
     bool fire = w.dis2rob.valid[i] && dispatch_success_flags[i] && w.rob2dis.ready && !pre_stall && !global_flush;
+    if (rob_compact() && inst_valid[i]) { if (rob_used >= w.rob2dis.free_cnt) fire = false; rob_used++; }
     // serializing instructions need an empty ROB and nothing older firing this cycle
     if ((is_CSR(inst_r[i]->type) || atomic) && (!w.rob2dis.empty || pre_fire)) fire = false;
     w.dis2rob.dis_fire[i] = fire;
