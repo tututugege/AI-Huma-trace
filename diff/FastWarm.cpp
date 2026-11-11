@@ -3,6 +3,7 @@
 // (the real L1D sees them out of order and merged by MSHRs), L1I replacement is LRU (the RTL is random), BPU updates are
 // applied immediately (no update-queue delay, no speculative history).
 #include "FastWarm.h"
+#include "xlen_cast.h"
 #include "BPU/BPU.h"
 #include "Csr.h"
 #include "DcacheConfig.h"
@@ -171,14 +172,15 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
   RefCpuState s{}, post{};
   for (uint64_t i = 0; i < steps; ++i) {
     refcpu_get_state(rc, &s);
-    const uint32_t pc = s.pc, satp = s.csr[csr_satp];
-    const bool vm = ((satp >> 31) & 1) && s.privilege != 3;
+    const uint32_t pc = narrow_pc(s.pc, "warm-up pc");
+    const xlen_t satp = s.csr[csr_satp];
+    const bool vm = satp_on(satp) && s.privilege != 3;
     // instruction line: L1I + ITLB (translate once per line)
     const uint32_t iline = pc >> ICACHE_OFFSET_BITS;
     if (iline != last_iline) {
       uint32_t ipa = pc;
       bool ok = true, miss = false;
-      if (vm) ok = W.itlb.translate(rc, satp, pc, ipa, miss);
+      if (vm) ok = W.itlb.translate(rc, narrow_pc(satp, "satp"), pc, ipa, miss);   // (the warm-up TLB model is Sv32 only)
       if (miss) ++st.itlb_miss;
       if (ok && is_ram(ipa)) {
         ++st.ifetch_lines;
@@ -207,7 +209,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       if (op == 0x63) { dir = info.br_taken; }
       else if (op == 0x6f) type = (bits(inst, 11, 7) == 1) ? BR_CALL : BR_JAL;
       else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bpuf::cfg_icall() && bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
-      front_warm_commit(pc, type, dir, dir ? post.pc : pc + 4);
+      front_warm_commit(pc, type, dir, dir ? narrow_pc(post.pc, "warm-up target") : pc + 4);
       ++st.branches;
     } else {
       front_warm_commit(pc, BR_NONCTL, false, pc + 4);
@@ -215,12 +217,13 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
     // data side
     const bool is_ld = op == 0x03, is_st = op == 0x23, is_amo = op == 0x2f;
     if ((is_ld || is_st || is_amo) && !info.page_fault_load && !info.page_fault_store && !info.is_io) {
-      const uint32_t base = s.gpr[bits(inst, 19, 15)];
-      const uint32_t va = base + (is_ld ? uint32_t(sext(bits(inst, 31, 20), 12))
-                                : is_st ? uint32_t(sext((bits(inst, 31, 25) << 5) | bits(inst, 11, 7), 12)) : 0u);
+      const xlen_t base = s.gpr[bits(inst, 19, 15)];
+      const xlen_t va_x = base + (is_ld ? xlen_t(sxlen_t(sext(bits(inst, 31, 20), 12)))
+                                : is_st ? xlen_t(sxlen_t(sext((bits(inst, 31, 25) << 5) | bits(inst, 11, 7), 12))) : xlen_t(0));
+      const uint32_t va = narrow_pc(va_x, "warm-up address");
       uint32_t pa = va;
       bool ok = true, miss = false;
-      if (vm) ok = W.dtlb.translate(rc, satp, va, pa, miss);
+      if (vm) ok = W.dtlb.translate(rc, narrow_pc(satp, "satp"), va, pa, miss);
       if (miss) ++st.dtlb_miss;
       if (ok && is_ram(pa)) {
         const bool wr = is_st || (is_amo && bits(inst, 31, 27) != 2);

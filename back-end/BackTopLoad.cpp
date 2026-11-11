@@ -57,8 +57,9 @@ constexpr uint64_t kCkptSimpointRamBytes = RAM_SIZE;
 constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
-constexpr uint16_t kCkptFormatVersion = 3u;
-constexpr uint16_t kCkptLegacyFormatVersion = 2u;
+// format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
+constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? 4u : 3u;
+constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? 4u : 2u;
 
 typedef struct CkptHeader {
   uint32_t magic;
@@ -272,11 +273,11 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
   }
 
   struct CkptCpuState {  // layout of CPU_state in the checkpoint; read and discarded
-    uint32_t gpr[32];
-    uint32_t csr[21];
-    uint32_t pc;
+    xlen_t gpr[32];
+    xlen_t csr[21];
+    xlen_t pc;
     uint32_t store_addr;
-    uint32_t store_data;
+    xlen_t store_data;
     uint32_t store_strb;
     bool store;
     bool reserve_valid;
@@ -377,12 +378,12 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   // 与 SimpleSim/save_checkpoint 写入格式保持一致，确保反序列化对齐。
   // 注意：reserve_* 当前在本模拟器中暂未使用，但必须读取以避免流错位。
   typedef struct Ckpt_CPU_state {
-    uint32_t gpr[32];
-    uint32_t csr[21];
-    uint32_t pc;
+    xlen_t gpr[32];
+    xlen_t csr[21];
+    xlen_t pc;
 
     uint32_t store_addr;
-    uint32_t store_data;
+    xlen_t store_data;
     uint32_t store_strb;
     bool store;
     bool reserve_valid;

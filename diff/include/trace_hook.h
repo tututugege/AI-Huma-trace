@@ -1,5 +1,6 @@
 // Check-mode taps for the trace bridge (enabled with TB_CHECK=1; no-ops otherwise).
 #pragma once
+#include "xlen_cast.h"
 #include <cstdint>
 
 #include "TraceBridge.h"

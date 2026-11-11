@@ -74,9 +74,10 @@ inline void sync_oracle_control_state(const front_top_in &in) {
   RefCpuState state = current_oracle_state();
   state.pc = in.refetch_address;
   if (in.csr_status != nullptr) {
-    state.csr[csr_mstatus] = static_cast<uint32_t>(in.csr_status->mstatus);
-    state.csr[csr_sstatus] = static_cast<uint32_t>(in.csr_status->sstatus);
-    state.csr[csr_satp] = static_cast<uint32_t>(in.csr_status->satp);
+    // the model's CSR copies are 32 bit (not widened yet): keep the upper bits the function model holds (mstatus.UXL/SXL)
+    state.csr[csr_mstatus] = merge_low32(state.csr[csr_mstatus], static_cast<uint32_t>(in.csr_status->mstatus));
+    state.csr[csr_sstatus] = merge_low32(state.csr[csr_sstatus], static_cast<uint32_t>(in.csr_status->sstatus));
+    state.csr[csr_satp] = merge_low32(state.csr[csr_satp], static_cast<uint32_t>(in.csr_status->satp));
     state.privilege = static_cast<uint8_t>(in.csr_status->privilege);
   }
   refcpu_set_state(oracle_ctx, &state);
@@ -99,9 +100,9 @@ inline void sync_oracle_arch_state_from_dut(const front_top_in &in) {
   RefCpuState state = dut_to_ref_state(privilege);
   state.pc = in.refetch_address;
   if (in.csr_status != nullptr) {
-    state.csr[csr_mstatus] = static_cast<uint32_t>(in.csr_status->mstatus);
-    state.csr[csr_sstatus] = static_cast<uint32_t>(in.csr_status->sstatus);
-    state.csr[csr_satp] = static_cast<uint32_t>(in.csr_status->satp);
+    state.csr[csr_mstatus] = merge_low32(state.csr[csr_mstatus], static_cast<uint32_t>(in.csr_status->mstatus));
+    state.csr[csr_sstatus] = merge_low32(state.csr[csr_sstatus], static_cast<uint32_t>(in.csr_status->sstatus));
+    state.csr[csr_satp] = merge_low32(state.csr[csr_satp], static_cast<uint32_t>(in.csr_status->satp));
   }
   refcpu_set_state(oracle_ctx, &state);
 }
@@ -210,11 +211,11 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
   }
 
   out.FIFO_valid = true;
-  out.predict_next_fetch_address = current_oracle_state().pc;
+  out.predict_next_fetch_address = narrow_pc(current_oracle_state().pc, "oracle pc");
   for (i = 0; i < FETCH_WIDTH; i++) {
     RefCpuState state = current_oracle_state();
     out.inst_valid[i] = true;
-    out.pc[i] = state.pc;
+    out.pc[i] = narrow_pc(state.pc, "oracle pc");
     out.page_fault_inst[i] = false;
 
     refcpu_set_sim_time(oracle_ctx, static_cast<uint64_t>(sim_time));
@@ -222,7 +223,7 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
     RefCpuStepInfo info = current_oracle_step_info();
     state = current_oracle_state();
     out.instructions[i] = info.instruction;
-    out.predict_next_fetch_address = state.pc;
+    out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
 
 
     if (info.is_exception || info.is_csr || info.is_io) {
@@ -242,14 +243,14 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
         // Stress mode: keep branch direction metadata, but do not truncate
         // this oracle fetch group on taken branches.
         out.predict_dir[i] = info.br_taken;
-        out.predict_next_fetch_address = state.pc;
+        out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
       } else {
         if (stall) {
           out.predict_dir[i] = !info.br_taken;
           out.predict_next_fetch_address = 0;
         } else {
           out.predict_dir[i] = info.br_taken;
-          out.predict_next_fetch_address = state.pc;
+          out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
         }
 
         if (info.br_taken || stall)
@@ -261,7 +262,7 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
 
     // Cache line boundary check: truncate if next instruction is in a different line
     if (!kOracleSteadyFetchWidth &&
-        ((state.pc ^ out.pc[i]) & ~(ICACHE_LINE_SIZE - 1))) {
+        ((narrow_pc(state.pc, "oracle next pc") ^ out.pc[i]) & ~(ICACHE_LINE_SIZE - 1))) {
       break;
     }
   }

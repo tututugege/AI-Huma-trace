@@ -2,7 +2,7 @@
 # Optimized Simulator Makefile
 # ==========================================
 
-BUILD_DIR := build
+BUILD_DIR ?= build
 .DEFAULT_GOAL := all
 SIM_EXE   := $(BUILD_DIR)/simulator
 IMG     := ./baremetal/memory
@@ -15,12 +15,15 @@ CXXFLAGS += -MMD -MP
 CXXFLAGS += -Wall -Wextra -Wno-unused-parameter
 CXXFLAGS += --std=c++2a
 CXXFLAGS += $(EXTRA_CXXFLAGS)
+# register width of the function model (rv32 default; XLEN=64 needs an rv64 librefcpu: REFCPU_LIB=<its path>, and BUILD_DIR=build64)
+XLEN ?= 32
+CXXFLAGS += -DXLEN=$(XLEN)
 ZLIB_CFLAGS := $(shell pkg-config --silence-errors --cflags zlib)
 ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)
 CXXFLAGS += $(ZLIB_CFLAGS)
 
 # Libraries
-REFCPU_LIB := ./function-model/librefcpu.a
+REFCPU_LIB ?= ./function-model/librefcpu.a
 LIBS := $(REFCPU_LIB) ./libs/softfloat.a
 LDFLAGS := -lz -lstdc++fs
 ifneq ($(ZLIB_LIBDIR),)
