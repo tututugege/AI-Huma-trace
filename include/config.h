@@ -3,6 +3,12 @@
 #include "base_types.h"
 #include "debug_config.h"
 
+// Register width of the core (32: rv32, 64: rv64); set by the build (-DXLEN=64) and by the RTL package generator.
+#ifndef XLEN
+#define XLEN 32
+#endif
+constexpr int XLEN_BITS = XLEN;
+
 // Default profile:
 // - wide frontend / backend
 // - larger core resources
