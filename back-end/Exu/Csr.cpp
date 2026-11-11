@@ -220,22 +220,23 @@ void Csr::comb_csr_write() {
   else if (csr_wcmd == CSR_C) csr_wdata = (~csr_wdata & old_val);
 
   // machine register `m`, written through its supervisor alias with `s_mask` or directly with `m_mask`
-  auto write_pair = [&](int m, int s, bool via_s, xlen_t m_mask, xlen_t s_mask) {
+  auto write_pair = [&](int m, int s, bool via_s, xlen_t m_mask, xlen_t s_mask, xlen_t s_view) {
     CSR_RegFile_1[m] = via_s ? (CSR_RegFile[m] & ~s_mask) | (csr_wdata & s_mask) : (m == csr_mstatus ? (CSR_RegFile[m] & ~m_mask) | (csr_wdata & m_mask) : csr_wdata & m_mask);
-    CSR_RegFile_1[s] = CSR_RegFile_1[m] & s_mask;
+    CSR_RegFile_1[s] = CSR_RegFile_1[m] & s_view;   // the supervisor view: sstatus shows UXL (read-only) that a write cannot change
   };
   const xlen_t deleg = CSR_RegFile[csr_mideleg] & kDelegBits;
   if (csr_idx == number_mie || csr_idx == number_sie) {
-    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, deleg);
+    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, deleg, deleg);
   } else if (csr_idx == number_mip || csr_idx == number_sip) {
-    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg);
+    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg,
+               csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg);
     CSR_RegFile_1[csr_sip] = CSR_RegFile_1[csr_mip] & deleg;
   } else if (csr_idx == number_mideleg) {
     CSR_RegFile_1[csr_mideleg] = csr_wdata & kDelegBits;
     CSR_RegFile_1[csr_sie] = CSR_RegFile[csr_mie] & CSR_RegFile_1[csr_mideleg];
     CSR_RegFile_1[csr_sip] = CSR_RegFile[csr_mip] & CSR_RegFile_1[csr_mideleg];
   } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
-    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask);
+    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask, kSstatusMask);
   } else if (csr_idx == number_satp) {
     const xlen_t old_satp = CSR_RegFile[csr_satp];
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
