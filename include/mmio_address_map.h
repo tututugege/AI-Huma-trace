@@ -32,7 +32,6 @@ inline constexpr SimMmioRange kSimulatorMmioRanges[] = {
     {TIMER_BASE, 0x00000010u},
     {OCSDC_ADDR_BASE, OCSDC_MMIO_SIZE},
     {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE},
-    {SIM_UNCACHE_DDR_RESERVED_BASE, SIM_UNCACHE_DDR_RESERVED_SIZE},
     {SIM_UNCACHE_HIGH_BASE, SIM_UNCACHE_HIGH_SIZE},
 };
 
@@ -47,8 +46,7 @@ static constexpr bool simulator_addr_in_range(uint32_t addr,
 
 static inline bool simulator_is_cache_addr(uint32_t addr) {
   return (addr >= SIM_CACHE_ADDR_1_MIN && addr < SIM_CACHE_ADDR_1_MAX) ||
-         (addr >= SIM_CACHE_ADDR_2_MIN && addr < SIM_CACHE_ADDR_2_MAX) ||
-         (addr >= SIM_CACHE_ADDR_3_MIN && addr < SIM_CACHE_ADDR_3_MAX);
+         (addr >= SIM_CACHE_ADDR_2_MIN && addr < SIM_CACHE_ADDR_2_MAX);
 }
 
 
@@ -64,10 +62,6 @@ static inline bool simulator_is_mmio_addr(uint32_t addr) {
 static inline bool simulator_is_uncached_memory_addr(uint32_t addr) {
   return simulator_addr_in_range(
              addr, {SIM_UNCACHE_SDRAM_BASE, SIM_UNCACHE_SDRAM_SIZE}) ||
-         simulator_addr_in_range(
-             addr,
-             {SIM_UNCACHE_DDR_RESERVED_BASE,
-              SIM_UNCACHE_DDR_RESERVED_SIZE}) ||
          simulator_addr_in_range(
              addr, {SIM_UNCACHE_HIGH_BASE, SIM_UNCACHE_HIGH_SIZE});
 }

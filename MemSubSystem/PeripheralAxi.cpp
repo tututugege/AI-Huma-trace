@@ -178,7 +178,7 @@ void PeripheralAxi::comb_inputs() {
                                             peripheral_req->mmio_fun3);
         // No write: the core's own RAM is the only memory and the reference already performed this store when it was
         // dispatched. Writing the store data here (at execution, later than the dispatch) put an old value back over
-        // the newer stores the reference had run ahead (xalancbmk: data in the 0x87f00000 uncached window).
+        // the newer stores the reference had run ahead (xalancbmk: data in the former 0x87f00000 uncached window).
         nxt.req_id = 0;
         return;
       }

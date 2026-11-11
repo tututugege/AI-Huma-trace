@@ -902,20 +902,15 @@ constexpr uint32_t OCSDC_ADDR_BASE = 0x1fe10000;
 constexpr uint32_t OCSDC_MMIO_SIZE = 0x00000100;
 constexpr uint32_t SIM_UNCACHE_SDRAM_BASE = 0x4ff00000;
 constexpr uint32_t SIM_UNCACHE_SDRAM_SIZE = 0x00100000;
-constexpr uint32_t SIM_UNCACHE_DDR_RESERVED_BASE = 0x87f00000;
-constexpr uint32_t SIM_UNCACHE_DDR_RESERVED_SIZE = 0x00100000;
 constexpr uint32_t SIM_UNCACHE_HIGH_BASE = 0xfff00000;
 constexpr uint32_t SIM_UNCACHE_HIGH_SIZE = 0x00100000;
-constexpr uint32_t SD_DMA_POOL_BASE = SIM_UNCACHE_DDR_RESERVED_BASE;
-constexpr uint32_t SD_DMA_POOL_SIZE = SIM_UNCACHE_DDR_RESERVED_SIZE;
 
 
 constexpr uint32_t SIM_CACHE_ADDR_1_MIN = 0x40000000;
 constexpr uint32_t SIM_CACHE_ADDR_1_MAX = 0x4ff00000;
 
+// DDR is cacheable up to the high uncached window. The old 0x87f00000-0x87ffffff uncached window (left over from an SoC DMA /
+// cache coherence workaround) is gone: Linux handed those pages to user programs and their loads ran as MMIO.
 constexpr uint32_t SIM_CACHE_ADDR_2_MIN = 0x80000000;
-constexpr uint32_t SIM_CACHE_ADDR_2_MAX = 0x87f00000;
-
-constexpr uint32_t SIM_CACHE_ADDR_3_MIN = 0x88000000;
-constexpr uint32_t SIM_CACHE_ADDR_3_MAX = 0xfff00000;
+constexpr uint32_t SIM_CACHE_ADDR_2_MAX = 0xfff00000;
 #include "types.h"
