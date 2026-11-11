@@ -6,7 +6,7 @@
 struct InstructionBufferEntry {
   wire<1> valid;
   wire<32> inst;
-  wire<32> pc;
+  wire<XLEN> pc;
   wire<1> page_fault_inst;
   wire<FTQ_IDX_WIDTH> ftq_idx;
   wire<FTQ_OFFSET_WIDTH> ftq_offset;

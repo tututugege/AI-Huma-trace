@@ -4,8 +4,8 @@
 #include <cstdint>
 
 struct FTQEntry {
-  wire<32> slot_pc[BACKEND_FETCH_WIDTH];
-  wire<32> next_pc; // Predicted Target of the block
+  wire<XLEN> slot_pc[BACKEND_FETCH_WIDTH];
+  wire<XLEN> next_pc; // Predicted Target of the block
   wire<1> pred_taken_mask[BACKEND_FETCH_WIDTH];
   uint8_t nslots = 0; // slots of the fetch group that carry instructions (FE_PAIR: tells a fetch-block boundary after a taken branch)
 

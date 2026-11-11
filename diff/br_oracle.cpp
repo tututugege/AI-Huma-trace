@@ -211,11 +211,11 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
   }
 
   out.FIFO_valid = true;
-  out.predict_next_fetch_address = narrow_pc(current_oracle_state().pc, "oracle pc");
+  out.predict_next_fetch_address = current_oracle_state().pc;
   for (i = 0; i < FETCH_WIDTH; i++) {
     RefCpuState state = current_oracle_state();
     out.inst_valid[i] = true;
-    out.pc[i] = narrow_pc(state.pc, "oracle pc");
+    out.pc[i] = state.pc;
     out.page_fault_inst[i] = false;
 
     refcpu_set_sim_time(oracle_ctx, static_cast<uint64_t>(sim_time));
@@ -223,7 +223,7 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
     RefCpuStepInfo info = current_oracle_step_info();
     state = current_oracle_state();
     out.instructions[i] = info.instruction;
-    out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
+    out.predict_next_fetch_address = state.pc;
 
 
     if (info.is_exception || info.is_csr || info.is_io) {
@@ -243,14 +243,14 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
         // Stress mode: keep branch direction metadata, but do not truncate
         // this oracle fetch group on taken branches.
         out.predict_dir[i] = info.br_taken;
-        out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
+        out.predict_next_fetch_address = state.pc;
       } else {
         if (stall) {
           out.predict_dir[i] = !info.br_taken;
           out.predict_next_fetch_address = 0;
         } else {
           out.predict_dir[i] = info.br_taken;
-          out.predict_next_fetch_address = narrow_pc(state.pc, "oracle next pc");
+          out.predict_next_fetch_address = state.pc;
         }
 
         if (info.br_taken || stall)
@@ -262,7 +262,7 @@ void get_oracle(struct front_top_in &in, struct front_top_out &out) {
 
     // Cache line boundary check: truncate if next instruction is in a different line
     if (!kOracleSteadyFetchWidth &&
-        ((narrow_pc(state.pc, "oracle next pc") ^ out.pc[i]) & ~(ICACHE_LINE_SIZE - 1))) {
+        ((state.pc ^ out.pc[i]) & ~(ICACHE_LINE_SIZE - 1))) {
       break;
     }
   }

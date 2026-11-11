@@ -82,7 +82,7 @@ struct TrueGlueInput {
 
   bool module_ifu_req_ready = false;
   bool module_ifu_resp_valid = false;
-  uint32_t module_ifu_resp_pc = 0;
+  pc_t module_ifu_resp_pc = 0;
   uint32_t module_resp_paddr = 0;
   bool module_ifu_page_fault = false;
   bool module_ifu_resp_single_word = false;
@@ -100,8 +100,8 @@ struct TrueGlueOutput {
   uint32_t fetch_group_2[FETCH_WIDTH] = {0};
   bool page_fault_inst_2[FETCH_WIDTH] = {false};
   bool inst_valid_2[FETCH_WIDTH] = {false};
-  uint32_t fetch_pc = 0;
-  uint32_t fetch_pc_2 = 0;
+  pc_t fetch_pc = 0;
+  pc_t fetch_pc_2 = 0;
   uint32_t fetch_paddr = 0;
   bool fetch_single_word = false;
   bool fetch_page_fault = false;
@@ -188,7 +188,7 @@ namespace {
 
 #define CONFIG_ICACHE_FOCUS_VADDR_END 0u
 
-inline bool icache_focus_vaddr(uint32_t v_addr) {
+inline bool icache_focus_vaddr(uint64_t v_addr) {
   const uint32_t begin = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_BEGIN);
   const uint32_t end = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_END);
   return end > begin && (v_addr - begin) < (end - begin);
@@ -275,7 +275,7 @@ struct ICacheMmuReqView {
   bool context_flush = false;
   bool cancel_pending = false;
   bool translate_valid = false;
-  uint32_t vaddr = 0;
+  pc_t vaddr = 0;
   CsrStatusIO *csr_status = nullptr;
 };
 
@@ -778,7 +778,7 @@ public:
     DcacheProbeView dcache_probe =
         dcache_probe_comb_view(runtime.mem_probe_resp_port);
     const bool req_valid = in->icache_read_valid;
-    const uint32_t req_pc = in->fetch_address;
+    const pc_t req_pc = in->fetch_address;
     bool itlb_translate_invoked = false;
     TlbMmu::Result itlb_translate_ret = TlbMmu::Result::OK;
 
@@ -807,7 +807,7 @@ public:
     mmu_req.context_flush = translation_context_flush;
     mmu_req.cancel_pending = in->refetch;
     mmu_req.translate_valid = !in->refetch && icache_hw.io.out.mmu_req_valid;
-    mmu_req.vaddr = static_cast<uint32_t>(icache_hw.io.out.mmu_req_vtag) << 12;
+    mmu_req.vaddr = static_cast<pc_t>(icache_hw.io.out.mmu_req_vtag) << 12;
     mmu_req.csr_status = in->csr_status;
     const ICacheMmuRespView mmu_resp = comb_mmu_view(runtime, ctx, mmu_req);
     itlb_translate_invoked = mmu_resp.translate_invoked;

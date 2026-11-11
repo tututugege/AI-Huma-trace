@@ -34,13 +34,13 @@ struct PreFrontIO {
 struct FrontPreIO {
 
   wire<32> inst[BACKEND_FETCH_WIDTH] = {};
-  wire<32> pc[BACKEND_FETCH_WIDTH] = {};
+  wire<XLEN> pc[BACKEND_FETCH_WIDTH] = {};
   wire<1> valid[BACKEND_FETCH_WIDTH] = {};
   wire<1> front_stall = {};
   wire<1> predict_dir[BACKEND_FETCH_WIDTH] = {};
 
   PredMetaT<BACKEND_FETCH_WIDTH> meta = {};
-  wire<32> predict_next_fetch_address[BACKEND_FETCH_WIDTH] = {};
+  wire<XLEN> predict_next_fetch_address[BACKEND_FETCH_WIDTH] = {};
   wire<1> page_fault_inst[BACKEND_FETCH_WIDTH] = {};
 };
 
@@ -71,9 +71,9 @@ struct FtqPcReadReq {
 struct FtqPcReadResp {
   wire<1> valid = {};
   wire<1> entry_valid = {};
-  wire<32> pc = {};
+  wire<XLEN> pc = {};
   wire<1> pred_taken = {};
-  wire<32> next_pc = {};
+  wire<XLEN> next_pc = {};
 };
 
 struct FtqPrfPcReqIO {
@@ -93,7 +93,7 @@ struct FtqRobPcRespIO {
 };
 
 struct FtqCommitInfoResp {
-  wire<32> pc;
+  wire<XLEN> pc;
   wire<1> pred_taken;
   wire<1> alt_pred;
   pcpn_t altpcpn;
@@ -230,7 +230,7 @@ struct RobBroadcastIO {
   wire<1> illegal_inst = {};
   wire<1> interrupt = {};
   wire<XLEN> trap_val = {};
-  wire<32> pc = {};
+  wire<XLEN> pc = {};
 
   wire<ROB_IDX_WIDTH> head_rob_idx = {};
   wire<1> head_valid = {};
@@ -287,7 +287,7 @@ struct ExuRobIO {
 struct ExuIdIO {
 
   wire<1> mispred;
-  wire<32> redirect_pc;
+  wire<XLEN> redirect_pc;
   wire<ROB_IDX_WIDTH> redirect_rob_idx;
   wire<BR_TAG_WIDTH> br_id;
   wire<FTQ_IDX_WIDTH>
@@ -330,8 +330,8 @@ struct CsrRobIO {
 
 struct CsrFrontIO {
 
-  wire<32> epc = {};
-  wire<32> trap_pc = {};
+  wire<XLEN> epc = {};
+  wire<XLEN> trap_pc = {};
 };
 
 struct CsrInterruptInjectIO {

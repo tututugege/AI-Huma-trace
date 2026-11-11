@@ -66,7 +66,7 @@ void FrontTop::seq_back2front() {
   back2front_stall = back2front_stall_1;
 }
 
-void FrontTop::force_back2front_refetch(uint32_t pc) {
+void FrontTop::force_back2front_refetch(pc_t pc) {
   back2front.refetch = true;
   back2front.refetch_address = pc;
   back2front_1 = back2front;

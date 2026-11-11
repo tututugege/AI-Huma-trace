@@ -51,6 +51,7 @@ static constexpr int wire16_t_BITS = 16;
 using wire30_t = uint32_t;
 static constexpr int wire30_t_BITS = 30;
 using wire32_t = uint32_t;
+using wire64_t = uint64_t;
 static constexpr int wire32_t_BITS = 32;
 
 template <int Bits>
@@ -127,6 +128,10 @@ struct wire_for_bits<30> {
 template <>
 struct wire_for_bits<32> {
   using type = wire32_t;
+};
+template <>
+struct wire_for_bits<64> {
+  using type = wire64_t;
 };
 
 template <int Bits>
@@ -228,14 +233,15 @@ using type_pred_conf_t = wire_for_bits_t<TYPE_PRED_CONF_BITS>;
 static constexpr int type_pred_conf_t_BITS = TYPE_PRED_CONF_BITS;
 using type_pred_age_t = wire_for_bits_t<TYPE_PRED_AGE_BITS>;
 static constexpr int type_pred_age_t_BITS = TYPE_PRED_AGE_BITS;
-using fetch_addr_t = wire32_t;
-static constexpr int fetch_addr_t_BITS = 32;
-using pc_t = wire32_t;
-static constexpr int pc_t_BITS = 32;
+// virtual addresses / PCs are register wide (Sv39 on rv64: kernel text is at 0xffffffff80000000)
+using fetch_addr_t = wire_for_bits_t<XLEN>;
+static constexpr int fetch_addr_t_BITS = XLEN;
+using pc_t = wire_for_bits_t<XLEN>;
+static constexpr int pc_t_BITS = XLEN;
 using inst_word_t = wire32_t;
 static constexpr int inst_word_t_BITS = 32;
-using target_addr_t = wire32_t;
-static constexpr int target_addr_t_BITS = 32;
+using target_addr_t = wire_for_bits_t<XLEN>;
+static constexpr int target_addr_t_BITS = XLEN;
 using nlp_conf_t = wire_for_bits_t<NLP_CONF_BITS>;
 static constexpr int nlp_conf_t_BITS = NLP_CONF_BITS;
 using nlp_index_t = wire_for_bits_t<ceil_log2_u32(NLP_TABLE_SIZE)>;

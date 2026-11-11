@@ -280,7 +280,7 @@ void ICache::lookup(uint32_t index) {
   lookup_index_next = io.regs.lookup_index_r;
   lookup_pc_next = io.regs.lookup_pc_r;
   sram_load_fire = false;
-  uint32_t load_pc = io.regs.lookup_pending_r ? io.regs.lookup_pc_r : io.in.pc;
+  wire<XLEN> load_pc = io.regs.lookup_pending_r ? io.regs.lookup_pc_r : io.in.pc;
   uint32_t load_index = index;
   bool req_valid_next = io.regs.req_valid_r;
 

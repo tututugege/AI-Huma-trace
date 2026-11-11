@@ -19,7 +19,7 @@
 // Latched front-end state (registers)
 // ============================================================================
 static bool predecode_refetch = false;
-static uint32_t predecode_refetch_address = 0;
+static pc_t predecode_refetch_address = 0;
 static bpuf::PdInfo pd_latch{};
 static uint32_t front_sim_time = 0;
 
@@ -106,13 +106,13 @@ void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) 
 }
 void front_warm_finish() { if (g_use_pipe) bpu_pipe.warm_finish(); else bpu_instance.warm_finish(); }
 
-static uint32_t sequential_next_pc(uint32_t fetch_pc, const wire1_t *inst_valid) {
+static pc_t sequential_next_pc(pc_t fetch_pc, const wire1_t *inst_valid) {
   uint32_t valid_prefix = 0;
   while (valid_prefix < FETCH_WIDTH && inst_valid[valid_prefix]) {
     ++valid_prefix;
   }
-  uint32_t next_pc = fetch_pc + valid_prefix * 4u;
-  const uint32_t line_mask = ~(ICACHE_LINE_SIZE - 1u);
+  pc_t next_pc = fetch_pc + valid_prefix * 4u;
+  const pc_t line_mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1u);
   if ((next_pc & line_mask) != (fetch_pc & line_mask)) {
     next_pc &= line_mask;
   }
@@ -338,9 +338,9 @@ struct FrontComb {
   void write_fetch_addr();
   void run_icache();
   void write_instruction_fifo();
-  void write_ptab_and_check(bool &predecode_flush, uint32_t &flush_address);
+  void write_ptab_and_check(bool &predecode_flush, pc_t &flush_address);
   void write_front2back();
-  void finish(bool predecode_flush, uint32_t flush_address);
+  void finish(bool predecode_flush, pc_t flush_address);
 };
 
 // Flush/refetch, read enables, and the FIFO heads (the fetch-address FIFO feeds the ICache, the other three feed the
@@ -564,7 +564,7 @@ void FrontComb::write_instruction_fifo() {
 
 // The BPU's prediction enters the PTAB; the predecode checker compares the FIFO head against the PTAB head and may ask
 // for a refetch.
-void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_address) {
+void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address) {
   const bool ptab_can_write =
       bpu_output.PTAB_write_enable && (g_use_pipe || !rd.ptab_full_latch_snapshot) && !global_reset && !global_refetch;
   if (ptab_can_write && !ptab_written) {
@@ -594,7 +594,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, uint32_t &flush_addr
   } else
   for (int i = 0; i < FETCH_WIDTH; i++) {
     if (fifo_head.pc[i] != ptab_head.predict_base_pc[i]) {
-      printf("ERROR: fifo pc[%d]: %x != ptab pc[%d]: %x\n", i, fifo_head.pc[i], i, ptab_head.predict_base_pc[i]);
+      printf("ERROR: fifo pc[%d]: %llx != ptab pc[%d]: %llx\n", i, (unsigned long long)fifo_head.pc[i], i, (unsigned long long)ptab_head.predict_base_pc[i]);
       exit(1);
     }
   }
@@ -661,7 +661,7 @@ void FrontComb::write_front2back() {
 }
 
 // Latches for the next cycle, the predecode-flush request, and the output toward the back end.
-void FrontComb::finish(bool predecode_flush, uint32_t flush_address) {
+void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
   { static const bool tr = std::getenv("FE_TRACE") != nullptr; static int budget = 24;
     if (tr && budget > 0 && front_ctx->perf.cycle > 40000 && (global_refetch || budget < 24)) { budget--;
       std::printf("[FE_TRACE] cyc=%llu refetch=%d bpu_issue=%d(pc=%x) ic_req=%d ic_done=%d fifo_w=%d f2b_w=%d out_valid=%d icrdy=%d faE=%d faSz=%d\n",
@@ -742,7 +742,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd, st
   c.run_icache();
   c.write_instruction_fifo();
   bool predecode_flush = false;
-  uint32_t flush_address = 0;
+  pc_t flush_address = 0;
   c.write_ptab_and_check(predecode_flush, flush_address);
   c.write_front2back();
   c.finish(predecode_flush, flush_address);

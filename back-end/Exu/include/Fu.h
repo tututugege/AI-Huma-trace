@@ -224,21 +224,21 @@ private:
   }
 
   static void resolve_branch(ExuInst &inst) {
-    const uint32_t inst_pc = inst->pc;
-    uint32_t pc_br = inst_pc + inst->imm;
+    const xlen_t inst_pc = inst->pc;
+    xlen_t pc_br = inst_pc + static_cast<xlen_t>(static_cast<sxlen_t>(static_cast<int32_t>(inst->imm)));   // (imm is a 32-bit sign-extended immediate)
     bool br_taken = false;
     if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
       if (inst.op == UOP_BR) {
         br_taken = f->br_taken;
       } else if (inst.op == UOP_JUMP) {
         br_taken = true;
-        pc_br = narrow_pc(f->next_pc, "jump target");  // jal/jalr target (the model's pc is 32 bit)
+        pc_br = f->next_pc;  // jal/jalr target
       }
     } else if (inst.op == UOP_JUMP) {
       br_taken = true;  // killed instruction: no fact, outcome unobservable
     }
     const bool pred_taken = inst->ftq_pred_taken;
-    const uint32_t pred_target = pred_taken ? inst->ftq_next_pc : inst_pc + 4;
+    const xlen_t pred_target = pred_taken ? static_cast<xlen_t>(inst->ftq_next_pc) : inst_pc + 4;
     inst.mispred = !((br_taken && pred_taken && pred_target == pc_br) ||
                      (!br_taken && !pred_taken));
     { static const bool dg = std::getenv("FE_DIAG") != nullptr; static uint64_t c[4]; static bool rg = false;

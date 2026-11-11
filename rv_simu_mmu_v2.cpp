@@ -597,7 +597,7 @@ void SimCpu::sync_mmio_devices_from_backing() {
 }
 
 // 强制重置前端 PC (用于 FAST 模式切换)
-void SimCpu::restore_pc(uint32_t pc) {
+void SimCpu::restore_pc(pc_t pc) {
   front.in.reset = false;
   front.in.FIFO_read_enable = false;
   // 显式给前端一个重取指请求，并同步后端重定向输出，

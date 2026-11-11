@@ -68,7 +68,7 @@ constexpr uint8_t MAXU = 0b11100;
 // Debug sideband shared by InstInfo/MicroOp. Keep diag_val in hardware path.
 struct DebugMeta {
   wire<32> instruction;
-  wire<32> pc;
+  wire<XLEN> pc;
   bool is_mmio;
   int64_t inst_idx;
 };
@@ -106,8 +106,8 @@ struct UopS {
   wire<7> func7;
   wire<1> is_atomic;
   wire<PRF_IDX_WIDTH> old_dest_preg;
-  wire<32> pc;
-  wire<32> ftq_next_pc;
+  wire<XLEN> pc;
+  wire<XLEN> ftq_next_pc;
   wire<1> ftq_entry_valid;
   wire<1> ftq_resp_valid;
   wire<1> ftq_pred_taken;

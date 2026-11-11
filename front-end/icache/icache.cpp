@@ -199,7 +199,7 @@ void icache_comb_calc(struct icache_in *in, struct icache_out *out) {
   bind_icache_runtime(instance);
   instance->setIO(in, out);
 
-  uint32_t lookup_pc = in->fetch_address;
+  pc_t lookup_pc = in->fetch_address;
   if (icache.io.regs.req_valid_r) {
     lookup_pc = icache.io.regs.req_pc_r;
   } else if (icache.io.regs.lookup_pending_r) {
