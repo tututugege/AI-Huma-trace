@@ -6,8 +6,18 @@
 #include "ref.h"
 
 namespace {
-constexpr uint32_t kSstatusMask = 0x800DE133;  // mstatus bits visible through sstatus
+// mstatus bits visible through sstatus / writable (as in the function model: rv64 has no SD tracking, UXL = SXL = 2 are read-only)
+#if XLEN == 64
+constexpr xlen_t kSstatusMask = 0x00000003000DE133ull;
+constexpr xlen_t kSstatusWriteMask = 0x00000000000DE133ull;
+constexpr xlen_t kMstatusWriteMask = 0x00000000007FF9BBull;
+constexpr xlen_t kMstatusReset = 0x0000000A00000000ull;
+#else
+constexpr uint32_t kSstatusMask = 0x800DE133;
+constexpr uint32_t kSstatusWriteMask = 0x800DE133;
 constexpr uint32_t kMstatusWriteMask = 0x807FF9BB;
+constexpr uint32_t kMstatusReset = 0;
+#endif
 // Interrupt CSRs per the privileged spec (no N extension, same as the function model): mie holds SSIE/MSIE/STIE/MTIE/SEIE/MEIE;
 // the supervisor views sie / sip show only the bits delegated by mideleg (mideleg holds SSI/STI/SEI), and sip can only write SSIP.
 constexpr uint32_t kMipMask = 0x00000aaa, kMieMask = 0x00000aaa, kDelegBits = 0x00000222;
@@ -20,7 +30,7 @@ struct IrqState {
   bool to_s() const { return s_sw || s_timer || s_ext; }
 };
 
-IrqState eval_interrupts(uint32_t mstatus, uint32_t mie, uint32_t mip, uint32_t mideleg, uint32_t priv) {
+IrqState eval_interrupts(xlen_t mstatus, xlen_t mie, xlen_t mip, xlen_t mideleg, uint32_t priv) {
   const bool m_enable = priv < 3 || (mstatus & MSTATUS_MIE);
   const bool s_enable = priv < 2 && (priv < 1 || (priv == 1 && (mstatus & MSTATUS_SIE)));
   // pending and enabled, not delegated -> machine level
@@ -34,7 +44,15 @@ IrqState eval_interrupts(uint32_t mstatus, uint32_t mie, uint32_t mip, uint32_t 
 }
 }  // namespace
 
-void Csr::init() { CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103; }  // U/S/M, RV32 I/A/M/B
+void Csr::init() {
+#if XLEN == 64
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | 0x141103;   // MXL = 2: U/S/M, RV64 I/A/M/B
+#else
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103;                    // U/S/M, RV32 I/A/M/B
+#endif
+  CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
+  CSR_RegFile[csr_sstatus] = CSR_RegFile_1[csr_sstatus] = kMstatusReset & kSstatusMask;
+}
 
 // The working copies already equal the registered state (seq() copies them back).
 void Csr::comb_begin() {
@@ -82,10 +100,10 @@ void Csr::comb_interrupt_inject() {
 // over supervisor traps; a trap is delegated to S according to medeleg (interrupts: mideleg inside eval_interrupts).
 void Csr::comb_exception() {
   const RobBroadcastIO &rb = wires->rob_bcast;
-  uint32_t mstatus = CSR_RegFile[csr_mstatus];
-  uint32_t sstatus = CSR_RegFile[csr_sstatus];
-  const uint32_t medeleg = CSR_RegFile[csr_medeleg];
-  const uint32_t mtvec = CSR_RegFile[csr_mtvec], stvec = CSR_RegFile[csr_stvec];
+  xlen_t mstatus = CSR_RegFile[csr_mstatus];
+  xlen_t sstatus = CSR_RegFile[csr_sstatus];
+  const xlen_t medeleg = CSR_RegFile[csr_medeleg];
+  const xlen_t mtvec = CSR_RegFile[csr_mtvec], stvec = CSR_RegFile[csr_stvec];
 
   const bool bp = rb.breakpoint, ecall = rb.ecall, pf_inst = rb.page_fault_inst, pf_load = rb.page_fault_load,
              pf_store = rb.page_fault_store, illegal = rb.illegal_inst;
@@ -107,15 +125,16 @@ void Csr::comb_exception() {
                       (pf_load && d_pf_load) || (pf_store && d_pf_store) || (illegal && d_illegal) || (bp && d_bp);
 
   // Vectored mode: interrupts jump to base + 4 * cause.
-  auto trap_target = [&](uint32_t tvec, uint32_t cause) {
-    if ((tvec & 1) && (cause & (1u << 31))) return (tvec & 0xfffffffc) + 4 * (cause & 0x7fffffff);
+  auto trap_target = [&](xlen_t tvec, xlen_t cause) -> xlen_t {
+    const xlen_t msb = xlen_t(1) << (XLEN - 1);   // interrupt flag of mcause / scause
+    if ((tvec & 1) && (cause & msb)) return (tvec & ~xlen_t(3)) + 4 * (cause & ~msb);
     return tvec;
   };
 
   if (m_trap) {
     CSR_RegFile_1[csr_mepc] = rb.pc;
     const bool is_irq = irq.to_m();  // same selection as the hardware: the cause reports the raw interrupt state
-    uint32_t cause = is_irq ? 1u << 31 : 0;
+    xlen_t cause = is_irq ? xlen_t(1) << (XLEN - 1) : xlen_t(0);
     cause += irq.m_sw ? 3
              : irq.m_timer ? 7
              : (irq.m_ext || (m_ecall && !d_uecall)) ? 11
@@ -139,7 +158,7 @@ void Csr::comb_exception() {
     CSR_RegFile_1[csr_mtval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (s_trap) {
     CSR_RegFile_1[csr_sepc] = rb.pc;
-    uint32_t cause = irq.to_s() ? 1u << 31 : 0;
+    xlen_t cause = irq.to_s() ? xlen_t(1) << (XLEN - 1) : xlen_t(0);
     cause += (irq.s_ext || (s_ecall && d_secall)) ? 9
              : irq.s_timer ? 5
              : (u_ecall && d_uecall) ? 8
@@ -157,7 +176,7 @@ void Csr::comb_exception() {
     sstatus = (sstatus & MSTATUS_SIE) ? (sstatus | MSTATUS_SPIE) : (sstatus & ~MSTATUS_SPIE);  // SPIE = SIE
     sstatus &= ~MSTATUS_SIE;
     CSR_RegFile_1[csr_sstatus] = sstatus;
-    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusMask) | (sstatus & kSstatusMask);
+    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
     privilege_1 = 1;
     CSR_RegFile_1[csr_stval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (rb.mret) {
@@ -174,7 +193,7 @@ void Csr::comb_exception() {
     sstatus |= MSTATUS_SPIE;
     sstatus &= ~MSTATUS_SPP;  // SPP = U
     CSR_RegFile_1[csr_sstatus] = sstatus;
-    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusMask) | (sstatus & kSstatusMask);
+    CSR_RegFile_1[csr_mstatus] = (CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
     wires->csr2front.epc = CSR_RegFile[csr_sepc];
   }
 }
@@ -190,16 +209,16 @@ void Csr::comb_csr_write() {
   }
   if (!(wires->rob2csr.commit && csr_we)) return;
 
-  const uint32_t old_val = CSR_RegFile[cvt_number_to_csr(csr_idx)];
+  const xlen_t old_val = CSR_RegFile[cvt_number_to_csr(csr_idx)];
   if (csr_wcmd == CSR_S) csr_wdata = (csr_wdata | old_val);
   else if (csr_wcmd == CSR_C) csr_wdata = (~csr_wdata & old_val);
 
   // machine register `m`, written through its supervisor alias with `s_mask` or directly with `m_mask`
-  auto write_pair = [&](int m, int s, bool via_s, uint32_t m_mask, uint32_t s_mask) {
+  auto write_pair = [&](int m, int s, bool via_s, xlen_t m_mask, xlen_t s_mask) {
     CSR_RegFile_1[m] = via_s ? (CSR_RegFile[m] & ~s_mask) | (csr_wdata & s_mask) : (m == csr_mstatus ? (CSR_RegFile[m] & ~m_mask) | (csr_wdata & m_mask) : csr_wdata & m_mask);
     CSR_RegFile_1[s] = CSR_RegFile_1[m] & s_mask;
   };
-  const uint32_t deleg = CSR_RegFile[csr_mideleg] & kDelegBits;
+  const xlen_t deleg = CSR_RegFile[csr_mideleg] & kDelegBits;
   if (csr_idx == number_mie || csr_idx == number_sie) {
     write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, deleg);
   } else if (csr_idx == number_mip || csr_idx == number_sip) {
@@ -210,12 +229,13 @@ void Csr::comb_csr_write() {
     CSR_RegFile_1[csr_sie] = CSR_RegFile[csr_mie] & CSR_RegFile_1[csr_mideleg];
     CSR_RegFile_1[csr_sip] = CSR_RegFile[csr_mip] & CSR_RegFile_1[csr_mideleg];
   } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
-    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusMask);
+    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask);
   } else if (csr_idx == number_satp) {
-    const uint32_t old_satp = CSR_RegFile[csr_satp];
-    CSR_RegFile_1[csr_satp] = csr_wdata;
+    const xlen_t old_satp = CSR_RegFile[csr_satp];
+    // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
+    if (!(XLEN == 64 && (csr_wdata >> 60) != 0 && (csr_wdata >> 60) != 8)) CSR_RegFile_1[csr_satp] = csr_wdata;
     if (old_satp != csr_wdata)
-      debug_ptw_trace::record_satp_write(old_satp, static_cast<uint32_t>(csr_wdata), static_cast<uint8_t>(privilege));
+      debug_ptw_trace::record_satp_write(static_cast<uint32_t>(old_satp), static_cast<uint32_t>(csr_wdata), static_cast<uint8_t>(privilege));
   } else {
     CSR_RegFile_1[cvt_number_to_csr(csr_idx)] = csr_wdata;
   }

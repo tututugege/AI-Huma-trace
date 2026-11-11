@@ -28,6 +28,7 @@ struct Counters {
   uint64_t dispatch = 0, commit = 0, commit_front_miss = 0, flush = 0, mispredict = 0;
   uint64_t cmp_rd = 0, cmp_br = 0, cmp_addr = 0, cmp_target = 0;
   uint64_t mis_rd = 0, mis_br = 0, mis_addr = 0, mis_target = 0;
+  uint64_t cmp_pf = 0, mis_pf = 0;   // model page fault (TLB/PTW) vs the function model trapping on the same load/store
   uint64_t skip_nofact = 0, skip_blocked = 0, skip_trapped = 0, skip_fault = 0, skip_other = 0;
   uint64_t mis_by_op[32] = {0}, seen_by_op[32] = {0}, nofact_by_op[32] = {0};
   uint64_t mem_writes = 0, interrupt_rejected = 0, printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
@@ -44,6 +45,7 @@ struct Counters {
       (unsigned long long)mis_addr, (unsigned long long)mis_target, (unsigned long long)uid_conflict, (unsigned long long)patch_mmio_load, (unsigned long long)patch_csr_read, (unsigned long long)skip_nofact,
       (unsigned long long)skip_blocked, (unsigned long long)skip_trapped, (unsigned long long)skip_fault,
       (unsigned long long)skip_other);
+    std::fprintf(stderr, "[TB_CHECK] page faults: compared=%llu mismatches=%llu\n", (unsigned long long)cmp_pf, (unsigned long long)mis_pf);
     std::fprintf(stderr, "[TB_CHECK] seen/mismatch by op:");
     for (int i = 0; i < 32; i++) if (seen_by_op[i]) std::fprintf(stderr, " op%d=%llu/%llu", i, (unsigned long long)seen_by_op[i], (unsigned long long)mis_by_op[i]);
     std::fprintf(stderr, "\n[TB_CHECK] nofact by op:");
@@ -187,6 +189,18 @@ void on_exec(const ExecObs &o) {
   static const bool compare = std::getenv("TB_CHECK") != nullptr;
   if (!compare) return;
   if (f->blocked != tb::Blocked::None) { g_c.skip_blocked++; return; }
+  // a load / store the function model executed: the model's translation must fault exactly when the function model traps
+  // (an executed load or store traps only on a page fault: misaligned and out-of-range accesses are "blocked" above)
+  // (an AMO / SC is a load uop plus a store-address uop: it faults when the store side does, so only that uop is compared;
+  // LR has the load uop only)
+  const bool is_amo = (f->inst & 0x7F) == 0x2F, is_lr = is_amo && (f->inst >> 27) == 2;
+  if ((o.op == UOP_LOAD && (!is_amo || is_lr)) || o.op == UOP_STA) {
+    g_c.cmp_pf++;
+    if (static_cast<bool>(o.page_fault) != f->trapped) {
+      g_c.mis_pf++;
+      if (g_c.mis_pf <= 6) std::fprintf(stderr, "[TB_CHECK][PF-MISMATCH] uid=%llu pc=0x%llx inst=0x%08x vaddr=0x%llx model_fault=%d function_model_trap=%d\n", (unsigned long long)uid, (unsigned long long)f->pc, f->inst, (unsigned long long)f->vaddr, (int)o.page_fault, (int)f->trapped);
+    }
+  }
   if (f->trapped) { g_c.skip_trapped++; return; }
   if (o.page_fault) { g_c.skip_fault++; return; }
   auto report = [&](const char *what, uint64_t got, uint64_t want, uint64_t &cnt) {

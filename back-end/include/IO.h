@@ -229,7 +229,7 @@ struct RobBroadcastIO {
   wire<1> page_fault_store = {};
   wire<1> illegal_inst = {};
   wire<1> interrupt = {};
-  wire<32> trap_val = {};
+  wire<XLEN> trap_val = {};
   wire<32> pc = {};
 
   wire<ROB_IDX_WIDTH> head_rob_idx = {};
@@ -314,13 +314,13 @@ struct ExeCsrIO {
   wire<1> we = {};
   wire<1> re = {};
   wire<12> idx = {};
-  wire<32> wdata = {};
+  wire<XLEN> wdata = {};
   wire<32> wcmd = {};
 };
 
 struct CsrExeIO {
 
-  wire<32> rdata = {};
+  wire<XLEN> rdata = {};
 };
 
 struct CsrRobIO {
@@ -345,9 +345,9 @@ struct CsrInterruptInjectIO {
 
 struct CsrStatusIO {
 
-  wire<32> sstatus = {};
-  wire<32> mstatus = {};
-  wire<32> satp = {};
+  wire<XLEN> sstatus = {};
+  wire<XLEN> mstatus = {};
+  wire<XLEN> satp = {};
   wire<2> privilege = {};
 };
 
@@ -358,21 +358,21 @@ struct RobCsrIO {
 };
 
 struct PtwWalkReq {
-  wire<32> vaddr = {};
-  wire<32> satp = {};
+  wire<XLEN> vaddr = {};
+  wire<XLEN> satp = {};
   wire<32> access_type; // 0=Fetch, 1=Load, 2=Store
 };
 
 struct PtwWalkResp {
   wire<1> fault = {};
-  wire<32> vaddr = {};
-  wire<32> leaf_pte = {};
-  wire<8> leaf_level = {}; // 1: L1 leaf, 0: L0 leaf
+  wire<XLEN> vaddr = {};
+  wire<XLEN> leaf_pte = {};   // the PTE (rv64: 8 bytes)
+  wire<8> leaf_level = {}; // Sv32: 1 = L1 (megapage) leaf, 0 = L0 leaf; Sv39: 2 = 1 GiB, 1 = 2 MiB, 0 = 4 KiB
 };
 
 struct PtwMemRespIO {
   wire<1> valid = {};
-  wire<32> data = {};
+  wire<XLEN> data = {};   // the PTE: one word on rv32, two on rv64
 };
 
 struct PtwWalkRespIO {
@@ -460,13 +460,13 @@ enum class StoreState : uint8_t {
 struct StqEntry {
 
   wire<1> data_valid = false;
-  wire<32> data = 0;
+  wire<XLEN> data = 0;
   wire<3>  func3 = 0;
 
 
 
   wire<1> vaddr_valid = false;
-  wire<32> vaddr = 0;
+  wire<XLEN> vaddr = 0;
 
   wire<1> paddr_valid = false;
   wire<32> paddr = 0;
@@ -567,7 +567,7 @@ static constexpr int LSU_MMU_IDX_WIDTH =
 
 struct MMUReq{
   wire<1> valid;
-  wire<32> vaddr;
+  wire<XLEN> vaddr;
   wire<LSU_MMU_IDX_WIDTH> entry_idx;
   wire<LSU_MMU_IDX_WIDTH> wait_idx;
 };

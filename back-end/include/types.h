@@ -122,8 +122,8 @@ uint16_t uop_alloc();                // fresh zeroed block of UOP_BLOCK pool ent
 struct Uop {
   uint16_t id;
 
-  wire<32> diag_val; // Hardware: Shared field for instruction or pc_next
-  wire<32> result;
+  wire<XLEN> diag_val; // Hardware: Shared field for instruction or pc_next
+  wire<XLEN> result;     // register-width value: load/ALU result, AGU address, store data
   wire<PRF_IDX_WIDTH> dest_preg;
   wire<1> dest_en;
 

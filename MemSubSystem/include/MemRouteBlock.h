@@ -38,7 +38,7 @@ struct PtwGrant {
 struct PtwEvent {
   wire<1> valid;
   Owner owner;
-  uint32_t data;
+  uint64_t data;   // the PTE for page-walk reads (rv64: 8 bytes)
   uint8_t replay;
   uint32_t req_addr;
   uint32_t req_id;

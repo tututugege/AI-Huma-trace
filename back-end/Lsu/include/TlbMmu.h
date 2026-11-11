@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IO.h"
+#include <type_traits>
 #include "PtwWalker.h"
 #include "PtwWalkPort.h"
 #include "config.h"
@@ -11,6 +12,9 @@
 
 class SimContext;
 class PtwMemPort;
+
+// register-width virtual address / satp (Sv32 on rv32, Sv39 on rv64)
+using vaddr_t = std::conditional_t<(XLEN == 64), uint64_t, uint32_t>;
 
 class TlbMmu {
 public:
@@ -50,7 +54,7 @@ public:
                                               : kItlbTopPortCount;
 
   struct TranslateContext {
-    wire<32> satp = 0;
+    wire<XLEN> satp = 0;
     wire<2> eff_priv = 0;
     wire<1> mxr = false;
     wire<1> sum = false;
@@ -59,20 +63,21 @@ public:
   struct TlbEntry {
     reg<1> valid = false;
     reg<1> global = false;
-    reg<9> asid = 0; // Sv32 satp ASID is 9 bits: satp[30:22]
-    reg<1> level = 0; // 1: megapage (L1 leaf), 0: normal page (L0 leaf)
+    reg<16> asid = 0; // Sv32 satp ASID is 9 bits (satp[30:22]), Sv39 16 bits (satp[59:44])
+    reg<2> level = 0; // leaf level: Sv32 1 = megapage / 0 = page; Sv39 2 = 1 GiB, 1 = 2 MiB, 0 = 4 KiB
+    reg<10> vpn2 = 0; // Sv39 only
     reg<10> vpn1 = 0;
     reg<10> vpn0 = 0;
-    reg<22> ppn = 0; // Sv32 PPN is 22 bits
+    reg<XLEN == 64 ? 44 : 22> ppn = 0; // Sv32 PPN is 22 bits, Sv39 44 bits
     reg<8> perm = 0; // bit[0:7]=V,R,W,X,U,G,A,D
   };
 
   struct WalkRegs {
     reg<1> active = false;
     reg<1> req_sent = false;
-    reg<32> v_addr = 0;
+    reg<XLEN> v_addr = 0;
     reg<2> type = 0;
-    reg<32> satp = 0;
+    reg<XLEN> satp = 0;
     reg<2> eff_priv = 0;
     reg<1> mxr = false;
     reg<1> sum = false;
@@ -92,8 +97,8 @@ public:
 
   struct LookupInput {
     wire<1> valid = false;
-    wire<32> v_addr = 0;
-    wire<9> asid = 0;
+    wire<XLEN> v_addr = 0;
+    wire<16> asid = 0;
   };
 
   struct LookupOutput {
@@ -103,9 +108,9 @@ public:
 
   struct CoreInput {
     wire<1> translate_valid = false;
-    wire<32> v_addr = 0;
+    wire<XLEN> v_addr = 0;
     wire<2> type = 0;
-    wire<32> satp = 0;
+    wire<XLEN> satp = 0;
     wire<2> privilege = 0;
     wire<1> mstatus_mxr = false;
     wire<1> mstatus_sum = false;
@@ -143,7 +148,7 @@ public:
 
   struct TopPortInput {
     wire<1> valid = false;
-    wire<32> v_addr = 0;
+    wire<XLEN> v_addr = 0;
     wire<2> type = 0;
     LookupOutput lookup{};
   };
@@ -161,7 +166,7 @@ public:
   struct TopInput {
     wire<1> flush = false;
     wire<1> cancel = false;
-    wire<32> satp = 0;
+    wire<XLEN> satp = 0;
     wire<2> privilege = 0;
     wire<1> mstatus_mxr = false;
     wire<1> mstatus_sum = false;
@@ -197,11 +202,11 @@ public:
   TlbMmu(SimContext *ctx, PtwMemPort *port = nullptr,
          int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
 
-  Result translate(uint32_t &p_addr, uint32_t v_addr, uint32_t type,
+  Result translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
                    CsrStatusIO *status);
   void translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp);
   // FE_IPF: translation without any side effect (no walk, no TLB update); false when the TLB cannot translate it right now
-  bool peek_translate(uint32_t &p_addr, uint32_t v_addr, uint32_t type, CsrStatusIO *status) const;
+  bool peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) const;
   void flush();
   void seq();
   void cancel_pending_walk();
@@ -246,20 +251,20 @@ private:
   void clear_tlb_entries();
   static TranslateContext build_translate_context(uint32_t type,
                                                   CsrStatusIO *status);
-  static TranslateContext build_translate_context(uint32_t type, uint32_t satp,
+  static TranslateContext build_translate_context(uint32_t type, vaddr_t satp,
                                                   uint32_t privilege,
                                                   bool mstatus_mxr,
                                                   bool mstatus_sum,
                                                   bool mstatus_mprv,
                                                   uint32_t mstatus_mpp);
-  static bool entry_matches(const TlbEntry &entry, uint32_t v_addr,
+  static bool entry_matches(const TlbEntry &entry, vaddr_t v_addr,
                             uint16_t asid);
-  bool lookup(uint32_t v_addr, uint16_t asid, TlbEntry &hit) const;
-  LookupOutput lookup_table_access(uint32_t v_addr, uint16_t asid) const;
-  static uint32_t compose_paddr(uint32_t v_addr, const TlbEntry &e);
+  bool lookup(vaddr_t v_addr, uint16_t asid, TlbEntry &hit) const;
+  LookupOutput lookup_table_access(vaddr_t v_addr, uint16_t asid) const;
+  static uint32_t compose_paddr(vaddr_t v_addr, const TlbEntry &e);
   static bool check_perm(uint8_t perm, uint32_t type, int eff_priv, bool sum,
                          bool mxr);
-  Result translate_shared_via_io_generator(uint32_t &p_addr, uint32_t v_addr,
+  Result translate_shared_via_io_generator(uint32_t &p_addr, vaddr_t v_addr,
                                            uint32_t type,
                                            CsrStatusIO *status);
   TopInput build_top_common_input(const CsrStatusIO *status) const;
@@ -267,10 +272,10 @@ private:
   void apply_top_output(const TopOutput &out);
   void run_control_via_top(bool flush, bool cancel);
   bool consume_completed_walk_refill(bool consume_fault);
-  Result walk_and_refill_shared(uint32_t &p_addr, uint32_t v_addr,
+  Result walk_and_refill_shared(uint32_t &p_addr, vaddr_t v_addr,
                                 uint32_t type, CsrStatusIO *status);
-  Result walk_and_refill(uint32_t &p_addr, uint32_t v_addr, uint32_t type,
+  Result walk_and_refill(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
                          CsrStatusIO *status);
-  void schedule_refill(uint32_t v_addr, uint16_t asid, uint8_t level,
-                       uint32_t pte, bool global);
+  void schedule_refill(vaddr_t v_addr, uint16_t asid, uint8_t level,
+                       uint64_t pte, bool global);
 };

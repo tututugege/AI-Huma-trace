@@ -232,7 +232,7 @@ private:
         br_taken = f->br_taken;
       } else if (inst.op == UOP_JUMP) {
         br_taken = true;
-        pc_br = f->next_pc;  // jal/jalr target
+        pc_br = narrow_pc(f->next_pc, "jump target");  // jal/jalr target (the model's pc is 32 bit)
       }
     } else if (inst.op == UOP_JUMP) {
       br_taken = true;  // killed instruction: no fact, outcome unobservable

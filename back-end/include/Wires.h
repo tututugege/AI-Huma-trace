@@ -29,7 +29,7 @@ struct Back_out {
 
   wire<32> sstatus;
   wire<32> mstatus;
-  wire<32> satp;
+  wire<XLEN> satp;
   wire<2> privilege;
 
   // to MemSubsystem

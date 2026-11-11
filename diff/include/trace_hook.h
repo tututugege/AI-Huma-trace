@@ -27,7 +27,7 @@ struct ExecObs {
   uint32_t rob_idx;          // the LSU path loses dbg.inst_idx: identity is rob_idx -> uid
   uint64_t uid_dbg;          // dbg.inst_idx as carried (0 on the LSU path)
   int op;                    // UopType
-  uint32_t result, diag_val;
+  xlen_t result, diag_val;
   bool br_taken, mispred, page_fault;
 };
 void on_exec(const ExecObs &o);
