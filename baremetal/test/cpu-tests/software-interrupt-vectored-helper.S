@@ -1,10 +1,19 @@
+#if __riscv_xlen == 64
+#define REG_S sd
+#define REG_L ld
+#define REG_W .dword
+#else
+#define REG_S sw
+#define REG_L lw
+#define REG_W .word
+#endif
     .section .text
     .align 2
 
     .globl run_software_interrupt_test
 run_software_interrupt_test:
     la t0, software_saved_ra
-    sw ra, 0(t0)
+    REG_S ra, 0(t0)
 
     # Phase 1: M-mode software interrupt, vectored slot 3.
     la t0, machine_software_vectors
@@ -150,10 +159,11 @@ software_machine_exit:
 
 software_machine_resume:
     la t0, software_saved_ra
-    lw ra, 0(t0)
+    REG_L ra, 0(t0)
     ret
 
     .section .bss
     .align 2
+    .balign 8
 software_saved_ra:
-    .word 0
+    REG_W 0

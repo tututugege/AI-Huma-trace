@@ -4,7 +4,7 @@
 set -uo pipefail
 SIMREPO=$1; OUT=$2; shift 2
 L=${LLVM:-/opt/homebrew/opt/llvm/bin}
-BM=$SIMREPO/baremetal; TD=$BM/test/cpu-tests; EX=$(cd "$(dirname "$0")/.." && pwd)/tests/extra
+BM=$SIMREPO/baremetal; TD=$BM/test/cpu-tests; EX=${EXTRA_DIR:-$(cd "$(dirname "$0")/.." && pwd)/tests/extra}
 ARCH=${ARCH:-rv32ima_zicsr_zifencei}
 mkdir -p "$OUT"
 sed -e 's/(wxa!ri)/(wxa)/' -e 's/^\( *\)\. = __stack_size;/\1. += __stack_size;/' -e 's/\(\.stack ORIGIN[^:]*\):/\1 (NOLOAD) :/' "$BM/link.lds" > "$OUT/link.lds.0"
@@ -16,7 +16,7 @@ t=t.replace("  .dma_buffer","  .bss (NOLOAD) : { *(.sbss .sbss.* .bss .bss.* COM
 open(sys.argv[2],"w").write(t)
 PY
 tests=("$@"); [ ${#tests[@]} -eq 0 ] && tests=($(cd "$TD" && ls *.c | sed 's/\.c$//'))
-CF="--target=riscv32 -march=$ARCH -mabi=ilp32 -O2 -ffp-contract=off -mcmodel=medlow -mstrict-align -ffreestanding -fno-builtin -nostdlib -I$BM -I$BM/include"
+CF="--target=${TARGET:-riscv32} -march=$ARCH -mabi=${ABI:-ilp32} -O2 -ffp-contract=off -mcmodel=${CMODEL:-medlow} -mstrict-align -ffreestanding -fno-builtin -nostdlib -I$BM -I$BM/include"
 for t in "${tests[@]}"; do
   d=$OUT/$t; mkdir -p "$d"; objs=()
   D=$TD; [ -f "$EX/$t.c" ] && D=$EX

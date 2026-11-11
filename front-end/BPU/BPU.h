@@ -208,7 +208,7 @@ class Tage {
   static bool provider_weak(int pcpn, uint8_t cnt) { return pcpn >= TN || weak(cnt); }
 
   void predict(pc_t pc, const uint32_t fh[FH_N_MAX][TN], TagePred &o) const {
-    const uint32_t w = pc >> 2;
+    const uint32_t w = static_cast<uint32_t>(pc >> 2);   // index hashes use the low 32 bits of the word address
     uint32_t b = w & TAGE_BASE_IDX_MASK;
     int pcpn = TN, altpcpn = TN;
     for (int i = 0; i < TN; i++) {
@@ -384,8 +384,8 @@ class Btb {
     if (3 * wd < 32) x ^= pcw >> (3 * wd);
     return (x ^ salt) & mask;
   }
-  static uint32_t btb_idx(pc_t pc) { return hash(pc >> 2, BTB_IDX_MASK, 0x9e3779b9u); }
-  static btb_tag_t btb_tag(pc_t pc) { return ((pc >> 2) >> ceil_log2_u32(BTB_ENTRY_NUM)) & BTB_TAG_MASK; }
+  static uint32_t btb_idx(pc_t pc) { return hash(static_cast<uint32_t>(pc >> 2), BTB_IDX_MASK, 0x9e3779b9u); }
+  static btb_tag_t btb_tag(pc_t pc) { return static_cast<btb_tag_t>(((pc >> 2) >> ceil_log2_u32(BTB_ENTRY_NUM)) & BTB_TAG_MASK); }
   static uint8_t useful_next(uint8_t v, bool ok) { return ok ? (v < 7 ? v + 1 : v) : (v > 0 ? v - 1 : 0); }
   template <class S, int N>
   static int hit_way(const S (&set)[N], uint32_t tag) {
@@ -502,7 +502,7 @@ class TypePred {
   TypeEntry t_[NB][TYPE_PRED_SET_NUM][TYPE_PRED_WAY_NUM];
   static void locate(pc_t pc, uint32_t &bank, uint32_t &set, type_pred_tag_t &tag) {
     bank = bank_of(pc);
-    const uint32_t w = bank_pc_of(pc) >> 2;
+    const uint32_t w = static_cast<uint32_t>(bank_pc_of(pc) >> 2);
     set = w & TYPE_PRED_SET_MASK;
     tag = (w >> ceil_log2_u32(TYPE_PRED_SET_NUM)) & TYPE_PRED_TAG_MASK;
   }
@@ -694,15 +694,15 @@ class Bpu {
     std::memset(&t, 0, sizeof(t));
     const bool refetch = in.refetch;
     const pc_t base = refetch ? in.refetch_address : pc_;
-    const uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-    const uint32_t plus = base + FW * 4;
-    const uint32_t boundary = (base & mask) != (plus & mask) ? (plus & mask) : plus;
+    const pc_t mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1);
+    const pc_t plus = base + FW * 4;
+    const pc_t boundary = (base & mask) != (plus & mask) ? (plus & mask) : plus;
     const bool go_pred = in.icache_read_ready || refetch;
 
     out.icache_read_valid = !refetch;
     out.fetch_address = out.out_pred_base_pc = base;
     out.PTAB_write_enable = go_pred && !refetch;
-    uint32_t next = boundary;
+    pc_t next = boundary;
 
     if (go_pred) {
       const Ras &ras = refetch ? arch_ras_ : spec_ras_;

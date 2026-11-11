@@ -35,6 +35,32 @@ void gz_read_pod(gzFile file, T &data) {
 }
 
 namespace {
+// Boot stub at address 0 (the CPU starts there): a0 = mhartid, a1 = the devicetree address, jump to `jump`.  On rv64 `lui`
+// sign-extends (0x80000000 would become 0xffffffff80000000), so the constants are built with addi + slli instead; the
+// function model's own stub does the same.
+static void write_boot_stub(uint32_t a1_value, uint32_t jump_value) {
+  uint32_t at = 0;
+  pmem_write(at, 0xf1402573);  // csrrs a0, mhartid, zero
+  at += 4;
+  auto li_hi = [&](uint32_t reg, uint32_t v) {
+    if (XLEN == 64) {
+      uint32_t sh = 21;   // v = imm << sh with imm < 2048 (the platform addresses are multiples of 2 MiB)
+      while (sh > 0 && (v & ((1u << sh) - 1))) sh--;
+      const uint32_t imm = v >> sh;
+      pmem_write(at, (imm << 20) | (reg << 7) | 0x13);   // addi reg, zero, imm
+      at += 4;
+      pmem_write(at, (sh << 20) | (reg << 15) | (1u << 12) | (reg << 7) | 0x13);   // slli reg, reg, sh
+      at += 4;
+    } else {
+      pmem_write(at, (v & 0xfffff000u) | (reg << 7) | 0x37);   // lui reg, v >> 12
+      at += 4;
+    }
+  };
+  li_hi(11, a1_value);  // a1
+  li_hi(5, jump_value);  // t0
+  pmem_write(at, 0x00028067);  // jalr zero, 0(t0)
+}
+
 void seed_uart_io_words() {
   constexpr uint32_t kUartLsrThre = 0x20u;
   constexpr uint32_t kUartLsrTemt = 0x40u;
@@ -57,8 +83,9 @@ constexpr uint64_t kCkptSimpointRamBytes = RAM_SIZE;
 constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
-constexpr uint16_t kCkptFormatVersion = 3u;
-constexpr uint16_t kCkptLegacyFormatVersion = 2u;
+// format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
+constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? 4u : 3u;
+constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? 4u : 2u;
 
 typedef struct CkptHeader {
   uint32_t magic;
@@ -134,10 +161,7 @@ void BackTop::load_image(const std::string &filename) {
 
   inst_data.close();
 
-  pmem_write(0x0, 0xf1402573);
-  pmem_write(0x4, 0x83e005b7);
-  pmem_write(0x8, 0x800002b7);
-  pmem_write(0xc, 0x00028067);
+  write_boot_stub(0x83e00000u, 0x80000000u);
   seed_uart_io_words();
 
   init_difftest(size);
@@ -184,10 +208,7 @@ void BackTop::load_flash_image(const std::string &filename) {
     pmem_memcpy_to_ram(kSdLoaderLoadAddr,
                        bytes.data() + kEmbeddedSdLoaderOffset, loader_size);
 
-    pmem_write(0x0, 0xf1402573); // csrrs a0, mhartid, zero
-    pmem_write(0x4, 0x83e005b7); // lui a1, 0x83e00
-    pmem_write(0x8, 0x838002b7); // lui t0, 0x83800
-    pmem_write(0xc, 0x00028067); // jalr zero, 0(t0)
+    write_boot_stub(0x83e00000u, 0x83800000u);
   }
 
   seed_uart_io_words();
@@ -233,10 +254,7 @@ void BackTop::load_sd_boot_blob(const std::string &sdcard_image,
     pmem_memcpy_to_ram(load_addr, payload.data(), payload.size());
   }
 
-  pmem_write(0x0, 0xf1402573); // csrrs a0, mhartid, zero
-  pmem_write(0x4, 0x83e005b7); // lui a1, 0x83e00
-  pmem_write(0x8, 0x800002b7); // lui t0, 0x80000
-  pmem_write(0xc, 0x00028067); // jalr zero, 0(t0)
+  write_boot_stub(0x83e00000u, 0x80000000u);
   seed_uart_io_words();
 }
 
@@ -272,11 +290,11 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
   }
 
   struct CkptCpuState {  // layout of CPU_state in the checkpoint; read and discarded
-    uint32_t gpr[32];
-    uint32_t csr[21];
-    uint32_t pc;
+    xlen_t gpr[32];
+    xlen_t csr[21];
+    xlen_t pc;
     uint32_t store_addr;
-    uint32_t store_data;
+    xlen_t store_data;
     uint32_t store_strb;
     bool store;
     bool reserve_valid;
@@ -377,12 +395,12 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   // 与 SimpleSim/save_checkpoint 写入格式保持一致，确保反序列化对齐。
   // 注意：reserve_* 当前在本模拟器中暂未使用，但必须读取以避免流错位。
   typedef struct Ckpt_CPU_state {
-    uint32_t gpr[32];
-    uint32_t csr[21];
-    uint32_t pc;
+    xlen_t gpr[32];
+    xlen_t csr[21];
+    xlen_t pc;
 
     uint32_t store_addr;
-    uint32_t store_data;
+    xlen_t store_data;
     uint32_t store_strb;
     bool store;
     bool reserve_valid;

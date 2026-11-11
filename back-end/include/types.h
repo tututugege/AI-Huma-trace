@@ -68,7 +68,7 @@ constexpr uint8_t MAXU = 0b11100;
 // Debug sideband shared by InstInfo/MicroOp. Keep diag_val in hardware path.
 struct DebugMeta {
   wire<32> instruction;
-  wire<32> pc;
+  wire<XLEN> pc;
   bool is_mmio;
   int64_t inst_idx;
 };
@@ -104,10 +104,11 @@ struct UopS {
   wire<1> src2_is_imm;
   wire<3> func3;
   wire<7> func7;
+  wire<1> is_word;      // rv64 *W instruction (OP-IMM-32 / OP-32): a 32-bit operation (the divider needs half the iterations)
   wire<1> is_atomic;
   wire<PRF_IDX_WIDTH> old_dest_preg;
-  wire<32> pc;
-  wire<32> ftq_next_pc;
+  wire<XLEN> pc;
+  wire<XLEN> ftq_next_pc;
   wire<1> ftq_entry_valid;
   wire<1> ftq_resp_valid;
   wire<1> ftq_pred_taken;
@@ -122,8 +123,8 @@ uint16_t uop_alloc();                // fresh zeroed block of UOP_BLOCK pool ent
 struct Uop {
   uint16_t id;
 
-  wire<32> diag_val; // Hardware: Shared field for instruction or pc_next
-  wire<32> result;
+  wire<XLEN> diag_val; // Hardware: Shared field for instruction or pc_next
+  wire<XLEN> result;     // register-width value: load/ALU result, AGU address, store data
   wire<PRF_IDX_WIDTH> dest_preg;
   wire<1> dest_en;
 

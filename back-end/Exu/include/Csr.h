@@ -138,22 +138,22 @@ public:
   void comb_exception();
   void seq();
 
-  reg<32> CSR_RegFile[CSR_NUM];
+  reg<XLEN> CSR_RegFile[CSR_NUM];
   reg<2> privilege = 0b11;
 
   // 执行时存下需要写入的idx，cmd和data
   // 提交时才写入
   // 否则csr指令未提交，其更改就已经生效
   reg<12> csr_idx;
-  reg<32> csr_wdata;
+  reg<XLEN> csr_wdata;
   reg<2> csr_wcmd;
   reg<1> csr_we;
 
-  wire<32> CSR_RegFile_1[CSR_NUM];
+  wire<XLEN> CSR_RegFile_1[CSR_NUM];
   wire<2> privilege_1 = 0b11;
 
   wire<12> csr_idx_1;
-  wire<32> csr_wdata_1;
+  wire<XLEN> csr_wdata_1;
   wire<2> csr_wcmd_1;
   wire<1> csr_we_1;
 };

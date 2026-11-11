@@ -193,6 +193,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop->src2_is_imm = true;
   uop->func3 = f3;
   uop->func7 = f7;
+  uop->is_word = false;
   uop->csr_idx = csr;
   uop.page_fault_inst = false;
   uop.illegal_inst = false;
@@ -254,6 +255,18 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
     uop->src2_is_imm = false;
     break;
+#if XLEN == 64
+  case 0b0011011:  // OP-IMM-32: addiw, slliw, srliw, sraiw, slli.uw, clzw, ctzw, cpopw, roriw (rv64)
+    set(true, true, false, ADD);
+    uop->imm = immI(inst);
+    uop->is_word = true;
+    break;
+  case 0b0111011:  // OP-32: addw, subw, sllw, srlw, sraw, add.uw, shNadd.uw, rolw, rorw, zext.h; funct7 == 1 is mulw/divw/divuw/remw/remuw
+    set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
+    uop->src2_is_imm = false;
+    uop->is_word = true;
+    break;
+#endif
   case number_9_opcode_fence:  // funct3 001 is fence.i
     set(false, false, false, f3 == 0b001 ? FENCE_I : FENCE);
     break;

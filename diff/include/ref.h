@@ -1,5 +1,6 @@
 #pragma once
 #include "config.h"
+#include "xlen_cast.h"
 #include <cstdint>
 
 #define RISCV_MODE_U 0b00
@@ -64,12 +65,12 @@
 #define MSTATUS_MPP_SHIFT 11
 
 typedef struct CPU_state {
-  uint32_t gpr[ARF_NUM];
-  uint32_t csr[21];
-  uint32_t pc;
+  xlen_t gpr[ARF_NUM];   // function-model widths: memcpy'd to and from RefCpuState
+  xlen_t csr[21];
+  xlen_t pc;
 
   uint32_t store_addr;
-  uint32_t store_data;
+  xlen_t store_data;
   uint32_t store_strb;
   bool store;
   uint32_t instruction;
@@ -77,7 +78,7 @@ typedef struct CPU_state {
   bool page_fault_load;
   bool page_fault_store;
   uint32_t inst_idx;
-  uint32_t commit_pc;
+  xlen_t commit_pc;
   bool reserve_valid;
   uint32_t reserve_addr;
 } CPU_state;

@@ -33,18 +33,18 @@ enum class LoadState : uint8_t {
 struct LdqEntry {
   LoadState load_state;
   wire<1> v_addr_valid;
-  wire<32> v_addr;
+  wire<XLEN> v_addr;
   wire<1> p_addr_valid;
   wire<32> p_addr;
   ReplayType replay_type;
   wire<3> func3;
-  wire<32> result;
+  wire<XLEN> result;
   wire<PRF_IDX_WIDTH> dest_preg;
   wire<ROB_IDX_WIDTH> rob_idx;
   wire<1> rob_flag;
   wire<BR_MASK_WIDTH> br_mask;
   wire<1> is_mmio;
-  wire<32> diag_val;  // faulting virtual address for the exception handler
+  wire<XLEN> diag_val;  // faulting virtual address for the exception handler
   wire<1> page_fault;
   wire<1> is_lrsc;
   StoreTag stq_snapshot;

@@ -23,6 +23,8 @@ namespace {
     return 1;
   case 0b01:
     return 2;
+  case 0b11:
+    return XLEN == 64 ? 8 : 4;   // ld / sd exist on rv64 only
   case 0b10:
   default:
     return 4;
@@ -39,6 +41,8 @@ namespace {
     return 0x3u << off; // SH, 要求 off 为 0 或 2
   case 2:
     return 0xFu; // SW, 要求 off 为 0
+  case 3:
+    return XLEN == 64 ? 0xFFu : 0;   // SD (rv64): 8 bytes, 8-byte aligned (CheckAddr compares up to 8 bytes)
   default:
     return 0;
   }

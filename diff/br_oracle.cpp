@@ -74,9 +74,10 @@ inline void sync_oracle_control_state(const front_top_in &in) {
   RefCpuState state = current_oracle_state();
   state.pc = in.refetch_address;
   if (in.csr_status != nullptr) {
-    state.csr[csr_mstatus] = static_cast<uint32_t>(in.csr_status->mstatus);
-    state.csr[csr_sstatus] = static_cast<uint32_t>(in.csr_status->sstatus);
-    state.csr[csr_satp] = static_cast<uint32_t>(in.csr_status->satp);
+    // the model's CSR copies are 32 bit (not widened yet): keep the upper bits the function model holds (mstatus.UXL/SXL)
+    state.csr[csr_mstatus] = merge_low32(state.csr[csr_mstatus], static_cast<uint32_t>(in.csr_status->mstatus));
+    state.csr[csr_sstatus] = merge_low32(state.csr[csr_sstatus], static_cast<uint32_t>(in.csr_status->sstatus));
+    state.csr[csr_satp] = merge_low32(state.csr[csr_satp], static_cast<uint32_t>(in.csr_status->satp));
     state.privilege = static_cast<uint8_t>(in.csr_status->privilege);
   }
   refcpu_set_state(oracle_ctx, &state);
@@ -99,9 +100,9 @@ inline void sync_oracle_arch_state_from_dut(const front_top_in &in) {
   RefCpuState state = dut_to_ref_state(privilege);
   state.pc = in.refetch_address;
   if (in.csr_status != nullptr) {
-    state.csr[csr_mstatus] = static_cast<uint32_t>(in.csr_status->mstatus);
-    state.csr[csr_sstatus] = static_cast<uint32_t>(in.csr_status->sstatus);
-    state.csr[csr_satp] = static_cast<uint32_t>(in.csr_status->satp);
+    state.csr[csr_mstatus] = merge_low32(state.csr[csr_mstatus], static_cast<uint32_t>(in.csr_status->mstatus));
+    state.csr[csr_sstatus] = merge_low32(state.csr[csr_sstatus], static_cast<uint32_t>(in.csr_status->sstatus));
+    state.csr[csr_satp] = merge_low32(state.csr[csr_satp], static_cast<uint32_t>(in.csr_status->satp));
   }
   refcpu_set_state(oracle_ctx, &state);
 }

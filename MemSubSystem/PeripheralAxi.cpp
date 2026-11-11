@@ -131,8 +131,8 @@ void PeripheralAxi::comb_inputs() {
         nxt.func3 = peripheral_req->mmio_fun3;
         nxt.rdata = peripheral_req->wen
                         ? 0
-                        : peripheral_model->read_load(peripheral_req->mmio_addr,
-                                                      nxt.func3);
+                        : peripheral_model->read_load64(peripheral_req->mmio_addr,
+                                                        nxt.func3);
         nxt.req_id = 0;
         return;
       }

@@ -19,36 +19,42 @@ static constexpr int kTrapCsr[8] = {7 /*mstatus*/, 15 /*sstatus*/, 1 /*mepc*/, 2
 
 struct Bridge::Entry {
   Fact f;
-  uint32_t pc_before = 0;
+  xlen_t pc_before = 0;
   uint8_t priv_before = 0;
   bool resv_valid_before = false;
   uint32_t resv_addr_before = 0;
   uint8_t rd = 0;  // destination register (0: none)
-  uint32_t rd_old = 0;
-  uint32_t trap_csr[8] = {};
+  xlen_t rd_old = 0;
+  xlen_t trap_csr[8] = {};
   bool full_csr = false;
-  std::vector<uint32_t> csr_full;  // only for SYSTEM instructions
+  std::vector<xlen_t> csr_full;  // only for SYSTEM instructions
   bool has_undo = false;
-  uint32_t undo_addr = 0, undo_old = 0;
+  uint32_t undo_addr = 0, undo_old = 0, undo_old_hi = 0;
+  uint8_t undo_words = 1;        // an 8-byte store (rv64 sd, amo*.d) changes two words
   std::unique_ptr<RefCpuState> trap_after;  // state the core reached by trapping (undone speculatively)
 };
 
 namespace {
+// access size of a load/store from funct3[1:0]: 8 bytes (ld, sd) exist on rv64 only
+inline uint8_t access_bytes(uint32_t f3_low) { return f3_low == 3 ? (XLEN == 64 ? 8 : 4) : (uint8_t)(1u << f3_low); }
+inline uint8_t amo_bytes(uint32_t funct3) { return (funct3 == 3 && XLEN == 64) ? 8 : 4; }
 inline uint32_t bits(uint32_t v, int hi, int lo) { return (v >> lo) & ((1u << (hi - lo + 1)) - 1); }
 inline int32_t sext(uint32_t v, int n) { return (int32_t)(v << (32 - n)) >> (32 - n); }
-inline uint32_t immI(uint32_t i) { return (uint32_t)sext(bits(i, 31, 20), 12); }
-inline uint32_t immB(uint32_t i) {
-  return (uint32_t)sext((bits(i, 31, 31) << 12) | (bits(i, 7, 7) << 11) | (bits(i, 30, 25) << 5) | (bits(i, 11, 8) << 1), 13);
+// immediates sign-extended to the register width (xlen_t)
+inline xlen_t xs(int32_t v) { return static_cast<xlen_t>(static_cast<sxlen_t>(v)); }
+inline xlen_t immI(uint32_t i) { return xs(sext(bits(i, 31, 20), 12)); }
+inline xlen_t immB(uint32_t i) {
+  return xs(sext((bits(i, 31, 31) << 12) | (bits(i, 7, 7) << 11) | (bits(i, 30, 25) << 5) | (bits(i, 11, 8) << 1), 13));
 }
-inline uint32_t immJ(uint32_t i) {
-  return (uint32_t)sext((bits(i, 31, 31) << 20) | (bits(i, 19, 12) << 12) | (bits(i, 20, 20) << 11) | (bits(i, 30, 21) << 1), 21);
+inline xlen_t immJ(uint32_t i) {
+  return xs(sext((bits(i, 31, 31) << 20) | (bits(i, 19, 12) << 12) | (bits(i, 20, 20) << 11) | (bits(i, 30, 21) << 1), 21));
 }
-inline uint32_t immS(uint32_t i) { return (uint32_t)sext((bits(i, 31, 25) << 5) | bits(i, 11, 7), 12); }
+inline xlen_t immS(uint32_t i) { return xs(sext((bits(i, 31, 25) << 5) | bits(i, 11, 7), 12)); }
 
 // Undo one entry on a state copy (CSR/regs/pc/priv/reservation). Memory is the caller's job.
-void undo_into(const Bridge::Stats *, RefCpuState &st, const uint32_t *trap_csr, bool full_csr,
-               const uint32_t *csr_full, uint32_t pc_before, uint8_t priv_before, bool rv,
-               uint32_t ra, uint8_t rd, uint32_t rd_old) {
+void undo_into(const Bridge::Stats *, RefCpuState &st, const xlen_t *trap_csr, bool full_csr,
+               const xlen_t *csr_full, xlen_t pc_before, uint8_t priv_before, bool rv,
+               uint32_t ra, uint8_t rd, xlen_t rd_old) {
   if (full_csr) std::memcpy(st.csr, csr_full, sizeof st.csr);
   else for (int i = 0; i < 8; i++) st.csr[kTrapCsr[i]] = trap_csr[i];
 #ifndef TB_NEG_NO_RD_UNDO
@@ -63,17 +69,17 @@ void undo_into(const Bridge::Stats *, RefCpuState &st, const uint32_t *trap_csr,
 
 // Control-flow outcome computed from the register file, independent of the core's execution
 // (used when the instruction was not executed: blocked fetch, undone trap).
-static bool eval_control(uint32_t pc, uint32_t inst, const uint32_t *gpr, bool &taken, uint32_t &next) {
+static bool eval_control(xlen_t pc, uint32_t inst, const xlen_t *gpr, bool &taken, xlen_t &next) {
   const uint32_t op = bits(inst, 6, 0), f3 = bits(inst, 14, 12);
-  const uint32_t a = gpr[bits(inst, 19, 15)], b = gpr[bits(inst, 24, 20)];
+  const xlen_t a = gpr[bits(inst, 19, 15)], b = gpr[bits(inst, 24, 20)];
   if (op == 0x6f) { taken = true; next = pc + immJ(inst); return true; }
-  if (op == 0x67) { taken = true; next = (a + immI(inst)) & ~1u; return true; }
+  if (op == 0x67) { taken = true; next = (a + immI(inst)) & ~xlen_t(1); return true; }
   if (op != 0x63) return false;
   switch (f3) {
   case 0: taken = a == b; break;
   case 1: taken = a != b; break;
-  case 4: taken = (int32_t)a < (int32_t)b; break;
-  case 5: taken = (int32_t)a >= (int32_t)b; break;
+  case 4: taken = (sxlen_t)a < (sxlen_t)b; break;
+  case 5: taken = (sxlen_t)a >= (sxlen_t)b; break;
   case 6: taken = a < b; break;
   case 7: taken = a >= b; break;
   default: taken = false; break;
@@ -107,7 +113,7 @@ const Fact *Bridge::find(uint64_t uid) const {
   return nullptr;
 }
 
-const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
+const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
   auto *e = new Entry();
   e->f.uid = uid;
   e->f.pc = pc;
@@ -152,31 +158,33 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   if (opcode == 0x03 || is_lr) {
     e->f.is_load = true;
     e->f.vaddr = opcode == 0x03 ? st.gpr[rs1] + immI(inst) : st.gpr[rs1];
-    e->f.size = opcode == 0x03 ? ((funct3 & 3) == 0 ? 1 : (funct3 & 3) == 1 ? 2 : 4) : 4;
+    e->f.size = opcode == 0x03 ? access_bytes(funct3 & 3) : amo_bytes(funct3);
   } else if (opcode == 0x23 || is_amo) {
     e->f.is_store = true;
     e->f.vaddr = opcode == 0x23 ? st.gpr[rs1] + immS(inst) : st.gpr[rs1];
-    e->f.size = opcode == 0x23 ? (funct3 == 0 ? 1 : funct3 == 1 ? 2 : 4) : 4;
+    e->f.size = opcode == 0x23 ? (funct3 <= 3 ? access_bytes(funct3) : 4) : amo_bytes(funct3);
     e->f.store_data = st.gpr[rs2];
     if (e->f.size == 1) e->f.store_data &= 0xFF;
     if (e->f.size == 2) e->f.store_data &= 0xFFFF;
+    if (e->f.size == 4) e->f.store_data &= 0xFFFFFFFFu;
   }
 
   Blocked blk = Blocked::None;
   // Virtual -> physical for the checks below (identity when translation is off). A page fault
   // is not "blocked": the core executes the access and raises the exception itself.
-  uint32_t pc_pa = pc;
+  uint32_t pc_pa = static_cast<uint32_t>(pc);
   const bool pc_xlate_ok = refcpu_translate_data(ctx_, pc, 0, &pc_pa);
-  uint32_t data_pa = e->f.vaddr;
+  uint32_t data_pa = static_cast<uint32_t>(e->f.vaddr);
   bool data_xlate_ok = true;
   if (e->f.is_load || e->f.is_store)
     data_xlate_ok = refcpu_translate_data(ctx_, e->f.vaddr, e->f.is_store ? 2 : 1, &data_pa);
-  const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + 4 <= (uint64_t)boot_base_ + boot_bytes_;
+  const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + 4 <= (uint64_t)boot_base_ + boot_bytes_;   // (pc >= 2^32 is never in the boot ROM)
   if (pc_xlate_ok && !in_ram(pc_pa, 4) && !in_boot) blk = Blocked::PcOutOfRam;
   else if (inst == 0x00100073) blk = Blocked::Ebreak;
   else if (e->f.is_load || e->f.is_store) {
-    const uint32_t a = e->f.vaddr, sz = e->f.size;
-    if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3))) blk = Blocked::MemMisalign;
+    const xlen_t a = e->f.vaddr;
+    const uint32_t sz = e->f.size;
+    if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3)) || (sz == 8 && (a & 7))) blk = Blocked::MemMisalign;
     else if (data_xlate_ok && !in_ram(data_pa, sz)) blk = Blocked::MemOutOfRam;
   }
   e->f.blocked = blk;
@@ -186,7 +194,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     // Not executed. The state stays as before (pc nominal +4); the next dispatch forces
     // a jump if the window continues elsewhere. rd keeps its old value: wrong-path only.
     e->rd = 0;
-    bool tk; uint32_t nx;
+    bool tk; xlen_t nx;
     if (eval_control(pc, inst, st.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; st.pc = nx; }
     else st.pc = pc + 4;
     refcpu_set_state(ctx_, &st);
@@ -200,6 +208,10 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     e->has_undo = true;
     e->undo_addr = wa;
     e->undo_old = refcpu_load_word(ctx_, wa);
+    if (e->f.size == 8) {   // sd / amo*.d: two aligned words
+      e->undo_words = 2;
+      e->undo_old_hi = refcpu_load_word(ctx_, wa + 4);
+    }
   }
 
   refcpu_set_sim_end(ctx_, false);
@@ -215,13 +227,13 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
     e->f.trapped = true;
     e->trap_after.reset(new RefCpuState(after));
     stats.trapped++;
-    if (e->has_undo) refcpu_store_word(ctx_, e->undo_addr, e->undo_old);
+    if (e->has_undo) { refcpu_store_word(ctx_, e->undo_addr, e->undo_old); if (e->undo_words == 2) refcpu_store_word(ctx_, e->undo_addr + 4, e->undo_old_hi); }
     e->has_undo = false;
     // A trap writes only pc, privilege and the trap CSRs; rd is untouched.
     undo_into(&stats, after, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before,
               e->priv_before, e->resv_valid_before, e->resv_addr_before, 0, 0);
     after.pc = pc + 4;
-    { bool tk; uint32_t nx;
+    { bool tk; xlen_t nx;
       if (eval_control(pc, inst, after.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; after.pc = nx; } }
     refcpu_set_state(ctx_, &after);
     e->rd = 0;
@@ -240,7 +252,7 @@ const Fact &Bridge::dispatch(uint64_t uid, uint32_t pc, uint32_t inst) {
   if (e->f.is_br) e->f.br_taken = info.br_taken;
   if (after.store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
     e->f.has_mem_write = true;
-    e->f.mem_waddr = after.store_addr & ~3u;
+    e->f.mem_waddr = after.store_addr & ~3u;   // (debug only: the first word of an 8-byte store)
     e->f.mem_wdata = refcpu_load_word(ctx_, e->f.mem_waddr);
     e->f.mem_old = e->has_undo && e->undo_addr == e->f.mem_waddr ? e->undo_old : e->f.mem_wdata;
   }
@@ -271,7 +283,7 @@ void Bridge::rewind_after(int64_t uid) {
     Entry *e = chain_.back();
     chain_.pop_back();
 #ifndef TB_NEG_NO_STORE_UNDO
-    if (e->has_undo) refcpu_store_word(ctx_, e->undo_addr, e->undo_old);
+    if (e->has_undo) { refcpu_store_word(ctx_, e->undo_addr, e->undo_old); if (e->undo_words == 2) refcpu_store_word(ctx_, e->undo_addr + 4, e->undo_old_hi); }
 #endif
     undo_into(&stats, st, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before, e->priv_before,
               e->resv_valid_before, e->resv_addr_before, e->rd, e->rd_old);
@@ -287,13 +299,13 @@ void Bridge::commit(uint64_t uid) {
   chain_.pop_front();
 }
 
-bool Bridge::patch_rd(uint64_t uid, uint32_t value) {
+bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   Entry *t = nullptr;
   for (auto *e : chain_) if (e->f.uid == uid) { t = e; break; }
   if (!t) return false;
   const uint32_t rd = bits(t->f.inst, 11, 7);
   if (rd == 0) return false;
-  struct Re { uint64_t uid; uint32_t pc, inst; };
+  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; };
   std::vector<Re> younger;
   for (auto *e : chain_) if (e->f.uid > uid) younger.push_back({e->f.uid, e->f.pc, e->f.inst});
   const int64_t saved = stats.rewinds;
@@ -334,7 +346,7 @@ void Bridge::commit_flush(uint64_t uid) {
   while (!chain_.empty()) { delete chain_.front(); chain_.pop_front(); }
 }
 
-bool Bridge::take_interrupt(uint32_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
+bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
   rewind_after(-1);
   stats.rewinds--;
   stats.interrupts++;
@@ -347,7 +359,7 @@ size_t Bridge::kill_older_than(uint64_t uid) {
   while (killed < chain_.size() && chain_[killed]->f.uid != uid) killed++;  // entries before the committing one
   if (killed == chain_.size()) return 0;  // not in the chain
   if (!killed) return 0;
-  struct Re { uint64_t uid; uint32_t pc, inst; };
+  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; };
   std::vector<Re> younger;
   for (size_t i = killed; i < chain_.size(); i++) younger.push_back({chain_[i]->f.uid, chain_[i]->f.pc, chain_[i]->f.inst});
   const int64_t saved = stats.rewinds;

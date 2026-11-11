@@ -2,9 +2,10 @@
 
 #include <cstring>
 
-static inline uint32_t sign_extend_u32(uint32_t value, int bits) {
+// sign-extend a `bits`-wide immediate to the register width (a 32-bit two's-complement value added to a 64-bit pc would carry)
+static inline pc_t sign_extend_u32(uint32_t value, int bits) {
   const uint32_t mask = 1u << (bits - 1);
-  return (value ^ mask) - mask;
+  return static_cast<pc_t>(static_cast<int64_t>(static_cast<int32_t>((value ^ mask) - mask)));
 }
 
 void predecode_seq_read(const struct predecode_in *in,
@@ -19,7 +20,7 @@ void predecode_comb(const predecode_read_data &input, PredecodeResult &output) {
   output.target_address = 0;
 
   const uint32_t inst = input.inst;
-  const uint32_t pc = input.pc;
+  const pc_t pc = input.pc;
   if (inst == 0 || inst == INST_NOP) {
     return;
   }

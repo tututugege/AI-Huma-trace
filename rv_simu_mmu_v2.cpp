@@ -510,7 +510,7 @@ void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
   if (tbhook::enabled) {
     const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
-    const uint32_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
+    const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
                                           : cpu->back.csr->CSR_RegFile_1[csr_scause];
     tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
   }
@@ -597,7 +597,7 @@ void SimCpu::sync_mmio_devices_from_backing() {
 }
 
 // 强制重置前端 PC (用于 FAST 模式切换)
-void SimCpu::restore_pc(uint32_t pc) {
+void SimCpu::restore_pc(pc_t pc) {
   front.in.reset = false;
   front.in.FIFO_read_enable = false;
   // 显式给前端一个重取指请求，并同步后端重定向输出，

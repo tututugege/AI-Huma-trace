@@ -179,7 +179,7 @@ private:
 
   // Latency of an iterative unit: the divider takes DIV_MAX_LATENCY, the FPU by operation.
   int iter_latency(const ExuInst &inst) const {
-    if (kind == FuKind::DIV) return DIV_MAX_LATENCY;
+    if (kind == FuKind::DIV) return div_latency(inst->is_word);
     constexpr int FADD = 0b00000, FSUB = 0b00001, FMUL = 0b00010, FDIV = 0b00011;
     constexpr int FSQRT = 0x2C, FCVT_W_S = 0x60, FCVT_S_W = 0x68;
     constexpr int LAT_FADD = 5, LAT_FMUL = 3, LAT_FDIV = 10, LAT_FCVT = 3;
@@ -224,8 +224,8 @@ private:
   }
 
   static void resolve_branch(ExuInst &inst) {
-    const uint32_t inst_pc = inst->pc;
-    uint32_t pc_br = inst_pc + inst->imm;
+    const xlen_t inst_pc = inst->pc;
+    xlen_t pc_br = inst_pc + static_cast<xlen_t>(static_cast<sxlen_t>(static_cast<int32_t>(inst->imm)));   // (imm is a 32-bit sign-extended immediate)
     bool br_taken = false;
     if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
       if (inst.op == UOP_BR) {
@@ -238,7 +238,7 @@ private:
       br_taken = true;  // killed instruction: no fact, outcome unobservable
     }
     const bool pred_taken = inst->ftq_pred_taken;
-    const uint32_t pred_target = pred_taken ? inst->ftq_next_pc : inst_pc + 4;
+    const xlen_t pred_target = pred_taken ? static_cast<xlen_t>(inst->ftq_next_pc) : inst_pc + 4;
     inst.mispred = !((br_taken && pred_taken && pred_target == pc_br) ||
                      (!br_taken && !pred_taken));
     inst.br_taken = br_taken;

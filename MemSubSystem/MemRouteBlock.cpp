@@ -54,6 +54,8 @@ void MemRouteBlock::comb_response() {
         out.ptw_events->owner = owner;
         // Page table entries are functional memory too.
         out.ptw_events->data = tbhook::mem_read(cur.issued_tags.req_addr);
+        if (XLEN == 64)   // an Sv39 PTE is 8 bytes (aligned): the second word is in the same line
+          out.ptw_events->data |= static_cast<uint64_t>(tbhook::mem_read(cur.issued_tags.req_addr + 4)) << 32;
         out.ptw_events->replay = 0;
         out.ptw_events->req_addr = cur.issued_tags.req_addr;
         out.ptw_events->req_id = cur.issued_tags.req_id;

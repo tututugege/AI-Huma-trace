@@ -1,3 +1,12 @@
+#if __riscv_xlen == 64
+#define REG_S sd
+#define REG_L ld
+#define REG_W .dword
+#else
+#define REG_S sw
+#define REG_L lw
+#define REG_W .word
+#endif
     .equ UART_THR,       0x10000000
     .equ UART_IER,       0x10000001
     .equ UART_IIR,       0x10000002
@@ -12,7 +21,7 @@
     .globl run_supervisor_external_interrupt
 run_supervisor_external_interrupt:
     la t0, external_saved_ra
-    sw ra, 0(t0)
+    REG_S ra, 0(t0)
 
     la t0, external_machine_vector
     .word 0x30529073       # csrw mtvec, t0
@@ -163,10 +172,11 @@ external_machine_vector:
 
 external_machine_resume:
     la t0, external_saved_ra
-    lw ra, 0(t0)
+    REG_L ra, 0(t0)
     ret
 
     .section .bss
     .align 2
+    .balign 8
 external_saved_ra:
-    .word 0
+    REG_W 0

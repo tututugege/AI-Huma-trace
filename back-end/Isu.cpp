@@ -60,9 +60,9 @@ void Isu::comb_begin() {
 }
 
 // Cycles until the result of a uop is available; 1 means fast wakeup (the consumer can issue next cycle).
-int Isu::get_latency(UopType uop, wire<7> func7) {
+int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
   if (uop == UOP_MUL) return MUL_MAX_LATENCY;
-  if (uop == UOP_DIV) return DIV_MAX_LATENCY;
+  if (uop == UOP_DIV) return div_latency(word);
   if (uop != UOP_FP) return 1;
   switch (func7 >> 2) {
   case 0b00000:  // FADD.S
@@ -142,7 +142,7 @@ void Isu::comb_calc_latency_next() {
     const auto &inst = wires->iss2prf.iss_entry[i];
     if (!(inst.valid && inst.uop.dest_en)) continue;
     const UopType op = decode_uop_type(inst.uop.op);
-    const int lat = get_latency(op, inst.uop->func7);
+    const int lat = get_latency(op, inst.uop->func7, inst.uop->is_word);
     if (lat <= 1) continue;
     auto put = [&](auto &e, int countdown) {
       e.valid = true;
@@ -203,7 +203,7 @@ void Isu::comb_awake() {
     const auto &e = wires->iss2prf.iss_entry[i];
     if (!(e.valid && e.uop.dest_en)) continue;
     const UopType op = decode_uop_type(e.uop.op);
-    if (get_latency(op, e.uop->func7) <= 1 && op != UOP_LOAD && op != UOP_STA && fast_ch[i] != -1)
+    if (get_latency(op, e.uop->func7, e.uop->is_word) <= 1 && op != UOP_LOAD && op != UOP_STA && fast_ch[i] != -1)
       drive(fast_ch[i], e.uop.dest_preg, "Fast writeback collision");
   }
 

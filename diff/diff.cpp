@@ -213,11 +213,11 @@ static void checkregs() {
   int i;
   const RefCpuState ref_state = current_ref_state();
   const RefCpuStepInfo step_info = current_step_info();
-  uint32_t ref_csrs[CSR_NUM];
-  uint32_t dut_csrs[CSR_NUM];
+  xlen_t ref_csrs[CSR_NUM];
+  xlen_t dut_csrs[CSR_NUM];
   std::memcpy(ref_csrs, ref_state.csr, sizeof(ref_csrs));
   std::memcpy(dut_csrs, dut_cpu.csr, sizeof(dut_csrs));
-  constexpr uint32_t kAsyncPendingMask = MIP_MTIP | MIP_MEIP | MIP_SEIP;
+  constexpr xlen_t kAsyncPendingMask = MIP_MTIP | MIP_MEIP | MIP_SEIP;
   ref_csrs[csr_mip] &= ~kAsyncPendingMask;
   dut_csrs[csr_mip] &= ~kAsyncPendingMask;
   ref_csrs[csr_sip] = ref_csrs[csr_mip] & 0x00000333u;
@@ -274,12 +274,12 @@ fault:
       static_cast<unsigned long long>(g_diff_total_steps),
       static_cast<unsigned long long>(suggested_fast_forward));
 
-  auto print_mismatch = [](const char *name, uint32_t ref, uint32_t dut) {
-    printf("%10s:\t%08x\t%08x%s\n", name, ref, dut,
+  auto print_mismatch = [](const char *name, uint64_t ref, uint64_t dut) {
+    printf("%10s:\t%08llx\t%08llx%s\n", name, (unsigned long long)ref, (unsigned long long)dut,
            (ref != dut ? "\t Error" : ""));
   };
 
-  printf("        PC:\t%08x\t%08x\n", ref_state.pc, dut_cpu.pc);
+  printf("        PC:\t%08llx\t%08llx\n", (unsigned long long)ref_state.pc, (unsigned long long)dut_cpu.pc);
   printf(" privilege:\t%u\t%u%s\n", ref_state.privilege, dut_privilege,
          (ref_state.privilege != dut_privilege ? "\t Error" : ""));
   cout << "\t\tReference\tDut" << endl;
@@ -299,8 +299,9 @@ fault:
 
   printf("Ref Inst: %08x\tDUT Inst: %08x\n", step_info.instruction,
          dut_cpu.instruction);
-  std::printf("Commit PC: 0x%08x\tDUT next PC: 0x%08x\tREF next PC: 0x%08x\n",
-              dut_cpu.commit_pc, dut_cpu.pc, ref_state.pc);
+  std::printf("Commit PC: 0x%08llx\tDUT next PC: 0x%08llx\tREF next PC: 0x%08llx\n",
+              (unsigned long long)dut_cpu.commit_pc, (unsigned long long)dut_cpu.pc,
+              (unsigned long long)ref_state.pc);
 
   Assert(0 && "Difftest: Register or Memory mismatch detected.");
   exit(1);
@@ -336,12 +337,12 @@ void difftest_sync_ram_from_dut(uint32_t paddr, size_t size) {
               reinterpret_cast<const uint8_t *>(dut_ram) + offset, size);
 }
 
-void difftest_ref_set_next_csr_read(uint32_t csr_addr, uint32_t value) {
+void difftest_ref_set_next_csr_read(uint32_t csr_addr, xlen_t value) {
   ensure_ref_cpu();
   refcpu_set_next_csr_read(ref_cpu_ctx, csr_addr, value);
 }
 
-void difftest_take_interrupt(uint32_t cause, uint8_t target_privilege,
+void difftest_take_interrupt(xlen_t cause, uint8_t target_privilege,
                              uint32_t pending_snapshot) {
   ensure_ref_cpu();
   dut_privilege = target_privilege;

@@ -43,7 +43,7 @@ public:
   void init();
   void sync_mmio_devices_from_backing();
   void reinit_frontend_after_restore();
-  void restore_pc(uint32_t pc);
+  void restore_pc(pc_t pc);
   void cycle();
   void front_comb_before_back();
   void front2back_hold_comb();

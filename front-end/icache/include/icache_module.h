@@ -109,7 +109,7 @@ struct ICache_lookup_in_t {
 struct ICache_regs_t {
   // Registered request context for the current in-flight lookup/fill.
   reg<1> req_valid_r = false;
-  reg<32> req_pc_r = 0;
+  reg<XLEN> req_pc_r = 0;
   reg<ICACHE_INDEX_BITS> req_index_r = 0;
   // Registered frontend acceptance state.
   reg<1> ifu_req_ready_r = true;
@@ -136,7 +136,7 @@ struct ICache_regs_t {
   // Lookup in-flight state (resource state, not SRAM implementation timing).
   reg<1> lookup_pending_r = false;
   reg<ICACHE_INDEX_BITS> lookup_index_r = 0;
-  reg<32> lookup_pc_r = 0;
+  reg<XLEN> lookup_pc_r = 0;
 };
 
 // Generalized-IO note:
@@ -157,7 +157,7 @@ struct ICache_table_write_t {
 
 struct ICache_in_t {
   // Input from the IFU (Instruction Fetch Unit)
-  wire<32> pc = 0;        // Program Counter
+  wire<XLEN> pc = 0;        // Program Counter
   wire<1> ifu_req_valid = false;  // Fetch enable signal
   wire<1> ifu_resp_ready = true;  // actually always true in current design
   wire<1> refetch = false;        // Refetch signal from Top
@@ -187,7 +187,7 @@ struct ICache_out_t {
   wire<1> miss = false;           // Cache miss signal
   wire<1> ifu_resp_valid = false; // Indicates if output data is valid
   wire<1> ifu_req_ready = false;  // Indicates if i-cache is allow to accept next PC
-  wire<32> ifu_resp_pc = 0;    // PC corresponding to ifu_resp
+  wire<XLEN> ifu_resp_pc = 0;    // PC corresponding to ifu_resp
   wire<32> ifu_resp_paddr = 0; // physical address of ifu_resp_pc (the words come from the core's memory)
   wire<1> ifu_page_fault = false;                 // page fault exception signal
   wire<1> ifu_resp_single_word = false; // Uncache response contains only req_pc
@@ -196,7 +196,7 @@ struct ICache_out_t {
   wire<1> ppn_ready = false; // ready to accept PPN
   // MMU request (drive vtag for translation; unify with ICacheV2 top wiring)
   wire<1> mmu_req_valid = false;
-  wire<20> mmu_req_vtag = 0;
+  wire<XLEN - 12> mmu_req_vtag = 0;   // virtual page number
 
   // Output to memory
   wire<1> mem_req_valid = false;    // Memory request signal
@@ -311,7 +311,7 @@ private:
   bool fast_bypass_from_pending = false;
   bool lookup_pending_next = false;
   uint32_t lookup_index_next = 0;
-  uint32_t lookup_pc_next = 0;
+  wire<XLEN> lookup_pc_next = 0;
 
   // Perf bookkeeping is simulator-local state, not architectural/register
   // state of the hardware model. Keep it out of generalized IO/reg structs.

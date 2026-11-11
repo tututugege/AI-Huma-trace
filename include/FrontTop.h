@@ -45,7 +45,7 @@ public:
   void comb_bpu();
   void seq_write_bpu();
   void seq_back2front();
-  void force_back2front_refetch(uint32_t pc);
+  void force_back2front_refetch(pc_t pc);
   void step_bpu();
   void step_oracle();
 

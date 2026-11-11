@@ -140,7 +140,7 @@ inline bool is_load(InstInfo uop) {
 // renamed away: rd takes over rs's physical register, no uop is issued, the ROB entry completes at dispatch.
 inline constexpr bool move_elim_enabled() { return MOVE_ELIM != 0; }
 inline bool is_move_shape(const InstInfo &u) {
-  return decode_inst_type(u->type) == ADD && u->src2_is_imm && u->func3 == 0 && u->imm == 0 && u->src1_en &&
+  return decode_inst_type(u->type) == ADD && u->src2_is_imm && !u->is_word && u->func3 == 0 && u->imm == 0 && u->src1_en &&
          !u->src1_is_pc && u->src1_areg != 0 && u.dest_en && u->dest_areg != 0;
 }
 // After rename: an eliminated move shares its source's physical register.

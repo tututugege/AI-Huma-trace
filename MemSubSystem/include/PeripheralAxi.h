@@ -58,7 +58,7 @@ struct PeripheralAxiState {
   uint32_t addr = 0;
   uint32_t wdata = 0;
   uint8_t func3 = 0;
-  uint32_t rdata = 0;
+  uint64_t rdata = 0;
   uint8_t req_id = 0;
 };
 
