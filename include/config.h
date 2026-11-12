@@ -369,7 +369,7 @@ constexpr int ROB_NUM = CFG_ROB_NUM;
 constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
 // Compact ROB (EXP-028): entries allocated one after another instead of one dispatch group per line, commit takes the
 // longest completed prefix, commit credits from the BPU update / uBTB train queue occupancy (registered). 0 = line ROB.
-// The environment variable ROB_COMPACT=1 also turns it on at run time (model experiments only).
+// (Compile-time only: there is no run-time environment variable for it.)
 #ifndef CFG_ROB_COMPACT
 #define CFG_ROB_COMPACT 1
 #endif
