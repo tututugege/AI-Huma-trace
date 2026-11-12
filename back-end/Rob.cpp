@@ -428,6 +428,7 @@ void Rob::comb_complete() {
     }
     // an instruction can write back several uops (STA/STD): these flags only accumulate
     u.flush_pipe = u.flush_pipe || wb.flush_pipe;
+    u.illegal_inst = u.illegal_inst || wb.illegal_inst;   // F/D: an FP uop found illegal at execute (FS = Off, reserved encoding)
     u.is_mmio = u.is_mmio || wb.is_mmio;
     if (is_branch_uop(wb.op)) {
       u.diag_val = wb.diag_val;
