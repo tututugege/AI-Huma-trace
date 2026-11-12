@@ -236,6 +236,10 @@ void Exu::comb_exec() {
   for (int p = 0; p < ISSUE_WIDTH && cmask; p++) {
     const uint64_t pm = cmask & port_fu_mask[p];
     if (!pm) continue;
+    if (pm & (pm - 1)) {  // two units complete on one port: the later ones wait (the issue stage's completion reservation should prevent it)
+      static struct C { uint64_t n = 0; ~C() { if (n) std::fprintf(stderr, "[EXU] port write-back conflicts=%llu\n", (unsigned long long)n); } } c;
+      c.n++;
+    }
     const int fu = __builtin_ctzll(pm);  // first completing unit in write-back priority order
     FuUnit &winner = units[fu];
     ExuInst u = *cinst[fu];

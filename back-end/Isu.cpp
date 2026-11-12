@@ -7,6 +7,34 @@
 #include <cstring>
 #include <vector>
 
+// Completion-cycle table of the issue ports (EXP-034): a port completes one uop per cycle (one ROB / write-back entry), so the
+// issue stage reserves the cycle in which a granted uop completes and a uop that would collide with an earlier one on the same
+// port stays in the queue (like XiangShan's WbFuBusyTable). WB_RESERVE=0 switches it off (the old behaviour: the loser waits in its unit).
+namespace {
+struct WbBusy {
+  static constexpr int kRing = 64;
+  bool on = [] { const char *e = std::getenv("WB_RESERVE"); return !e || std::atoi(e) != 0; }();
+  uint8_t busy[ISSUE_WIDTH][kRing] = {};
+  uint64_t gated = 0;
+  long long last_cycle = -1;
+  void new_cycle(bool flush) {
+    if (sim_time == last_cycle) return;
+    last_cycle = sim_time;
+    for (int p = 0; p < ISSUE_WIDTH; p++) busy[p][(sim_time - 1) & (kRing - 1)] = 0;
+    if (flush) std::memset(busy, 0, sizeof busy);
+  }
+  bool free(int port, int off) {
+    if (!on) return true;
+    Assert(off >= 1 && off < kRing);
+    if (busy[port][(sim_time + off) & (kRing - 1)]) { gated++; return false; }
+    return true;
+  }
+  void reserve(int port, int off) { if (on) busy[port][(sim_time + off) & (kRing - 1)] = 1; }
+  ~WbBusy() { if (gated) std::fprintf(stderr, "[WB_RESERVE] issue-gated=%llu\n", (unsigned long long)gated); }
+};
+WbBusy g_wb;
+}  // namespace
+
 Isu::Isu(SimContext *context) : ctx(context) {}
 
 void Isu::add_iq(const IssueQueueConfig &cfg) {
@@ -101,20 +129,29 @@ void Isu::comb_enq() {
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::comb_issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
+  g_wb.new_cycle(wires->rob_bcast.flush);
 #if FP
   g_fp_stats.new_cycle(wires->rob_bcast.flush);
-  const auto gate = [this](const Uop &u) {   // reserve the FP register-file write cycle of an FP-writing unit
+#endif
+  const auto gate = [this](const Uop &u, int port) {
     const UopType t = decode_uop_type(u.op);
-    if (!(u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F))) return true;
-    return g_fp_stats.try_reserve(get_latency(t, u->func7, u->is_word));
+    const int lat = get_latency(t, u->func7, u->is_word);
+    const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
+    if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
+#if FP
+    // reserve the FP register-file write cycle of an FP-writing unit
+    if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
+        !g_fp_stats.try_reserve(lat)) return false;
+#endif
+    g_wb.reserve(port, off);
+    return true;
   };
+#if FP
   int fp_reads = 0, std_reads = 0;
 #endif
   for (auto &q : iqs) {
     q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
-#if FP
     q.in.grant_gate = gate;
-#endif
     for (int p = 0; p < ISSUE_WIDTH; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
     q.comb_issue();
     for (int p = 0; p < ISSUE_WIDTH; p++) {
