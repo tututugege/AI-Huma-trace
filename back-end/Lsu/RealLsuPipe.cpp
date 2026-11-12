@@ -1593,7 +1593,8 @@ void RealLsu::comb_check_p() {
   }
   LP_PORT_CHECK(ret, RETIRE_PORTS, "stq_retire");
 
-  if (const char *d = std::getenv("LSU_PIPE_DUMP")) {  // debug aid: dump the queues at one cycle (env = cycle number)
+  static const char *const lsu_dump_env = std::getenv("LSU_PIPE_DUMP");   // (read once: getenv per cycle cost ~2%)
+  if (const char *d = lsu_dump_env) {  // debug aid: dump the queues at one cycle (env = cycle number)
     if ((long long)sim_time == std::atoll(d)) {
       for (int i = 0; i < LDQ_SIZE; i++) {
         const PLdq &l = pnxt.ldq[i];
