@@ -476,8 +476,10 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #ifndef CFG_BR_IQ_ENQ_WIDTH
 #define CFG_BR_IQ_ENQ_WIDTH 5
 #endif
-// F/D (FP=1) issue queue and unit latencies (EXP-030; all of them are starting values to be calibrated).  An FP uop is
-// woken CFG_FP_*_LAT cycles after it issues (the unit is pipelined: one new uop per cycle).
+// F/D (FP=1) issue queue and unit latencies (EXP-030; all of them are starting values to be calibrated).  CFG_FP_*_LAT is the
+// issue-to-issue interval of a dependent uop (what a dependent chain measures: 4 = a dependent fadd.d issues 4 cycles after the
+// previous one).  Like MUL / DIV the delayed wake-up costs one cycle on top of the unit latency, so the model latency used inside
+// (FP_*_LAT below) is CFG - 1 and the minimum is 3.  The units are pipelined (one new uop per cycle) except fdiv / fsqrt.
 #ifndef CFG_FP_IQ_SIZE
 #define CFG_FP_IQ_SIZE 32
 #endif
@@ -505,10 +507,10 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #ifndef CFG_FP_FSQRT_D_LAT
 #define CFG_FP_FSQRT_D_LAT 24
 #endif
-constexpr int FP_FMA_LAT = CFG_FP_FMA_LAT, FP_MISC_LAT = CFG_FP_MISC_LAT, FP_I2F_LAT = CFG_FP_I2F_LAT;
-constexpr int FP_FDIV_S_LAT = CFG_FP_FDIV_S_LAT, FP_FDIV_D_LAT = CFG_FP_FDIV_D_LAT;
-constexpr int FP_FSQRT_S_LAT = CFG_FP_FSQRT_S_LAT, FP_FSQRT_D_LAT = CFG_FP_FSQRT_D_LAT;
-static_assert(FP_FMA_LAT >= 2 && FP_MISC_LAT >= 2 && FP_I2F_LAT >= 2, "FP latencies must be >= 2 (1 would be a fast wake-up)");
+constexpr int FP_FMA_LAT = CFG_FP_FMA_LAT - 1, FP_MISC_LAT = CFG_FP_MISC_LAT - 1, FP_I2F_LAT = CFG_FP_I2F_LAT - 1;
+constexpr int FP_FDIV_S_LAT = CFG_FP_FDIV_S_LAT - 1, FP_FDIV_D_LAT = CFG_FP_FDIV_D_LAT - 1;
+constexpr int FP_FSQRT_S_LAT = CFG_FP_FSQRT_S_LAT - 1, FP_FSQRT_D_LAT = CFG_FP_FSQRT_D_LAT - 1;
+static_assert(FP_FMA_LAT >= 2 && FP_MISC_LAT >= 2 && FP_I2F_LAT >= 2, "CFG_FP_*_LAT must be >= 3 (a model latency of 1 would be a fast wake-up)");
 enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 #define PORT_CFG(mask) {(__COUNTER__ - ISSUE_PORT_COUNTER_BASE - 1), (mask)}
 

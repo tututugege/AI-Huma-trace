@@ -331,6 +331,9 @@ void BackTop::comb_outputs() {
             rob_commit.commit_entry[i].valid);
     if (tbhook::enabled && rob_commit.commit_entry[i].valid &&
         !rob_bcast.interrupt) {
+#if FP
+      if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) csr->fs_dirty_req = true;
+#endif
       tbhook::on_commit(
           (uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }

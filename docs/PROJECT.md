@@ -130,3 +130,30 @@ Not touched since the distillation: MemSubSystem peripherals (PeripheralModel.h,
 - Not handled: `add rd, rs, x0` (the toolchain emits no compressed `c.mv`). A commit with a destination in the same cycle
   as a mispredict asserts in ME mode (the baseline free-list sanity check already treats it as unreachable; never hit in the gate,
   the big programs, Linux or SPEC quick).
+
+## F/D floating point (EXP-030, `FP=1`, rv64 only; branch `exp/fd`, not merged)
+Build: `gmake XLEN=64 FP=1 BUILD_DIR=build64fp REFCPU_LIB=<rv64 FP=1 librefcpu.a>` (the function-model must be built with the same `XLEN=64 FP=1`: `RefCpuState`
+carries `fpr[32]` and `fcsr` then). `FP=0` (default): nothing changes, rv32 gate and the rv64 programs have identical cycles with and without `FP=1` on integer code.
+- **Registers and tags.** Separate FP physical register file (`CFG_FPRF_NUM` 96, 32 architectural), FP RAT / free list / per-branch RAT checkpoints in `Ren`. In the
+  model the physical-register tags are one number space (integer `0..PRF_NUM-1`, FP `FP_TAG_BASE..`; `TAG_NUM`, `PRF_IDX_WIDTH` follow), so issue-queue entries, the
+  dispatch busy table, the wake-up buses and the memory-speculation taint table are unchanged; the RTL has two register files, a domain bit and per-domain wake buses.
+  `UopS` has `dest_fp` / `src{1,2,3}_fp`, `src3_en/areg/preg` (fused multiply-add), `fp_cls`. `InstType::FP` was renamed `FPOP` (the name is the build macro now).
+- **Issue.** New `IQ_FP` (`CFG_FP_IQ_SIZE` 32, enqueue width 4) with a third wake-up matrix; three FP issue ports (FMA+MISC, FMA+MISC, FDIV+MISC; each unit is its own FU
+  so a long divide does not block the others) and `I2F` on integer ports 2 and 3. Units: `UOP_FMA` (fadd/fsub/fmul/fmadd family, pipelined), `UOP_FMISC` (fsgnj,
+  fmin/fmax, fcmp, fclass, fcvt inside FP, FP -> integer moves/conversions, pipelined), `UOP_FDIV` (fdiv/fsqrt, iterative, latency by S/D), `UOP_I2F` (integer -> FP).
+  `CFG_FP_*_LAT` are **dependent-issue intervals** (4 = a dependent fadd.d issues 4 cycles after the previous one; the delayed wake-up costs one cycle on top of the unit
+  latency like MUL/DIV, so the model latency is CFG - 1): FMA 4, MISC 3, I2F 3, fdiv S/D 12/20, fsqrt S/D 14/24 (starting values, not calibrated).
+- **Memory.** `flw/fld` are loads (LD queue, FP destination tag), `fsw/fsd` are STA (integer base) + STD whose data source is an FP tag (all STD ports can take it for now;
+  the plan was port 0 only, open for the RTL). Nothing in the LSU changed.
+- **Traps and status.** What traps (mstatus.FS = Off, reserved rounding mode ...) is the function model's verdict: an executed FP-class uop whose fact says "trapped, cause 2"
+  becomes the illegal-instruction exception (`Fu::fp_trap`); statically reserved encodings trap in decode. mstatus.FS = Dirty / SD and misa F/D are modelled in `Csr`
+  (a committed instruction whose fact says it turned FS to Dirty sets it at the end of the cycle). `csrr`/`csrw` of fflags / frm / fcsr are still NOPs with no
+  serialization (the model computes no values, so a dynamic rounding mode has no effect; fcsr writes dirty FS through the same fact).
+- **Interface.** `Fact` has `rd_is_fp`, `fs_dirty`, `trap_cause`; the bridge decodes opcodes 0x07 / 0x27 (address, size, store data from `fpr`), undoes FP register and fcsr writes,
+  `FastWarm` replays FP loads/stores, checkpoint format 5 (`CPU_state.fpr`, fcsr after it) is read by `BackTopLoad.cpp`.
+- **Checks.** `scripts/fp_check.sh <sim> <workdir>`: the function model's directed FP tests, trap/status test, compiler-generated kernels and the 23 official riscv-tests
+  `rv64uf`/`rv64ud` all run to the end (difftest Success, every instruction committed); `tests/fp/fpmicro.c` micro-benchmarks show the configured latencies (4 dependent fadd.d: 16 cycles,
+  8 independent: 4 cycles = both FMA pipes, dependent fdiv.d 20, fcvt.l.d + addi + fcvt.d.l 7). Small `CFG_FPRF_NUM=36`, `CFG_FP_IQ_SIZE=8`, `CFG_FP_FMA_LAT=8` runs without deadlock
+  (the FP free-list invariant is asserted every cycle). `TB_TRACE_PATCH=1` prints every CSR read the model patches into the function model (0 for the FP tests).
+- **Not done.** Serialized fcsr/frm accesses, FP-domain move elimination, FS-off trap coverage beyond the directed test, RTL, calibrated latencies, an FP workload (PolyBench / SPECfp) for the knobs, `MsData` taint of FP consumers (not modelled).
+

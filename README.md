@@ -12,7 +12,7 @@ Every change must keep the gate's cycle counts (`results/baseline/baseline.csv`)
 merged to main. Project-wide rules (branches, merge procedure, `MAIN_RECORDS.md`, `EXPLORATION.md`, TODO) live in the AI-Huma
 repository that contains the three parts (`docs/WORKFLOW.md`, `docs/GUIDE.md`).
 
-ISA: rv32imab by default; rv64imab since 2026-11-12 (EXP-029, `-DXLEN=64`, see below). Not done for rv64: F/D, C, the SPEC rv64 flow,
+ISA: rv32imab by default; rv64imab since 2026-11-12 (EXP-029, `-DXLEN=64`, see below); F/D on rv64 with `FP=1` (EXP-030, branch `exp/fd`, see docs/PROJECT.md). Not done for rv64: C, the SPEC rv64 flow,
 Sv39 in the FastWarm replay.
 
 ## Documents

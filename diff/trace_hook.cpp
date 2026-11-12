@@ -132,6 +132,12 @@ static void apply_mem_write(const tb::Fact *f) {
   }
 }
 
+bool fs_dirty_at_commit(uint64_t uid) {
+  ensure();
+  const tb::Fact *f = g_bridge->find(uid);
+  return f && f->fs_dirty && !f->trapped && f->blocked == tb::Blocked::None;
+}
+
 void on_commit(uint64_t uid) {
   ensure();
   // Entries older than the committing one that never committed were killed without a rewind (wrong-path stragglers
@@ -186,6 +192,8 @@ void on_exec(const ExecObs &o) {
     if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_mmio_load++; return; }
   }
   if (o.op == UOP_CSR && f->rd_valid && widen_result(o, f->inst) != f->rd_value && f->blocked == tb::Blocked::None && !f->trapped) {
+    if (static const bool tp = std::getenv("TB_TRACE_PATCH") != nullptr; tp)
+      std::fprintf(stderr, "[PATCH] csr read pc=0x%llx inst=0x%08x model=0x%llx function-model=0x%llx\n", (unsigned long long)f->pc, f->inst, (unsigned long long)widen_result(o, f->inst), (unsigned long long)f->rd_value);
     if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_csr_read++; f = g_bridge->find(uid); }
   }
   // The value comparison of P1b only means something while the model still computes values.

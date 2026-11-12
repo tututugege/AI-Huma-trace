@@ -32,6 +32,7 @@
 | `TB_POISON` | 关 | 把时序模型不该读的、模型自己算出的值破坏掉，用来证明时序没有偷读这些值 | 同上 |
 | `TB_RESYNC_REF` | 关 | 用 P1b 的重同步行为（对照用） | 同上 |
 | `TB_TRACE_COMMIT` | 关 | 每条提交打印 `[COMMIT] cyc pc inst rd v`；`rtl/scripts/first_diff.sh` 用它和 RTL 的 `SOC_TB_COMMIT` 找第一处分歧 | 同上 |
+| `TB_TRACE_PATCH` | 关 | `FP=1` 调试：每次模型把自己的 CSR 读值补丁进 function-model 时打印 `[PATCH] csr read pc inst model function-model`（F/D 测试应为 0 次） | 同上 |
 | `TB_TRACE_TRAP` | 关 | 打印每个 trap（`[TRAP] M/S cause epc tval target priv`）和注入给函数模型的中断（`[IRQ]`） | `back-end/Exu/Csr.cpp`、`diff/trace_hook.cpp` |
 | `TB_SAMPLE_PC` | 关 | 设 N：每 N 条提交打印一次 `[SAMPLE] cyc commits pc inst`，看长程序的时间花在哪里 | `diff/trace_hook.cpp` |
 | `TB_PERTURB_BR` | 关 | 阳性对照：每 N 个分支翻转一次分支事实，之后的运行必须和基线不同（验证检查本身有效） | 同上 |

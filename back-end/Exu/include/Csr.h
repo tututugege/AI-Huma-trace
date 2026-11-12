@@ -148,6 +148,7 @@ public:
   reg<XLEN> csr_wdata;
   reg<2> csr_wcmd;
   reg<1> csr_we;
+  bool fs_dirty_req = false;   // F/D: set at commit of an instruction that turned mstatus.FS to Dirty; applied in seq()
 
   wire<XLEN> CSR_RegFile_1[CSR_NUM];
   wire<2> privilege_1 = 0b11;

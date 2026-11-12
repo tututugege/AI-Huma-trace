@@ -10,6 +10,8 @@ extern bool poison;   // TB_POISON=1: corrupt model-computed values that the tim
 extern bool inject;   // TB_INJECT=1: facts drive branch/address/store-data/csr-write decisions
 // Fact of the in-flight instruction in this ROB slot, nullptr if unknown (killed) or inject is off.
 const tb::Fact *fact_by_rob(uint32_t rob_idx);
+// F/D: does the instruction with this bridge uid turn mstatus.FS to Dirty when it commits? (call before on_commit)
+bool fs_dirty_at_commit(uint64_t uid);
 extern uint64_t inject_miss;
 // Functional memory read (instruction words, page-table entries): the core's memory in trace mode.
 uint32_t mem_read(uint32_t paddr);

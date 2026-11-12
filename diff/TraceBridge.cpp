@@ -262,6 +262,9 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
   refcpu_get_step_info(ctx_, &info);
   RefCpuState after{};
   refcpu_get_state(ctx_, &after);
+#if FP
+  e->f.fs_dirty = ((after.csr[7] >> 13) & 3) == 3 && ((st.csr[7] >> 13) & 3) != 3;   // (csr index 7 = mstatus)
+#endif
 
   if (info.is_exception) {
     // Speculative trap: undo at once (state and store), continue at pc+4.
