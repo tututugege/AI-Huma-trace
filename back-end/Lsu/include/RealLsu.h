@@ -165,7 +165,7 @@ public:
     if (pipe) {   // the staged LSU keeps its queues in pcur / pnxt; of the legacy state only these two units are shared
       cur.uncached_unit = nxt.uncached_unit;
       cur.lrsc_unit = nxt.lrsc_unit;
-      pcur = pnxt;
+      seq_pipe();
     } else {
       cur = nxt;
     }
@@ -181,6 +181,7 @@ public:
   int lp_gate = 1;          // DCache read enable qualified by the partial CAM (LSU_PIPE_GATE)
 
   StqEntry get_stq_entry(int idx, bool flag);
+  void seq_pipe();  // pcur = pnxt, copying only the live LDQ / STQ entries (see RealLsuPipe.cpp)
 
 private:
   uint32_t ldq_allocated_ = 0, ldq_empty_ = 0, stq_allocated_ = 0;  // start-of-cycle counts from comb_cal
