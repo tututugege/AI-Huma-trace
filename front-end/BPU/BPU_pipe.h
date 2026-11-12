@@ -1,4 +1,4 @@
-// Pipelined branch predictor (BPU_PIPE); docs/BPU_PIPE.md is the stage-by-stage description the RTL is written from.
+// Pipelined branch predictor (BPU_PIPE); the stage-by-stage description the RTL is written from is rtl/docs/analysis/bpu-pipe-rtl.md.
 //
 //   S0 (1 cycle)   PC register -> uBTB lookup (indexed by fetch-block start) -> next fetch address; speculative history / RAS
 //                  push; index generation for the main predictor; the block's fetch address enters the fetch-address FIFO.

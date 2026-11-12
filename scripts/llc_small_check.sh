@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: llc_small_check.sh <simulator-repo> <baseline-sim-src>
-# The default 8 MiB LLC never evicts in the small tests, so DDR writes / victim write-backs are unexercised by the gate.
+# The default 4 MiB LLC never evicts in the small tests, so DDR writes / victim write-backs are unexercised by the gate.
 # This builds both simulators with a 64 KiB LLC and compares cycle counts on tests that do evict.
 SIM=$1; BASE=$2; T=$(cd "$(dirname "$0")/.." && pwd)
 F="-DCONFIG_AXI_LLC_SIZE_BYTES=65536"
