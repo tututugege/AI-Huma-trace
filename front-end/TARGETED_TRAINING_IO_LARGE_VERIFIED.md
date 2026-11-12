@@ -1,5 +1,7 @@
 # Targeted Training IO Widths (Large, Verified)
 
+> 上游文档（训练 IO 位宽统计），原样保留；`make large` 和 `CONFIG_BPU` 在本仓库已不存在（只有一套配置，见 `include/config.h`），行号和位宽对应当时的代码，仅作参考。
+
 适用范围：
 
 - 配置：`make large`
@@ -46,5 +48,5 @@
 ## 3. 备注
 
 - 本文件用于记录本次 PR 涉及函数在 `large` 配置下的核准位宽。
-- 现有 [TRAINING_FUNCTION_LIST.md](/home/watts/simulator-main-mainline/front-end/TRAINING_FUNCTION_LIST.md) 仍保留旧冻结口径，未在本次 PR 中做全量 large 重算。
+- 现有 [TRAINING_FUNCTION_LIST.md](TRAINING_FUNCTION_LIST.md) 仍保留旧冻结口径，未在本次 PR 中做全量 large 重算。
 - 因此，本次 PR 只以本文件作为目标函数的 `large` 统计依据，避免把未完成全量复核的条目混入同一清单。

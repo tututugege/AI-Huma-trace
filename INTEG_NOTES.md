@@ -1,3 +1,5 @@
+> Historical record of the `exp/integ` merge (2026-11-09; memory speculation EXP-018/020 + front end EXP-019). It is in main; the defaults listed below are still the defaults, but later merges (EXP-024 write buffer, EXP-025 ITT, EXP-027 uncached windows, EXP-028 compact ROB) changed the cycle numbers, so those here are no longer current: see `docs/MAIN_RECORDS.md` and [docs/PROJECT.md](docs/PROJECT.md). Branch names, commit ids and server paths are of that session.
+
 # exp/integ: main (7f8456e) + memory speculation (exp/memspec-refs ef02c4c) + front end (exp/fe-refs b02eaf6)
 
 ## Merge

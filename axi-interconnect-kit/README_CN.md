@@ -69,7 +69,7 @@
 
 `AXI_LLC` 位于 AXI4 interconnect 之后，建模共享统一缓存。
 
-默认配置：
+kit 自身的默认配置（trace-model 在 `include/config.h` 里覆盖：`CONFIG_AXI_LLC_SIZE_BYTES` 4 MiB、16 路、8 个 MSHR、lookup 3；DDR 用 SimDDR 后面的 DRAMsim3，见 `sim_ddr/include/SimDDR_DS3.h`）：
 
 - `8MB`
 - `64B` cache line
@@ -188,7 +188,6 @@
 
 ## 接口文档
 
-- [docs/submodule_architecture_CN.md](docs/submodule_architecture_CN.md)
 - [docs/interfaces.md](docs/interfaces.md)
 - [docs/interfaces_CN.md](docs/interfaces_CN.md)
 - [docs/llc_design_CN.md](docs/llc_design_CN.md)

@@ -1,5 +1,7 @@
 # P0: where the baseline's host time goes (measured)
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 Binary: upstream 2f31e8d, default profile, -O3, macOS arm64, sampled with `sample` (1 ms), get-task-allow signed copy.
 Workloads: timer-mmio (206,120 cycles, 17.3 s; sampled 10 s after 3 s) and matmul_fpu (42,253 cycles; 2 s).
 Raw samples: results/baseline/p0_*.sample.txt.

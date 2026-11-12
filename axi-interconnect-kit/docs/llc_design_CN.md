@@ -57,7 +57,7 @@ upstream read/write masters
 
 ### 3.1 地址与容量
 
-当前默认配置：
+当前默认配置（kit 自身的默认；trace-model 的 `include/config.h` 把容量覆盖为 4 MiB）：
 
 - capacity: `8MB`
 - line size: `64B`

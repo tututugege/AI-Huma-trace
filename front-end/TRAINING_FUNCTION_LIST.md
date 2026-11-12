@@ -1,5 +1,7 @@
 # Front-end Training Function List
 
+> 上游文档，原样保留：行号和位宽对应当时的代码，之后（BPU 流水化、快速通路、紧凑 ROB 的额度信号等）没有重新统计，仅作参考。
+
 适用范围：
 
 - 目录：`front-end/`

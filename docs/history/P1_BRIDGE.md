@@ -1,5 +1,7 @@
 # P1: trace bridge (functional core following the model's dispatch stream)
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 ## Status
 - P1a DONE: src/TraceBridge.{h,cpp} + tests/bridge_selftest.cpp. Uses only the existing librefcpu API (no function-model change).
 - P1b DONE: taps in the model + check mode (TB_CHECK=1), patches/0003-p1b-bridge-check-mode.patch.

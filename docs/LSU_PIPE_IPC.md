@@ -1,5 +1,7 @@
 # LSU_PIPE 对 legacy LSU 的 IPC 差分解（2026-11-07；第 8 节是 lsu-pipe-fix 分支的实施结果，其余是研究阶段的原文）
 
+> **状态说明（2026-11-12）**：本文是 2026-11-07 的研究记录，不随后续合入更新。第 2 节表里的“现默认 CUT=63 L2=115”是当时的默认；main 现在的默认是 CUT=127、DRAIN=2 + 4 项写缓冲（`CFG_LSU_PIPE_WBUF`）、RP=4，并默认开启访存推测（`CFG_LSU_MEMSPEC` 1），见 [LSU_PIPE.md](LSU_PIPE.md) 第 11、12 节和文件头。第 7 节的 `ipc-scratch` 分支、scratchpad 路径和服务器目录是一次性的，可能已不存在；`LSU_PIPE_DRAINSKIP/DRAINCAND/CAMBITS` 等 scratch 分支开关不在 main（main 里对应的是 `LSU_PIPE_DCAND`）。环境变量见 [ENV_VARS.md](ENV_VARS.md)。
+
 范围：30 点 exact-warmup SPEC（同 LSU_PIPE.md 10.1），模型提交 472b937（默认 LSU_PIPE=1 CUT=63 L2=115）。**服务器上重编的 Linux 二进制对 legacy 的周期与 Mac 结果逐点相等**（如 perlbench sp5 3,183,317）。每个配置一次运行（模型确定性）。
 IPC 变化 = cycles(legacy)/cycles(配置) - 1，几何平均。全部数字是 30 点，除非标注“只有 8 点”（x_/y_/z_ 配置）。**主扫描最后几个配置（尾部若干点）在写本文时仍在跑，ALL 列里 n<30 的列已标出；缺失的不影响结论。**
 

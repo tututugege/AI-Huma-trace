@@ -5,8 +5,7 @@
 1. Interconnect 上游接口
 2. 双外部 AXI4 五通道信号
 
-架构总览、地址映射和约束说明见
-[submodule_architecture_CN.md](submodule_architecture_CN.md)。
+架构总览、地址映射和约束说明见本目录 README 和 [llc_design_CN.md](llc_design_CN.md)（上游的 `submodule_architecture_CN.md` 不在这份 vendored 副本里）。
 
 ## 1) Interconnect 上游接口
 

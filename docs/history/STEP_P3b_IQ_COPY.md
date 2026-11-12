@@ -1,5 +1,7 @@
 # P3b: IssueQueue / PreIduQueue double-buffer copies (exact)
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 After P3a the top of stack was still memmove (~20%): IssueQueue vector assigns, PreIduQueue::comb_begin/seq.
 Pattern: committed copy `x` and working copy `x_1`; comb_begin did `x_1 = x`, seq did `x = x_1`, although the two are
 equal at comb_begin (seq just copied them) and a cycle usually changes a few slots.

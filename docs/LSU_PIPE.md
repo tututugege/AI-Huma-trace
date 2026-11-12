@@ -1,11 +1,18 @@
 # LSU_PIPE: staged load/store unit prototype (trace-model; experiment branch exp/lsu-pipe, merged into main as lsu-pipe-main, EXP-014)
 
+> **Status (2026-11-12).** The staged LSU is the default LSU of main (EXP-014, 2026-11-07), with later changes merged: IPC fixes (section 11), memory-dependence
+> speculation `CFG_LSU_MEMSPEC` 1 with the value path `CFG_LSU_MS_DATA` 1 (EXP-018/019/020, `MS_DATA_NOTES.md`; so the "non-speculative load policy" and "no flush-from-load channel" remarks below
+> describe the first version) and the store write buffer (section 12, EXP-024). **Current defaults** (`include/config.h`): `CFG_LSU_PIPE` 1, `CFG_LSU_PIPE_CUT` 127, `CFG_LSU_PIPE_L2` 115,
+> `CFG_LSU_PIPE_DRAIN` 2, `_DCAND` 4, `_RP` 4, `_WBUF` 4, `_WBMAX` 2, `_WBINS` 4, `_WBSCAN` 4. Statements about "default 0 / default off" in sections 6-7 and 9-10 are the state of those
+> stages, not of main. The document is chronological (analysis, specification, results per stage), the sections are not rewritten when later ones change a default.
+> When comparing cycles with the RTL set `LSU_PIPE_NOWD=1` (the RTL has no 63-cycle watchdog). All environment variables: [ENV_VARS.md](ENV_VARS.md).
+
 Purpose: the C++ model is the prototype of the RTL. `back-end/Lsu/RealLsu.cpp` (legacy) is queue-centric; its RTL translation
 (`rtl/docs/modules/lsu.md`) is one combinational chain per cycle. This document (1) records the analysis of the legacy
 design (Step 0), (2) specifies the staged replacement implemented in `back-end/Lsu/RealLsuPipe.cpp` /
-`include/RealLsuPipe.h`, and (3) lists the model approximations. The RTL is to be written from sections 2-4.
+`back-end/Lsu/include/RealLsuPipe.h`, and (3) lists the model approximations. The RTL is to be written from sections 2-4.
 
-Switch: `CFG_LSU_PIPE` (config.h, default 1 in main since 2026-11-07; env `LSU_PIPE=0` selects the legacy LSU for regression; cut masks `CFG_LSU_PIPE_CUT` 127 (was 63 before section 11: + bit 64 FM) and `CFG_LSU_PIPE_L2` 115, env `LSU_PIPE_CUT` / `LSU_PIPE_L2`; since section 11 also `CFG_LSU_PIPE_DRAIN` 3 / `CFG_LSU_PIPE_DCAND` 4 / `CFG_LSU_PIPE_RP` 4, env `LSU_PIPE_DRAIN` / `LSU_PIPE_DCAND` / `LSU_PIPE_RP`). The text below was written while the switch was off by default; "default OFF / cycle-identical to main" statements describe the experiment branch. Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay registers 1..4 [4 since section 11; was 1..2 [2]],
+Switch: `CFG_LSU_PIPE` (config.h, default 1 in main since 2026-11-07; env `LSU_PIPE=0` selects the legacy LSU for regression; cut masks `CFG_LSU_PIPE_CUT` 127 (was 63 before section 11: + bit 64 FM) and `CFG_LSU_PIPE_L2` 115, env `LSU_PIPE_CUT` / `LSU_PIPE_L2`; since section 11 also `CFG_LSU_PIPE_DRAIN` 3 (2 since section 12, with the write buffer) / `CFG_LSU_PIPE_DCAND` 4 / `CFG_LSU_PIPE_RP` 4, env `LSU_PIPE_DRAIN` / `LSU_PIPE_DCAND` / `LSU_PIPE_RP`). The text below was written while the switch was off by default; "default OFF / cycle-identical to main" statements describe the experiment branch. Other env knobs (all runtime, defaults in brackets): `LSU_PIPE_RP` replay registers 1..4 [4 since section 11; was 1..2 [2]],
 `LSU_PIPE_GATE` DCache read enable qualified by the partial CAM [1], `LSU_PIPE_BOUNCE=n` aging bounce of a new load by a replay register
 that waited n cycles [0 = off], `LSU_PIPE_STATS=1` prints the counters at exit, `LSU_PIPE_DUMP=<cycle>` debug dump.
 Port counts come from `config.h` (`CFG_LD_PORTS` 4, `CFG_STA_PORTS` 3, `CFG_STD_PORTS` 3, LDQ 64, STQ 64).
@@ -184,7 +191,7 @@ Pointers: head+flag, count, ccount (committed, not retired), commit pointer.
   Flushed or failed-SC stores become `suppress+done`.
 * Memory-order check at STA arrival: CAM over the 64 LDQ entries, partial address: a younger load (store rank < load's older-count)
   in `DCW`/`WBP` (already read the cache / forwarded) with overlapping page offset is a violation -> replay (`RDY`) and a counter.
-  With the default (non-speculative) load policy no load passes an unknown-address older store, so the counter must stay 0. A
+  With the first-version (non-speculative, `LSU_MEMSPEC=0`) load policy no load passes an unknown-address older store, so the counter must stay 0. A
   flush-from-load channel to the ROB does not exist in the model; see approximations.
 * Drain (`comb_lsu2dcache_stq_p`): over the committed, not done, not in flight stores oldest-first (rotate by head), at most
   `DRAIN_PORTS`=2 per cycle. A store is blocked while an older committed, not done store overlaps its bytes (CAM over the STQ:
@@ -286,7 +293,7 @@ ungated DCache read 184.9k vs 172.9k cycles (wasted bank slots), replay-register
 ### 4.4 Not verified / open
 * gcc sp42 loses 22% (0.78) in both LD4 and LD3; cause not analysed (candidates: replay bandwidth with no priority over new loads, CONFLICT replays, store drain 2 ports).
 * The 6-bit watchdog is still in the code (default on, `LSU_PIPE_NOWD=1` turns it off); with the fix it never fires on the 30 points.
-* Memory-order speculation and the flush-from-load channel to the ROB do not exist; the violation CAM is implemented but only a detector.
+* (At that time:) memory-order speculation and the flush-from-load channel to the ROB did not exist; both are in main since EXP-018/019 (`CFG_LSU_MEMSPEC` 1).
 * No timing synthesis; compare widths/entries in section 1.3 are structural estimates. Stats counters, TMA `miss` and debug dumps are model-only.
 * LD 1/2 ports, RP=1, GATE=0, BOUNCE were not run on the SPEC set.
 

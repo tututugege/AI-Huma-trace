@@ -1,5 +1,7 @@
 # P3a: LLC register state copy (exact)
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 Finding (P0, docs/history/P0_PROFILE.md): ~68% of host time was memmove in AXI_LLC::comb / AXI_Interconnect::seq.
 Cause (measured): the AXI subsystem ticks CONFIG_AXI_SUBSYSTEM_FREQ_DIV=16 times per core cycle; per core cycle
 AXI_LLC::comb ran 32x and seq 16x (counted: 121,760 / 60,880 over 3,805 cycles of timer-interrupt-mask).

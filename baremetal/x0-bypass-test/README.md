@@ -33,7 +33,7 @@ The runner saves logs under `build/run-*`, requires a clean EBREAK with code 0,
 and returns nonzero for mismatches, failed checks or timeouts. It does not
 rebuild the simulator or overwrite `baremetal/memory`.
 
-Run direct host-side tests of `RealLsu::comb_stlf()` with the native C++ compiler:
+Direct host-side tests of `RealLsu::comb_stlf()` (the legacy LSU, `back-end/Lsu/RealLsu.cpp`, used with `LSU_PIPE=0`; the default staged LSU `RealLsuPipe.cpp` is covered only by the whole-simulator cases above). **Stale:** this target no longer builds (the Makefile names the removed `RealLsuPerf.cpp`, and `stlf-unit.cpp` uses `LsuState` members that no longer exist); it needs porting to the current `RealLsu.h` before use:
 
 ```sh
 make -C baremetal/x0-bypass-test host-test

@@ -5,8 +5,8 @@ This document lists:
 1. Interconnect upstream interfaces
 2. Dual external AXI4 channel signals
 
-For the current architecture diagram and constraints, see
-[submodule_architecture_CN.md](submodule_architecture_CN.md).
+For the architecture overview see the README of this directory and [llc_design_CN.md](llc_design_CN.md)
+(the upstream `submodule_architecture_CN.md` is not part of this vendored copy).
 
 ## 1) Interconnect Upstream Interfaces
 

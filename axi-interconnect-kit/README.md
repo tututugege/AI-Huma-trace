@@ -76,7 +76,7 @@ Terminology used in this repository:
 
 `AXI_LLC` sits behind the AXI4 interconnect and models a shared unified cache.
 
-Default configuration:
+Default configuration of the kit itself (the trace-model overrides it in `include/config.h`: `CONFIG_AXI_LLC_SIZE_BYTES` 4 MiB, 16 ways, 8 MSHRs, lookup 3; its DDR is DRAMsim3 behind SimDDR, `sim_ddr/include/SimDDR_DS3.h`):
 
 - `8MB`
 - `64B` line
@@ -201,7 +201,6 @@ Validated toolchains:
 
 ## Interface Documentation
 
-- [docs/submodule_architecture_CN.md](docs/submodule_architecture_CN.md)
 - [docs/interfaces.md](docs/interfaces.md)
 - [docs/interfaces_CN.md](docs/interfaces_CN.md)
 - [docs/llc_design_CN.md](docs/llc_design_CN.md)

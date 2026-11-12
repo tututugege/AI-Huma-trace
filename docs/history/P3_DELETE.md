@@ -1,5 +1,7 @@
 # P3: deleting the value datapath
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 Order is by evidence (P0 profile + poison control), not by size. Every step: 56/56 cycle counts equal to baseline,
 fact misses 0, csr_read patches only for mip/time (2 in timer-interrupt-mask). With facts mandatory the model runs
 without difftest (main.cpp sets disable_difftest when the bridge is on); check mode (TB_CHECK, P1b) is the pre-P3

@@ -1,5 +1,7 @@
 # P2a: facts drive the model's timing-relevant decisions (TB_INJECT=1)
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 The model's own value computation is still there; these points no longer read it when a fact exists:
 | point | fact | n over 56 tests |
 |---|---|---|

@@ -1,5 +1,7 @@
 # Distillation plan: execution-driven model -> trace-driven timing model
 
+> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+
 Goal: a standalone timing model, cycle-identical to the execution-driven baseline on the gate set, much faster.
 Later: generated RTL + this model, so the event/fact interface must not depend on the old model's internals.
 

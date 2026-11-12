@@ -1,5 +1,7 @@
 # Front-end exploration notes (branch exp/frontend, trace-model only)
 
+> Historical record (EXP-019/023). Status 2026-11-12: `FE_RFAST=15` is the default of main (`CFG_FE_RFAST` 15), `FE_BFAST` stays 0 (`CFG_FE_BFAST`); `FE_PAIR` and `FE_IPF` (with `FE_IPF_LAT`) are run-time switches, default off, not in the RTL; `FE_DIAG`, `FE_TRACE`, `FE_FUSE_DIAG` are diagnostics. All variables: [docs/ENV_VARS.md](docs/ENV_VARS.md). The `main cefaee4` baseline, the cycle numbers and the 63-test gate below are those of that time (the gate is 64 tests and the baseline was regenerated several times since).
+
 Baseline = main cefaee4 (PF_ENABLE=1 PMU=1, precise warm-up, 10M + 10M, points in scripts/pf/points_fe.lst, 25 points).
 Raw results: ~/personal/AI-Huma-data/frontend/srv/<tag> (server runs under /root/fe/res), comparison script
 ~/personal/AI-Huma-data/frontend/cmp.py (`python3 -I cmp.py <tag>`). Baselines: iqenq_local/p30_C (identical cycles to a local run of this

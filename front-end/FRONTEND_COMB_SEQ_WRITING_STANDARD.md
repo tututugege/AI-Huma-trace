@@ -6,7 +6,7 @@
 - `icache` 模块通过其声明的接口（`icache_seq_read`, `icache_comb_calc`, `icache_seq_write`）被顶层调用，其内部实现不在本规范范围内
 - 目标对象：所有参与前端重构、维护、训练数据提取、训练清单统计的开发者/Codex
 
-关联手册：
+关联手册（上游文档，不在本仓库）：
 - `FRONTEND_COMB_SEQ_REQUIREMENTS_MANUAL.md`
 - `FRONTEND_TOPLEVEL_TRAINING_MANUAL.md`
 

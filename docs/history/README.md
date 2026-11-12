@@ -1,0 +1,2 @@
+> **Note (2026-11-12).** The documents in this directory describe the 2026-11-04 distillation of the execution-driven model into the trace-driven model (steps P0-P3). They are historical records of that migration (gate of 56 tests, patch numbers, `TB_INJECT`, AXI divider 16, paths such as `src/TraceBridge.*` and `patches/`) and may be outdated: file locations, defaults, test counts and cycle numbers have changed since. For the current state see [../PROJECT.md](../PROJECT.md), [../ENV_VARS.md](../ENV_VARS.md) and the repository README.
+

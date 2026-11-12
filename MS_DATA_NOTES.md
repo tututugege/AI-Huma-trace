@@ -1,3 +1,5 @@
+> Historical record (EXP-020), merged into main with the memory speculation. Status 2026-11-12: `CFG_LSU_MS_DATA` is 1 by default (the "default 0" below was the branch state; env `LSU_MS_DATA` overrides, bit mask as described in section 2), the value path needs `LSU_MEMSPEC` 1 (default). `scripts/ref_cycles_memspec.txt` and `tests/ubench` named below were on the branch and are not in this repository; the RTL's cycle table is `scripts/ref_cycles.txt` in the rtl repository. Variables: [docs/ENV_VARS.md](docs/ENV_VARS.md).
+
 # EXP-020: value path of the memory-speculation window (trace-model branch exp/ms-data, from exp/memspec-refs 40ed5bc)
 
 Goal: model cycles = RTL cycles with `LSU_MEMSPEC=1`, without touching the microarchitecture or the RTL. The model is oracle driven (values are facts
