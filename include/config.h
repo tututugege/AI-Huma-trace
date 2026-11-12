@@ -376,7 +376,7 @@ inline unsigned lsu_pipe_env_mask(const char *name, unsigned dflt) {
   const char *e = std::getenv(name);
   return e && e[0] ? (unsigned)std::atoi(e) : dflt;
 }
-constexpr int CSR_NUM = 21;
+constexpr int CSR_NUM = FP ? 22 : 21;   // F/D: + the fcsr register (fflags / frm / fcsr)
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;
 #ifndef CFG_ROB_NUM

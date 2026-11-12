@@ -10,6 +10,9 @@
 #define CSR_C 0b11
 
 enum enum_number_csr_code {
+  number_fflags = 0x001,   // F/D: fflags / frm / fcsr are three views of one register (value-free here)
+  number_frm = 0x002,
+  number_fcsr = 0x003,
   number_mtvec = 0x305,
   number_mepc = 0x341,
   number_mcause = 0x342,
@@ -57,6 +60,7 @@ enum enum_csr {
   csr_satp,
   csr_mhartid,
   csr_misa,
+  csr_fcsr,   // F/D (CSR_NUM = 22)
 };
 
 inline int cvt_number_to_csr(int csr_idx) {
@@ -103,6 +107,10 @@ inline int cvt_number_to_csr(int csr_idx) {
     return csr_mhartid;
   case number_misa:
     return csr_misa;
+  case number_fflags:
+  case number_frm:
+  case number_fcsr:
+    return csr_fcsr;
   case number_time:
   case number_timeh:
     std::fprintf(stderr,

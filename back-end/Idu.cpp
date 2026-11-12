@@ -164,8 +164,8 @@ void Idu::seq() {
 
 namespace {
 // CSRs the core implements; accessing any other one raises an illegal-instruction exception (like the function model:
-// OpenSBI probes menvcfg / mcounteren / stimecmp / ... by trapping, and must see them absent). The floating-point CSRs
-// are executed by the function model but have no timing effect here, so they stay NOPs.
+// OpenSBI probes menvcfg / mcounteren / stimecmp / ... by trapping, and must see them absent). F/D: fflags / frm / fcsr
+// are real CSR instructions (serialised like the others: the RTL keeps fflags in the CSR file, accrued at commit).
 bool is_known_csr(uint32_t c) {
   switch (c) {
   case number_mtvec: case number_mepc: case number_mcause: case number_mie: case number_mip: case number_mtval:
@@ -173,6 +173,8 @@ bool is_known_csr(uint32_t c) {
   case number_stvec: case number_scause: case number_sscratch: case number_stval: case number_sstatus:
   case number_sie: case number_sip: case number_satp: case number_mhartid: case number_misa:
     return true;
+  case number_fflags: case number_frm: case number_fcsr:
+    return FP != 0;
   default:
     return false;
   }
@@ -279,7 +281,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     if ((f3 & 0b001) || (f3 & 0b010)) {
       if (!is_known_csr(csr)) {
         set(false, false, false, NOP);
-        if (csr < 0x001 || csr > 0x003) uop.illegal_inst = true;   // not fflags / frm / fcsr
+        uop.illegal_inst = true;
       } else {
         set(true, true, !uop->src2_is_imm, CSR);
         uop->imm = ra;  // zimm for the immediate forms

@@ -235,7 +235,8 @@ private:
     const UopType op = inst.op;
     const bool fpq = op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F;
     const bool fpmem = (op == UOP_LOAD || op == UOP_STA || op == UOP_STD) && (inst->dest_fp || inst->src2_fp);
-    if (!fpq && !fpmem) return;
+    const bool fpcsr = op == UOP_CSR && inst->csr_idx >= 1 && inst->csr_idx <= 3;   // fflags / frm / fcsr: illegal while FS = Off
+    if (!fpq && !fpmem && !fpcsr) return;
     const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
     if (f && f->trapped && f->blocked == tb::Blocked::None && f->trap_cause == 2) inst.illegal_inst = true;
   }
