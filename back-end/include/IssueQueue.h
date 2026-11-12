@@ -68,6 +68,9 @@ private:
   int dispatch_width;
   std::vector<PortBinding> ports;
   int wake_words_per_row;
+public:
+  int port_lo = 0, port_hi = 0;   // the queue's physical issue ports are [port_lo, port_hi)
+private:
 
   std::vector<IqStoredEntry> entry;
   std::vector<IqStoredEntry> entry_1;
@@ -86,6 +89,7 @@ private:
   bool entry_dirty = false;
   bool entry_all_dirty = false;
   std::vector<uint64_t> slot_dirty;
+  std::vector<uint64_t> vmask_1;     // bit i = entry_1[i].valid (working copy), so scans visit only the live slots
   std::vector<uint64_t> ready_bits;  // valid && is_ready(entry[i]) for the committed copy, refreshed in seq()
   void refresh_ready(int i) {
     const uint64_t bit = 1ull << (i & 63);
@@ -123,10 +127,15 @@ public:
   IssueQueue(const IssueQueueConfig &cfg)
       : size(cfg.size), dispatch_width(cfg.dispatch_width), // <--- 初始化
         ports(cfg.ports) {
+    if (!ports.empty()) {
+      port_lo = port_hi = ports[0].port_idx;
+      for (const auto &pb : ports) { port_lo = std::min(port_lo, pb.port_idx); port_hi = std::max(port_hi, pb.port_idx + 1); }
+    }
     entry.resize(size);
     entry_1.resize(size);
     slot_dirty.assign((size + 63) / 64, 0);
     ready_bits.assign((size + 63) / 64, 0);
+    vmask_1.assign((size + 63) / 64, 0);
     count = 0;
     count_1 = 0;
     wake_words_per_row = (size + 63) / 64;
@@ -152,24 +161,16 @@ public:
 #endif
     count_1 = count;
     out.free_slots = size - count;
-    for (auto &grant : out.issue_grants) {
-      grant.valid = false; // comb_issue() clears the payload before filling it
+    if (grants_live) {   // the grants are all-zero unless the last comb_issue() filled one
+      for (auto &grant : out.issue_grants) grant = {};
+      grants_live = false;
     }
-    for (int i = 0; i < WAKE_CH_ALL; i++) {
-      in.wake_pregs[i] = 0;
-      in.wake_valid[i] = 0;
-    }
+    // (the wake-up inputs, the enqueue requests and the FU ready masks are written by the Isu phases every cycle before they are read)
     in.issue_block = 0;
     in.flush_all = 0;
     in.flush_br = 0;
     in.flush_br_mask = 0;
     in.clear_mask = 0;
-    for (auto &req : in.enq_reqs) {
-      req.valid = false; // the uop payload is only read when valid
-    }
-    for (int i = 0; i < ISSUE_WIDTH; i++) {
-      in.port_fu_ready_mask[i] = 0;
-    }
   }
 
   void comb_enq() {
@@ -184,11 +185,17 @@ public:
   }
 
   void comb_wakeup() {
-    for (int i = 0; i < WAKE_CH_ALL; i++) {
-      if (!in.wake_valid[i]) {
-        continue;
-      }
-      uint32_t preg = in.wake_pregs[i];
+    uint32_t pregs[WAKE_CH_ALL];
+    int n = 0;
+    for (int i = 0; i < WAKE_CH_ALL; i++)
+      if (in.wake_valid[i]) pregs[n++] = in.wake_pregs[i];
+    wakeup(pregs, n);
+  }
+
+  // The registers woken this cycle (the valid channels of the wake-up bus, in channel order).
+  void wakeup(const uint32_t *pregs, int n) {
+    for (int i = 0; i < n; i++) {
+      uint32_t preg = pregs[i];
       if (preg >= TAG_NUM) {
         continue;
       }
@@ -315,52 +322,55 @@ private:
   int enqueue(const IqStoredEntry &inst) {
     if (count_1 >= size)
       return 0;
-    for (int i = 0; i < size; i++) {
-      if (!entry_1[i].valid) {
+    for (size_t w = 0; w < vmask_1.size(); w++) {   // lowest free slot
+      const uint64_t freebits = ~vmask_1[w];
+      if (!freebits) continue;
+      const int i = int(w * 64) + __builtin_ctzll(freebits);
+      if (i >= size) break;
 #ifndef IQ_NEG_CONTROL
-        mark_slot(i);
+      mark_slot(i);
 #endif
-        entry_1[i] = inst;
-        entry_1[i].valid = true;
-        set_dep_bits_for_slot(entry_1[i], i);
+      entry_1[i] = inst;
+      entry_1[i].valid = true;
+      vmask_1[w] |= 1ull << (i & 63);
+      set_dep_bits_for_slot(entry_1[i], i);
 
-        count_1++;
-        return 1;
-      }
+      count_1++;
+      return 1;
     }
     return 0;
   }
 
   // Flush
   void flush_br(wire<BR_MASK_WIDTH> br_mask) {
-    for (int i = 0; i < size; i++) {
-      if (!entry_1[i].valid) {
-        continue;
-      }
-      bool match_mask = (entry_1[i].uop.br_mask & br_mask) != 0;
-      if (match_mask) {
+    for (size_t w = 0; w < vmask_1.size(); w++)
+      for (uint64_t m = vmask_1[w]; m; m &= m - 1) {
+        const int i = int(w * 64) + __builtin_ctzll(m);
+        if ((entry_1[i].uop.br_mask & br_mask) == 0) continue;
         clear_dep_bits_for_slot(entry_1[i], i);
         entry_1[i].valid = false;
+        vmask_1[w] &= ~(1ull << (i & 63));
         mark_slot(i);
         count_1--;
       }
-    }
   }
 
   // Clear resolved branch bits from surviving entries
   void clear_br(wire<BR_MASK_WIDTH> clear_mask) {
     if (clear_mask == 0) return;
-    for (int i = 0; i < size; i++) {
-      if (entry_1[i].valid) {
+    for (size_t w = 0; w < vmask_1.size(); w++)
+      for (uint64_t m = vmask_1[w]; m; m &= m - 1) {
+        const int i = int(w * 64) + __builtin_ctzll(m);
+        if ((entry_1[i].uop.br_mask & clear_mask) == 0) continue;   // unchanged entries need no copy at seq()
         entry_1[i].uop.br_mask &= ~clear_mask;
         mark_slot(i);
       }
-    }
   }
 
   void flush_all() {
     for (auto &e : entry_1)
       e.valid = false;
+    std::fill(vmask_1.begin(), vmask_1.end(), 0);
     entry_dirty = true;
     entry_all_dirty = true;
     matrix_all_dirty = true;
@@ -378,6 +388,7 @@ private:
       if (entry_1[idx].valid) {
         clear_dep_bits_for_slot(entry_1[idx], idx);
         entry_1[idx].valid = false;
+        vmask_1[idx >> 6] &= ~(1ull << (idx & 63));
         mark_slot(idx);
         count_1--;
       }

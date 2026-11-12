@@ -78,6 +78,7 @@ void Isu::init() {
     }
     add_iq(cfg);
   }
+  for (auto &q : iqs) q.in.grant_gate = [this](const Uop &u, int port) { return grant_gate(u, port); };
 }
 
 // Working copies already equal the registered state (seq() copies them back); each IQ resets its default IO.
@@ -126,6 +127,21 @@ void Isu::comb_enq() {
   }
 }
 
+// Extra grant conditions of a pick: its completion cycle on the port is free (EXP-035), and the FP register-file write cycle of an
+// FP-writing unit (EXP-032). The reservations are made here, only for a grant that is about to be made.
+bool Isu::grant_gate(const Uop &u, int port) {
+  const UopType t = decode_uop_type(u.op);
+  const int lat = get_latency(t, u->func7, u->is_word);
+  const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
+  if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
+#if FP
+  if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
+      !g_fp_stats.try_reserve(lat)) return false;
+#endif
+  g_wb.reserve(port, off);
+  return true;
+}
+
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::comb_issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
@@ -133,28 +149,14 @@ void Isu::comb_issue() {
 #if FP
   g_fp_stats.new_cycle(wires->rob_bcast.flush);
 #endif
-  const auto gate = [this](const Uop &u, int port) {
-    const UopType t = decode_uop_type(u.op);
-    const int lat = get_latency(t, u->func7, u->is_word);
-    const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
-    if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
-#if FP
-    // reserve the FP register-file write cycle of an FP-writing unit
-    if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
-        !g_fp_stats.try_reserve(lat)) return false;
-#endif
-    g_wb.reserve(port, off);
-    return true;
-  };
 #if FP
   int fp_reads = 0, std_reads = 0;
 #endif
   for (auto &q : iqs) {
     q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
-    q.in.grant_gate = gate;
-    for (int p = 0; p < ISSUE_WIDTH; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
+    for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
     q.comb_issue();
-    for (int p = 0; p < ISSUE_WIDTH; p++) {
+    for (int p = q.port_lo; p < q.port_hi; p++) {
       const auto &grant = q.out.issue_grants[p];
       if (!grant.valid) continue;
       Assert(!wires->iss2prf.iss_entry[p].valid);
@@ -293,13 +295,12 @@ void Isu::comb_awake() {
         bus[early_base + i].preg = wires->lsu_awake.wake[i].preg;
       }
   }
-  for (auto &q : iqs) {
-    for (int i = 0; i < WAKE_CH_ALL; i++) {
-      q.in.wake_valid[i] = bus[i].valid;
-      q.in.wake_pregs[i] = bus[i].preg;
-    }
-    q.comb_wakeup();
-  }
+  uint32_t woken[WAKE_CH_ALL];
+  int n_woken = 0;
+  for (int i = 0; i < WAKE_CH_ALL; i++)
+    if (bus[i].valid) woken[n_woken++] = bus[i].preg;
+  if (n_woken)
+    for (auto &q : iqs) q.wakeup(woken, n_woken);
 }
 
 // Speculative load wake-up of the previous cycle was wrong (before the select of this cycle): woken entries wait again.

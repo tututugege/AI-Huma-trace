@@ -1622,12 +1622,12 @@ void RealLsu::comb_check_p() {
   // DCache response watchdog: a request whose response never arrives (lost bank-retry latch in the DCache) is replayed
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
-    if (e.st != L_DCW) { e.wd = 0; continue; }
+    if (e.st != L_DCW) { if (e.wd) e.wd = 0; continue; }   // (no store to an idle entry: it would dirty the line every cycle)
     if (++e.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] load ldq=%d stuck in DCW at cycle %lld\n", i, (long long)sim_time); } else { e.wd = 0; e.st = L_RDY; g_st.wd_ld++; } }
   }
   for (int j = 0; j < STQ_SIZE; j++) {
     PStq &t = pnxt.stq[j];
-    if (!t.iss) { t.wd = 0; continue; }
+    if (!t.iss) { if (t.wd) t.wd = 0; continue; }
     if (++t.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] store stq=%d stuck issued at cycle %lld\n", j, (long long)sim_time); } else { t.wd = 0; t.iss = 0; t.rwait = 0; g_st.wd_st++; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } } }
   }
   if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
