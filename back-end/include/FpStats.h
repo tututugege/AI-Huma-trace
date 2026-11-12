@@ -1,5 +1,5 @@
 // F/D register-file port statistics and the FP write-port limit (EXP-032), printed at exit.
-//   FP_WB_PORTS=<n> (env; 0 = unlimited, the default): at most n FP-register writes of the pipelined / iterative FP units (FMA, MISC with an FP
+//   FP_WB_PORTS=<n> (env; default 2, 0 = unlimited): at most n FP-register writes of the pipelined / iterative FP units (FMA, MISC with an FP
 //   destination, FDIV, I2F) per cycle.  The write cycle is known at issue (the unit latency), so the issue stage reserves it in a
 //   busy table (like XiangShan's WbFuBusyTable) and a uop that finds the cycle full stays in the issue queue.  FP loads write
 //   through the LSU and are only counted.
@@ -14,7 +14,7 @@ extern long long sim_time;
 
 struct FpStats {
   static constexpr int kRing = 64, kHist = 16;
-  int ports = [] { const char *e = std::getenv("FP_WB_PORTS"); return e ? std::atoi(e) : 0; }();
+  int ports = [] { const char *e = std::getenv("FP_WB_PORTS"); return e ? std::atoi(e) : 2; }();
   uint8_t busy[kRing] = {};
   uint64_t wb_hist[kHist] = {};       // FU writes to the FP register file per cycle
   uint64_t ld_hist[kHist] = {};       // FP load write-backs per cycle (cycles with at least one)

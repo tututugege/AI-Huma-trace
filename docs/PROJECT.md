@@ -158,7 +158,7 @@ rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers r
 - **Not done.** Serialized fcsr/frm accesses, FP-domain move elimination, FS-off trap coverage beyond the directed test, RTL, calibrated latencies, an FP workload (PolyBench / SPECfp) for the knobs, `MsData` taint of FP consumers (not modelled).
 
 ### FP register-file port study (EXP-032, branch `exp/fp-wb`)
-`FP_WB_PORTS=<n>` (env, 0 = unlimited, default): at most n FP-register writes per cycle from the FP units (FMA, MISC with an FP destination, FDIV, I2F). The write cycle is known at issue
+`FP_WB_PORTS=<n>` (env, default 2, 0 = unlimited): at most n FP-register writes per cycle from the FP units (FMA, MISC with an FP destination, FDIV, I2F). The write cycle is known at issue
 (`issue + latency`), so `Isu::comb_issue` reserves it in a busy table (`back-end/include/FpStats.h`, like XiangShan's WbFuBusyTable; an `IssueQueue::grant_gate` hook) and a uop that finds the cycle full stays in the
 issue queue (reservations of squashed uops are not released, a small pessimism). FP loads write through the LSU and are not limited, only counted. Exit statistics `[FP_PORTS]`: FU writes per cycle, FP load write-backs per cycle,
 FP reads of the FP queue's issued uops per cycle, FP store-data reads per cycle. `scripts/fp_bench.sh <sim> <work> [ports...]` builds the six kernels of `tests/fp/fpbench.c` and sweeps the limit.
