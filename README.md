@@ -24,7 +24,7 @@ Sv39 in the FastWarm replay.
 | [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | staged LSU: specification, approximations, results, IPC study |
 | [FRONTEND_NOTES.md](FRONTEND_NOTES.md), [INTEG_NOTES.md](INTEG_NOTES.md), [MS_DATA_NOTES.md](MS_DATA_NOTES.md) | records of the front-end fast paths, the memspec + front-end integration and the memspec value path (historical, defaults since merged) |
 | [docs/history/](docs/history/) | the 2026-11-04 distillation (P0-P3); historical, may be outdated |
-| [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/), [baremetal/x0-bypass-test/](baremetal/x0-bypass-test/README.md) | front-end coding standards, the vendored AXI/LLC/DDR kit, an x0-forwarding regression |
+| [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/) | front-end coding standards, the vendored AXI/LLC/DDR kit |
 
 ## Build
 
