@@ -40,10 +40,10 @@ enum InstType {
   MUL,
   DIV,
   AMO,
-  FP
+  FPOP // (not FP: that name is the F/D build macro)
 };
 
-constexpr int INST_TYPE_COUNT = FP + 1;
+constexpr int INST_TYPE_COUNT = FPOP + 1;
 constexpr int INST_TYPE_WIDTH = bit_width_for_count(INST_TYPE_COUNT);
 
 // AMO Operations (funct7[6:2])

@@ -18,6 +18,10 @@ namespace {
 RefCpuState dut_to_ref_state(uint8_t privilege) {
   RefCpuState state{};
   std::memcpy(state.gpr, dut_cpu.gpr, sizeof(state.gpr));
+#if FP
+  std::memcpy(state.fpr, dut_cpu.fpr, sizeof(state.fpr));
+  state.fcsr = dut_cpu.fcsr;
+#endif
   std::memcpy(state.csr, dut_cpu.csr, sizeof(state.csr));
   state.pc = dut_cpu.pc;
   state.store_addr = dut_cpu.store_addr;

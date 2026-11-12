@@ -84,8 +84,9 @@ constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
 // format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
-constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? 4u : 3u;
-constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? 4u : 2u;
+// rv64: 4 = integer state, 5 = F/D build (CPU_state carries the FP registers and fcsr follows it)
+constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : 3u;
+constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : 2u;
 
 typedef struct CkptHeader {
   uint32_t magic;
@@ -266,6 +267,10 @@ void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   for (int i = 0; i < CSR_NUM; i++) csr->CSR_RegFile[i] = csr->CSR_RegFile_1[i] = state.csr[i];
 
   std::memcpy(dut_cpu.gpr, state.gpr, sizeof(dut_cpu.gpr));
+#if FP
+  std::memcpy(dut_cpu.fpr, state.fpr, sizeof(dut_cpu.fpr));
+  dut_cpu.fcsr = state.fcsr;
+#endif
   std::memcpy(dut_cpu.csr, state.csr, sizeof(dut_cpu.csr));
   dut_cpu.pc = state.pc;
   dut_cpu.store = state.store;
@@ -291,6 +296,9 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
 
   struct CkptCpuState {  // layout of CPU_state in the checkpoint; read and discarded
     xlen_t gpr[32];
+#if FP
+    uint64_t fpr[32];
+#endif
     xlen_t csr[21];
     xlen_t pc;
     uint32_t store_addr;
@@ -331,6 +339,10 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
   CkptCpuState discarded_state;
   uint64_t interval_inst_count = 0;
   gz_read_pod(file, discarded_state);
+#if FP
+  uint32_t discarded_fcsr = 0;
+  gz_read_pod(file, discarded_fcsr);
+#endif
   gz_read_pod(file, interval_inst_count);
   ckpt_interval_inst_count = interval_inst_count;
 
@@ -396,6 +408,9 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   // 注意：reserve_* 当前在本模拟器中暂未使用，但必须读取以避免流错位。
   typedef struct Ckpt_CPU_state {
     xlen_t gpr[32];
+#if FP
+    uint64_t fpr[32];
+#endif
     xlen_t csr[21];
     xlen_t pc;
 
@@ -442,11 +457,19 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   }
 
   gz_read_pod(file, ckpt_state);
+#if FP
+  uint32_t ckpt_fcsr = 0;
+  gz_read_pod(file, ckpt_fcsr);
+#endif
   gz_read_pod(file, interval_inst_count);
   ckpt_interval_inst_count = interval_inst_count;
 
   CPU_state state;
   memcpy(state.gpr, ckpt_state.gpr, sizeof(state.gpr));
+#if FP
+  memcpy(state.fpr, ckpt_state.fpr, sizeof(state.fpr));
+  state.fcsr = ckpt_fcsr;
+#endif
   memcpy(state.csr, ckpt_state.csr, sizeof(state.csr));
   state.pc = ckpt_state.pc;
   state.store_addr = ckpt_state.store_addr;

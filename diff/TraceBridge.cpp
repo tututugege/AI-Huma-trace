@@ -25,6 +25,13 @@ struct Bridge::Entry {
   uint32_t resv_addr_before = 0;
   uint8_t rd = 0;  // destination register (0: none)
   xlen_t rd_old = 0;
+#if FP
+  bool fp_rd = false;            // an FP register is written: undo it
+  uint8_t frd = 0;
+  uint64_t frd_old = 0;
+  bool fcsr_saved = false;       // fflags/frm may change (OP-FP, fused multiply-add, SYSTEM)
+  uint32_t fcsr_old = 0;
+#endif
   xlen_t trap_csr[8] = {};
   bool full_csr = false;
   std::vector<xlen_t> csr_full;  // only for SYSTEM instructions
@@ -65,6 +72,19 @@ void undo_into(const Bridge::Stats *, RefCpuState &st, const xlen_t *trap_csr, b
   st.reserve_valid = rv;
   st.reserve_addr = ra;
 }
+#if FP
+// F/D: does the instruction write an FP register?  LOAD-FP, the four fused multiply-adds, and OP-FP except the compares
+// (funct5 0x14), the conversions to integer (0x18) and fmv.x / fclass (0x1c).
+inline bool writes_fpr(uint32_t inst) {
+  const uint32_t op = inst & 0x7f, f5 = inst >> 27;
+  if (op == 0x07 || op == 0x43 || op == 0x47 || op == 0x4b || op == 0x4f) return true;
+  return op == 0x53 && f5 != 0x14 && f5 != 0x18 && f5 != 0x1c;
+}
+inline bool touches_fcsr(uint32_t inst) {
+  const uint32_t op = inst & 0x7f;
+  return op == 0x53 || op == 0x43 || op == 0x47 || op == 0x4b || op == 0x4f || op == 0x73;
+}
+#endif
 } // namespace
 
 // Control-flow outcome computed from the register file, independent of the core's execution
@@ -149,21 +169,42 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
     e->f.csr_wdata = (funct3 & 4) ? rs1 : st.gpr[rs1];  // csrr*i: zimm in the rs1 field
   }
   // Destination register undo (x0 never changes)
+#if FP
+  const bool fp_dest = writes_fpr(inst);
+  if (fp_dest) {
+    e->fp_rd = true;
+    e->frd = (uint8_t)rd;
+    e->frd_old = st.fpr[rd];
+  }
+  if (touches_fcsr(inst)) { e->fcsr_saved = true; e->fcsr_old = st.fcsr; }
+  const bool writes_rd = opcode != 0x63 && opcode != 0x23 && opcode != 0x27 && opcode != 0x0f && !fp_dest;
+#else
   const bool writes_rd = opcode != 0x63 && opcode != 0x23 && opcode != 0x0f;
+#endif
   if (writes_rd && rd != 0) {
     e->rd = (uint8_t)rd;
     e->rd_old = st.gpr[rd];
   }
 
-  if (opcode == 0x03 || is_lr) {
+#if FP
+  const bool fp_ld = opcode == 0x07, fp_st = opcode == 0x27;   // flw/fld, fsw/fsd: funct3 2 / 3 as lw / ld
+  if (fp_st) e->f.rs2_value = st.fpr[rs2];
+#else
+  constexpr bool fp_ld = false, fp_st = false;
+#endif
+  if (opcode == 0x03 || fp_ld || is_lr) {
     e->f.is_load = true;
-    e->f.vaddr = opcode == 0x03 ? st.gpr[rs1] + immI(inst) : st.gpr[rs1];
-    e->f.size = opcode == 0x03 ? access_bytes(funct3 & 3) : amo_bytes(funct3);
-  } else if (opcode == 0x23 || is_amo) {
+    e->f.vaddr = (opcode == 0x03 || fp_ld) ? st.gpr[rs1] + immI(inst) : st.gpr[rs1];
+    e->f.size = (opcode == 0x03 || fp_ld) ? access_bytes(funct3 & 3) : amo_bytes(funct3);
+  } else if (opcode == 0x23 || fp_st || is_amo) {
     e->f.is_store = true;
-    e->f.vaddr = opcode == 0x23 ? st.gpr[rs1] + immS(inst) : st.gpr[rs1];
-    e->f.size = opcode == 0x23 ? (funct3 <= 3 ? access_bytes(funct3) : 4) : amo_bytes(funct3);
+    e->f.vaddr = (opcode == 0x23 || fp_st) ? st.gpr[rs1] + immS(inst) : st.gpr[rs1];
+    e->f.size = (opcode == 0x23 || fp_st) ? (funct3 <= 3 ? access_bytes(funct3) : 4) : amo_bytes(funct3);
+#if FP
+    e->f.store_data = fp_st ? st.fpr[rs2] : st.gpr[rs2];
+#else
     e->f.store_data = st.gpr[rs2];
+#endif
     if (e->f.size == 1) e->f.store_data &= 0xFF;
     if (e->f.size == 2) e->f.store_data &= 0xFFFF;
     if (e->f.size == 4) e->f.store_data &= 0xFFFFFFFFu;
@@ -249,6 +290,14 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
     e->f.rd = rd;
     e->f.rd_value = after.gpr[rd];
   }
+#if FP
+  if (fp_dest) {
+    e->f.rd_valid = true;
+    e->f.rd_is_fp = true;
+    e->f.rd = rd;
+    e->f.rd_value = after.fpr[rd];
+  }
+#endif
   if (e->f.is_br) e->f.br_taken = info.br_taken;
   if (after.store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
     e->f.has_mem_write = true;
@@ -287,6 +336,10 @@ void Bridge::rewind_after(int64_t uid) {
 #endif
     undo_into(&stats, st, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before, e->priv_before,
               e->resv_valid_before, e->resv_addr_before, e->rd, e->rd_old);
+#if FP
+    if (e->fp_rd) st.fpr[e->frd] = e->frd_old;
+    if (e->fcsr_saved) st.fcsr = e->fcsr_old;
+#endif
     stats.entries_dropped++;
     delete e;
   }

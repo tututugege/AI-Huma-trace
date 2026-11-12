@@ -297,7 +297,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   case number_12_opcode_float: {
     // rs2 doubles as the format selector of FCVT and the other unary ops, which have no second source
     const bool unary = f7 == 0x60 || f7 == 0x68 || f7 == 0x2C || f7 == 0x70;
-    set(true, true, !unary, FP);
+    set(true, true, !unary, FPOP);
     uop->src2_is_imm = false;
     uop->imm = rb;
     break;

@@ -66,6 +66,10 @@
 
 typedef struct CPU_state {
   xlen_t gpr[ARF_NUM];   // function-model widths: memcpy'd to and from RefCpuState
+#if FP
+  uint64_t fpr[32];      // F/D registers (NaN-boxed singles) and fcsr = frm << 5 | fflags
+  uint32_t fcsr;
+#endif
   xlen_t csr[21];
   xlen_t pc;
 

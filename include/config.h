@@ -9,6 +9,13 @@
 #endif
 constexpr int XLEN_BITS = XLEN;
 
+// F/D (EXP-030): the standard floating-point extensions, rv64 only (the function model's FP=1; rv32 keeps its Zfinx).  The build
+// passes -DFP=1; the same value must be used for librefcpu.a.  FP=0 leaves every cycle count unchanged.
+#ifndef FP
+#define FP 0
+#endif
+static_assert(!FP || XLEN == 64, "FP=1 (F/D) needs XLEN=64");
+
 // Default profile:
 // - wide frontend / backend
 // - larger core resources

@@ -215,7 +215,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       front_warm_commit(pc, BR_NONCTL, false, pc + 4);
     }
     // data side
-    const bool is_ld = op == 0x03, is_st = op == 0x23, is_amo = op == 0x2f;
+    const bool is_ld = op == 0x03 || (FP && op == 0x07), is_st = op == 0x23 || (FP && op == 0x27), is_amo = op == 0x2f;
     if ((is_ld || is_st || is_amo) && !info.page_fault_load && !info.page_fault_store && !info.is_io) {
       const xlen_t base = s.gpr[bits(inst, 19, 15)];
       const xlen_t va_x = base + (is_ld ? xlen_t(sxlen_t(sext(bits(inst, 31, 20), 12)))

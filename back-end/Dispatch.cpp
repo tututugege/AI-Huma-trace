@@ -339,7 +339,7 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   case ADD:   add(IQ_INT, UOP_ADD); break;
   case MUL:   add(IQ_INT, UOP_MUL); break;
   case DIV:   add(IQ_INT, UOP_DIV); break;
-  case FP:    add(IQ_INT, UOP_FP); break;
+  case FPOP:    add(IQ_INT, UOP_FP); break;
   case BR:    add(IQ_BR, UOP_BR); break;
   case LOAD:  add(IQ_LD, UOP_LOAD); break;
   case STORE:  // STA uses the base register, STD the data register
