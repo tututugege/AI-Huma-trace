@@ -20,7 +20,7 @@ void Exu::init() {
   struct Spec { FuKind kind; uint64_t mask; };
   static const Spec kSpecs[] = {{FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV}, {FuKind::AGU, OP_MASK_LD},
                                 {FuKind::AGU, OP_MASK_STA}, {FuKind::SDU, OP_MASK_STD}, {FuKind::BRU, OP_MASK_BR},
-                                {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR}, {FuKind::FPU, OP_MASK_FP},
+                                {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
                                 {FuKind::FMA, OP_MASK_FMA}, {FuKind::FDIV, OP_MASK_FDIV}, {FuKind::FMISC, OP_MASK_FMISC},
                                 {FuKind::I2F, OP_MASK_I2F}};
   int agu = 0, sdu = 0;

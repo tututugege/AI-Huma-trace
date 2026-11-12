@@ -1,31 +1,36 @@
+// F/D (rv32imafd, ilp32d) version of the former Zfinx test zfinx-fsqrt.c: the operands stay uint32_t bit patterns, each operation moves them through the FP registers.
+// The entry wrapper (fd-fsqrt-helper.S) turns mstatus.FS on and calls fd_main.
 #include "trap.h"
 #include <stdint.h>
 
 static inline uint32_t fsqrt_s_rne(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 0, 0x2c, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfsqrt.s ft0, ft0, rne\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fsqrt_s_rtz(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 1, 0x2c, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfsqrt.s ft0, ft0, rtz\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fsqrt_s_rup(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 3, 0x2c, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfsqrt.s ft0, ft0, rup\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
-int main(void) {
+int fd_main(void) {
   /* Exact roots and ordinary inputs. */
   check(fsqrt_s_rne(0x40800000u) == 0x40000000u); /* sqrt(4) = 2 */
   check(fsqrt_s_rne(0x3e800000u) == 0x3f000000u); /* sqrt(0.25) = 0.5 */

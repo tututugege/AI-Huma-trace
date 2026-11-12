@@ -9,12 +9,11 @@
 #endif
 constexpr int XLEN_BITS = XLEN;
 
-// F/D (EXP-030): the standard floating-point extensions, rv64 only (the function model's FP=1; rv32 keeps its Zfinx).  The build
-// passes -DFP=1; the same value must be used for librefcpu.a.  FP=0 leaves every cycle count unchanged.
+// F/D (EXP-030): the standard floating-point extensions, rv32 and rv64 (the function model's FP; Zfinx no longer exists).  The build
+// passes -DFP=<0|1> (default 1); the same value must be used for librefcpu.a.  FP=0 is a core without floating point.
 #ifndef FP
-#define FP 0
+#define FP 1
 #endif
-static_assert(!FP || XLEN == 64, "FP=1 (F/D) needs XLEN=64");
 
 // Default profile:
 // - wide frontend / backend
@@ -424,7 +423,6 @@ constexpr uint64_t OP_MASK_FMISC = (1ULL << UOP_FMISC);
 constexpr uint64_t OP_MASK_FDIV = (1ULL << UOP_FDIV);
 constexpr uint64_t OP_MASK_I2F = (1ULL << UOP_I2F);
 constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   // everything the FP issue queue holds
-constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 
 // ============================================================
 // Issue Port Layout
@@ -520,7 +518,7 @@ enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL |
              OP_MASK_CSR), // Port 0: ALU + MUL/DIV + CSR
-    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_FP), // Port 1: ALU + DIV + FP
+    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV
 #if FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL | OP_MASK_I2F), // Port 2: ALU + MUL + integer -> FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_I2F), // Port 3: ALU + DIV + integer -> FP
@@ -678,7 +676,7 @@ constexpr int FPW_CH = FP ? 8 : 0;
 constexpr int MAX_WAKEUP_PORTS =
     LSU_LOAD_WB_WIDTH + count_ports_with_mask(OP_MASK_ALU) +
     count_ports_with_mask(OP_MASK_MUL) + count_ports_with_mask(OP_MASK_DIV) +
-    count_ports_with_mask(OP_MASK_FP) + FPW_CH;
+    FPW_CH;
 
 // ============================================================
 // ISU Scheduling Policy
@@ -711,7 +709,7 @@ constexpr int calculate_total_fu_count() {
   int total = 0;
   uint64_t major_masks[] = {OP_MASK_ALU, OP_MASK_CSR, OP_MASK_MUL,
                             OP_MASK_DIV, OP_MASK_BR,  OP_MASK_LD,
-                            OP_MASK_STA, OP_MASK_STD, OP_MASK_FP,
+                            OP_MASK_STA, OP_MASK_STD,
                             OP_MASK_FMA, OP_MASK_FMISC, OP_MASK_FDIV, OP_MASK_I2F};
   for (const auto &cfg : GLOBAL_ISSUE_PORT_CONFIG) {
     for (uint64_t m : major_masks) {

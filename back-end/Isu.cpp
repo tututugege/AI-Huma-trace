@@ -72,20 +72,7 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
     return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
   }
 #endif
-  if (uop != UOP_FP) return 1;
-  switch (func7 >> 2) {
-  case 0b00000:  // FADD.S
-  case 0b00001:  // FSUB.S
-    return 5;
-  case 0b00010:  // FMUL.S
-    return 3;
-  case 0b00011:  // FDIV.S
-    return 10;
-  default:
-    if (func7 == 0x2C) return 10;                    // FSQRT.S
-    if (func7 == 0x60 || func7 == 0x68) return 3;    // FCVT.W.S / FCVT.S.W
-    return 5;
-  }
+  return 1;
 }
 
 // Free slots of each queue go to Dispatch.
@@ -183,7 +170,7 @@ void Isu::comb_calc_latency_next() {
     bool ok = true;  // the placement must not sit inside Assert (it has to run in every build)
     if (op == UOP_MUL) ok = MUL_MAX_LATENCY > 1 && free_slot(mul_wake_pipe_1[0], 0);
     else if (op == UOP_DIV) ok = free_slot(div_wake_slots_1, lat - 1);
-    else if (op == UOP_FP || op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(fp_wake_slots_1, lat - 1);
+    else if (op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(fp_wake_slots_1, lat - 1);
     Assert(ok && "delayed-wakeup slots full");
   }
 }
@@ -200,8 +187,7 @@ void Isu::comb_awake() {
   const int lsu_base = 0;
   const int mul_base = lsu_base + LSU_LOAD_WB_WIDTH;
   const int div_base = mul_base + count_ports_with_mask(OP_MASK_MUL);
-  const int fp_base = div_base + count_ports_with_mask(OP_MASK_DIV);
-  const int fast_base = fp_base + count_ports_with_mask(OP_MASK_FP);
+  const int fast_base = div_base + count_ports_with_mask(OP_MASK_DIV);
   auto drive = [&](int ch, uint32_t preg, const char *collision) {
     Assert(!bus[ch].valid && collision);
     bus[ch].valid = true;
@@ -228,9 +214,6 @@ void Isu::comb_awake() {
         drive(ch++, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
       }
   }
-#else
-  for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
-    if (fp_wake_slots[i].valid && fp_wake_slots[i].countdown == 0) drive(fp_base + i, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
 #endif
   if (MUL_MAX_LATENCY > 1)
     for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)

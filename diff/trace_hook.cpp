@@ -221,7 +221,7 @@ void on_exec(const ExecObs &o) {
                    what, (unsigned long long)uid, (unsigned long long)f->pc, f->inst, o.op, (unsigned long long)got, (unsigned long long)want, (int)f->forced_jump);
   };
   switch (o.op) {
-  case UOP_ADD: case UOP_MUL: case UOP_DIV: case UOP_CSR: case UOP_FP: case UOP_LOAD:
+  case UOP_ADD: case UOP_MUL: case UOP_DIV: case UOP_CSR: case UOP_FMA: case UOP_FMISC: case UOP_FDIV: case UOP_I2F: case UOP_LOAD:
     if (f->rd_valid) {
       g_c.cmp_rd++;
       if (widen_result(o, f->inst) != f->rd_value) report("rd", widen_result(o, f->inst), f->rd_value, g_c.mis_rd);

@@ -1,5 +1,5 @@
 // F/D micro-benchmarks for the timing model: KIND 0 = dependent fadd.d chain, 1 = 8 independent fadd.d streams, 2 = dependent fdiv.d chain,
-// 3 = dependent fmadd.d chain, 4 = fld + fmadd.d + fsd stream (memory), 5 = int->fp->int round trip chain (fcvt.d.l / fcvt.l.d)
+// 3 = dependent fmadd.d chain, 4 = fld + fmadd.d + fsd stream (memory), 5 = int->fp->int round trip chain (fcvt.d.l / fcvt.l.d; rv32: fcvt.d.w / fcvt.w.d)
 __asm__(".globl main\nmain:\n li t0, 0x2000\n csrs mstatus, t0\n j fp_main\n");
 static double buf[512];
 int fp_main(void) {
@@ -21,7 +21,11 @@ int fp_main(void) {
     a += x;
 #else
     long k;
+    #if __riscv_xlen == 64
     __asm__ volatile("fcvt.l.d %0, %2\n addi %0, %0, 1\n fcvt.d.l %1, %0" : "=&r"(k), "=f"(a) : "f"(a));
+#else
+    __asm__ volatile("fcvt.w.d %0, %2\n addi %0, %0, 1\n fcvt.d.w %1, %0" : "=&r"(k), "=f"(a) : "f"(a));
+#endif
 #endif
   }
   return (a + c0 + c1 + c2 + c3 + c4 + c5 + c6 + c7) > 0 ? 0 : 1;

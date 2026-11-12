@@ -22,8 +22,13 @@ constexpr xlen_t kMstatusWriteMask = 0x00000000007FF9BBull;
 constexpr xlen_t kMstatusReset = 0x0000000A00000000ull;
 #else
 constexpr uint32_t kSstatusMask = 0x800DE133;
+#if FP
+constexpr uint32_t kSstatusWriteMask = 0x000DE133;   // SD (bit 31) follows FS: read-only
+constexpr uint32_t kMstatusWriteMask = 0x007FF9BB;
+#else
 constexpr uint32_t kSstatusWriteMask = 0x800DE133;
 constexpr uint32_t kMstatusWriteMask = 0x807FF9BB;
+#endif
 constexpr uint32_t kMstatusReset = 0;
 #endif
 // Interrupt CSRs per the privileged spec (no N extension, same as the function model): mie holds SSIE/MSIE/STIE/MTIE/SEIE/MEIE;
@@ -60,7 +65,11 @@ void Csr::init() {
   CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | 0x141103;   // MXL = 2: U/S/M, RV64 I/A/M/B
 #endif
 #else
+#if FP
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x4014112B;                    // U/S/M, RV32 I/A/M/B/F/D
+#else
   CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103;                    // U/S/M, RV32 I/A/M/B
+#endif
 #endif
   CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
   CSR_RegFile[csr_sstatus] = CSR_RegFile_1[csr_sstatus] = kMstatusReset & kSstatusMask;
@@ -247,7 +256,7 @@ void Csr::comb_csr_write() {
     write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask, kSstatusMask);
 #if FP
     {  // SD follows FS
-      const xlen_t sd = xlen_t(1) << 63;
+      const xlen_t sd = xlen_t(1) << (XLEN - 1);
       if (((CSR_RegFile_1[csr_mstatus] >> 13) & 3) == 3) CSR_RegFile_1[csr_mstatus] |= sd; else CSR_RegFile_1[csr_mstatus] &= ~sd;
       CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & kSstatusMask;
     }
@@ -267,7 +276,7 @@ void Csr::comb_csr_write() {
 void Csr::seq() {
 #if FP
   if (fs_dirty_req) {   // FS = Dirty, SD: applied on top of whatever else changed mstatus this cycle
-    CSR_RegFile_1[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << 63);
+    CSR_RegFile_1[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & kSstatusMask;
     fs_dirty_req = false;
   }

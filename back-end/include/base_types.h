@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
-// F/D build switch (-DFP=1, rv64 only); also defined in config.h
+// F/D build switch: -DFP=1 (default) = standard F/D on rv32 and rv64, -DFP=0 = no floating point at all; also defined in config.h
 #ifndef FP
-#define FP 0
+#define FP 1
 #endif
 #include <type_traits>
 
@@ -297,7 +297,6 @@ enum UopType {
   UOP_MUL,
   UOP_DIV,
   UOP_WFI,
-  UOP_FP,     // rv32 Zfinx: FP in the integer registers, integer queue
   UOP_FMA,    // F/D (FP=1): fadd / fsub / fmul / fused multiply-add, pipelined, FP queue
   UOP_FMISC,  // F/D: fsgnj, fmin/fmax, compares, classify, conversions inside the FP domain, FP -> integer moves/conversions
   UOP_FDIV,   // F/D: fdiv / fsqrt, iterative

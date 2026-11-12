@@ -1,79 +1,90 @@
+// F/D (rv32imafd, ilp32d) version of the former Zfinx test zfinx-fcvt.c: the operands stay uint32_t bit patterns, each operation moves them through the FP registers.
+// The entry wrapper (fd-fcvt-helper.S) turns mstatus.FS on and calls fd_main.
 #include "trap.h"
 #include <stdint.h>
 
 static inline uint32_t fcvt_w_s_rne(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 0, 0x60, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.w.s %0, ft0, rne"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_w_s_rtz(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 1, 0x60, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.w.s %0, ft0, rtz"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_w_s_rdn(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 2, 0x60, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.w.s %0, ft0, rdn"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_w_s_rup(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 3, 0x60, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.w.s %0, ft0, rup"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_w_s_rmm(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 4, 0x60, %0, %1, x0"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.w.s %0, ft0, rmm"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_wu_s_rtz(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 1, 0x60, %0, %1, x1"
+  asm volatile("fmv.w.x ft0, %1\n\tfcvt.wu.s %0, ft0, rtz"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_s_w_rne(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 0, 0x68, %0, %1, x0"
+  asm volatile("fcvt.s.w ft0, %1, rne\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_s_w_rup(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 3, 0x68, %0, %1, x0"
+  asm volatile("fcvt.s.w ft0, %1, rup\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
 static inline uint32_t fcvt_s_wu_rne(uint32_t a) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 0, 0x68, %0, %1, x1"
+  asm volatile("fcvt.s.wu ft0, %1, rne\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a));
+               : "r"(a)
+               : "ft0");
   return result;
 }
 
-int main(void) {
+int fd_main(void) {
   /* Float-to-signed-int: all implemented static rounding modes. */
   check(fcvt_w_s_rne(0x40700000u) == 4u);  /* 3.75 -> 4 */
   check(fcvt_w_s_rtz(0x40700000u) == 3u);  /* 3.75 -> 3 */

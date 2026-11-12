@@ -70,7 +70,7 @@ override, see [ENV_VARS.md](ENV_VARS.md). `XLEN` (32 default, 64: `gmake XLEN=64
 `XLEN` is a compile-time parameter of function-model, trace-model and the RTL package (`XLEN_BITS`, default 32; the default behaviour and all cycle counts are unchanged).
 `XLEN=64` covers rv64imab: register-wide PCs and addresses, Sv39 page walk / TLB, 64-bit CSRs, 8-byte accesses, OP-IMM-32 / OP-32, multiplier 3 and divider 32 cycles (`*W` divides 16);
 `addiw rd, rs, 0` is not a move (no elimination). Build: see [../README.md](../README.md). Verified through the RTL gate (cpu-tests, Linux to `rv64 login:`; `docs/MAIN_RECORDS.md`, 2026-11-12);
-there is no rv64 variant of `scripts/run_gate.sh` / `baseline.csv` here yet. Not done: F/D, C, the SPEC rv64 flow, Sv39 in the FastWarm replay.
+there is no rv64 variant of `scripts/run_gate.sh` / `baseline.csv` here yet. Not done: C, the SPEC rv64 flow, Sv39 in the FastWarm replay.
 
 ## Gate (run after every change)
 All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh build/simulator results/gate`.
@@ -131,9 +131,9 @@ Not touched since the distillation: MemSubSystem peripherals (PeripheralModel.h,
   as a mispredict asserts in ME mode (the baseline free-list sanity check already treats it as unreachable; never hit in the gate,
   the big programs, Linux or SPEC quick).
 
-## F/D floating point (EXP-030, `FP=1`, rv64 only; branch `exp/fd`, not merged)
-Build: `gmake XLEN=64 FP=1 BUILD_DIR=build64fp REFCPU_LIB=<rv64 FP=1 librefcpu.a>` (the function-model must be built with the same `XLEN=64 FP=1`: `RefCpuState`
-carries `fpr[32]` and `fcsr` then). `FP=0` (default): nothing changes, rv32 gate and the rv64 programs have identical cycles with and without `FP=1` on integer code.
+## F/D floating point (EXP-030; default on, rv32 and rv64; Zfinx removed)
+F/D is the default build (`FP=1`; the function-model's `librefcpu.a` must be built with the same `FP`: `RefCpuState` carries `fpr[32]` and `fcsr`). `FP=0` is a core without any floating point (no Zfinx either: the old `UOP_FP` / `FuKind::FPU` path and the tests `zfinx*`, `matmul_fpu` are gone; `tests/extra/fd-*` are their F/D versions). Integer code has identical cycles with and without F/D.
+rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers return 8 for funct3 3 with F/D), `fcvt.l/lu` and `fmv.x.d/fmv.d.x` do not exist (the function model traps them, so the model does too), `mstatus.SD` is bit 31.
 - **Registers and tags.** Separate FP physical register file (`CFG_FPRF_NUM` 96, 32 architectural), FP RAT / free list / per-branch RAT checkpoints in `Ren`. In the
   model the physical-register tags are one number space (integer `0..PRF_NUM-1`, FP `FP_TAG_BASE..`; `TAG_NUM`, `PRF_IDX_WIDTH` follow), so issue-queue entries, the
   dispatch busy table, the wake-up buses and the memory-speculation taint table are unchanged; the RTL has two register files, a domain bit and per-domain wake buses.

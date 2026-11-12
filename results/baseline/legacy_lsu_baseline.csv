@@ -21,7 +21,6 @@ interrupt-vectored.bin,0,0,3700
 leap-year.bin,0,0,1757
 load-store-aligned.bin,0,0,1962
 load-store.bin,0,0,1721
-matmul_fpu.bin,0,0,43491
 matrix-mul.bin,0,0,2501
 max.bin,0,0,1816
 memory-boundary.bin,0,0,1446
@@ -59,7 +58,3 @@ vm_sfence_perm_test.bin,0,0,44254
 vm_sum_fetch_test.bin,0,0,4049
 wanshu.bin,0,0,4734
 wfi-boundary.bin,0,0,957
-zfinx-fcvt.bin,0,0,1457
-zfinx-fdiv.bin,0,0,1323
-zfinx-fsqrt.bin,0,0,1139
-zfinx.bin,0,0,750

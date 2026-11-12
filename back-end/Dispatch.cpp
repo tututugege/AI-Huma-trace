@@ -345,8 +345,8 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   case ADD:   add(IQ_INT, UOP_ADD); break;
   case MUL:   add(IQ_INT, UOP_MUL); break;
   case DIV:   add(IQ_INT, UOP_DIV); break;
-  case FPOP:
 #if FP
+  case FPOP:
     switch (inst->fp_cls) {
     case FP_C_FMA:  add(IQ_FP, UOP_FMA); break;
     case FP_C_FDIV: add(IQ_FP, UOP_FDIV); break;
@@ -354,10 +354,8 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
     case FP_C_I2F:  add(IQ_INT, UOP_I2F); break;
     default: Assert(0 && "FP instruction without a unit class");
     }
-#else
-    add(IQ_INT, UOP_FP);
-#endif
     break;
+#endif
   case BR:    add(IQ_BR, UOP_BR); break;
   case LOAD:  add(IQ_LD, UOP_LOAD); break;
   case STORE:  // STA uses the base register, STD the data register

@@ -18,8 +18,8 @@ CXXFLAGS += $(EXTRA_CXXFLAGS)
 # register width of the function model (rv32 default; XLEN=64 needs an rv64 librefcpu: REFCPU_LIB=<its path>, and BUILD_DIR=build64)
 XLEN ?= 32
 CXXFLAGS += -DXLEN=$(XLEN)
-# F/D (EXP-030): FP=1 needs XLEN=64 and a librefcpu built with the same FP=1 (RefCpuState carries the FP registers then)
-FP ?= 0
+# F/D (EXP-030): FP=1 (default; rv32 and rv64) needs a librefcpu built with the same FP (RefCpuState carries the FP registers); FP=0 = no floating point
+FP ?= 1
 CXXFLAGS += -DFP=$(FP)
 ZLIB_CFLAGS := $(shell pkg-config --silence-errors --cflags zlib)
 ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)

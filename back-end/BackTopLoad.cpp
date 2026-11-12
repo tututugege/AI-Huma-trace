@@ -84,9 +84,9 @@ constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
 constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
 // format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
-// rv64: 4 = integer state, 5 = F/D build (CPU_state carries the FP registers and fcsr follows it)
-constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : 3u;
-constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : 2u;
+// rv64: 4 = integer state, 5 = F/D build; rv32: 3 = integer state (2 older), 6 = F/D build (CPU_state carries the FP registers and fcsr follows it)
+constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 3u);
+constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 2u);
 
 typedef struct CkptHeader {
   uint32_t magic;

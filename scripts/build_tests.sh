@@ -17,6 +17,8 @@ open(sys.argv[2],"w").write(t)
 PY
 tests=("$@"); [ ${#tests[@]} -eq 0 ] && tests=($(cd "$TD" && ls *.c | sed 's/\.c$//'))
 CF="--target=${TARGET:-riscv32} -march=$ARCH -mabi=${ABI:-ilp32} -O2 -ffp-contract=off -mcmodel=${CMODEL:-medlow} -mstrict-align -ffreestanding -fno-builtin -nostdlib -I$BM -I$BM/include"
+# F/D tests (fd-*, tests/extra): the same flags with the F and D extensions and the double-float ABI
+CFD=${CF/-march=$ARCH -mabi=${ABI:-ilp32}/-march=${ARCH/ima/imafd} -mabi=${ABI:-ilp32}d}
 for t in "${tests[@]}"; do
   d=$OUT/$t; mkdir -p "$d"; objs=()
   D=$TD; [ -f "$EX/$t.c" ] && D=$EX
@@ -24,7 +26,8 @@ for t in "${tests[@]}"; do
   ok=1
   for s in "${srcs[@]}"; do
     o=$d/$(basename "$s").o
-    $L/clang $CF -c "$s" -o "$o" 2>"$d/cc.log" || { ok=0; break; }; objs+=("$o")
+    cf=$CF; case $t in fd-*) cf=$CFD;; esac
+    $L/clang $cf -c "$s" -o "$o" 2>"$d/cc.log" || { ok=0; break; }; objs+=("$o")
   done
   [ $ok = 1 ] && ${LLD:-/opt/homebrew/bin/ld.lld} -T "$OUT/link.lds" --gc-sections "${objs[@]}" -o "$d/$t.elf" 2>"$d/ld.log" \
     && $L/llvm-objcopy -O binary "$d/$t.elf" "$d/$t.bin" || ok=0

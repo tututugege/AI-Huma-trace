@@ -1,40 +1,46 @@
+// F/D (rv32imafd, ilp32d) version of the former Zfinx test zfinx-fdiv.c: the operands stay uint32_t bit patterns, each operation moves them through the FP registers.
+// The entry wrapper (fd-fdiv-helper.S) turns mstatus.FS on and calls fd_main.
 #include "trap.h"
 #include <stdint.h>
 
 /* Zfinx keeps single-precision operands and results in integer registers. */
 static inline uint32_t fdiv_s_rne(uint32_t a, uint32_t b) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 0, 0x0c, %0, %1, %2"
+  asm volatile("fmv.w.x ft0, %1\n\tfmv.w.x ft1, %2\n\tfdiv.s ft0, ft0, ft1, rne\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a), "r"(b));
+               : "r"(a), "r"(b)
+               : "ft0", "ft1");
   return result;
 }
 
 static inline uint32_t fdiv_s_rtz(uint32_t a, uint32_t b) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 1, 0x0c, %0, %1, %2"
+  asm volatile("fmv.w.x ft0, %1\n\tfmv.w.x ft1, %2\n\tfdiv.s ft0, ft0, ft1, rtz\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a), "r"(b));
+               : "r"(a), "r"(b)
+               : "ft0", "ft1");
   return result;
 }
 
 static inline uint32_t fdiv_s_rdn(uint32_t a, uint32_t b) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 2, 0x0c, %0, %1, %2"
+  asm volatile("fmv.w.x ft0, %1\n\tfmv.w.x ft1, %2\n\tfdiv.s ft0, ft0, ft1, rdn\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a), "r"(b));
+               : "r"(a), "r"(b)
+               : "ft0", "ft1");
   return result;
 }
 
 static inline uint32_t fdiv_s_rup(uint32_t a, uint32_t b) {
   uint32_t result;
-  asm volatile(".insn r 0x53, 3, 0x0c, %0, %1, %2"
+  asm volatile("fmv.w.x ft0, %1\n\tfmv.w.x ft1, %2\n\tfdiv.s ft0, ft0, ft1, rup\n\tfmv.x.w %0, ft0"
                : "=r"(result)
-               : "r"(a), "r"(b));
+               : "r"(a), "r"(b)
+               : "ft0", "ft1");
   return result;
 }
 
-int main(void) {
+int fd_main(void) {
   /* Exact finite results and signs. */
   check(fdiv_s_rne(0x40c00000u, 0x40000000u) == 0x40400000u); /* 6 / 2 = 3 */
   check(fdiv_s_rne(0xc0e00000u, 0x40000000u) == 0xc0600000u); /* -7 / 2 = -3.5 */

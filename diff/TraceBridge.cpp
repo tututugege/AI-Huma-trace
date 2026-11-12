@@ -43,7 +43,7 @@ struct Bridge::Entry {
 
 namespace {
 // access size of a load/store from funct3[1:0]: 8 bytes (ld, sd) exist on rv64 only
-inline uint8_t access_bytes(uint32_t f3_low) { return f3_low == 3 ? (XLEN == 64 ? 8 : 4) : (uint8_t)(1u << f3_low); }
+inline uint8_t access_bytes(uint32_t f3_low) { return f3_low == 3 ? ((XLEN == 64 || FP) ? 8 : 4) : (uint8_t)(1u << f3_low); }   // 8 bytes: ld / sd (rv64), fld / fsd (F/D)
 inline uint8_t amo_bytes(uint32_t funct3) { return (funct3 == 3 && XLEN == 64) ? 8 : 4; }
 inline uint32_t bits(uint32_t v, int hi, int lo) { return (v >> lo) & ((1u << (hi - lo + 1)) - 1); }
 inline int32_t sext(uint32_t v, int n) { return (int32_t)(v << (32 - n)) >> (32 - n); }

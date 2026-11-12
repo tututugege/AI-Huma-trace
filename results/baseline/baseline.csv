@@ -12,6 +12,11 @@ dcache-mshr-pressure.bin,0,0.09,1361
 div.bin,0,0.1,2161
 dummy.bin,0,0.07,638
 fact.bin,0,0.06,1177
+fd-basic.bin,0,0.1,951
+fd-fcvt.bin,0,0.1,1700
+fd-fdiv.bin,0,0.1,1693
+fd-fsqrt.bin,0,0.1,1390
+fd-matmul.bin,0,0.1,26519
 fence-i-self-modify.bin,0,0.1,1407
 fib.bin,0,0.07,1058
 goldbach.bin,0,0.07,3292
@@ -22,7 +27,6 @@ itt-dispatch.bin,0,1.49,222439
 leap-year.bin,0,0.07,1587
 load-store-aligned.bin,0,0.1,1943
 load-store.bin,0,0.11,1724
-matmul_fpu.bin,0,0.29,42992
 matrix-mul.bin,0,0.08,2506
 max.bin,0,0.1,1620
 memory-boundary.bin,0,0.1,1409
@@ -60,7 +64,3 @@ vm_sfence_perm_test.bin,0,0.26,25144
 vm_sum_fetch_test.bin,0,0.09,3983
 wanshu.bin,0,0.09,4683
 wfi-boundary.bin,0,0.1,947
-zfinx-fcvt.bin,0,0.08,1447
-zfinx-fdiv.bin,0,0.08,1315
-zfinx-fsqrt.bin,0,0.09,1129
-zfinx.bin,0,0.07,743

@@ -24,7 +24,7 @@ namespace {
   case 0b01:
     return 2;
   case 0b11:
-    return XLEN == 64 ? 8 : 4;   // ld / sd exist on rv64 only
+    return (XLEN == 64 || FP) ? 8 : 4;   // ld / sd (rv64) and fld / fsd (F/D, rv32 too; funct3 3 is no integer load on rv32)
   case 0b10:
   default:
     return 4;
@@ -42,7 +42,7 @@ namespace {
   case 2:
     return 0xFu; // SW, 要求 off 为 0
   case 3:
-    return XLEN == 64 ? 0xFFu : 0;   // SD (rv64): 8 bytes, 8-byte aligned (CheckAddr compares up to 8 bytes)
+    return (XLEN == 64 || FP) ? 0xFFu : 0;   // SD (rv64) / FSD: 8 bytes, 8-byte aligned (CheckAddr compares up to 8 bytes)
   default:
     return 0;
   }

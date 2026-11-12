@@ -14,8 +14,8 @@
 // result completes, (c) what a flush / branch-mask clear does to the instructions in it.
 //   SINGLE : one cycle, always ready unless its result is not consumed (ALU/AGU/SDU/BRU/CSR)
 //   PIPE   : fully pipelined with a fixed latency (MUL)
-//   ITER   : one instruction at a time, latency depends on the operation (DIV, FPU)
-enum class FuKind : uint8_t { ALU, MUL, DIV, AGU, SDU, BRU, CSR, FPU, FMA, FMISC, FDIV, I2F };   // FMA / FMISC / I2F: pipelined FP units (FP=1); FDIV: iterative
+//   ITER   : one instruction at a time, latency depends on the operation (DIV, FDIV)
+enum class FuKind : uint8_t { ALU, MUL, DIV, AGU, SDU, BRU, CSR, FMA, FMISC, FDIV, I2F };   // FMA / FMISC / I2F: pipelined FP units (F/D); FDIV: iterative
 
 class Fu {
 public:
@@ -182,8 +182,7 @@ private:
     case FuKind::FMISC:
     case FuKind::I2F: return Mode::PIPE;
     case FuKind::DIV:
-    case FuKind::FDIV:
-    case FuKind::FPU: return Mode::ITER;
+    case FuKind::FDIV: return Mode::ITER;
     default: return Mode::SINGLE;
     }
   }
@@ -192,27 +191,14 @@ private:
     return !p.empty() && p.front().done_cycle <= sim_time;
   }
 
-  // Latency of an iterative unit: the divider takes DIV_MAX_LATENCY, the FPU by operation.
+  // Latency of an iterative unit: the divider takes DIV_MAX_LATENCY, the FP divide / square root unit its S / D latency.
   int iter_latency(const ExuInst &inst) const {
     if (kind == FuKind::DIV) return div_latency(inst->is_word);
     if (kind == FuKind::FDIV) {   // F/D divide / square root: funct7[1:0] = fmt (1 = D), funct5 0x0b = fsqrt
       const bool d = inst->func7 & 1, sq = (inst->func7 >> 2) == 0x0b;
       return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
     }
-    constexpr int FADD = 0b00000, FSUB = 0b00001, FMUL = 0b00010, FDIV = 0b00011;
-    constexpr int FSQRT = 0x2C, FCVT_W_S = 0x60, FCVT_S_W = 0x68;
-    constexpr int LAT_FADD = 5, LAT_FMUL = 3, LAT_FDIV = 10, LAT_FCVT = 3;
-    if (inst.op != UOP_FP) return LAT_FADD;
-    switch (inst->func7 >> 2) {
-    case FMUL: return LAT_FMUL;
-    case FDIV: return LAT_FDIV;
-    case FADD:
-    case FSUB: return LAT_FADD;
-    default:
-      if (inst->func7 == FCVT_W_S || inst->func7 == FCVT_S_W) return LAT_FCVT;
-      if (inst->func7 == FSQRT) return LAT_FDIV;
-      return LAT_FADD;
-    }
+    return 1;   // (only DIV and FDIV are iterative)
   }
 
   // Facts of the trace stand in for the datapath: the AGU address, the store data and the
@@ -239,7 +225,7 @@ private:
       msd::exec(0, inst);
     }
     if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL ||
-                           inst.op == UOP_DIV || inst.op == UOP_FP))
+                           inst.op == UOP_DIV || inst.op == UOP_FMA || inst.op == UOP_FMISC || inst.op == UOP_FDIV || inst.op == UOP_I2F))
       inst.result ^= 0xA5C3A5C3u;
   }
 

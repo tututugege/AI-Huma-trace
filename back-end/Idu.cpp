@@ -298,16 +298,6 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     uop->imm = 0;
     uop->is_atomic = true;
     break;
-#if !FP   // Zfinx (rv32; and rv64 without F/D): FP in the integer registers
-  case number_12_opcode_float: {
-    // rs2 doubles as the format selector of FCVT and the other unary ops, which have no second source
-    const bool unary = f7 == 0x60 || f7 == 0x68 || f7 == 0x2C || f7 == 0x70;
-    set(true, true, !unary, FPOP);
-    uop->src2_is_imm = false;
-    uop->imm = rb;
-    break;
-  }
-#endif
 #if FP
   // F/D (rv64): the function model decides what traps (reserved rounding modes, mstatus.FS = Off): an executed FP uop whose fact
   // says "trapped with illegal instruction" becomes the exception in Fu::compute.  Statically reserved encodings trap here.
