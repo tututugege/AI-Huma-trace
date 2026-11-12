@@ -3,6 +3,7 @@
 #include "Wires.h"
 #include "config.h"
 #include "trace_hook.h"
+#include "FpStats.h"
 
 namespace {
 // A uop whose branch was squashed by this cycle's mispredict is dead.
@@ -256,6 +257,14 @@ void Exu::comb_fu2exu_collect() {
   };
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
     if (w.lsu2exe.wb_req[i].valid) lsu_writeback(IQ_LD_PORT_BASE + i, w.lsu2exe.wb_req[i].uop);
+#if FP
+  {  // FP load write-backs per cycle (the staged LSU's write-back uop carries only the tag: an FP destination has a tag >= FP_TAG_BASE)
+    int n = 0;
+    for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
+      n += w.lsu2exe.wb_req[i].valid && w.lsu2exe.wb_req[i].uop.dest_en && w.lsu2exe.wb_req[i].uop.dest_preg >= FP_TAG_BASE;
+    FpStats::bump(g_fp_stats.ld_hist, n);
+  }
+#endif
   for (int i = 0; i < LSU_STA_COUNT; i++)
     if (w.lsu2exe.sta_wb_req[i].valid) lsu_writeback(IQ_STA_PORT_BASE + i, w.lsu2exe.sta_wb_req[i].uop);
 

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <vector>
 
 // 定义每个issue port操作类型的位掩码
@@ -45,6 +46,7 @@ struct IssueQueueIn {
   wire<BR_MASK_WIDTH> flush_br_mask = 0;
   wire<BR_MASK_WIDTH> clear_mask = 0;
   wire<MAX_UOP_TYPE> port_fu_ready_mask[ISSUE_WIDTH] = {};
+  std::function<bool(const Uop &)> grant_gate;   // F/D: extra grant condition (FP write-port reservation); called only for a grant about to be made
 };
 
 struct IssueQueueOut {
@@ -284,7 +286,7 @@ public:
       int phys_port = pair.second;
       uint64_t req_bit = (1ULL << static_cast<uint32_t>(entry[entry_idx].uop.op));
       if ((in.port_fu_ready_mask[phys_port] & req_bit) &&
-          !in.issue_block) {
+          !in.issue_block && (!in.grant_gate || in.grant_gate(entry[entry_idx].uop))) {
         out.issue_grants[phys_port].valid = true;
         out.issue_grants[phys_port].uop = entry[entry_idx].uop;
         grants_live = true;

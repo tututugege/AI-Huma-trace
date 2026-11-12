@@ -1,5 +1,6 @@
 #include "BeginCheck.h"
 #include "Isu.h"
+#include "FpStats.h"
 #include "Wires.h"
 #include "config.h"
 #include <cstdint>
@@ -100,8 +101,20 @@ void Isu::comb_enq() {
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::comb_issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
+#if FP
+  g_fp_stats.new_cycle(wires->rob_bcast.flush);
+  const auto gate = [this](const Uop &u) {   // reserve the FP register-file write cycle of an FP-writing unit
+    const UopType t = decode_uop_type(u.op);
+    if (!(u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F))) return true;
+    return g_fp_stats.try_reserve(get_latency(t, u->func7, u->is_word));
+  };
+  int fp_reads = 0, std_reads = 0;
+#endif
   for (auto &q : iqs) {
     q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
+#if FP
+    q.in.grant_gate = gate;
+#endif
     for (int p = 0; p < ISSUE_WIDTH; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
     q.comb_issue();
     for (int p = 0; p < ISSUE_WIDTH; p++) {
@@ -111,6 +124,11 @@ void Isu::comb_issue() {
       wires->iss2prf.iss_entry[p].valid = true;
       wires->iss2prf.iss_entry[p].uop = grant.uop;
 #if FP
+      {
+        const Uop &g = grant.uop;
+        const int reads = (g->src1_en && g->src1_fp) + (g->src2_en && g->src2_fp) + (g->src3_en && g->src3_fp);
+        if (decode_uop_type(g.op) == UOP_STD) std_reads += reads; else fp_reads += reads;
+      }
       {  // F/D statistics (EXP-030), printed at exit
         static struct FpStats {
           uint64_t issued[MAX_UOP_TYPE] = {0};
@@ -128,6 +146,10 @@ void Isu::comb_issue() {
 #endif
     }
   }
+#if FP
+  FpStats::bump(g_fp_stats.rd_hist, fp_reads);
+  FpStats::bump(g_fp_stats.std_hist, std_reads);
+#endif
 }
 
 // Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and
