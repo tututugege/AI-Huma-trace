@@ -63,6 +63,15 @@ void Isu::comb_begin() {
 int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
   if (uop == UOP_MUL) return MUL_MAX_LATENCY;
   if (uop == UOP_DIV) return div_latency(word);
+#if FP
+  if (uop == UOP_FMA) return FP_FMA_LAT;
+  if (uop == UOP_FMISC) return FP_MISC_LAT;
+  if (uop == UOP_I2F) return FP_I2F_LAT;
+  if (uop == UOP_FDIV) {   // funct7[1:0] = fmt (1 = D), funct5 0x0b = fsqrt
+    const bool d = func7 & 1, sq = (func7 >> 2) == 0x0b;
+    return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
+  }
+#endif
   if (uop != UOP_FP) return 1;
   switch (func7 >> 2) {
   case 0b00000:  // FADD.S
@@ -114,6 +123,22 @@ void Isu::comb_issue() {
       Assert(!wires->iss2prf.iss_entry[p].valid);
       wires->iss2prf.iss_entry[p].valid = true;
       wires->iss2prf.iss_entry[p].uop = grant.uop;
+#if FP
+      {  // F/D statistics (EXP-030), printed at exit
+        static struct FpStats {
+          uint64_t issued[MAX_UOP_TYPE] = {0};
+          uint64_t d_issued = 0;
+          ~FpStats() {
+            std::fprintf(stderr, "[FP] issued: fma=%llu fmisc=%llu fdiv=%llu i2f=%llu (double precision: %llu)\n",
+                         (unsigned long long)issued[UOP_FMA], (unsigned long long)issued[UOP_FMISC],
+                         (unsigned long long)issued[UOP_FDIV], (unsigned long long)issued[UOP_I2F], (unsigned long long)d_issued);
+          }
+        } st;
+        const UopType t = decode_uop_type(grant.uop.op);
+        st.issued[t]++;
+        if (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV) st.d_issued += grant.uop->func7 & 1;
+      }
+#endif
     }
   }
 }
@@ -158,7 +183,7 @@ void Isu::comb_calc_latency_next() {
     bool ok = true;  // the placement must not sit inside Assert (it has to run in every build)
     if (op == UOP_MUL) ok = MUL_MAX_LATENCY > 1 && free_slot(mul_wake_pipe_1[0], 0);
     else if (op == UOP_DIV) ok = free_slot(div_wake_slots_1, lat - 1);
-    else if (op == UOP_FP) ok = free_slot(fp_wake_slots_1, lat - 1);
+    else if (op == UOP_FP || op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(fp_wake_slots_1, lat - 1);
     Assert(ok && "delayed-wakeup slots full");
   }
 }
@@ -194,8 +219,19 @@ void Isu::comb_awake() {
     }
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++)
     if (div_wake_slots[i].valid && div_wake_slots[i].countdown == 0) drive(div_base + i, div_wake_slots[i].dest_preg, "Delayed writeback collision");
+#if FP
+  {  // the FP slots fire on the FPW_CH channels after the fast ones, in slot order
+    int ch = fast_base + ALU_NUM;
+    for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
+      if (fp_wake_slots[i].valid && fp_wake_slots[i].countdown == 0) {
+        Assert(ch < fast_base + ALU_NUM + FPW_CH && "more FP wake-ups in one cycle than channels");
+        drive(ch++, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
+      }
+  }
+#else
   for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
     if (fp_wake_slots[i].valid && fp_wake_slots[i].countdown == 0) drive(fp_base + i, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
+#endif
   if (MUL_MAX_LATENCY > 1)
     for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)
       if (mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");

@@ -28,7 +28,7 @@ struct TV {
   uint8_t depth = 0;  // 0 = the stale load itself
   uint32_t v = 0;
 };
-inline TV taint[PRF_NUM];
+inline TV taint[TAG_NUM];
 
 struct Stats {
   uint64_t loads_checked = 0, loads_check_bad = 0;                       // self check of the load value logic (non-speculative loads)
@@ -231,7 +231,7 @@ inline uint32_t load_extend(uint32_t raw, uint32_t f3) {
 // Consumers.  Called by the functional unit when it takes an instruction (Fu::compute), after the facts were applied.
 // ---------------------------------------------------------------------------------------------------------------
 inline void set_taint(uint32_t preg, bool t, uint32_t v, uint8_t depth) {
-  if (preg == 0 || preg >= (uint32_t)PRF_NUM) return;
+  if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   taint[preg].t = t;
   taint[preg].v = v;
   taint[preg].depth = depth;

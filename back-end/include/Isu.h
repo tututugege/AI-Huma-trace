@@ -27,8 +27,10 @@ constexpr int ISU_MUL_WAKE_SLOT_NUM =
     (ISU_MUL_WAKE_UNIT_NUM > 0) ? ISU_MUL_WAKE_UNIT_NUM : 1;
 constexpr int ISU_DIV_WAKE_SLOT_NUM =
     (ISU_DIV_WAKE_UNIT_NUM > 0) ? ISU_DIV_WAKE_UNIT_NUM : 1;
+// F/D: the delayed wake-ups of every FP unit and the integer -> FP conversions share one slot array (a slot lives from the issue of
+// the uop to its wake-up; at most FPW_CH of them fire in one cycle, each on its own channel)
 constexpr int ISU_FP_WAKE_SLOT_NUM =
-    (ISU_FP_WAKE_UNIT_NUM > 0) ? ISU_FP_WAKE_UNIT_NUM : 1;
+    FP ? 24 : ((ISU_FP_WAKE_UNIT_NUM > 0) ? ISU_FP_WAKE_UNIT_NUM : 1);
 
 class Isu {
 public:

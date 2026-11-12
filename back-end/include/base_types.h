@@ -1,5 +1,9 @@
 #pragma once
 #include <cstdint>
+// F/D build switch (-DFP=1, rv64 only); also defined in config.h
+#ifndef FP
+#define FP 0
+#endif
 #include <type_traits>
 
 #define SIMULATOR_HAS_PARENT_WIRE_REG 1
@@ -293,11 +297,18 @@ enum UopType {
   UOP_MUL,
   UOP_DIV,
   UOP_WFI,
-  UOP_FP,
+  UOP_FP,     // rv32 Zfinx: FP in the integer registers, integer queue
+  UOP_FMA,    // F/D (FP=1): fadd / fsub / fmul / fused multiply-add, pipelined, FP queue
+  UOP_FMISC,  // F/D: fsgnj, fmin/fmax, compares, classify, conversions inside the FP domain, FP -> integer moves/conversions
+  UOP_FDIV,   // F/D: fdiv / fsqrt, iterative
+  UOP_I2F,    // F/D: integer -> FP moves and conversions, issued from the integer queue
   MAX_UOP_TYPE
 };
 
 constexpr int UOP_TYPE_WIDTH = bit_width_for_count(MAX_UOP_TYPE);
+
+// F/D: the unit class of an OP-FP / fused multiply-add instruction (UopS::fp_cls)
+enum FpCls : uint8_t { FP_NONE = 0, FP_C_FMA, FP_C_FDIV, FP_C_MISC, FP_C_I2F };
 
 enum IQType {
   IQ_INT,
@@ -305,8 +316,10 @@ enum IQType {
   IQ_STA,
   IQ_STD,
   IQ_BR,
-  IQ_NUM,
+  IQ_FP,   // F/D only (FP=1)
 };
+// (an unscoped enum value IQ_NUM before F/D: the count is FP dependent now)
+constexpr int IQ_NUM = FP ? 6 : 5;
 
 constexpr int ROB_CPLT_MASK_WIDTH = 3;
 constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G0 = 0x1;

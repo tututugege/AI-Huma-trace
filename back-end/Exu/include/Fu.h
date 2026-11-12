@@ -15,7 +15,7 @@
 //   SINGLE : one cycle, always ready unless its result is not consumed (ALU/AGU/SDU/BRU/CSR)
 //   PIPE   : fully pipelined with a fixed latency (MUL)
 //   ITER   : one instruction at a time, latency depends on the operation (DIV, FPU)
-enum class FuKind : uint8_t { ALU, MUL, DIV, AGU, SDU, BRU, CSR, FPU };
+enum class FuKind : uint8_t { ALU, MUL, DIV, AGU, SDU, BRU, CSR, FPU, FMA, FMISC, FDIV, I2F };   // FMA / FMISC / I2F: pipelined FP units (FP=1); FDIV: iterative
 
 class Fu {
 public:
@@ -41,7 +41,7 @@ public:
 
   Fu(FuKind k, int port_idx) : kind(k), issue_port_idx(port_idx) {
     out.ready = true;
-    pipe_depth = (kind == FuKind::MUL) ? (MUL_MAX_LATENCY <= 0 ? 1 : MUL_MAX_LATENCY) : 0;
+    pipe_depth = pipe_latency();
   }
 
   void comb_begin() {
@@ -116,7 +116,7 @@ public:
       if (in.en && pipeline_1.size() < pipe_depth) {
         ExuInst inst = in.inst;
         compute(inst);
-        pipeline_1.push_back({inst, sim_time + MUL_MAX_LATENCY - 1});
+        pipeline_1.push_back({inst, sim_time + int(pipe_latency()) - 1});
       }
       out.complete = pipe_done(pipeline_1);
       if (out.complete) out.inst = pipeline_1.front().uop;
@@ -164,10 +164,25 @@ private:
     ExuInst inst;
   };
 
+  // latency of a pipelined unit (it is also the depth: one new uop per cycle)
+  size_t pipe_latency() const {
+    switch (kind) {
+    case FuKind::MUL: return MUL_MAX_LATENCY <= 0 ? 1 : MUL_MAX_LATENCY;
+    case FuKind::FMA: return FP_FMA_LAT;
+    case FuKind::FMISC: return FP_MISC_LAT;
+    case FuKind::I2F: return FP_I2F_LAT;
+    default: return 0;
+    }
+  }
+
   Mode mode() const {
     switch (kind) {
-    case FuKind::MUL: return Mode::PIPE;
+    case FuKind::MUL:
+    case FuKind::FMA:
+    case FuKind::FMISC:
+    case FuKind::I2F: return Mode::PIPE;
     case FuKind::DIV:
+    case FuKind::FDIV:
     case FuKind::FPU: return Mode::ITER;
     default: return Mode::SINGLE;
     }
@@ -180,6 +195,10 @@ private:
   // Latency of an iterative unit: the divider takes DIV_MAX_LATENCY, the FPU by operation.
   int iter_latency(const ExuInst &inst) const {
     if (kind == FuKind::DIV) return div_latency(inst->is_word);
+    if (kind == FuKind::FDIV) {   // F/D divide / square root: funct7[1:0] = fmt (1 = D), funct5 0x0b = fsqrt
+      const bool d = inst->func7 & 1, sq = (inst->func7 >> 2) == 0x0b;
+      return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
+    }
     constexpr int FADD = 0b00000, FSUB = 0b00001, FMUL = 0b00010, FDIV = 0b00011;
     constexpr int FSQRT = 0x2C, FCVT_W_S = 0x60, FCVT_S_W = 0x68;
     constexpr int LAT_FADD = 5, LAT_FMUL = 3, LAT_FDIV = 10, LAT_FCVT = 3;
@@ -214,6 +233,7 @@ private:
     default:
       break;
     }
+    if (FP) fp_trap(inst);
     if (msd::on) {
       msd::self_check(inst);
       msd::exec(0, inst);
@@ -221,6 +241,17 @@ private:
     if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL ||
                            inst.op == UOP_DIV || inst.op == UOP_FP))
       inst.result ^= 0xA5C3A5C3u;
+  }
+
+  // F/D: the function model decides what traps (mstatus.FS = Off, reserved rounding mode, ...): an FP-class uop whose fact says
+  // "trapped with an illegal instruction" becomes the illegal-instruction exception.  A page fault of flw/fld/fsw/fsd is the LSU's.
+  static void fp_trap(ExuInst &inst) {
+    const UopType op = inst.op;
+    const bool fpq = op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F;
+    const bool fpmem = (op == UOP_LOAD || op == UOP_STA || op == UOP_STD) && (inst->dest_fp || inst->src2_fp);
+    if (!fpq && !fpmem) return;
+    const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+    if (f && f->trapped && f->blocked == tb::Blocked::None && f->trap_cause == 2) inst.illegal_inst = true;
   }
 
   static void resolve_branch(ExuInst &inst) {

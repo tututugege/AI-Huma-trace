@@ -29,6 +29,7 @@ struct Fact {
   bool forced_jump = false;   // pc differed from the core's next pc
   Blocked blocked = Blocked::None;
   bool trapped = false;       // the step took a trap (undone: state restored, pc+4)
+  uint8_t trap_cause = 0;     // mcause of that trap (low bits; 2 = illegal instruction)
   bool rd_valid = false;      // writes a non-x0 register (FP builds: or an FP register, then rd_is_fp)
   bool rd_is_fp = false;      // the destination is f<rd> (F/D, rd may be 0); rd_value is the 64-bit register
   uint8_t rd = 0;

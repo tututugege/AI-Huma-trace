@@ -76,6 +76,7 @@ private:
   std::vector<uint64_t> wake_matrix_src2;
   std::vector<uint64_t> wake_matrix_src1_1;
   std::vector<uint64_t> wake_matrix_src2_1;
+  std::vector<uint64_t> wake_matrix_src3, wake_matrix_src3_1;   // F/D: the third source of the fused multiply-add (empty without FP)
 
   // Dirty tracking: entry/wake_matrix (committed) always equal entry_1/
   // wake_matrix_*_1 (working) at comb_begin (seq copies back). Writes to the
@@ -130,11 +131,15 @@ public:
 
     // Initialize segmented wakeup matrices:
     // [preg][word_idx], where each word tracks 64 IQ slots.
-    wake_matrix_src1.resize(PRF_NUM * wake_words_per_row, 0);
-    wake_matrix_src2.resize(PRF_NUM * wake_words_per_row, 0);
-    wake_matrix_src1_1.resize(PRF_NUM * wake_words_per_row, 0);
-    wake_matrix_src2_1.resize(PRF_NUM * wake_words_per_row, 0);
-    row_dirty.assign(PRF_NUM, 0);
+    wake_matrix_src1.resize(TAG_NUM * wake_words_per_row, 0);
+    wake_matrix_src2.resize(TAG_NUM * wake_words_per_row, 0);
+    wake_matrix_src1_1.resize(TAG_NUM * wake_words_per_row, 0);
+    wake_matrix_src2_1.resize(TAG_NUM * wake_words_per_row, 0);
+    if (FP) {
+      wake_matrix_src3.resize(TAG_NUM * wake_words_per_row, 0);
+      wake_matrix_src3_1.resize(TAG_NUM * wake_words_per_row, 0);
+    }
+    row_dirty.assign(TAG_NUM, 0);
 
     in.enq_reqs.resize(dispatch_width);
   }
@@ -182,7 +187,7 @@ public:
         continue;
       }
       uint32_t preg = in.wake_pregs[i];
-      if (preg >= PRF_NUM) {
+      if (preg >= TAG_NUM) {
         continue;
       }
       size_t row_base = matrix_row_base(preg);
@@ -214,6 +219,21 @@ public:
           mask2 &= (mask2 - 1);
         }
         wake_matrix_src2_1[row_base + w] = 0;
+
+        if (FP) {
+          uint64_t mask3 = wake_matrix_src3_1[row_base + w];
+          while (mask3) {
+            int bit = __builtin_ctzll(mask3);
+            int idx = (w << 6) + bit;
+            if (idx < size && entry_1[idx].valid && entry_1[idx].uop->src3_en &&
+                entry_1[idx].uop.src3_busy && entry_1[idx].uop->src3_preg == preg) {
+              entry_1[idx].uop.src3_busy = false;
+              mark_slot(idx);
+            }
+            mask3 &= (mask3 - 1);
+          }
+          wake_matrix_src3_1[row_base + w] = 0;
+        }
       }
     }
   }
@@ -228,6 +248,7 @@ public:
       auto fix = [&](IqStoredEntry &e) {
         if (e.uop->src1_en && !e.uop.src1_busy && e.uop->src1_preg == preg) { e.uop.src1_busy = true; hit = true; }
         if (e.uop->src2_en && !e.uop.src2_busy && e.uop->src2_preg == preg) { e.uop.src2_busy = true; hit = true; }
+        if (e.uop->src3_en && !e.uop.src3_busy && e.uop->src3_preg == preg) { e.uop.src3_busy = true; hit = true; }
       };
       fix(entry_1[i]);
       if (!hit) continue;
@@ -346,6 +367,7 @@ private:
     // Clear Wakeup Matrices
     std::fill(wake_matrix_src1_1.begin(), wake_matrix_src1_1.end(), 0);
     std::fill(wake_matrix_src2_1.begin(), wake_matrix_src2_1.end(), 0);
+    std::fill(wake_matrix_src3_1.begin(), wake_matrix_src3_1.end(), 0);
   }
 
   // 提交调度结果 (将选中的指令移出队列)
@@ -383,6 +405,7 @@ public:
     if (matrix_all_dirty) {
       wake_matrix_src1 = wake_matrix_src1_1;
       wake_matrix_src2 = wake_matrix_src2_1;
+      wake_matrix_src3 = wake_matrix_src3_1;
       matrix_all_dirty = false;
       for (uint32_t r : dirty_rows) row_dirty[r] = 0;
       dirty_rows.clear();
@@ -392,6 +415,7 @@ public:
         for (int w = 0; w < wake_words_per_row; w++) {
           wake_matrix_src1[base + w] = wake_matrix_src1_1[base + w];
           wake_matrix_src2[base + w] = wake_matrix_src2_1[base + w];
+          if (FP) wake_matrix_src3[base + w] = wake_matrix_src3_1[base + w];
         }
         row_dirty[r] = 0;
       }
@@ -481,15 +505,22 @@ private:
 
     if (ent.uop->src1_en && ent.uop.src1_busy) {
       uint32_t preg = ent.uop->src1_preg;
-      if (preg < PRF_NUM) {
+      if (preg < TAG_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] |= bit;
         mark_row(preg);
       }
     }
     if (ent.uop->src2_en && ent.uop.src2_busy) {
       uint32_t preg = ent.uop->src2_preg;
-      if (preg < PRF_NUM) {
+      if (preg < TAG_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] |= bit;
+        mark_row(preg);
+      }
+    }
+    if (FP && ent.uop->src3_en && ent.uop.src3_busy) {
+      uint32_t preg = ent.uop->src3_preg;
+      if (preg < TAG_NUM) {
+        wake_matrix_src3_1[matrix_row_base(preg) + word] |= bit;
         mark_row(preg);
       }
     }
@@ -502,15 +533,22 @@ private:
 
     if (ent.uop->src1_en) {
       uint32_t preg = ent.uop->src1_preg;
-      if (preg < PRF_NUM) {
+      if (preg < TAG_NUM) {
         wake_matrix_src1_1[matrix_row_base(preg) + word] &= clear_mask;
         mark_row(preg);
       }
     }
     if (ent.uop->src2_en) {
       uint32_t preg = ent.uop->src2_preg;
-      if (preg < PRF_NUM) {
+      if (preg < TAG_NUM) {
         wake_matrix_src2_1[matrix_row_base(preg) + word] &= clear_mask;
+        mark_row(preg);
+      }
+    }
+    if (FP && ent.uop->src3_en) {
+      uint32_t preg = ent.uop->src3_preg;
+      if (preg < TAG_NUM) {
+        wake_matrix_src3_1[matrix_row_base(preg) + word] &= clear_mask;
         mark_row(preg);
       }
     }
@@ -519,7 +557,7 @@ private:
   bool is_ready(const IqStoredEntry &ent) {
     const auto &op = ent.uop;
     bool ops_ok =
-        (!op->src1_en || !op.src1_busy) && (!op->src2_en || !op.src2_busy);
+        (!op->src1_en || !op.src1_busy) && (!op->src2_en || !op.src2_busy) && (!op->src3_en || !op.src3_busy);
     return ops_ok ;
   }
 };

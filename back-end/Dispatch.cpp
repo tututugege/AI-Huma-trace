@@ -16,6 +16,7 @@ bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
 void Dispatch::apply_wakeup_to_uop(Uop &uop) const {
   if (uop->src1_en && is_preg_woken(uop->src1_preg)) uop.src1_busy = false;
   if (uop->src2_en && is_preg_woken(uop->src2_preg)) uop.src2_busy = false;
+  if (uop->src3_en && is_preg_woken(uop->src3_preg)) uop.src3_busy = false;
 }
 
 void Dispatch::init() {
@@ -111,12 +112,14 @@ void Dispatch::comb_wake() {
     Uop &u = inst_alloc[i];
     u.src1_busy = u->src1_en ? busy_table[u->src1_preg] : false;
     u.src2_busy = u->src2_en ? busy_table[u->src2_preg] : false;
+    u.src3_busy = u->src3_en ? busy_table[u->src3_preg] : false;
     apply_wakeup_to_uop(u);
     for (int j = 0; j < i; j++) {
-      if (!w.dis2rob.valid[j] || !inst_alloc[j].dest_en || inst_alloc[j]->dest_areg == 0) continue;
+      if (!w.dis2rob.valid[j] || !inst_alloc[j].dest_en || (inst_alloc[j]->dest_areg == 0 && !inst_alloc[j]->dest_fp)) continue;
       if (is_eliminated_move(inst_alloc[j])) continue;  // its register is its source's: no writer to wait for
       if (u->src1_en && u->src1_preg == inst_alloc[j].dest_preg) u.src1_busy = true;
       if (u->src2_en && u->src2_preg == inst_alloc[j].dest_preg) u.src2_busy = true;
+      if (u->src3_en && u->src3_preg == inst_alloc[j].dest_preg) u.src3_busy = true;
     }
   }
 }
@@ -269,6 +272,7 @@ void Dispatch::comb_pipeline() {
     if (inst_valid_1[i]) {
       inst_r_1[i].src1_busy = inst_alloc[i].src1_busy;
       inst_r_1[i].src2_busy = inst_alloc[i].src2_busy;
+      inst_r_1[i].src3_busy = inst_alloc[i].src3_busy;
       apply_wakeup_to_uop(inst_r_1[i]);
       inst_r_1[i].br_mask &= ~clear_mask;
     }
@@ -291,6 +295,7 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   uop.dest_preg = inst.dest_preg;
   uop->src1_preg = inst->src1_preg;
   uop->src2_preg = inst->src2_preg;
+  uop->src3_preg = inst->src3_preg;
   uop->ftq_idx = inst->ftq_idx;
   uop->ftq_offset = inst->ftq_offset;
   uop->is_atomic = inst->is_atomic;
@@ -299,6 +304,7 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   uop->src2_en = inst->src2_en;
   uop.src1_busy = inst.src1_busy;
   uop.src2_busy = inst.src2_busy;
+  uop.src3_busy = inst.src3_busy;
   uop->src1_is_pc = inst->src1_is_pc;
   uop->src2_is_imm = inst->src2_is_imm;
   uop->func3 = inst->func3;
@@ -339,7 +345,19 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   case ADD:   add(IQ_INT, UOP_ADD); break;
   case MUL:   add(IQ_INT, UOP_MUL); break;
   case DIV:   add(IQ_INT, UOP_DIV); break;
-  case FPOP:    add(IQ_INT, UOP_FP); break;
+  case FPOP:
+#if FP
+    switch (inst->fp_cls) {
+    case FP_C_FMA:  add(IQ_FP, UOP_FMA); break;
+    case FP_C_FDIV: add(IQ_FP, UOP_FDIV); break;
+    case FP_C_MISC: add(IQ_FP, UOP_FMISC); break;
+    case FP_C_I2F:  add(IQ_INT, UOP_I2F); break;
+    default: Assert(0 && "FP instruction without a unit class");
+    }
+#else
+    add(IQ_INT, UOP_FP);
+#endif
+    break;
   case BR:    add(IQ_BR, UOP_BR); break;
   case LOAD:  add(IQ_LD, UOP_LOAD); break;
   case STORE:  // STA uses the base register, STD the data register

@@ -267,6 +267,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
     // Speculative trap: undo at once (state and store), continue at pc+4.
     e->f.trapped = true;
     e->trap_after.reset(new RefCpuState(after));
+    e->f.trap_cause = (uint8_t)(((after.csr[1] == pc) ? after.csr[2] : after.csr[12]) & 0x3f);   // mcause if the trap went to M (mepc = pc), else scause
     stats.trapped++;
     if (e->has_undo) { refcpu_store_word(ctx_, e->undo_addr, e->undo_old); if (e->undo_words == 2) refcpu_store_word(ctx_, e->undo_addr + 4, e->undo_old_hi); }
     e->has_undo = false;

@@ -74,6 +74,7 @@ inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_iq(int iq_id) {
   switch (iq_id) {
   case IQ_INT:
   case IQ_LD:
+  case IQ_FP:
     return ROB_CPLT_G0;
   case IQ_BR:
   case IQ_STA:
@@ -94,6 +95,11 @@ inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_issue_port(int port_idx) {
       port_idx < IQ_LD_PORT_BASE + LSU_LOAD_WB_WIDTH) {
     return ROB_CPLT_G0;
   }
+#if FP
+  if (port_idx >= IQ_FP_PORT_BASE && port_idx < IQ_FP_PORT_BASE + GLOBAL_IQ_CONFIG[IQ_FP].port_num) {
+    return ROB_CPLT_G0;
+  }
+#endif
   if (port_idx >= IQ_BR_PORT_BASE && port_idx < IQ_BR_PORT_BASE + BRU_NUM) {
     return ROB_CPLT_G1;
   }

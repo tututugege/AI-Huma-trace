@@ -60,6 +60,6 @@ public:
   Uop inst_r_1[DECODE_WIDTH];
   reg<1> inst_valid[DECODE_WIDTH];
   wire<1> inst_valid_1[DECODE_WIDTH];
-  reg<1> busy_table[PRF_NUM];
-  wire<1> busy_table_1[PRF_NUM];
+  reg<1> busy_table[TAG_NUM];   // integer tags, then (FP=1) the FP tags
+  wire<1> busy_table_1[TAG_NUM];
 };

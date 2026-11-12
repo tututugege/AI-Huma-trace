@@ -253,6 +253,17 @@ constexpr int ARF_NUM = 32;
 #define CFG_PRF_NUM 128
 #endif
 constexpr int PRF_NUM = CFG_PRF_NUM;
+// F/D (FP=1): a separate FP physical register file.  In the model the physical-register tags are one number space: integer tags
+// 0..PRF_NUM-1, FP tags FP_TAG_BASE.. (the issue queues, the busy table and the wake-up buses stay unchanged); the RTL has two
+// register files and a domain bit.
+#ifndef CFG_FPRF_NUM
+#define CFG_FPRF_NUM 96
+#endif
+constexpr int FPRF_NUM = FP ? CFG_FPRF_NUM : 0;
+constexpr int FP_TAG_BASE = PRF_NUM;
+constexpr int TAG_NUM = PRF_NUM + FPRF_NUM;
+constexpr int FP_ARF_NUM = 32;
+static_assert(!FP || FPRF_NUM > FP_ARF_NUM + 1, "CFG_FPRF_NUM too small");
 #ifndef CFG_MAX_BR_NUM
 #define CFG_MAX_BR_NUM 32
 #endif
@@ -408,6 +419,11 @@ constexpr uint64_t OP_MASK_BR = (1ULL << UOP_BR) | (1ULL << UOP_JUMP);
 constexpr uint64_t OP_MASK_LD = (1ULL << UOP_LOAD);
 constexpr uint64_t OP_MASK_STA = (1ULL << UOP_STA);
 constexpr uint64_t OP_MASK_STD = (1ULL << UOP_STD);
+constexpr uint64_t OP_MASK_FMA = (1ULL << UOP_FMA);
+constexpr uint64_t OP_MASK_FMISC = (1ULL << UOP_FMISC);
+constexpr uint64_t OP_MASK_FDIV = (1ULL << UOP_FDIV);
+constexpr uint64_t OP_MASK_I2F = (1ULL << UOP_I2F);
+constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   // everything the FP issue queue holds
 constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 
 // ============================================================
@@ -460,6 +476,39 @@ constexpr uint64_t OP_MASK_FP = (1ULL << UOP_FP);
 #ifndef CFG_BR_IQ_ENQ_WIDTH
 #define CFG_BR_IQ_ENQ_WIDTH 5
 #endif
+// F/D (FP=1) issue queue and unit latencies (EXP-030; all of them are starting values to be calibrated).  An FP uop is
+// woken CFG_FP_*_LAT cycles after it issues (the unit is pipelined: one new uop per cycle).
+#ifndef CFG_FP_IQ_SIZE
+#define CFG_FP_IQ_SIZE 32
+#endif
+#ifndef CFG_FP_IQ_ENQ_WIDTH
+#define CFG_FP_IQ_ENQ_WIDTH 4
+#endif
+#ifndef CFG_FP_FMA_LAT
+#define CFG_FP_FMA_LAT 4     // fadd / fsub / fmul / fmadd family (S and D)
+#endif
+#ifndef CFG_FP_MISC_LAT
+#define CFG_FP_MISC_LAT 3    // fsgnj, fmin/fmax, fcmp, fclass, fcvt inside FP, FP -> integer
+#endif
+#ifndef CFG_FP_I2F_LAT
+#define CFG_FP_I2F_LAT 3     // integer -> FP moves and conversions (issued from an integer port)
+#endif
+#ifndef CFG_FP_FDIV_S_LAT
+#define CFG_FP_FDIV_S_LAT 12
+#endif
+#ifndef CFG_FP_FDIV_D_LAT
+#define CFG_FP_FDIV_D_LAT 20
+#endif
+#ifndef CFG_FP_FSQRT_S_LAT
+#define CFG_FP_FSQRT_S_LAT 14
+#endif
+#ifndef CFG_FP_FSQRT_D_LAT
+#define CFG_FP_FSQRT_D_LAT 24
+#endif
+constexpr int FP_FMA_LAT = CFG_FP_FMA_LAT, FP_MISC_LAT = CFG_FP_MISC_LAT, FP_I2F_LAT = CFG_FP_I2F_LAT;
+constexpr int FP_FDIV_S_LAT = CFG_FP_FDIV_S_LAT, FP_FDIV_D_LAT = CFG_FP_FDIV_D_LAT;
+constexpr int FP_FSQRT_S_LAT = CFG_FP_FSQRT_S_LAT, FP_FSQRT_D_LAT = CFG_FP_FSQRT_D_LAT;
+static_assert(FP_FMA_LAT >= 2 && FP_MISC_LAT >= 2 && FP_I2F_LAT >= 2, "FP latencies must be >= 2 (1 would be a fast wake-up)");
 enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 #define PORT_CFG(mask) {(__COUNTER__ - ISSUE_PORT_COUNTER_BASE - 1), (mask)}
 
@@ -470,8 +519,13 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL |
              OP_MASK_CSR), // Port 0: ALU + MUL/DIV + CSR
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_FP), // Port 1: ALU + DIV + FP
-    PORT_CFG(OP_MASK_ALU | OP_MASK_MUL), // Port 1: ALU + DIV + FP
-    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV + FP
+#if FP
+    PORT_CFG(OP_MASK_ALU | OP_MASK_MUL | OP_MASK_I2F), // Port 2: ALU + MUL + integer -> FP
+    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_I2F), // Port 3: ALU + DIV + integer -> FP
+#else
+    PORT_CFG(OP_MASK_ALU | OP_MASK_MUL), // Port 2: ALU + MUL
+    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 3: ALU + DIV
+#endif
 #if CFG_PLAIN_ALU_PORTS >= 1
     PORT_CFG(OP_MASK_ALU ), // plain ALU
 #endif
@@ -526,6 +580,13 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
 #endif
 #if CFG_BR_PORTS >= 4
     PORT_CFG(OP_MASK_BR),
+#endif
+#if FP
+    // F/D issue ports (last: the FP queue binds by base + offset): two FMA pipes, a divide / square-root unit; all three
+    // also take the miscellaneous FP operations (each as its own unit, so a long divide does not block them)
+    PORT_CFG(OP_MASK_FMA | OP_MASK_FMISC),
+    PORT_CFG(OP_MASK_FMA | OP_MASK_FMISC),
+    PORT_CFG(OP_MASK_FDIV | OP_MASK_FMISC),
 #endif
 };
 #undef PORT_CFG
@@ -609,10 +670,13 @@ constexpr int LSU_LOAD_WB_WIDTH = LSU_LDU_COUNT;
 constexpr int ITLB_ENTRIES = 64;
 constexpr int DTLB_ENTRIES = 64;
 
+// F/D: wake-up channels of the delayed FP wake-ups (one result per FP unit and cycle at most: 3 FP ports (FMA/MISC or DIV each
+// completing one uop per cycle in the worst case counted per unit) + 2 integer ports with I2F; 8 is a safe bound)
+constexpr int FPW_CH = FP ? 8 : 0;
 constexpr int MAX_WAKEUP_PORTS =
     LSU_LOAD_WB_WIDTH + count_ports_with_mask(OP_MASK_ALU) +
     count_ports_with_mask(OP_MASK_MUL) + count_ports_with_mask(OP_MASK_DIV) +
-    count_ports_with_mask(OP_MASK_FP);
+    count_ports_with_mask(OP_MASK_FP) + FPW_CH;
 
 // ============================================================
 // ISU Scheduling Policy
@@ -635,6 +699,7 @@ constexpr int IQ_LD_PORT_BASE = find_first_port_with_mask(OP_MASK_LD);
 constexpr int IQ_STA_PORT_BASE = find_first_port_with_mask(OP_MASK_STA);
 constexpr int IQ_STD_PORT_BASE = find_first_port_with_mask(OP_MASK_STD);
 constexpr int IQ_BR_PORT_BASE = find_first_port_with_mask(OP_MASK_BR);
+constexpr int IQ_FP_PORT_BASE = FP ? find_first_port_with_mask(OP_MASK_FPQ) : 0;
 
 // ============================================================
 // Derived Counts
@@ -644,7 +709,8 @@ constexpr int calculate_total_fu_count() {
   int total = 0;
   uint64_t major_masks[] = {OP_MASK_ALU, OP_MASK_CSR, OP_MASK_MUL,
                             OP_MASK_DIV, OP_MASK_BR,  OP_MASK_LD,
-                            OP_MASK_STA, OP_MASK_STD, OP_MASK_FP};
+                            OP_MASK_STA, OP_MASK_STD, OP_MASK_FP,
+                            OP_MASK_FMA, OP_MASK_FMISC, OP_MASK_FDIV, OP_MASK_I2F};
   for (const auto &cfg : GLOBAL_ISSUE_PORT_CONFIG) {
     for (uint64_t m : major_masks) {
       if (cfg.support_mask & m)
@@ -670,7 +736,12 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
     {IQ_STD, CFG_STD_IQ_SIZE, CFG_STD_IQ_ENQ_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
      count_ports_with_mask(OP_MASK_STD)},
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
-     count_ports_with_mask(OP_MASK_BR)}};
+     count_ports_with_mask(OP_MASK_BR)}
+#if FP
+    ,
+    {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)}
+#endif
+};
 
 // per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)
 constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
@@ -798,7 +869,7 @@ static_assert(ITLB_ENTRIES > 0, "ITLB_ENTRIES must be positive");
 // ============================================================
 
 constexpr int AREG_IDX_WIDTH = 6;
-constexpr int PRF_IDX_WIDTH = clog2(PRF_NUM);
+constexpr int PRF_IDX_WIDTH = clog2(TAG_NUM);
 constexpr int ROB_IDX_WIDTH = clog2(ROB_NUM);
 constexpr int STQ_IDX_WIDTH = clog2(STQ_SIZE);
 constexpr int LDQ_IDX_WIDTH = clog2(LDQ_SIZE);

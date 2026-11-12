@@ -194,6 +194,10 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop->func3 = f3;
   uop->func7 = f7;
   uop->is_word = false;
+  uop->dest_fp = uop->src1_fp = uop->src2_fp = uop->src3_fp = false;
+  uop->src3_en = false;
+  uop->src3_areg = 0;
+  uop->fp_cls = FP_NONE;
   uop->csr_idx = csr;
   uop.page_fault_inst = false;
   uop.illegal_inst = false;
@@ -294,6 +298,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     uop->imm = 0;
     uop->is_atomic = true;
     break;
+#if !FP   // Zfinx (rv32; and rv64 without F/D): FP in the integer registers
   case number_12_opcode_float: {
     // rs2 doubles as the format selector of FCVT and the other unary ops, which have no second source
     const bool unary = f7 == 0x60 || f7 == 0x68 || f7 == 0x2C || f7 == 0x70;
@@ -302,6 +307,58 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     uop->imm = rb;
     break;
   }
+#endif
+#if FP
+  // F/D (rv64): the function model decides what traps (reserved rounding modes, mstatus.FS = Off): an executed FP uop whose fact
+  // says "trapped with illegal instruction" becomes the exception in Fu::compute.  Statically reserved encodings trap here.
+  case 0x07:  // flw / fld
+    if (f3 != 2 && f3 != 3) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
+    set(true, true, false, LOAD);
+    uop->dest_fp = true;
+    uop->imm = immI(inst);
+    break;
+  case 0x27:  // fsw / fsd
+    if (f3 != 2 && f3 != 3) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
+    set(false, true, true, STORE);
+    uop->src2_fp = true;
+    uop->imm = immS(inst);
+    break;
+  case 0x43: case 0x47: case 0x4b: case 0x4f:  // fmadd / fmsub / fnmsub / fnmadd: three FP sources
+    if ((f7 & 3) > 1) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
+    set(true, true, true, FPOP);
+    uop->src2_is_imm = false;
+    uop->dest_fp = uop->src1_fp = uop->src2_fp = uop->src3_fp = true;
+    uop->src3_en = true;
+    uop->src3_areg = BITS(inst, 31, 27);
+    uop->fp_cls = FP_C_FMA;
+    break;
+  case 0x53: {  // OP-FP: fmt (funct7[1:0]) 0 = S, 1 = D; the class comes from funct5
+    const uint32_t f5 = f7 >> 2;
+    if ((f7 & 3) > 1) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
+    uop->src2_is_imm = false;
+    switch (f5) {
+    case 0: case 1: case 2:  // fadd fsub fmul
+      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_FMA; break;
+    case 3:                  // fdiv
+      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_FDIV; break;
+    case 0x0b:               // fsqrt
+      set(true, true, false, FPOP); uop->dest_fp = uop->src1_fp = true; uop->fp_cls = FP_C_FDIV; break;
+    case 4: case 5:          // fsgnj*, fmin / fmax
+      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_MISC; break;
+    case 8:                  // fcvt.s.d / fcvt.d.s
+      set(true, true, false, FPOP); uop->dest_fp = uop->src1_fp = true; uop->fp_cls = FP_C_MISC; break;
+    case 0x14:               // feq / flt / fle: integer result
+      set(true, true, true, FPOP); uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_MISC; break;
+    case 0x18: case 0x1c:    // fcvt.{w,wu,l,lu}.fmt, fmv.x.w / fmv.x.d / fclass: integer result
+      set(true, true, false, FPOP); uop->src1_fp = true; uop->fp_cls = FP_C_MISC; break;
+    case 0x1a: case 0x1e:    // fcvt.fmt.{w,wu,l,lu}, fmv.w.x / fmv.d.x: integer source
+      set(true, true, false, FPOP); uop->dest_fp = true; uop->fp_cls = FP_C_I2F; break;
+    default:
+      set(false, false, false, NOP); uop.illegal_inst = true; break;
+    }
+    break;
+  }
+#endif
   default:
     set(false, false, false, NOP);
     uop.illegal_inst = true;
@@ -315,5 +372,5 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop.tma.mem_commit_is_store = type == STORE || (type == AMO && amo != AmoOp::LR);
   // an AMO that discards its result still writes through a dedicated register (it keeps the load's destination)
   if (type == AMO && uop->dest_areg == 0 && amo != AmoOp::LR && amo != AmoOp::SC) uop->dest_areg = 32;
-  if (uop->dest_areg == 0) uop.dest_en = false;
+  if (uop->dest_areg == 0 && !uop->dest_fp) uop.dest_en = false;   // x0 is not written (f0 is a register)
 }

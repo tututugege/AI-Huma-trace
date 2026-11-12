@@ -106,6 +106,14 @@ struct UopS {
   wire<7> func7;
   wire<1> is_word;      // rv64 *W instruction (OP-IMM-32 / OP-32): a 32-bit operation (the divider needs half the iterations)
   wire<1> is_atomic;
+  // F/D (FP=1): register domains and the third source of the fused multiply-add.  An areg number only names a register
+  // together with its domain bit (f0 is a real register, x0 is not); the physical tags of the two domains are one number
+  // space (config.h, FP_TAG_BASE).
+  wire<1> dest_fp, src1_fp, src2_fp, src3_fp;
+  wire<1> src3_en;
+  wire<AREG_IDX_WIDTH> src3_areg;
+  wire<PRF_IDX_WIDTH> src3_preg;
+  wire<3> fp_cls;       // FpCls: which FP unit class the instruction needs (FP_NONE unless it is an OP-FP / fused instruction)
   wire<PRF_IDX_WIDTH> old_dest_preg;
   wire<XLEN> pc;
   wire<XLEN> ftq_next_pc;
@@ -130,7 +138,7 @@ struct Uop {
 
   wire<1> mispred;
   wire<1> br_taken;
-  wire<1> src1_busy, src2_busy;
+  wire<1> src1_busy, src2_busy, src3_busy;
   wire<BR_MASK_WIDTH> br_mask;
 
   wire<ROB_IDX_WIDTH> rob_idx;

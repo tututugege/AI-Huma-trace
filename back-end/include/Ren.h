@@ -34,6 +34,23 @@ public:
   reg<PRF_IDX_WIDTH> free_tail;
   reg<PRF_IDX_WIDTH> alloc_checkpoint_head[MAX_BR_NUM];
 
+#if FP
+  // F/D: the FP rename state (32 architectural registers, no x0; tags FP_TAG_BASE + 0..FPRF_NUM-1), same structure as the integer one
+  reg<PRF_IDX_WIDTH> fp_arch_RAT[FP_ARF_NUM];
+  reg<PRF_IDX_WIDTH> fp_spec_RAT[FP_ARF_NUM];
+  reg<PRF_IDX_WIDTH> fp_RAT_checkpoint[MAX_BR_NUM][FP_ARF_NUM];
+  reg<PRF_IDX_WIDTH> fp_free_list[FPRF_NUM];
+  reg<PRF_IDX_WIDTH> fp_free_head, fp_free_head_commit, fp_free_tail;
+  reg<PRF_IDX_WIDTH> fp_alloc_checkpoint_head[MAX_BR_NUM];
+  wire<PRF_IDX_WIDTH> fp_arch_RAT_1[FP_ARF_NUM];
+  wire<PRF_IDX_WIDTH> fp_spec_RAT_1[FP_ARF_NUM];
+  wire<PRF_IDX_WIDTH> fp_RAT_checkpoint_1[MAX_BR_NUM][FP_ARF_NUM];
+  wire<PRF_IDX_WIDTH> fp_free_list_1[FPRF_NUM];
+  wire<PRF_IDX_WIDTH> fp_free_head_1, fp_free_head_commit_1, fp_free_tail_1;
+  wire<PRF_IDX_WIDTH> fp_alloc_checkpoint_head_1[MAX_BR_NUM];
+  uint64_t ckpt_dirty_fp = 0;  // rows of fp_RAT_checkpoint_1 written this cycle
+#endif
+
   Uop inst_r_1[DECODE_WIDTH];
   wire<1> inst_valid_1[DECODE_WIDTH];
   wire<PRF_IDX_WIDTH> arch_RAT_1[ARF_NUM + 1];
