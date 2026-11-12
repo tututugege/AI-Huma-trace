@@ -84,7 +84,6 @@ void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx) {
     if (difftest_get_ref_state(&s)) refcpu_set_state(g_ctx, &s);
     g_resync = false;
   }
-  if (pc >= 0x80000000u && pc < 0x100000000ull && inst != pmem_read(static_cast<uint32_t>(pc)) && std::getenv("TB_DEBUG_FLUSH")) { static int n = 0; if (n++ < 4) std::fprintf(stderr, "[BAD-FETCH] uid=%llu pc=0x%x inst=0x%08x pmem=0x%08x\n", (unsigned long long)uid, static_cast<unsigned>(pc), inst, pmem_read(static_cast<uint32_t>(pc))); }
   g_bridge->dispatch(uid, pc, inst);
   g_c.dispatch++;
 }
@@ -130,7 +129,6 @@ static void apply_mem_write(const tb::Fact *f) {
   if (!neg && f && f->has_mem_write && !f->trapped && f->blocked == tb::Blocked::None) {
     // (no functional-memory write: the core owns the memory; instruction words and PTEs are read from it)
     g_c.mem_writes++;
-    if (g_c.mem_writes <= 3 && std::getenv("TB_DEBUG_DDR")) std::fprintf(stderr, "[TB] commit mem write word=0x%08x data=0x%08x\n", f->mem_waddr, f->mem_wdata);
   }
 }
 
@@ -155,7 +153,6 @@ void on_flush(int64_t uid, bool interrupt) {
   g_c.flush++;
   static const bool use_ref = std::getenv("TB_RESYNC_REF") != nullptr;  // P1b behaviour, for comparison
   if (use_ref) { g_resync = true; return; }
-  if (std::getenv("TB_DEBUG_FLUSH")) { const tb::Fact *ff = uid >= 0 ? g_bridge->find((uint64_t)uid) : nullptr; std::fprintf(stderr, "[FLUSH] uid=%lld interrupt=%d pc=0x%llx inst=0x%x trapped=%d\n", (long long)uid, (int)interrupt, (unsigned long long)(ff ? ff->pc : 0), ff ? ff->inst : 0, ff ? (int)ff->trapped : -1); }
   if (interrupt || uid < 0) return;  // interrupt: handled by on_interrupt; no committing instruction: nothing to do yet
   apply_mem_write(g_bridge->find((uint64_t)uid));
   g_bridge->commit_flush((uint64_t)uid);
@@ -186,7 +183,6 @@ void on_exec(const ExecObs &o) {
   if (!f) { g_c.skip_nofact++; g_c.nofact_by_op[o.op & 31]++; if (g_c.nofact_by_op[o.op & 31] <= 3) std::fprintf(stderr, "[TB_CHECK] nofact op=%d uid=%llu oldest=%llu in_flight=%zu\n", o.op, (unsigned long long)uid, (unsigned long long)(g_bridge->in_flight() ? g_bridge->oldest_uid() : 0), g_bridge->in_flight()); return; }
   // Values the bridge cannot know: patch them from the model, then compare as usual.
   if (o.op == UOP_LOAD && f->blocked == tb::Blocked::MemOutOfRam && !o.page_fault) {
-    if (std::getenv("TB_DEBUG_PATCH") && g_c.patch_mmio_load < 6) std::fprintf(stderr, "[PATCH] uid=%llu pc=0x%llx vaddr=0x%llx model=0x%x\n", (unsigned long long)uid, (unsigned long long)f->pc, (unsigned long long)f->vaddr, o.result);
     if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_mmio_load++; return; }
   }
   if (o.op == UOP_CSR && f->rd_valid && widen_result(o, f->inst) != f->rd_value && f->blocked == tb::Blocked::None && !f->trapped) {

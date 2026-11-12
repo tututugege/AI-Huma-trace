@@ -174,7 +174,6 @@ public:
   int lp_bounce = 0;        // aged replay register bumps the last new load (LSU_PIPE_BOUNCE cycles, 0 = off)
   int lp_rblk = 1;          // do not launch on a port with a pending DCache hidden retry (LSU_PIPE_RBLK)
   int lp_gate = 1;          // DCache read enable qualified by the partial CAM (LSU_PIPE_GATE)
-  int lp_rp_reg = 1;        // replay selection registered before L1 (LSU_PIPE_RPREG)
 
   StqEntry get_stq_entry(int idx, bool flag);
 

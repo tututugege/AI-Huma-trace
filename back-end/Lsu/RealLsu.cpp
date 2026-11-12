@@ -26,7 +26,6 @@ void RealLsu::init() {
   if (const char *r = std::getenv("LSU_PIPE_BOUNCE")) lp_bounce = std::min(7, std::max(0, std::atoi(r)));
   if (const char *r = std::getenv("LSU_PIPE_GATE")) lp_gate = std::atoi(r) != 0;
   if (const char *r = std::getenv("LSU_PIPE_RBLK")) lp_rblk = std::atoi(r) != 0;
-  if (const char *r = std::getenv("LSU_PIPE_RPREG")) lp_rp_reg = std::atoi(r) != 0;
 }
 
 static uint32_t replay_delay_cycles(ReplayType replay) {

@@ -42,7 +42,7 @@ extern void (*g_icache_fill_hook)(uint32_t index, uint32_t tag);
 namespace ipf {
 static const int on = std::getenv("FE_IPF") ? std::atoi(std::getenv("FE_IPF")) : 0;
 static const int lat = std::getenv("FE_IPF_LAT") ? std::atoi(std::getenv("FE_IPF_LAT")) : 12;
-static const size_t maxfl = std::getenv("FE_IPF_MAX") ? size_t(std::atoi(std::getenv("FE_IPF_MAX"))) : 4;
+static const size_t maxfl = 4;   // in-flight instruction-prefetch fills
 struct Fl { uint32_t index, tag; uint64_t ready; };
 static std::vector<Fl> fl;
 static std::unordered_set<uint32_t> seen, pfd;   // key = tag << 8 | index
