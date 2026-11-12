@@ -15,6 +15,8 @@
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
+#include <type_traits>
+#include <utility>
 
 namespace bpuf {
 
@@ -258,7 +260,6 @@ class BpuPipe {
   };
 
   struct Txn {
-    State nx;                          // next value of every pipeline register
     uint32_t ub_wmask[2] = {};         // ways written in the set below: [0] uBTB (S0), [1] S1 level
     uint32_t ub_set[2] = {};
     UbEnt ub_v[2][MAXW];
@@ -284,7 +285,10 @@ class BpuPipe {
  private:
   int mode_ = 0, D_ = 2, N_ = 128, W_ = 2, S_ = 64, UQ_ = 8, P_ = 2;
   int loop_ = 0, bb_ = 0, merge_ = 1, ubmain_ = 0, tqd_ = 4, hist_ = 0, hsym_ = 2, hb_ = 0, pdck_ = 0, hb1_ = 0;
-  State st_;
+  // The pipeline registers are double-buffered: comb() builds the next value in *nxp_ (from *stp_), commit() flips the two.
+  // (R[k] for k >= D_ is never written and stays Blk{} in both buffers.)
+  State sb_[2];
+  State *stp_ = &sb_[0], *nxp_ = &sb_[1];
   UbTab ub0_, ub1_;
   Tage tage_[NB];
   Btb btb_[NB];
@@ -577,7 +581,7 @@ class BpuPipe {
   bool repair_blk(const InputPayload &in, State &n) const {
     const RecP &rc = rec_[in.rf_blk & 255];
     const uint32_t rslot = (in.rf_pc - rc.base) >> 2;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
-    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == st_.epoch && rslot < FW && rc.base + 4u * rslot == in.rf_pc)) return false;
+    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && rc.base + 4u * rslot == in.rf_pc)) return false;
     restore(rc.ck, n.spec, n.sras);
     if (repair_ == 2) n.sras = rc.rf;
     if (repair_ == 3) n.sras = n.aras;   // history repair only, RAS from the committed state
@@ -622,9 +626,9 @@ class BpuPipe {
   // Old rule: one entry per bank, second update to a bank in a cycle is dropped; type predictor updated straight from the commit stream.
   void update_old(const InputPayload &in, State &n, Txn &t) const {
     for (int b = 0; b < NB; b++) {
-      if (st_.cnt[b] == 0) continue;
-      apply_table_update(st_.q_old[st_.rd[b]][b], t);
-      n.rd[b] = (st_.rd[b] + 1) % Q_DEPTH; n.cnt[b]--;
+      if ((*stp_).cnt[b] == 0) continue;
+      apply_table_update((*stp_).q_old[(*stp_).rd[b]][b], t);
+      n.rd[b] = ((*stp_).rd[b] + 1) % Q_DEPTH; n.cnt[b]--;
     }
     bool enq[NB] = {}, enq_nonctl[NB] = {};
     for (int i = 0; i < CW; i++) {
@@ -649,16 +653,16 @@ class BpuPipe {
   // Update queue: control updates only; an entry is written when its bank has no S1 read this cycle (reads win), at most P_ writes
   // per cycle, one per bank. A full queue drops the new entry.
   void update_queue(const InputPayload &in, State &n, Txn &t) const {
-    const uint32_t rdm = read_mask(st_.R[0]);
+    const uint32_t rdm = read_mask((*stp_).R[0]);
     uint8_t bbr[MAXBB] = {};
-    if (bb_ && st_.R[0].valid) { const Blk &b = st_.R[0]; bbr[win_of(b.base) % bb_] = 1; bbr[win_of(b.bnd - 4) % bb_] = 1; }
+    if (bb_ && (*stp_).R[0].valid) { const Blk &b = (*stp_).R[0]; bbr[win_of(b.base) % bb_] = 1; bbr[win_of(b.bnd - 4) % bb_] = 1; }
     uint32_t wrm = 0;
     int nw = 0, kn = 0;
     UpdEnt keep[MAXUQ];
     bool done[MAXUQ] = {};
-    for (int qi = 0; qi < st_.uq_n; qi++) {
+    for (int qi = 0; qi < (*stp_).uq_n; qi++) {
       if (done[qi]) continue;
-      const UpdEnt &e = st_.uq[qi];
+      const UpdEnt &e = (*stp_).uq[qi];
       const uint32_t b = bank_of(e.pc);
       if (!bb_) {
         if (nw < P_ && !((rdm >> b) & 1) && !((wrm >> b) & 1)) {
@@ -676,9 +680,9 @@ class BpuPipe {
         apply_table_update(e, t); type_update(e, t);
         wrm |= 1u << b; nw++; t.bb_wr[wb] = 1; t.s_upd_applied++;
         if (merge_) {
-          for (int qj = qi + 1; qj < st_.uq_n; qj++) {
+          for (int qj = qi + 1; qj < (*stp_).uq_n; qj++) {
             if (done[qj]) continue;
-            const UpdEnt &f = st_.uq[qj];
+            const UpdEnt &f = (*stp_).uq[qj];
             const uint32_t fb = bank_of(f.pc);
             if (win_of(f.pc) != win_of(e.pc) || ((wrm >> fb) & 1) || std::memcmp(f.idx, e.idx, sizeof(e.idx)) != 0) continue;
             apply_table_update(f, t); type_update(f, t);
@@ -705,7 +709,7 @@ class BpuPipe {
   // Fast-warmup replay (EXP-011): one committed instruction in program order, applied straight to the tables, the architectural
   // history / RAS and the uBTB (through the same block tracker the commit stream uses).
   void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {
-    State &n = st_;
+    State &n = (*stp_);
     const br_type_t pty = type_.predict(pc);
     const uint32_t b = bank_of(pc);
     const pc_t bpc = bank_pc_of(pc);
@@ -765,7 +769,7 @@ class BpuPipe {
     }
     n.tr_v = tmp.tr_v; n.tr_start = tmp.tr_start; n.tr_expect = tmp.tr_expect; n.tr_nd = tmp.tr_nd; n.tr_hh = tmp.tr_hh; n.ah = tmp.ah; n.lt_v = tmp.lt_v; n.lt_start = tmp.lt_start; n.lt_slot = tmp.lt_slot; n.lt_cnt = tmp.lt_cnt;
   }
-  void warm_finish() { st_.spec = st_.arch; st_.sras = st_.aras; }
+  void warm_finish() { (*stp_).spec = (*stp_).arch; (*stp_).sras = (*stp_).aras; }
 
   BpuPipe() { if (cfg_pipe() > 0) reset(); }
   const Stats &stats() const { return stats_; }
@@ -799,7 +803,7 @@ class BpuPipe {
       if (l1n && (l1n & (l1n - 1) || l1w < 1 || l1w > MAXW || (l1w & (l1w - 1)) || l1n < l1w || mode_ < 2 || D_ < 2)) { std::printf("[BPU_PIPE] bad BPO_L1_ENTRIES / BPO_L1_WAYS (needs BPU_PIPE>=2, BPU_MAIN_LAT>=2)\n"); std::exit(1); }
       ub1_.init(l1n, l1w, cfg_ub_tag(), hb1_);
     }
-    st_ = State{};
+    sb_[0] = State{}; sb_[1] = State{}; stp_ = &sb_[0]; nxp_ = &sb_[1];
     type_.reset();
     static bool reg = false;
     if (!reg) { reg = true; self() = this; std::atexit([] { if (self()) self()->print_stats(); }); }
@@ -809,9 +813,12 @@ class BpuPipe {
   // Outcome of the last stage (registers only). Called first in the cycle: the front end uses squash_n to gate the
   // fetch-address FIFO pop and to drop its tail entries.
   void decide(bool refetch, Decision &d) const {
-    d = Decision{};
-    const Blk &b = st_.R[D_ - 1];
+    // Only the scalar fields are cleared when no block leaves the pipeline: blk / out / ... are read only under d.valid (and d.ovr, d.pair, which imply it).
+    d.valid = d.ovr = d.pair_unfit = d.pair = d.ovr_b = false;
+    d.squash_n = 0;
+    const Blk &b = (*stp_).R[D_ - 1];
     if (refetch || !b.valid) return;
+    d.out = MainOut{}; d.outB = MainOut{}; d.oout = MainOut{}; d.ock = Ckpt{}; d.obase = 0; d.og = S0Guess{};
     d.valid = true;
     d.blk = b;
     if (mode_ == 1) d.out = b.shadow;
@@ -832,7 +839,7 @@ class BpuPipe {
         if (d.ovr_b) { d.ock = b.b2.ck; d.oout = d.outB; d.obase = b.b2.base; d.og = g2; }
       }
     }
-    if (d.ovr) for (int k = 0; k < D_ - 1; k++) d.squash_n += st_.R[k].valid;
+    if (d.ovr) for (int k = 0; k < D_ - 1; k++) d.squash_n += (*stp_).R[k].valid;
   }
 
   // S1 level (BPO_L1_ENTRIES): a larger table read at S1 with the registered block address; on a hit that disagrees with the S0 guess
@@ -873,23 +880,33 @@ class BpuPipe {
     ub_event(n, t.tc, e);
   }
 
+  // n = s except R (the caller rebuilds R[0..D_-1]; the entries above are constant)
+  static void copy_state_but_R(State &n, const State &s) {
+    static_assert(std::is_trivially_copyable_v<State>);
+    char *dp = reinterpret_cast<char *>(&n);
+    const char *sp = reinterpret_cast<const char *>(&s);
+    const size_t a = reinterpret_cast<char *>(&n.R) - dp, b = a + sizeof(n.R);
+    std::memcpy(dp, sp, a);
+    std::memcpy(dp + b, sp + b, sizeof(State) - b);
+  }
+
   void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) const {
     std::memset(&out, 0, sizeof(out));
     t = Txn{};
-    State &n = t.nx;
-    n = st_;
+    State &n = *nxp_;
+    copy_state_but_R(n, *stp_);
     const bool refetch = in.refetch;
     // BPO_PDCKPT: the checker consumed the PTAB head in the previous cycle -> its checkpoint leaves the record queue
     Ckpt pd_rec; bool pd_have = false;
-    if (pdck_ && in.pd.valid && st_.pq_n > 0) {
-      pd_rec = st_.pq[0]; pd_have = true;
-      for (int i = 1; i < st_.pq_n; i++) n.pq[i - 1] = st_.pq[i];
-      n.pq_n = st_.pq_n - 1;
+    if (pdck_ && in.pd.valid && (*stp_).pq_n > 0) {
+      pd_rec = (*stp_).pq[0]; pd_have = true;
+      for (int i = 1; i < (*stp_).pq_n; i++) n.pq[i - 1] = (*stp_).pq[i];
+      n.pq_n = (*stp_).pq_n - 1;
     }
 
     // S0: look up the block starting at pc with the given speculative history / RAS, enter it into S1 and push the fetch address
     auto s0_issue = [&](pc_t pc, const HistRing &sp, const RasC &sr, uint8_t lpc) {
-      Blk b;
+      Blk &b = n.R[0];   // n.R[0] is Blk{} here (cleared above; at most one block is issued per cycle)
       b.valid = true;
       b.base = pc;
       b.bnd = block_bnd(b.base);
@@ -908,7 +925,6 @@ class BpuPipe {
       } else {
         push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       }
-      n.R[0] = b;
       n.pc = b.g.next;
       n.lp_cnt = lp_next(lpc, b.base, b.g.taken, b.g.next, b.g.type);
       out.icache_read_valid = true;
@@ -968,37 +984,37 @@ class BpuPipe {
       }
       if (repair_) {
         t.rec_v = true;
-        t.rec.ck = d.blk.ck; if (repair_ == 2) t.rec.rf = d.blk.rf; t.rec.base = d.blk.base; t.rec.id = st_.blk_seq; t.rec.epoch = st_.epoch; t.rec.valid = true;
-        for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = st_.blk_seq; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
-        n.blk_seq = st_.blk_seq + 1;
+        t.rec.ck = d.blk.ck; if (repair_ == 2) t.rec.rf = d.blk.rf; t.rec.base = d.blk.base; t.rec.id = (*stp_).blk_seq; t.rec.epoch = (*stp_).epoch; t.rec.valid = true;
+        for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = (*stp_).blk_seq; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
+        n.blk_seq = (*stp_).blk_seq + 1;
         if (d.pair) {
           const int lenA = d.out.slot + 1;
           t.rec2_v = true;
-          t.rec2.ck = d.blk.b2.ck; t.rec2.base = d.blk.b2.base; t.rec2.id = st_.blk_seq + 1; t.rec2.epoch = st_.epoch; t.rec2.valid = true;
+          t.rec2.ck = d.blk.b2.ck; t.rec2.base = d.blk.b2.base; t.rec2.id = (*stp_).blk_seq + 1; t.rec2.epoch = (*stp_).epoch; t.rec2.valid = true;
           for (int i = 0; i < FW; i++) t.rec2.ptype[i] = d.outB.meta.ps_info[i] & 7;
-          for (int i = lenA; i < FW; i++) out.meta.blk_id[i] = st_.blk_seq + 1;
-          n.blk_seq = st_.blk_seq + 2;
+          for (int i = lenA; i < FW; i++) out.meta.blk_id[i] = (*stp_).blk_seq + 1;
+          n.blk_seq = (*stp_).blk_seq + 2;
         }
       }
     }
 
     // shift; the block in S1 is read this cycle and its raw array data rides along into the next stage register
-    for (int k = D_ - 1; k >= 1; k--) n.R[k] = st_.R[k - 1];
+    for (int k = D_ - 1; k >= 1; k--) n.R[k] = (*stp_).R[k - 1];
     n.R[0] = Blk{};
-    if (mode_ >= 2 && st_.R[0].valid) {
-      count_reads(st_.R[0], t);
-      bb_reads(st_.R[0], t);
-      if (D_ >= 2) main_read(st_.R[0], n.R[1].raw);
-      if (D_ >= 2 && st_.R[0].pair) main_read(st_.R[0].b2, n.R[1].b2.raw);
+    if (mode_ >= 2 && (*stp_).R[0].valid) {
+      count_reads((*stp_).R[0], t);
+      bb_reads((*stp_).R[0], t);
+      if (D_ >= 2) main_read((*stp_).R[0], n.R[1].raw);
+      if (D_ >= 2 && (*stp_).R[0].pair) main_read((*stp_).R[0].b2, n.R[1].b2.raw);
     }
 
     if (refetch) {
       t.s_refetch = 1; t.s_refetch_pd = in.refetch_pd;
-      for (int k = 0; k < MAXD; k++) n.R[k] = Blk{};
+      for (int k = 0; k < D_; k++) n.R[k] = Blk{};
       n.pc = in.refetch_address;
     } else if (d.ovr) {
       t.s_squashed = d.squash_n;
-      for (int k = 0; k < MAXD; k++) n.R[k] = Blk{};
+      for (int k = 0; k < D_; k++) n.R[k] = Blk{};
       restore(d.ock, n.spec, n.sras);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
@@ -1016,16 +1032,16 @@ class BpuPipe {
           t.s_ov_oth = 1;
         }
       }
-    } else if (l1_override(st_.R[0], n, t)) {
+    } else if (l1_override((*stp_).R[0], n, t)) {
       // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
       if ((cfg_bfast() & 1) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit0
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
       int inflight = 0;
-      for (int k = 0; k < D_; k++) inflight += st_.R[k].valid;
+      for (int k = 0; k < D_; k++) inflight += (*stp_).R[k].valid;
       const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
       t.s_stall_ptab = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) s0_issue(st_.pc, st_.spec, st_.sras, st_.lp_cnt);
+      if (in.icache_read_ready && !ptab_stall) s0_issue((*stp_).pc, (*stp_).spec, (*stp_).sras, (*stp_).lp_cnt);
     }
 
     // ---- commit side ---------------------------------------------------------------------------------------------------------
@@ -1044,26 +1060,26 @@ class BpuPipe {
         t.s_pd_restore = 1;
       } else if (repair_ && in.rf_valid && repair_blk(in, n)) {
         t.s_rep_ok = 1;
-      } else { n.spec = n.arch; n.sras = n.aras; t.s_rep_miss = repair_ && in.rf_valid; n.epoch = st_.epoch + 1; }
+      } else { n.spec = n.arch; n.sras = n.aras; t.s_rep_miss = repair_ && in.rf_valid; n.epoch = (*stp_).epoch + 1; }
       n.pq_n = 0;
       n.lp_cnt = 0;
       if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
     if (mode_ >= 3) update_queue(in, n, t); else update_old(in, n, t);
     // uBTB training: head of the train queue is written, new events are appended behind it
-    if (st_.tq_n > 0) {
-      const UbEv &e = st_.tq[0];
+    if ((*stp_).tq_n > 0) {
+      const UbEv &e = (*stp_).tq[0];
       if (cfg_s0_train()) {
         if (!(ubmain_ == 4 && e.src == 1)) { ub_rmw(ub0_, e, t.ub_v[0], t.ub_wmask[0]); t.ub_set[0] = ub0_.index(e.start, e.hh); }   // BPO_UB_MAIN=4: S_D events train the S1 table only
         if (ub1_.N) { ub_rmw(ub1_, e, t.ub_v[1], t.ub_wmask[1]); t.ub_set[1] = ub1_.index(e.start, e.hh); }
       }
-      for (int i = 1; i < st_.tq_n; i++) n.tq[i - 1] = st_.tq[i];
-      n.tq_n = st_.tq_n - 1;
+      for (int i = 1; i < (*stp_).tq_n; i++) n.tq[i - 1] = (*stp_).tq[i];
+      n.tq_n = (*stp_).tq_n - 1;
     }
     if (!refetch) sd_event(d, n, t);
     if (ubmain_ != 2) ub_track(in, n, t.tc);
-    out.upd_free = mode_ >= 3 ? uint8_t(UQ_ - st_.uq_n) : 255;   // EXP-028 compact ROB commit credits (registered)
-    out.tq_free = uint8_t(tqd_ - st_.tq_n);
+    out.upd_free = mode_ >= 3 ? uint8_t(UQ_ - (*stp_).uq_n) : 255;   // EXP-028 compact ROB commit credits (registered)
+    out.tq_free = uint8_t(tqd_ - (*stp_).tq_n);
   }
 
   void commit(const Txn &t) {
@@ -1098,14 +1114,14 @@ class BpuPipe {
     pair_blocks_ += t.s_pair; pair_ovr_b_ += t.s_pair_ovr_b; pair_unfit_ += t.s_pair_unfit;
     s.refetch_pd += t.s_refetch_pd; s.pd_restore += t.s_pd_restore; s.l1_hit += t.s_l1_hit; s.l1_ovr += t.s_l1_ovr; s.sd_ev += t.s_sd_ev; s.merged += t.s_merged; s.blocked += t.s_blocked;
     s.upd_ctl += t.s_upd_ctl; s.upd_enq += t.s_upd_enq; s.upd_drop += t.s_upd_drop; s.upd_applied += t.s_upd_applied;
-    s.upd_delayed_cycles += t.s_delayed; s.uq_occ_sum += t.nx.uq_n; if (t.nx.uq_n > s.uq_max) s.uq_max = t.nx.uq_n;
+    s.upd_delayed_cycles += t.s_delayed; s.uq_occ_sum += nxp_->uq_n; if (nxp_->uq_n > s.uq_max) s.uq_max = nxp_->uq_n;
     s.old_drop_sb += t.s_ctl_drop_sb; s.old_drop_full += t.s_ctl_drop_full; s.old_drop_nonctl += t.s_ctl_drop_nonctl;
     s.old_nonctl_enq += t.s_nonctl_enq;
     for (int b = 0; b < NB; b++) { tage_[b].commit(t.tage[b]); btb_[b].commit(t.btb[b]); }
     for (int i = 0; i < t.n_type; i++) type_.commit(t.type[i]);
     for (int w = 0; w < ub0_.W; w++) if ((t.ub_wmask[0] >> w) & 1) ub0_.e[t.ub_set[0] * ub0_.W + w] = t.ub_v[0][w];
     for (int w = 0; w < ub1_.W && ub1_.N; w++) if ((t.ub_wmask[1] >> w) & 1) ub1_.e[t.ub_set[1] * ub1_.W + w] = t.ub_v[1][w];
-    st_ = t.nx;
+    std::swap(stp_, nxp_);
   }
 
   void print_stats() const {
