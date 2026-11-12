@@ -191,7 +191,10 @@ void on_exec(const ExecObs &o) {
   if (o.op == UOP_LOAD && f->blocked == tb::Blocked::MemOutOfRam && !o.page_fault) {
     if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_mmio_load++; return; }
   }
-  if (o.op == UOP_CSR && f->rd_valid && widen_result(o, f->inst) != f->rd_value && f->blocked == tb::Blocked::None && !f->trapped) {
+  // (fflags / frm / fcsr are the function model's own state: the timing model's CSR file keeps no values for them)
+  const uint32_t csr_no = f->inst >> 20;
+  if (o.op == UOP_CSR && !(csr_no >= 1 && csr_no <= 3) && f->rd_valid && widen_result(o, f->inst) != f->rd_value &&
+      f->blocked == tb::Blocked::None && !f->trapped) {
     if (static const bool tp = std::getenv("TB_TRACE_PATCH") != nullptr; tp)
       std::fprintf(stderr, "[PATCH] csr read pc=0x%llx inst=0x%08x model=0x%llx function-model=0x%llx\n", (unsigned long long)f->pc, f->inst, (unsigned long long)widen_result(o, f->inst), (unsigned long long)f->rd_value);
     if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_csr_read++; f = g_bridge->find(uid); }
