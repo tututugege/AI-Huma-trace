@@ -142,8 +142,8 @@ CXXFLAGS += -DDIS_SHADOW
 endif
 
 ifdef EXU_SHADOW
-CXXSRC += ./exu_ref/ExuRef.cpp ./exu_ref/ExuShadow.cpp
-INCLUDES += -I./exu_ref
+CXXSRC += ./tests/exu_ref/ExuRef.cpp ./tests/exu_ref/ExuShadow.cpp
+INCLUDES += -I./tests/exu_ref
 CXXFLAGS += -DEXU_SHADOW
 endif
 

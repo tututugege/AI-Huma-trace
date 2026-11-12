@@ -1,71 +1,66 @@
 #pragma once
 #include "IO.h"
 #include "ExuTypes.h"
-#include "Fu.h" // 包含具体的 FU 定义
+#include "Fu.h"
 #include "config.h"
 #include "FTQ.h"
 #include <vector>
+#include <utility>
 
-struct FuEntry {
-  Fu *fu;
-  int fu_idx = -1;
-  uint64_t support_mask;
+// One functional unit: static description + its state. A unit holds at most one issued uop in its input slot (valid from the
+// cycle after issue until the unit takes it); PIPE units a ring of in-flight uops, ITER units one busy-until uop.
+struct FuUnit {
+  FuKind kind = FuKind::ALU;
+  FuMode mode = FuMode::SINGLE;
+  int port = -1;
+  uint64_t support_mask = 0;
   int lsu_agu_port = -1;
   int lsu_sdu_port = -1;
-};
+  int depth = 0;  // PIPE: latency == capacity
 
-struct PortMapping {
-  std::vector<FuEntry> entries;
-};
+  bool slot_valid = false;
+  ExuInst slot{};
 
-struct Exu2FuIO {
-  Fu::FuInput entry[TOTAL_FU_COUNT];
-};
+  struct PipeEntry {
+    ExuInst uop;
+    int64_t done_cycle = 0;
+  };
+  std::vector<PipeEntry> ring;  // PIPE
+  int head = 0, count = 0;
+  bool busy = false;  // ITER
+  int64_t done = 0;
+  ExuInst cur{};
+  ExuInst out{};  // SINGLE: result of this cycle
 
-struct Fu2ExuIO {
-  Fu::FuOutput entry[TOTAL_FU_COUNT];
-};
-
-struct FuInstSlot {
-  wire<1> valid = false;
-  ExuInst uop{};
+  bool idle() const { return mode == FuMode::SINGLE ? true : mode == FuMode::PIPE ? count == 0 : !busy; }
+  PipeEntry &front() { return ring[head]; }
+  void pop_front() { head = head + 1 == depth ? 0 : head + 1; count--; }
+  void push_back(const PipeEntry &e) {
+    int i = head + count;
+    if (i >= depth) i -= depth;
+    ring[i] = e;
+    count++;
+  }
 };
 
 class Exu {
 public:
-  friend struct ExuDigestAccess;  // lockstep test hook
   Exu(SimContext *ctx);
-  ~Exu(); // 析构函数释放 FU 内存
 
   SimContext *ctx;
-  std::vector<PortMapping> port_mappings;
 
   void init();
-  void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
-
-  // 组合逻辑
-  void comb_exec(); // 核心：发射到 FU + 收集结果
+  void comb_begin();    // idle default outputs
+  void comb_exec();     // FU controls, FU evaluation, result collection
   void comb_to_csr();
-  void comb_pipeline(); // 将本拍 issue 入 FU 输入槽（在 pipeline 阶段生效）
-  void comb_ready();    // 告诉 Issue 阶段 FU 是否空闲
-
-  // 时序逻辑
-  void seq();
+  void comb_pipeline(); // issued uops enter the FU input slots
+  void comb_ready();    // which operation classes each port can accept
+  void seq() {}         // all state is updated in place (each phase runs once per cycle, in order)
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
-  // === FU 资源管理 ===
-  // 物理 FU 实例
-  std::vector<Fu *> units;
-  int fu_to_port[TOTAL_FU_COUNT];
-  FuInstSlot fu_inst_r[TOTAL_FU_COUNT];
-  FuInstSlot fu_inst_r_1[TOTAL_FU_COUNT];
 
 private:
-  void comb_fu_ctrl();
-  void comb_exu2fu_dispatch();
-  void comb_fu_exec();
-  void comb_fu2exu_collect();
-
-  Exu2FuIO exu2fu_io{};
-  Fu2ExuIO fu2exu_io{};
+  std::vector<FuUnit> units;
+  std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order
+  uint64_t port_fu_mask[ISSUE_WIDTH] = {};
 };

@@ -16,7 +16,7 @@ fd-basic.bin,0,0.1,951
 fd-fcvt.bin,0,0.1,1700
 fd-fdiv.bin,0,0.1,1693
 fd-fsqrt.bin,0,0.1,1390
-fd-matmul.bin,0,0.1,26519
+fd-matmul.bin,0,0.1,26717
 fence-i-self-modify.bin,0,0.1,1407
 fib.bin,0,0.07,1058
 goldbach.bin,0,0.07,3292

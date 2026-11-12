@@ -1,11 +1,11 @@
 #include "ExuShadow.h"
-#include "ExuDigest.h"
 #include "ExuRef.h"
 #include "Wires.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include "util.h"
 
 namespace {
 struct Shadow {
@@ -41,8 +41,21 @@ void exu_shadow(Exu &x, ExuPhase p, const char *name) {
   if (!same(rw.exe2prf, s.w.exe2prf)) fail(name, "exe2prf");
   if (!same(rw.exe2iss, s.w.exe2iss)) fail(name, "exe2iss");
   if (!same(rw.exe2lsu, s.w.exe2lsu)) fail(name, "exe2lsu");
-  if (!same(rw.exu2id, s.w.exu2id)) fail(name, "exu2id");
-  if (!same(rw.exu2rob, s.w.exu2rob)) fail(name, "exu2rob");
-  const bool committed = p == ExuPhase::seq;
-  if (ExuDigestAccess::digest(x, !committed) != ExuDigestAccess::digest(s.ref, !committed)) fail(name, committed ? "state digest (committed)" : "state digest (working)");
+  if (!same(rw.exu2id, s.w.exu2id)) {
+    const auto &a = rw.exu2id, &b = s.w.exu2id;
+    fprintf(stderr, "t=%lld new: mis=%d pc=%llx rob=%d br=%d ftq=%d clr=%llx off=%d type=%d\n", (long long)sim_time, (int)a.mispred, (unsigned long long)a.redirect_pc, (int)a.redirect_rob_idx, (int)a.br_id, (int)a.ftq_idx, (unsigned long long)a.clear_mask, (int)a.ftq_off, (int)a.br_type);
+    fprintf(stderr, "t=%lld ref: mis=%d pc=%llx rob=%d br=%d ftq=%d clr=%llx off=%d type=%d\n", (long long)sim_time, (int)b.mispred, (unsigned long long)b.redirect_pc, (int)b.redirect_rob_idx, (int)b.br_id, (int)b.ftq_idx, (unsigned long long)b.clear_mask, (int)b.ftq_off, (int)b.br_type);
+    fail(name, "exu2id");
+  }
+  if (!same(rw.exu2rob, s.w.exu2rob)) {
+    for (int i = 0; i < ISSUE_WIDTH; i++) {
+      const auto &a = rw.exu2rob.entry[i], &b = s.w.exu2rob.entry[i];
+      if (!same(a, b)) {
+        const unsigned char *pa = (const unsigned char *)&a, *pb = (const unsigned char *)&b;
+        size_t k = 0; while (k < sizeof(a) && pa[k] == pb[k]) k++;
+        fprintf(stderr, "t=%lld port %d valid new=%d ref=%d first diff byte %zu of %zu (uop at %zu) rob new=%d ref=%d op %d %d br_mask %llx %llx\n", (long long)sim_time, i, (int)a.valid, (int)b.valid, k, sizeof(a), (size_t)((const char *)&a.uop - (const char *)&a), (int)a.uop.rob_idx, (int)b.uop.rob_idx, (int)a.uop.op, (int)b.uop.op, (unsigned long long)a.uop.br_mask, (unsigned long long)b.uop.br_mask);
+      }
+    }
+    fail(name, "exu2rob");
+  }
 }

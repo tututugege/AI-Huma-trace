@@ -12,10 +12,6 @@ inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO &db) { return 
 
 Exu::Exu(SimContext *ctx) : ctx(ctx) {}
 
-Exu::~Exu() {
-  for (auto fu : units) delete fu;
-}
-
 // Functional units are created per issue port, in write-back priority order (MUL first).
 void Exu::init() {
   struct Spec { FuKind kind; uint64_t mask; };
@@ -25,33 +21,34 @@ void Exu::init() {
                                 {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
                                 {FuKind::FMA, OP_MASK_FMA}, {FuKind::FDIV, OP_MASK_FDIV}, {FuKind::FMISC, OP_MASK_FMISC}};
   int agu = 0, sdu = 0;
-  port_mappings.resize(ISSUE_WIDTH);
+  units.clear();
+  for (auto &m : port_fu_mask) m = 0;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
+    port_fus[i].clear();
     for (const Spec &spec : kSpecs) {
       if (!(GLOBAL_ISSUE_PORT_CONFIG[i].support_mask & spec.mask)) continue;
-      FuEntry e;
-      e.fu = new Fu(spec.kind, i);
-      e.fu_idx = static_cast<int>(units.size());
-      e.support_mask = spec.mask;
-      if (spec.kind == FuKind::AGU) e.lsu_agu_port = agu++;
-      if (spec.kind == FuKind::SDU) e.lsu_sdu_port = sdu++;
-      units.push_back(e.fu);
-      port_mappings[i].entries.push_back(e);
+      FuUnit u;
+      u.kind = spec.kind;
+      u.mode = fu_mode(spec.kind);
+      u.port = i;
+      u.support_mask = spec.mask;
+      if (spec.kind == FuKind::AGU) u.lsu_agu_port = agu++;
+      if (spec.kind == FuKind::SDU) u.lsu_sdu_port = sdu++;
+      if (u.mode == FuMode::PIPE) {
+        u.depth = fu_pipe_latency(spec.kind);
+        u.ring.resize(u.depth);
+      }
+      port_fus[i].push_back(static_cast<int>(units.size()));
+      port_fu_mask[i] |= 1ULL << units.size();
+      units.push_back(std::move(u));
     }
   }
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) {
-    fu_inst_r[i] = fu_inst_r_1[i] = {};
-    fu_to_port[i] = -1;
-  }
-  for (int i = 0; i < ISSUE_WIDTH; i++)
-    for (auto &e : port_mappings[i].entries) fu_to_port[e.fu_idx] = i;
+  Assert(static_cast<int>(units.size()) <= TOTAL_FU_COUNT && TOTAL_FU_COUNT <= 64);
 }
 
-// Default (idle) outputs and FU request buses; each FU starts its cycle and publishes its state.
+// Default (idle) outputs.
 void Exu::comb_begin() {
   Wires &w = *wires;
-  BEGIN_EQ(fu_inst_r_1, fu_inst_r);
-
   w.exe2csr.we = w.exe2csr.re = false;
   w.exe2csr.idx = 0;
   w.exe2csr.wcmd = 0;
@@ -72,25 +69,17 @@ void Exu::comb_begin() {
   w.exu2id.ftq_idx = 0;
   w.exu2id.ftq_off = 0;
   w.exu2id.br_type = 0;
-  for (auto &e : exu2fu_io.entry) {
-    e.en = e.consume = e.flush = false;
-    e.flush_mask = e.clear_mask = 0;
-  }
-  for (size_t i = 0; i < units.size(); i++) {
-    units[i]->comb_begin();
-    fu2exu_io.entry[i] = units[i]->out;
-  }
 }
 
-// Which operation classes each issue port can accept: an FU takes a new uop when its input slot is free or the FU frees it.
-// Nothing is accepted during a flush.
+// Which operation classes each issue port can accept. After the collect phase an input slot is occupied only if its unit
+// could not take the uop, so a free slot is what makes a unit ready. Nothing is accepted during a flush.
 void Exu::comb_ready() {
   Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     uint64_t mask = 0;
     if (!w.rob_bcast.flush)
-      for (auto &e : port_mappings[i].entries)
-        if (!fu_inst_r_1[e.fu_idx].valid || fu2exu_io.entry[e.fu_idx].ready) mask |= e.support_mask;
+      for (int fu : port_fus[i])
+        if (!units[fu].slot_valid) mask |= units[fu].support_mask;
     w.exe2iss.fu_ready_mask[i] = mask;
   }
 }
@@ -99,9 +88,10 @@ void Exu::comb_ready() {
 void Exu::comb_to_csr() {
   Wires &w = *wires;
   if (w.rob_bcast.flush) return;
-  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++) {
-    if (!fu_inst_r[fu].valid || fu_to_port[fu] != 0) continue;
-    const ExuInst &u = fu_inst_r[fu].uop;
+  for (int fu : port_fus[0]) {
+    const FuUnit &f = units[fu];
+    if (!f.slot_valid) continue;
+    const ExuInst &u = f.slot;
     if (u.op != UOP_CSR || is_br_killed(u, w.dec_bcast)) continue;
 
     const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;  // CSRRW / CSRRWI always write
@@ -110,7 +100,7 @@ void Exu::comb_to_csr() {
     w.exe2csr.idx = u->csr_idx;
     w.exe2csr.wcmd = u->func3 & 0b11;
     w.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
-    if (const tb::Fact *f = tbhook::fact_by_rob(u.rob_idx)) w.exe2csr.wdata = f->csr_wdata;
+    if (const tb::Fact *f2 = tbhook::fact_by_rob(u.rob_idx)) w.exe2csr.wdata = f2->csr_wdata;
     return;
   }
 }
@@ -119,14 +109,14 @@ void Exu::comb_to_csr() {
 void Exu::comb_pipeline() {
   Wires &w = *wires;
   if (w.rob_bcast.flush) {
-    for (auto &s : fu_inst_r_1) s.valid = false;
+    for (auto &f : units) f.slot_valid = false;
     return;
   }
   const auto clear = w.dec_bcast.clear_mask;
-  for (auto &s : fu_inst_r_1) {
-    if (!s.valid) continue;
-    if (is_br_killed(s.uop, w.dec_bcast)) s.valid = false;
-    else if (clear) s.uop.br_mask &= ~clear;
+  for (auto &f : units) {
+    if (!f.slot_valid) continue;
+    if (is_br_killed(f.slot, w.dec_bcast)) f.slot_valid = false;
+    else if (clear) f.slot.br_mask &= ~clear;
   }
   for (int p = 0; p < ISSUE_WIDTH; p++) {
     if (!w.prf2exe.iss_entry[p].valid) continue;
@@ -134,74 +124,121 @@ void Exu::comb_pipeline() {
     if (is_br_killed(uop, w.dec_bcast)) continue;
     if (clear) uop.br_mask &= ~clear;
     const uint64_t bit = 1ULL << uop.op;
-    int target = -1;  // first FU of the port that supports the op and can take it
-    for (const auto &e : port_mappings[p].entries)
-      if ((e.support_mask & bit) && (!fu_inst_r_1[e.fu_idx].valid || fu2exu_io.entry[e.fu_idx].ready)) { target = e.fu_idx; break; }
+    int target = -1;  // first FU of the port that supports the op and has a free input slot
+    for (int fu : port_fus[p])
+      if ((units[fu].support_mask & bit) && !units[fu].slot_valid) { target = fu; break; }
     Assert(target >= 0 && "EXU enqueue without free FU input slot");
-    fu_inst_r_1[target].valid = true;
-    fu_inst_r_1[target].uop = uop;
+    units[target].slot_valid = true;
+    units[target].slot = uop;
   }
 }
 
-// Stage 0: every FU gets the cycle's flush/clear controls.
-void Exu::comb_fu_ctrl() {
+// FUs take their input slots and evaluate (units that hold nothing are skipped); then results are collected. Every completing
+// FU is broadcast for bypass; each port's first completing FU wins the port and, unless flushed/killed, completes in the ROB,
+// sends its LSU request, writes back (ALU ports) or takes part in the branch arbitration (the oldest mispredicted branch
+// redirects). LSU write-backs come in on their own ports.
+void Exu::comb_exec() {
   Wires &w = *wires;
   const bool flush_all = w.rob_bcast.flush, flush_br = !flush_all && w.dec_bcast.mispred;
-  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? ~wire<BR_MASK_WIDTH>(0) : flush_br ? w.dec_bcast.br_mask : wire<BR_MASK_WIDTH>(0);
+  const bool flush_any = flush_all || flush_br, flush = flush_all;  // (results are dead only on a global flush or when killed by the branch mask)
+  const wire<BR_MASK_WIDTH> all = ~wire<BR_MASK_WIDTH>(0);
+  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? all : flush_br ? w.dec_bcast.br_mask : wire<BR_MASK_WIDTH>(0);
+  const wire<BR_MASK_WIDTH> clear = w.dec_bcast.clear_mask;
+  const int64_t now = sim_time;
+
+  uint64_t cmask = 0;  // completing units
+  ExuInst *cinst[64];
   for (size_t i = 0; i < units.size(); i++) {
-    exu2fu_io.entry[i].flush = flush_all || flush_br;
-    exu2fu_io.entry[i].flush_mask = flush_mask;
-    exu2fu_io.entry[i].clear_mask = w.dec_bcast.clear_mask;
-    units[i]->in = exu2fu_io.entry[i];
-    units[i]->comb_ctrl();
-  }
-}
+    FuUnit &f = units[i];
+    if (!f.slot_valid && f.idle()) continue;
 
-// Stage 1: valid input slots go to their FU unless flushed or killed (those slots are freed).
-void Exu::comb_exu2fu_dispatch() {
-  Wires &w = *wires;
-  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++) {
-    if (!fu_inst_r[fu].valid || fu_to_port[fu] < 0 || fu_to_port[fu] >= ISSUE_WIDTH) continue;
-    ExuInst u = fu_inst_r[fu].uop;
-    if (w.rob_bcast.flush || is_br_killed(u, w.dec_bcast)) {
-      fu_inst_r_1[fu].valid = false;
-      continue;
+    // flush / branch-mask clear applied to the instructions held in the unit
+    if (f.mode == FuMode::PIPE) {
+      if (flush_any && f.count) {
+        if (flush_mask == all) {
+          f.count = 0;
+        } else {
+          int m = 0;
+          for (int k = 0; k < f.count; k++) {
+            const int s = f.head + k >= f.depth ? f.head + k - f.depth : f.head + k;
+            if (f.ring[s].uop.br_mask & flush_mask) continue;
+            if (m != k) f.ring[f.head + m >= f.depth ? f.head + m - f.depth : f.head + m] = f.ring[s];
+            m++;
+          }
+          f.count = m;
+        }
+      }
+      if (clear)
+        for (int k = 0; k < f.count; k++) f.ring[f.head + k >= f.depth ? f.head + k - f.depth : f.head + k].uop.br_mask &= ~clear;
+    } else if (f.mode == FuMode::ITER) {
+      if (flush_any && f.busy && (flush_mask == all || (f.cur.br_mask & flush_mask) != 0)) {
+        f.busy = false;
+        f.done = 0;
+      }
+      if (clear && f.busy) f.cur.br_mask &= ~clear;
     }
-    if (w.dec_bcast.clear_mask) u.br_mask &= ~w.dec_bcast.clear_mask;
-    exu2fu_io.entry[fu].en = true;
-    exu2fu_io.entry[fu].inst = u;
-  }
-}
 
-// Stage 2: the FUs evaluate.
-void Exu::comb_fu_exec() {
-  for (size_t i = 0; i < units.size(); i++) {
-    units[i]->in = exu2fu_io.entry[i];
-    units[i]->comb_issue();
-    fu2exu_io.entry[i].complete = units[i]->out.complete;
-    fu2exu_io.entry[i].inst = units[i]->out.inst;
-  }
-}
-
-// Stage 3: collect results. Every completing FU is broadcast for bypass; each port's first completing FU wins the port
-// and, unless flushed/killed, completes in the ROB, sends its LSU request, writes back (ALU ports) or takes part in the
-// branch arbitration (the oldest mispredicted branch redirects). LSU write-backs come in on their own ports.
-void Exu::comb_fu2exu_collect() {
-  Wires &w = *wires;
-  const bool flush = w.rob_bcast.flush;
-  for (size_t i = 0; i < units.size(); i++)
-    if (fu2exu_io.entry[i].complete) {
-      w.exe2prf.bypass[i].uop = fu2exu_io.entry[i].inst;
-      w.exe2prf.bypass[i].valid = true;
+    // the input slot goes to the unit unless flushed or killed (that frees it)
+    bool en = false;
+    if (f.slot_valid) {
+      if (flush_all || is_br_killed(f.slot, w.dec_bcast)) f.slot_valid = false;
+      else en = true;
     }
+
+    switch (f.mode) {
+    case FuMode::SINGLE:
+      if (en) {
+        f.out = f.slot;
+        if (clear) f.out.br_mask &= ~clear;
+        fu::compute(f.kind, f.out);
+        cinst[i] = &f.out;
+        cmask |= 1ULL << i;
+      }
+      break;
+    case FuMode::PIPE:
+      if (en && f.count < f.depth) {
+        FuUnit::PipeEntry e;
+        e.uop = f.slot;
+        if (clear) e.uop.br_mask &= ~clear;
+        fu::compute(f.kind, e.uop);
+        e.done_cycle = now + f.depth - 1;
+        f.push_back(e);
+      }
+      if (f.count && f.front().done_cycle <= now) {
+        cinst[i] = &f.front().uop;
+        cmask |= 1ULL << i;
+      }
+      break;
+    case FuMode::ITER:
+      if (en && !f.busy) {
+        f.cur = f.slot;
+        if (clear) f.cur.br_mask &= ~clear;
+        fu::compute(f.kind, f.cur);
+        f.done = now + fu::iter_latency(f.kind, f.cur);
+        f.busy = true;
+      }
+      if (f.busy && f.done <= now) {
+        cinst[i] = &f.cur;
+        cmask |= 1ULL << i;
+      }
+      break;
+    }
+  }
+
+  for (uint64_t m = cmask; m; m &= m - 1) {
+    const int i = __builtin_ctzll(m);
+    w.exe2prf.bypass[i].uop = *cinst[i];
+    w.exe2prf.bypass[i].valid = true;
+  }
 
   ExuEntry int_res[ALU_NUM] = {}, br_res[BRU_NUM] = {};
-  for (int p = 0; p < ISSUE_WIDTH; p++) {
-    const FuEntry *winner = nullptr;
-    for (auto &e : port_mappings[p].entries)
-      if (fu2exu_io.entry[e.fu_idx].complete) { winner = &e; break; }
-    if (!winner) continue;
-    ExuInst u = fu2exu_io.entry[winner->fu_idx].inst;
+  uint64_t consumed = 0;
+  for (int p = 0; p < ISSUE_WIDTH && cmask; p++) {
+    const uint64_t pm = cmask & port_fu_mask[p];
+    if (!pm) continue;
+    const int fu = __builtin_ctzll(pm);  // first completing unit in write-back priority order
+    FuUnit &winner = units[fu];
+    ExuInst u = *cinst[fu];
     const bool dead = flush || is_br_killed(u, w.dec_bcast);
 
     if (u.op == UOP_CSR && w.exe2csr.re) u.result = w.csr2exe.rdata;
@@ -211,13 +248,13 @@ void Exu::comb_fu2exu_collect() {
         w.exu2rob.entry[p].uop = u;
       }
       if (u.op == UOP_STA || u.op == UOP_LOAD) {
-        Assert(winner->lsu_agu_port >= 0 && winner->lsu_agu_port < LSU_AGU_COUNT);
-        w.exe2lsu.agu_req[winner->lsu_agu_port].valid = true;
-        w.exe2lsu.agu_req[winner->lsu_agu_port].uop = u;
+        Assert(winner.lsu_agu_port >= 0 && winner.lsu_agu_port < LSU_AGU_COUNT);
+        w.exe2lsu.agu_req[winner.lsu_agu_port].valid = true;
+        w.exe2lsu.agu_req[winner.lsu_agu_port].uop = u;
       } else if (u.op == UOP_STD) {
-        Assert(winner->lsu_sdu_port >= 0 && winner->lsu_sdu_port < LSU_SDU_COUNT);
-        w.exe2lsu.sdu_req[winner->lsu_sdu_port].valid = true;
-        w.exe2lsu.sdu_req[winner->lsu_sdu_port].uop = u;
+        Assert(winner.lsu_sdu_port >= 0 && winner.lsu_sdu_port < LSU_SDU_COUNT);
+        w.exe2lsu.sdu_req[winner.lsu_sdu_port].valid = true;
+        w.exe2lsu.sdu_req[winner.lsu_sdu_port].uop = u;
       }
     }
     if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM && u.dest_en) {
@@ -228,17 +265,21 @@ void Exu::comb_fu2exu_collect() {
       br_res[p - IQ_BR_PORT_BASE].uop = u;
       br_res[p - IQ_BR_PORT_BASE].valid = true;
     }
-    exu2fu_io.entry[winner->fu_idx].consume = true;
+    consumed |= 1ULL << fu;
   }
 
-  // FUs pop what was consumed; a ready FU frees its input slot
-  for (size_t i = 0; i < units.size(); i++) {
-    units[i]->in = exu2fu_io.entry[i];
-    units[i]->comb_consume();
-    fu2exu_io.entry[i].ready = units[i]->out.ready;
+  // units pop what was consumed; a unit that can take more frees its input slot
+  for (uint64_t m = consumed; m; m &= m - 1) {
+    FuUnit &f = units[__builtin_ctzll(m)];
+    if (f.mode == FuMode::PIPE) f.pop_front();
+    else if (f.mode == FuMode::ITER) { f.busy = false; f.done = 0; }
   }
-  for (int fu = 0; fu < TOTAL_FU_COUNT; fu++)
-    if (fu_inst_r_1[fu].valid && fu2exu_io.entry[fu].ready) fu_inst_r_1[fu].valid = false;
+  for (auto &f : units) {
+    if (!f.slot_valid) continue;
+    const int i = static_cast<int>(&f - units.data());
+    const bool ready = f.mode == FuMode::SINGLE ? ((consumed >> i) & 1) : f.mode == FuMode::PIPE ? f.count < f.depth : !f.busy;
+    if (ready) f.slot_valid = false;
+  }
 
   for (int i = 0; i < ALU_NUM; i++)
     if (int_res[i].valid) {
@@ -313,15 +354,3 @@ void Exu::comb_fu2exu_collect() {
   }
 }
 
-// FU interaction in dependency order: controls -> dispatch to FUs -> FU evaluation -> collection.
-void Exu::comb_exec() {
-  comb_fu_ctrl();
-  comb_exu2fu_dispatch();
-  comb_fu_exec();
-  comb_fu2exu_collect();
-}
-
-void Exu::seq() {
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) fu_inst_r[i] = fu_inst_r_1[i];
-  for (auto fu : units) fu->seq();
-}
