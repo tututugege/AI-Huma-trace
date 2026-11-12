@@ -196,7 +196,7 @@ struct Decision {                // outcome of the last stage, computed from reg
   bool valid = false;            // a block leaves the pipeline: PTAB write
   bool ovr = false;
   uint8_t squash_n = 0;          // younger blocks in flight (already pushed into the fetch-address FIFO)
-  Blk blk;
+  const Blk *blk = nullptr;      // the block in S_D of the current registers (valid until the next commit)
   MainOut out;
   bool pair_unfit = false;
   bool pair = false, ovr_b = false;   // FE_PAIR: the group has a second block that survived the first block's check; the override (if any) is the second block's
@@ -820,7 +820,7 @@ class BpuPipe {
     if (refetch || !b.valid) return;
     d.out = MainOut{}; d.outB = MainOut{}; d.oout = MainOut{}; d.ock = Ckpt{}; d.obase = 0; d.og = S0Guess{};
     d.valid = true;
-    d.blk = b;
+    d.blk = &b;
     if (mode_ == 1) d.out = b.shadow;
     else if (D_ == 1) { MainRaw raw; main_read(b, raw); main_select(b, raw, d.out); }  // read and compare in one cycle
     else main_select(b, b.raw, d.out);
@@ -866,8 +866,8 @@ class BpuPipe {
   // Training event from the result of the last stage (BPO_UB_MAIN): only where the final prediction differs from what S0 guessed
   void sd_event(const Decision &d, State &n, Txn &t) const {
     if (!d.valid || !ubmain_) return;
-    const S0Guess &g = d.blk.g;
-    UbEv e; e.start = d.blk.base; e.hh = d.blk.hh; e.src = 1;
+    const S0Guess &g = d.blk->g;
+    UbEv e; e.start = d.blk->base; e.hh = d.blk->hh; e.src = 1;
     if (d.out.taken) {
       if (g.taken && g.slot == d.out.slot && g.next == d.out.next && g.nbits == d.out.nbits && g.type == d.out.type) return;
       e.kind = UE_TAKEN; e.slot = d.out.slot; e.type = d.out.type; e.nd = d.out.nbits; e.target = d.out.next;
@@ -880,14 +880,18 @@ class BpuPipe {
     ub_event(n, t.tc, e);
   }
 
-  // n = s except R (the caller rebuilds R[0..D_-1]; the entries above are constant)
+  // n = s except R and pq (the caller rebuilds R[0..D_-1]; the entries above are constant; only pq[0..pq_n) are live)
   static void copy_state_but_R(State &n, const State &s) {
     static_assert(std::is_trivially_copyable_v<State>);
     char *dp = reinterpret_cast<char *>(&n);
     const char *sp = reinterpret_cast<const char *>(&s);
-    const size_t a = reinterpret_cast<char *>(&n.R) - dp, b = a + sizeof(n.R);
-    std::memcpy(dp, sp, a);
-    std::memcpy(dp + b, sp + b, sizeof(State) - b);
+    const size_t a1 = reinterpret_cast<char *>(&n.pq) - dp, b1 = a1 + sizeof(n.pq);
+    const size_t a2 = reinterpret_cast<char *>(&n.R) - dp, b2 = a2 + sizeof(n.R);
+    static_assert(offsetof(State, pq) < offsetof(State, R), "State layout");
+    std::memcpy(dp, sp, a1);
+    std::memcpy(dp + a1, sp + a1, size_t(s.pq_n) * sizeof(Ckpt));
+    std::memcpy(dp + b1, sp + b1, a2 - b1);
+    std::memcpy(dp + b2, sp + b2, sizeof(State) - b2);
   }
 
   void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) const {
@@ -961,17 +965,17 @@ class BpuPipe {
 
     // PTAB write: the block leaving S_D with the final prediction
     if (d.valid) {
-      if (pdck_ && n.pq_n < PQ) n.pq[n.pq_n++] = d.blk.ck;
+      if (pdck_ && n.pq_n < PQ) n.pq[n.pq_n++] = d.blk->ck;
       out.PTAB_write_enable = true;
-      out.out_pred_base_pc = d.blk.base;
+      out.out_pred_base_pc = d.blk->base;
       for (int i = 0; i < FW; i++) out.out_pred_dir[i] = d.out.dir[i];
       out.meta = d.out.meta;
       out.predict_next_fetch_address = d.out.next;
       if (d.pair) {   // FE_PAIR: the group is the first block (up to its taken branch) followed by the second block
         const int lenA = d.out.slot + 1;
-        const BlkB &c = d.blk.b2;
+        const BlkB &c = d.blk->b2;
         out.ptab_pcs_valid = true;
-        for (int i = 0; i < FW; i++) { out.out_pred_pc[i] = i < lenA ? d.blk.base + 4u * i : c.base + 4u * (i - lenA); if (i >= lenA) out.out_pred_dir[i] = false; }
+        for (int i = 0; i < FW; i++) { out.out_pred_pc[i] = i < lenA ? d.blk->base + 4u * i : c.base + 4u * (i - lenA); if (i >= lenA) out.out_pred_dir[i] = false; }
         for (int j = 0; lenA + j < FW; j++) {
           const int di = lenA + j;
           out.out_pred_dir[di] = d.outB.dir[j];
@@ -984,13 +988,13 @@ class BpuPipe {
       }
       if (repair_) {
         t.rec_v = true;
-        t.rec.ck = d.blk.ck; if (repair_ == 2) t.rec.rf = d.blk.rf; t.rec.base = d.blk.base; t.rec.id = (*stp_).blk_seq; t.rec.epoch = (*stp_).epoch; t.rec.valid = true;
+        t.rec.ck = d.blk->ck; if (repair_ == 2) t.rec.rf = d.blk->rf; t.rec.base = d.blk->base; t.rec.id = (*stp_).blk_seq; t.rec.epoch = (*stp_).epoch; t.rec.valid = true;
         for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = (*stp_).blk_seq; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
         n.blk_seq = (*stp_).blk_seq + 1;
         if (d.pair) {
           const int lenA = d.out.slot + 1;
           t.rec2_v = true;
-          t.rec2.ck = d.blk.b2.ck; t.rec2.base = d.blk.b2.base; t.rec2.id = (*stp_).blk_seq + 1; t.rec2.epoch = (*stp_).epoch; t.rec2.valid = true;
+          t.rec2.ck = d.blk->b2.ck; t.rec2.base = d.blk->b2.base; t.rec2.id = (*stp_).blk_seq + 1; t.rec2.epoch = (*stp_).epoch; t.rec2.valid = true;
           for (int i = 0; i < FW; i++) t.rec2.ptype[i] = d.outB.meta.ps_info[i] & 7;
           for (int i = lenA; i < FW; i++) out.meta.blk_id[i] = (*stp_).blk_seq + 1;
           n.blk_seq = (*stp_).blk_seq + 2;

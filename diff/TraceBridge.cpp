@@ -128,9 +128,20 @@ bool Bridge::read_word(uint32_t paddr, uint32_t &word) const {
   return false;
 }
 
+// The chain is in dispatch order, which is ascending uid (a uid is dispatched once): binary search.
 const Fact *Bridge::find(uint64_t uid) const {
-  for (auto *e : chain_) if (e->f.uid == uid) return &e->f;
-  return nullptr;
+  size_t lo = 0, hi = chain_.size();
+  while (lo < hi) {
+    const size_t mid = (lo + hi) / 2;
+    if (chain_[mid]->f.uid < uid) lo = mid + 1; else hi = mid;
+  }
+  const Fact *r = lo < chain_.size() && chain_[lo]->f.uid == uid ? &chain_[lo]->f : nullptr;
+#ifdef BRIDGE_FIND_CHECK
+  const Fact *lin = nullptr;
+  for (auto *e : chain_) if (e->f.uid == uid) { lin = &e->f; break; }
+  if (lin != r) { std::fprintf(stderr, "[BRIDGE_FIND_CHECK] uid %llu: linear %p binary %p\n", (unsigned long long)uid, (const void *)lin, (const void *)r); std::abort(); }
+#endif
+  return r;
 }
 
 const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {

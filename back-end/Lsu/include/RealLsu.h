@@ -162,8 +162,13 @@ public:
   void comb_stlf();
   void comb_check();
   void seq() {
-    cur = nxt;
-    if (pipe) pcur = pnxt;
+    if (pipe) {   // the staged LSU keeps its queues in pcur / pnxt; of the legacy state only these two units are shared
+      cur.uncached_unit = nxt.uncached_unit;
+      cur.lrsc_unit = nxt.lrsc_unit;
+      pcur = pnxt;
+    } else {
+      cur = nxt;
+    }
   }
 
   // Staged LSU (switch LSU_PIPE / CFG_LSU_PIPE): same comb phases, see RealLsuPipe.cpp and docs/LSU_PIPE.md.
