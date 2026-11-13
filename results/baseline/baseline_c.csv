@@ -64,3 +64,4 @@ trap-precise-store.bin,0,0,1251
 unalign.bin,0,0,1182
 wanshu.bin,0,0,4659
 wfi-boundary.bin,0,0,847
+rvc-sv32.bin,0,0,2516

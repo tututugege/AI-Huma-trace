@@ -81,7 +81,7 @@ public:
   size_t undo_bytes() const;  // per-entry undo log size (fixed part)
 
   struct Stats {
-    uint64_t dispatched = 0, forced_jumps = 0, rewinds = 0, entries_dropped = 0, patches = 0, replayed = 0, flush_commits = 0, trap_commits = 0, interrupts = 0;
+    uint64_t dispatched = 0, inst_mismatch = 0, forced_jumps = 0, rewinds = 0, entries_dropped = 0, patches = 0, replayed = 0, flush_commits = 0, trap_commits = 0, interrupts = 0;
     uint64_t blocked[5] = {0}, trapped = 0;
   } stats;
 

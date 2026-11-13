@@ -52,8 +52,8 @@ struct Counters {
     for (int i = 0; i < 32; i++) if (nofact_by_op[i]) std::fprintf(stderr, " op%d=%llu", i, (unsigned long long)nofact_by_op[i]);
     std::fprintf(stderr, "\n");
     if (g_bridge)
-      std::fprintf(stderr, "[TB_CHECK] bridge forced_jumps=%llu rewinds=%llu dropped=%llu trapped=%llu blocked=%llu/%llu/%llu/%llu\n",
-        (unsigned long long)g_bridge->stats.forced_jumps, (unsigned long long)g_bridge->stats.rewinds,
+      std::fprintf(stderr, "[TB_CHECK] bridge inst_mismatch=%llu forced_jumps=%llu rewinds=%llu dropped=%llu trapped=%llu blocked=%llu/%llu/%llu/%llu\n",
+        (unsigned long long)g_bridge->stats.inst_mismatch, (unsigned long long)g_bridge->stats.forced_jumps, (unsigned long long)g_bridge->stats.rewinds,
         (unsigned long long)g_bridge->stats.entries_dropped, (unsigned long long)g_bridge->stats.trapped,
         (unsigned long long)g_bridge->stats.blocked[1], (unsigned long long)g_bridge->stats.blocked[2],
         (unsigned long long)g_bridge->stats.blocked[3], (unsigned long long)g_bridge->stats.blocked[4]);

@@ -86,6 +86,10 @@ struct TrueGlueInput {
   uint32_t module_resp_paddr = 0;
   bool module_ifu_page_fault = false;
   bool module_ifu_resp_single_word = false;
+  // RVC=1: physical address of the page that follows the response's virtual page (its translation), for a 32-bit instruction that starts at the last
+  // halfword of the page; not valid if it is not mapped.  (The next virtual page is not the next physical page.)
+  bool next_page_valid = false;
+  uint32_t next_page_paddr = 0;
 };
 
 struct TrueGlueOutput {
@@ -114,6 +118,46 @@ struct TrueGlueOutput {
 
 
 
+
+// Software walk of the page tables (no state change, no timing) for an instruction fetch at `va` under the given satp / privilege: the translation of the
+// page that follows a straddling instruction's first page, which is usually not in the ITLB yet.  Returns false if it would fault.
+static bool soft_walk_fetch(uint64_t satp, uint32_t priv, uint64_t va, uint32_t &pa) {
+  constexpr int levels = XLEN == 32 ? 2 : 3, bits = XLEN == 32 ? 10 : 9, ptesz = XLEN == 32 ? 4 : 8;
+  const bool on = XLEN == 32 ? ((satp >> 31) & 1) != 0 : ((satp >> 60) & 0xF) == 8;
+  if (priv == 3 || !on) { pa = static_cast<uint32_t>(va); return true; }
+  const uint64_t ppn_mask = XLEN == 32 ? 0x3FFFFFull : 0xFFFFFFFFFFFull;
+  uint64_t a = (satp & ppn_mask) << 12;
+  for (int i = levels - 1; i >= 0; --i) {
+    const uint64_t vpn = (va >> (12 + bits * i)) & ((1u << bits) - 1u);
+    const uint32_t pte_addr = static_cast<uint32_t>(a + vpn * ptesz);
+    uint64_t pte = tbhook::mem_read(pte_addr);
+    if (ptesz == 8) pte |= static_cast<uint64_t>(tbhook::mem_read(pte_addr + 4)) << 32;
+    if (!(pte & 1) || (!(pte & 2) && (pte & 4))) return false;
+    if (pte & 0xA) {   // leaf (R or X)
+      if (!(pte & 8) || !(pte & 0x40)) return false;                       // not executable, accessed bit clear
+      const bool u = (pte & 0x10) != 0;
+      if (priv == 0 ? !u : u) return false;                                // U-mode: user pages only; S-mode: never user pages (fetch)
+      const uint64_t ppn = (pte >> 10) & ppn_mask;
+      const int sh = bits * i;
+      if (sh && (ppn & ((1ull << sh) - 1))) return false;                  // misaligned superpage
+      const uint64_t span = 1ull << (12 + sh);
+      pa = static_cast<uint32_t>(((ppn << 12) & ~(span - 1)) | (va & (span - 1)));
+      return true;
+    }
+    a = ((pte >> 10) & ppn_mask) << 12;
+  }
+  return false;
+}
+
+// The 32-bit window at a 2-byte aligned physical address of the response's page; a window that starts at the last halfword of the page takes its upper
+// half from the next virtual page (its own translation), not from the physically adjacent page.
+static uint32_t window_at(const TrueGlueInput &in, uint32_t paddr) {
+  if (kRvc && (paddr & 0xFFFu) == 0xFFEu) {
+    const uint32_t lo = tbhook::mem_read(paddr & ~3u) >> 16;
+    return lo | (in.next_page_valid ? (tbhook::mem_read(in.next_page_paddr) << 16) : 0u);
+  }
+  return tbhook::fetch_window_at(paddr);
+}
 
 TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
   TrueGlueOutput out;
@@ -151,7 +195,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
       out.page_fault_inst[0] = in.module_ifu_page_fault;
       out.inst_valid[0] = true;
       if (kRvc) {   // one 4-byte word = two 2-byte slots; the window of the second slot is the word's upper half plus the next word
-        out.fetch_group[1] = in.module_ifu_page_fault ? INST_NOP : tbhook::fetch_window_at(in.module_resp_paddr + SLOT_BYTES);
+        out.fetch_group[1] = in.module_ifu_page_fault ? INST_NOP : window_at(in, in.module_resp_paddr + SLOT_BYTES);
         out.page_fault_inst[1] = in.module_ifu_page_fault;
         out.inst_valid[1] = true;
       }
@@ -165,7 +209,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
         }
         out.fetch_group[i] = in.module_ifu_page_fault
                                  ? INST_NOP
-                                 : tbhook::fetch_window_at(in.module_resp_paddr + SLOT_BYTES * i);
+                                 : window_at(in, in.module_resp_paddr + SLOT_BYTES * i);
         out.page_fault_inst[i] = in.module_ifu_page_fault;
         out.inst_valid[i] = true;
       }
@@ -834,7 +878,16 @@ public:
         runtime.mem_probe_req_port, icache_hw.io.out.dcache_req_valid,
         icache_hw.io.out.dcache_req_addr);
 
-    const auto glue_in = make_true_glue_input(icache_hw, hold_for_recovery);
+    auto glue_in = make_true_glue_input(icache_hw, hold_for_recovery);
+    if (kRvc && glue_in.module_ifu_resp_valid && !glue_in.module_ifu_page_fault && !glue_in.module_ifu_resp_single_word &&
+        runtime.mmu_model != nullptr && ((glue_in.module_resp_paddr & 0xFFFu) + ICACHE_LINE_SIZE > 0x1000u)) {
+      // the group reaches the end of the page: translate the next page (no state change) for the upper half of a straddling instruction
+      uint32_t np = 0;
+      const pc_t next_va = (glue_in.module_ifu_resp_pc & ~static_cast<pc_t>(0xFFF)) + 0x1000u;
+      glue_in.next_page_valid = runtime.mmu_model->peek_translate(np, static_cast<uint32_t>(next_va), 0, in->csr_status) ||
+                                (in->csr_status && icache_top_n::soft_walk_fetch(static_cast<uint64_t>(in->csr_status->satp), static_cast<uint32_t>(in->csr_status->privilege) & 3u, next_va, np));
+      glue_in.next_page_paddr = np & ~3u;
+    }
     const auto glue_out = icache_top_n::eval_true_glue(glue_in);
     apply_true_glue_output(out, glue_out);
     update_true_perf_outputs(out, req_valid, icache_hw, itlb_translate_invoked,
@@ -932,6 +985,7 @@ bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int n
   const uint32_t pb = (a_paddr & ~0xFFFu) | (b_vpc & 0xFFFu);
   const uint32_t index = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
   if (!icache_peek_hit(index, pb >> 12)) return false;
+  for (int i = 0; i < nwords; ++i) if (kRvc && ((pb + SLOT_BYTES * i) & 0xFFFu) == 0xFFEu) return false;   // upper half in the next page
   for (int i = 0; i < nwords; ++i) words[i] = tbhook::fetch_window_at(pb + SLOT_BYTES * i);
   return true;
 }

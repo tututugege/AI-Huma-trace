@@ -17,7 +17,7 @@ one() {
 }
 export -f one; export SIM OUT BASE DEADLINE WRITE
 list=$(ls "$T"/build_c/tests/*/*.bin | grep -v "memory-stress/\|load-store/\|smc-")
-list="$list $T/build_c/gen/rvc-flow/rvc-flow.bin $T/build_c/gen/rvc-straddle/rvc-straddle.bin"
+list="$list $T/build_c/gen/rvc-flow/rvc-flow.bin $T/build_c/gen/rvc-straddle/rvc-straddle.bin $T/build_c/gen/rvc-sv32/rvc-sv32.bin"
 [ -n "$FULL" ] && list="$list $T/build_c/gen/rvc-alu/rvc-alu.bin $T/build_c/gen/rvc-mem/rvc-mem.bin $T/build_c/gen/fd-rvc-mem/fd-rvc-mem.bin"
 echo $list | tr ' ' '\n' | xargs -P "$JOBS" -I{} bash -c 'one {}' > "$OUT/result.txt"
 if [ -n "$WRITE" ]; then { echo "test,status,wall_s,cycles"; sort "$OUT/result.txt"; } > "$WRITE"; echo "wrote $WRITE ($(wc -l < "$WRITE") lines)"; exit 0; fi

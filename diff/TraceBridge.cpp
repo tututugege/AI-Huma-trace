@@ -19,6 +19,8 @@ static constexpr int kTrapCsr[8] = {7 /*mstatus*/, 15 /*sstatus*/, 1 /*mepc*/, 2
 
 struct Bridge::Entry {
   Fact f;
+  uint32_t exec_inst = 0;       // the word the function model executed (compared with the fetched one when the instruction commits)
+  bool exec_cmp = false;
   xlen_t pc_before = 0;
   uint8_t priv_before = 0;
   bool resv_valid_before = false;
@@ -275,6 +277,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   refcpu_step(ctx_, 1);
   RefCpuStepInfo info{};
   refcpu_get_step_info(ctx_, &info);
+  e->exec_inst = info.instruction; e->exec_cmp = !info.page_fault_inst;
   RefCpuState after{};
   refcpu_get_state(ctx_, &after);
 #if FP
@@ -367,6 +370,14 @@ void Bridge::rewind_after(int64_t uid) {
 
 void Bridge::commit(uint64_t uid) {
   if (chain_.empty() || chain_.front()->f.uid != uid) return;
+  // The word the front end fetched must be the word the function model executed (a second half read from the wrong physical page, a stale I$ line):
+  // the back end decodes the front end's word, the facts come from the function model, so a difference would otherwise only show up later as a wrong result.
+  if (chain_.front()->exec_cmp && chain_.front()->exec_inst != chain_.front()->f.inst) {
+    stats.inst_mismatch++;
+    if (stats.inst_mismatch <= 8)
+      std::fprintf(stderr, "[TB_CHECK] fetched word != executed word at commit: pc=%llx fetched=%08x executed=%08x len=%u\n", (unsigned long long)chain_.front()->f.pc,
+                   chain_.front()->f.inst, chain_.front()->exec_inst, (unsigned)chain_.front()->f.len);
+  }
   delete chain_.front();
   chain_.pop_front();
 }
