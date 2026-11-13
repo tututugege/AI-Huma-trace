@@ -85,6 +85,8 @@ struct PendingFrontState {
   wire1_t next_ptab_empty = true;
   wire1_t next_front2back_fifo_full = false;
   wire1_t next_front2back_fifo_empty = true;
+  wire1_t next_lh_valid = false;     // RVC=1: the last instruction of the group at the FIFO head starts in its last slot (its second half is the next group's first halfword)
+  pc_t next_lh_pc = 0;
   wire1_t next_pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
   fetch_addr_t next_pend_addr = 0;
   FetchPair next_pend_pair{};
@@ -109,6 +111,8 @@ struct FrontReadData {
   wire1_t ptab_empty_latch_snapshot = true;
   wire1_t front2back_fifo_full_latch_snapshot = false;
   wire1_t front2back_fifo_empty_latch_snapshot = true;
+  wire1_t lh_valid_snapshot = false;
+  pc_t lh_pc_snapshot = 0;
   wire1_t pend_valid_snapshot = false;
   fetch_addr_t pend_addr_snapshot = 0;
   FetchPair pend_pair_snapshot{};

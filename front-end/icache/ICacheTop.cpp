@@ -150,6 +150,11 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
           in.module_ifu_page_fault ? INST_NOP : tbhook::mem_read(in.module_resp_paddr);
       out.page_fault_inst[0] = in.module_ifu_page_fault;
       out.inst_valid[0] = true;
+      if (kRvc) {   // one 4-byte word = two 2-byte slots; the window of the second slot is the word's upper half plus the next word
+        out.fetch_group[1] = in.module_ifu_page_fault ? INST_NOP : tbhook::fetch_window_at(in.module_resp_paddr + SLOT_BYTES);
+        out.page_fault_inst[1] = in.module_ifu_page_fault;
+        out.inst_valid[1] = true;
+      }
     } else {
       for (int i = 0; i < FETCH_WIDTH; ++i) {
         if (base_idx + i >= ICACHE_TOP_TRUE_GLUE_LINE_WORDS) {

@@ -40,6 +40,7 @@ static void front2back_FIFO_comb_impl(const front2back_FIFO_in &inp, const front
       write_entry.fetch_group[i] = inp.fetch_group[i];
       write_entry.page_fault_inst[i] = inp.page_fault_inst[i];
       write_entry.inst_valid[i] = inp.inst_valid[i];
+      write_entry.is_rvc[i] = inp.is_rvc[i];
       write_entry.predict_dir_corrected[i] = inp.predict_dir_corrected[i];
       write_entry.predict_base_pc[i] = inp.predict_base_pc[i];
     }
@@ -60,6 +61,7 @@ static void front2back_FIFO_comb_impl(const front2back_FIFO_in &inp, const front
       out.out_regs.fetch_group[i] = read_entry.fetch_group[i];
       out.out_regs.page_fault_inst[i] = read_entry.page_fault_inst[i];
       out.out_regs.inst_valid[i] = read_entry.inst_valid[i];
+      out.out_regs.is_rvc[i] = read_entry.is_rvc[i];
       out.out_regs.predict_dir_corrected[i] = read_entry.predict_dir_corrected[i];
       out.out_regs.predict_base_pc[i] = read_entry.predict_base_pc[i];
     }

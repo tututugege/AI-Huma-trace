@@ -61,7 +61,7 @@ inline uint32_t hr_mask() { static const uint32_t m = (cfg_pair() ? 512u : 256u)
 
 constexpr uint32_t mask_of(int bits) { return bits >= 32 ? 0xffffffffu : ((1u << bits) - 1u); }
 // uBTB entry field widths: every field is truncated to its declared width on write.
-constexpr int UB_TAG_BITS = 10, UB_SLOT_BITS = 3, UB_TYPE_BITS = 3, UB_CTR_BITS = 2, UB_ND_BITS = 4, UB_TGT_BITS = 30;
+constexpr int UB_TAG_BITS = 10, UB_SLOT_BITS = clog2(FETCH_WIDTH), UB_TYPE_BITS = 3, UB_CTR_BITS = 2, UB_ND_BITS = 4, UB_TGT_BITS = 32 - SLOT_SHIFT;   // slot offset and target slot address
 
 // ---------------------------------------------------------------------------
 // Circular global history: bit ring + head pointer + folded histories. Repair restores head and fh; no ghr copy.
@@ -1034,6 +1034,8 @@ class BpuPipe {
         else if (d.oout.type == BR_RET) { t.s_ov_ret = 1; }
         else {
           t.s_ov_oth = 1;
+          static const bool dbg = std::getenv("BPU_OVR_DBG") != nullptr; static int budget = 12;
+          if (dbg && budget-- > 0) std::printf("[BPU_OVR_DBG] base=%x s0: next=%x slot=%d type=%d | main: next=%x slot=%d type=%d taken=%d\n", (unsigned)d.obase, (unsigned)g.next, (int)g.slot, (int)g.type, (unsigned)d.oout.next, (int)d.oout.slot, (int)d.oout.type, (int)d.oout.taken);
         }
       }
     } else if (l1_override((*stp_).R[0], n, t)) {

@@ -133,6 +133,11 @@ struct instruction_FIFO_in {
   predecode_type_t predecode_type[FETCH_WIDTH];
   target_addr_t predecode_target_address[FETCH_WIDTH];
   pc_t seq_next_pc;
+  // RVC=1: per slot, the window at that slot is a 16-bit instruction (the word in fetch_group is then the expanded one), and which slots start an instruction
+  // if the group begins with an instruction (start_a) or with the second half of the previous block's last instruction (start_b)
+  wire1_t is_rvc[FETCH_WIDTH];
+  wire1_t start_a[FETCH_WIDTH];
+  wire1_t start_b[FETCH_WIDTH];
 };
 
 struct instruction_FIFO_out {
@@ -147,6 +152,9 @@ struct instruction_FIFO_out {
   predecode_type_t predecode_type[FETCH_WIDTH];
   target_addr_t predecode_target_address[FETCH_WIDTH];
   pc_t seq_next_pc;
+  wire1_t is_rvc[FETCH_WIDTH];
+  wire1_t start_a[FETCH_WIDTH];
+  wire1_t start_b[FETCH_WIDTH];
 };
 
 struct PTAB_in {
@@ -182,6 +190,7 @@ struct front2back_FIFO_in {
   inst_word_t fetch_group[FETCH_WIDTH];
   wire1_t page_fault_inst[FETCH_WIDTH];
   wire1_t inst_valid[FETCH_WIDTH];
+  wire1_t is_rvc[FETCH_WIDTH];
   // to back-end
   wire1_t predict_dir_corrected[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address_corrected;
@@ -198,6 +207,7 @@ struct front2back_FIFO_out {
   inst_word_t fetch_group[FETCH_WIDTH];
   wire1_t page_fault_inst[FETCH_WIDTH];
   wire1_t inst_valid[FETCH_WIDTH];
+  wire1_t is_rvc[FETCH_WIDTH];
   wire1_t predict_dir_corrected[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address_corrected;
   pc_t predict_base_pc[FETCH_WIDTH];

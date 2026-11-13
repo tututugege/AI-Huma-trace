@@ -1,3 +1,4 @@
+#include "../function-model/include/rvc.h"
 #include "BPU/BPU.h"
 #include "BPU/BPU_pipe.h"
 #include "Pmu.h"
@@ -86,6 +87,8 @@ static void tick(uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
 }
 }  // namespace ipf
 
+static bool lh_valid = false;             // RVC=1 "last half": the next group begins with the second half of an instruction that started in the last slot of the group before
+static pc_t lh_pc = 0;                    // ... and that group starts at this pc
 static bool pend_valid = false;           // FE_PAIR: ICache request in flight and its second block
 static uint32_t pend_addr = 0;
 static FetchPair pend_pair{};
@@ -159,12 +162,14 @@ static void front_front2back_write_comb(const instruction_FIFO_out &fifo_out, co
     fifo_in.fetch_group[i] = fifo_out.instructions[i];
     fifo_in.page_fault_inst[i] = fifo_out.page_fault_inst[i];
     fifo_in.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
+    fifo_in.is_rvc[i] = fifo_out.is_rvc[i];
     fifo_in.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
     fifo_in.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     if (bypass) {
       bypass_out.fetch_group[i] = fifo_out.instructions[i];
       bypass_out.page_fault_inst[i] = fifo_out.page_fault_inst[i];
       bypass_out.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
+      bypass_out.is_rvc[i] = fifo_out.is_rvc[i];
       bypass_out.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
       bypass_out.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     }
@@ -193,6 +198,7 @@ static void front_output_comb(const front2back_FIFO_out &saved, const front2back
     out.predict_dir[i] = src->predict_dir_corrected[i];
     out.pc[i] = src->predict_base_pc[i];
     out.inst_valid[i] = src->inst_valid[i];
+    out.is_rvc[i] = src->is_rvc[i];
   }
   out.meta.assign_prefix(src->meta);
   for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {
@@ -328,6 +334,9 @@ struct FrontComb {
   bool ptab_written = false;  // FE_RFAST bit1: the PTAB write was merged into the head read (write-to-read bypass)
   bpuf::PdInfo pd_next{};
   predecode_checker_out checker_out{};
+  bool lh_new_valid = false;      // RVC=1: the "last half" state after the group at the FIFO head (set when a head is processed)
+  pc_t lh_new_pc = 0;
+  bool lh_updated = false;
 
   FrontComb(const front_top_in &i, const FrontReadData &r, front_top_out &o, FrontUpdateRequest &q)
       : in(i), rd(r), out(o), req(q), fetch_addr_rd(r.fetch_addr_fifo_rd_snapshot), fifo_rd(r.fifo_rd_snapshot),
@@ -534,6 +543,14 @@ void FrontComb::write_instruction_fifo() {
     fifo_in.page_fault_inst[i] = gpf[i];
     fifo_in.inst_valid[i] = gv[i];
     if (gv[i]) {
+      if constexpr (kRvc) {   // the window at this slot is a 16-bit instruction when its low bits are not 11: expand it (an illegal encoding becomes 0)
+        if ((grp[i] & 3u) != 3u) {
+          uint32_t ex = 0;
+          fifo_in.is_rvc[i] = true;
+          grp[i] = rvc::expand(grp[i] & 0xffffu, ex) ? ex : 0u;
+          fifo_in.fetch_group[i] = grp[i];
+        }
+      }
       predecode_in predecode_inp{grp[i], gpc[i]};
       predecode_read_data predecode_rd{};
       PredecodeResult result{};
@@ -544,6 +561,14 @@ void FrontComb::write_instruction_fifo() {
     } else {
       fifo_in.predecode_type[i] = PREDECODE_NON_BRANCH;
       fifo_in.predecode_target_address[i] = 0;
+    }
+  }
+  if constexpr (kRvc) {   // instruction starts: from slot 0 (start_a) or, when slot 0 is the second half of the previous block's last instruction, from slot 1 (start_b)
+    int n = 0;
+    while (n < FETCH_WIDTH && gv[n]) n++;
+    for (int pass = 0; pass < 2; pass++) {
+      wire1_t *st = pass ? fifo_in.start_b : fifo_in.start_a;
+      for (int pos = pass; pos < n; pos += fifo_in.is_rvc[pos] ? 1 : 2) st[pos] = true;
     }
   }
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && ic_out.inst_valid[pr.a_len - 1] && !ic_out.fetch_single_word) {   // FE_PAIR: next pc after the last valid slot
@@ -596,6 +621,20 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
       exit(1);
     }
   }
+  int rvc_n = 0, rvc_last = -1;   // RVC=1: slots in range, and the last slot that starts an instruction
+  bool rvc_straddle = false;
+  if constexpr (kRvc) {
+    // Which in-range slots start an instruction: the chain from slot 0, or from slot 1 when slot 0 completes the previous group's last instruction.
+    const bool use_b = rd.lh_valid_snapshot && rd.lh_pc_snapshot == fifo_head.pc[0];
+    const wire1_t *m = use_b ? fifo_head.start_b : fifo_head.start_a;
+    while (rvc_n < FETCH_WIDTH && fifo_head.inst_valid[rvc_n]) rvc_n++;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      if (!fifo_head.inst_valid[i]) continue;
+      if (m[i]) { rvc_last = i; continue; }
+      fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0;
+    }
+    rvc_straddle = rvc_last >= 0 && rvc_last == rvc_n - 1 && !fifo_head.is_rvc[rvc_last] && !fifo_head.page_fault_inst[rvc_last];
+  }
   predecode_checker_in checker_in;
   front_checker_input_comb(fifo_head, ptab_head, checker_in);
   checker_in.multi = multi;
@@ -606,6 +645,23 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
   if (checker_out.predecode_flush_enable) {
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
+  }
+  if (kRvc) { static const bool dbg = std::getenv("RVC_DBG") != nullptr; static int budget = 40;
+    if (dbg && checker_out.predecode_flush_enable && budget-- > 0) {
+      std::printf("[RVC_DBG] flush pc0=%x predicted_next=%x corrected=%x seq_next=%x n=%d valid=", (unsigned)fifo_head.pc[0], (unsigned)ptab_head.predict_next_fetch_address, (unsigned)checker_out.predict_next_fetch_address_corrected, (unsigned)fifo_head.seq_next_pc, rvc_n);
+      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)fifo_head.inst_valid[i]);
+      std::printf(" dir=");
+      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)ptab_head.predict_dir[i]);
+      std::printf(" type=");
+      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)fifo_head.predecode_type[i]);
+      std::printf("\n");
+    } }
+  if constexpr (kRvc) {   // the next group starts with the second half of this group's last instruction if it straddles and the fetch continues sequentially
+    bool any_taken = false;
+    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) any_taken = true;
+    lh_updated = true;
+    lh_new_valid = rvc_straddle && !any_taken && !checker_out.predecode_flush_enable;
+    lh_new_pc = fifo_head.pc[0] + rvc_n * SLOT_BYTES;
   }
   if (g_use_pipe) {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
     bpuf::PdInfo &pd = pd_next;
@@ -627,7 +683,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
         if (hist) { pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::cfg_hsym(); }
         const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
         if (pd.ras_op == 0) {
-          if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + 4; }
+          if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
           else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) pd.ras_op = 2;
         }
         if (!multi || i + 1 >= int(checker_out.keep_n)) break;
@@ -678,6 +734,11 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
     if (global_refetch || global_reset) nv = false;
     state.next_pend_valid = nv; state.next_pend_addr = na; state.next_pend_pair = np;
   }
+  {   // RVC=1 last-half state
+    bool nv = lh_updated ? lh_new_valid : rd.lh_valid_snapshot;
+    if (global_refetch || global_reset || predecode_flush) nv = false;
+    state.next_lh_valid = nv; state.next_lh_pc = lh_updated ? lh_new_pc : rd.lh_pc_snapshot;
+  }
   state.next_predecode_refetch = predecode_flush;
   state.next_pd = pd_next;
   state.next_predecode_refetch_address = predecode_flush ? flush_address : 0;
@@ -708,7 +769,7 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
       int last = -1;
       bool no_taken = true;
       for (int j = 0; j < FETCH_WIDTH; j++) {   // the same cut as SimCpu::front_comb_before_back
-        if (j > 0 && !no_taken && out.inst_valid[j - 1] && out.inst_valid[j] && out.pc[j] != out.pc[j - 1] + 4 && out.predict_dir[j - 1]) no_taken = true;
+        if (j > 0 && !no_taken && out.inst_valid[j - 1] && out.inst_valid[j] && out.pc[j] != out.pc[j - 1] + ilen_of(out.is_rvc[j - 1]) && out.predict_dir[j - 1]) no_taken = true;
         const bool v = no_taken && out.FIFO_valid && out.inst_valid[j];
         if (v) { pf.feo_n++; last = j; if (out.predict_dir[j]) no_taken = false; }
       }
@@ -769,6 +830,7 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   rd.ptab_empty_latch_snapshot = ptab_empty_latch;
   rd.front2back_fifo_full_latch_snapshot = front2back_fifo_full_latch;
   rd.front2back_fifo_empty_latch_snapshot = front2back_fifo_empty_latch;
+  rd.lh_valid_snapshot = lh_valid; rd.lh_pc_snapshot = lh_pc;
   rd.pend_valid_snapshot = pend_valid; rd.pend_addr_snapshot = pend_addr; rd.pend_pair_snapshot = pend_pair;
 
   fetch_address_FIFO_in fetch_addr_in;
@@ -823,6 +885,7 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
     ptab_empty_latch = req.front_state.next_ptab_empty;
     front2back_fifo_full_latch = req.front_state.next_front2back_fifo_full;
     front2back_fifo_empty_latch = req.front_state.next_front2back_fifo_empty;
+    lh_valid = req.front_state.next_lh_valid; lh_pc = req.front_state.next_lh_pc;
     pend_valid = req.front_state.next_pend_valid; pend_addr = req.front_state.next_pend_addr; pend_pair = req.front_state.next_pend_pair;
   }
 }

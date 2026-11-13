@@ -35,6 +35,9 @@ struct instruction_FIFO_entry {
   predecode_type_t predecode_type[FETCH_WIDTH];
   target_addr_t predecode_target_address[FETCH_WIDTH];
   pc_t seq_next_pc;
+  wire1_t is_rvc[FETCH_WIDTH];
+  wire1_t start_a[FETCH_WIDTH];
+  wire1_t start_b[FETCH_WIDTH];
 };
 
 struct instruction_FIFO_read_data {
@@ -60,6 +63,7 @@ struct front2back_FIFO_entry {
   inst_word_t fetch_group[FETCH_WIDTH];
   wire1_t page_fault_inst[FETCH_WIDTH];
   wire1_t inst_valid[FETCH_WIDTH];
+  wire1_t is_rvc[FETCH_WIDTH];
   wire1_t predict_dir_corrected[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address_corrected;
   pc_t predict_base_pc[FETCH_WIDTH];

@@ -63,7 +63,7 @@ ICacheTop *get_icache_instance();
 
 namespace icache_top_n {
 
-inline constexpr int ICACHE_TOP_TRUE_GLUE_LINE_WORDS = ICACHE_LINE_SIZE / 4;
+inline constexpr int ICACHE_TOP_TRUE_GLUE_LINE_WORDS = ICACHE_LINE_SIZE / SLOT_BYTES;   // slots per line
 
 } // namespace icache_top_n
 

@@ -41,6 +41,9 @@ static void instruction_FIFO_comb_impl(const instruction_FIFO_in &inp, const ins
       write_entry.inst_valid[i] = inp.inst_valid[i];
       write_entry.predecode_type[i] = inp.predecode_type[i];
       write_entry.predecode_target_address[i] = inp.predecode_target_address[i];
+      write_entry.is_rvc[i] = inp.is_rvc[i];
+      write_entry.start_a[i] = inp.start_a[i];
+      write_entry.start_b[i] = inp.start_b[i];
     }
     write_entry.seq_next_pc = inp.seq_next_pc;
   }
@@ -59,6 +62,9 @@ static void instruction_FIFO_comb_impl(const instruction_FIFO_in &inp, const ins
       out.out_regs.inst_valid[i] = read_entry.inst_valid[i];
       out.out_regs.predecode_type[i] = read_entry.predecode_type[i];
       out.out_regs.predecode_target_address[i] = read_entry.predecode_target_address[i];
+      out.out_regs.is_rvc[i] = read_entry.is_rvc[i];
+      out.out_regs.start_a[i] = read_entry.start_a[i];
+      out.out_regs.start_b[i] = read_entry.start_b[i];
     }
     out.out_regs.seq_next_pc = read_entry.seq_next_pc;
     out.out_regs.FIFO_valid = true;
