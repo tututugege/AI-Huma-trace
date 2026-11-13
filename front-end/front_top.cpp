@@ -87,6 +87,22 @@ static void tick(uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
 }
 }  // namespace ipf
 
+// RVC=1 front-end statistics (printed at exit)
+struct RvcFeStats {
+  uint64_t groups = 0, slots_in_range = 0, insts = 0, insts_rvc = 0, carry_used = 0, straddle = 0, straddle_line_end = 0, taken_nonstart = 0;
+  ~RvcFeStats() {
+    if (!kRvc || groups == 0) return;
+    std::printf("[RVC_FE] groups=%llu slots_in_range=%llu insts=%llu (16-bit %llu = %.1f%%) insts/group=%.2f | last-half carry used=%llu | straddling 4-byte insts at the group end=%llu (at a cache-line end=%llu) | predicted taken on a non-start slot=%llu\n",
+                (unsigned long long)groups, (unsigned long long)slots_in_range, (unsigned long long)insts, (unsigned long long)insts_rvc,
+                insts ? 100.0 * insts_rvc / insts : 0.0, double(insts) / double(groups), (unsigned long long)carry_used, (unsigned long long)straddle,
+                (unsigned long long)straddle_line_end, (unsigned long long)taken_nonstart);
+  }
+};
+static RvcFeStats g_rvc_stats;
+static const bool g_rvc_pair_guard = [] {
+  if (kRvc && bpuf::cfg_pair() != 0) { std::fprintf(stderr, "FE_PAIR is not supported with RVC=1\n"); std::exit(2); }
+  return true;
+}();
 static bool lh_valid = false;             // RVC=1 "last half": the next group begins with the second half of an instruction that started in the last slot of the group before
 static pc_t lh_pc = 0;                    // ... and that group starts at this pc
 static bool pend_valid = false;           // FE_PAIR: ICache request in flight and its second block
@@ -632,9 +648,13 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     for (int i = 0; i < FETCH_WIDTH; i++) {
       if (!fifo_head.inst_valid[i]) continue;
       if (m[i]) { rvc_last = i; continue; }
+      if (ptab_head.predict_dir[i]) g_rvc_stats.taken_nonstart++;
       fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0;
     }
+    g_rvc_stats.groups++; g_rvc_stats.slots_in_range += rvc_n; g_rvc_stats.carry_used += use_b;
+    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i]) { g_rvc_stats.insts++; g_rvc_stats.insts_rvc += fifo_head.is_rvc[i]; }
     rvc_straddle = rvc_last >= 0 && rvc_last == rvc_n - 1 && !fifo_head.is_rvc[rvc_last] && !fifo_head.page_fault_inst[rvc_last];
+    if (rvc_straddle) { g_rvc_stats.straddle++; if (((fifo_head.pc[0] + rvc_n * SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
   }
   predecode_checker_in checker_in;
   front_checker_input_comb(fifo_head, ptab_head, checker_in);
