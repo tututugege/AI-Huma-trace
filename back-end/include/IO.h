@@ -35,6 +35,7 @@ struct FrontPreIO {
 
   wire<32> inst[BACKEND_FETCH_WIDTH] = {};
   wire<XLEN> pc[BACKEND_FETCH_WIDTH] = {};
+  wire<1> is_rvc[BACKEND_FETCH_WIDTH] = {};   // the instruction is 16 bits (RVC=1)
   wire<1> valid[BACKEND_FETCH_WIDTH] = {};
   wire<1> front_stall = {};
   int front_upd_free = 255, front_tq_free = 255;  // free entries at the start of the cycle (registered)  // BPU update / uBTB train queue free entries (compact ROB credits, EXP-028)
@@ -73,6 +74,7 @@ struct FtqPcReadResp {
   wire<1> valid = {};
   wire<1> entry_valid = {};
   wire<XLEN> pc = {};
+  wire<1> is_rvc = {};
   wire<1> pred_taken = {};
   wire<XLEN> next_pc = {};
 };
@@ -95,6 +97,7 @@ struct FtqRobPcRespIO {
 
 struct FtqCommitInfoResp {
   wire<XLEN> pc;
+  wire<1> is_rvc;
   wire<1> pred_taken;
   wire<1> alt_pred;
   pcpn_t pcpn;
@@ -231,6 +234,7 @@ struct RobBroadcastIO {
   wire<1> interrupt = {};
   wire<XLEN> trap_val = {};
   wire<XLEN> pc = {};
+  wire<1> is_rvc = {};   // the instruction at pc is 16 bits: the refetch after it starts at pc + 2
 
   wire<ROB_IDX_WIDTH> head_rob_idx = {};
   wire<1> head_valid = {};

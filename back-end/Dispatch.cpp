@@ -327,7 +327,7 @@ namespace {
 struct Piece {
   int iq, op;
   int src1_en, src2_en, dest_en;
-  bool imm4;    // immediate becomes 4 (the "PC + 4" link value)
+  bool imm4;    // immediate becomes the instruction length (the "PC + 4" link value; 2 for a compressed instruction)
   bool atomic;  // marks the STD of an atomic
 };
 }  // namespace
@@ -404,7 +404,7 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
     if (p.src1_en >= 0) u->src1_en = p.src1_en;
     if (p.src2_en >= 0) u->src2_en = p.src2_en;
     if (p.dest_en >= 0) u.dest_en = p.dest_en;
-    if (p.imm4) u->imm = 4;
+    if (p.imm4) u->imm = ilen_of(u->is_rvc);
     if (p.atomic) u->is_atomic = true;
   }
   if (type == AMO && amo != AmoOp::LR && amo != AmoOp::SC) {

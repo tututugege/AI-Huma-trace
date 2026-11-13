@@ -723,11 +723,12 @@ void SimCpu::front_comb_before_back() {
     bool no_taken = true;
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
       // FE_PAIR: a fetch group may continue with a second block after a predicted-taken branch (pc discontinuity)
-      if (j > 0 && !no_taken && back.in.valid[j - 1] && front.out.inst_valid[j] && front.out.pc[j] != front.out.pc[j - 1] + 4 && front.out.predict_dir[j - 1])
+      if (j > 0 && !no_taken && back.in.valid[j - 1] && front.out.inst_valid[j] && front.out.pc[j] != front.out.pc[j - 1] + ilen_of(front.out.is_rvc[j - 1]) && front.out.predict_dir[j - 1])
         no_taken = true;
       back.in.valid[j] =
           no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
       back.in.pc[j] = front.out.pc[j];
+      back.in.is_rvc[j] = front.out.is_rvc[j];
       back.in.predict_next_fetch_address[j] =
           front.out.predict_next_fetch_address;
       back.in.page_fault_inst[j] = front.out.page_fault_inst[j];
@@ -802,7 +803,7 @@ void SimCpu::back2front_comb() {
       front.back2front_1.actual_target[i] =
           (is_branch((*inst)->type) || (*inst)->type == JAL || (*inst)->type == JALR)
               ? back.out.commit_entry[i].uop.diag_val
-              : ftq_info.pc + 4;
+              : ftq_info.pc + ilen_of(ftq_info.is_rvc);
       int br_type = BR_NONCTL;
       if (is_branch((*inst)->type)) {
         br_type = BR_DIRECT;

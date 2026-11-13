@@ -285,13 +285,13 @@ inline void exec(int kind, Inst &inst) {
       if (mode & 1) {
         const bool pred_taken = u.ftq_pred_taken;
         const uint32_t pc = u.pc, pc_br = pc + u.imm;
-        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : pc + 4;
+        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
         const bool mis = !((taken && pred_taken && pred_target == pc_br) || (!taken && !pred_taken));
         if (mis && !inst.mispred) st.br_flip_to_mispred++;
         if (!mis && inst.mispred) st.br_flip_to_correct++;
         inst.mispred = mis;
         inst.br_taken = taken;
-        inst.diag_val = taken ? pc_br : pc + 4;
+        inst.diag_val = taken ? pc_br : pc + ilen_of(u.is_rvc);
         if (trace) std::fprintf(stderr, "MSD t=%lld branch rob=%u pc=%x flip true=%d stale=%d mispred=%d | s1=%d(p%u v=%x) s2=%d(p%u v=%x) rs1=%x rs2=%x\n", (long long)sim_time, (unsigned)inst.rob_idx, pc, (int)f->br_taken, (int)taken, (int)mis, (int)s1, (unsigned)u.src1_preg, a, (int)s2, (unsigned)u.src2_preg, b, f->rs1_value, f->rs2_value);
       }
     } else {
@@ -308,7 +308,7 @@ inline void exec(int kind, Inst &inst) {
       st.br_depth[dd]++;
       if (mode & 1) {
         const bool pred_taken = u.ftq_pred_taken;
-        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : (uint32_t)u.pc + 4;
+        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : (uint32_t)u.pc + ilen_of(u.is_rvc);
         const bool mis = !(pred_taken && pred_target == tgt);
         inst.mispred = mis;
         inst.br_taken = true;

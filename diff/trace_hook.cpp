@@ -73,7 +73,7 @@ void ensure() {
 }
 } // namespace
 
-void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx) {
+void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx, uint32_t len) {
   ensure();
   g_rob_uid[rob_idx & 4095] = uid;
   if (g_resync) {
@@ -84,7 +84,7 @@ void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx) {
     if (difftest_get_ref_state(&s)) refcpu_set_state(g_ctx, &s);
     g_resync = false;
   }
-  g_bridge->dispatch(uid, pc, inst);
+  g_bridge->dispatch(uid, pc, inst, len);
   g_c.dispatch++;
 }
 

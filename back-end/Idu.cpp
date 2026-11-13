@@ -70,6 +70,7 @@ void Idu::comb_decode() {
       decode(u, e.inst);
     }
     u->dbg.pc = e.pc;
+    u->is_rvc = e.is_rvc;
     u->ftq_idx = e.ftq_idx;
     u->ftq_offset = e.ftq_offset;
     u.ftq_is_last = e.ftq_is_last;

@@ -1,6 +1,6 @@
 // Trace bridge: a functional core (librefcpu) that follows the timing model's
 // dispatch stream, wrong paths included, and supplies per-instruction facts.
-//   dispatch(uid, pc, inst)  in program/fetch order (forced jump when pc != next pc)
+//   dispatch(uid, pc, inst, len)  in program/fetch order (forced jump when pc != next pc)
 //   rewind_after(uid)        mispredict/flush: drop every entry younger than uid
 //   commit(uid)              oldest entry leaves the window
 // Speculation is undone with per-entry state checkpoints and a store journal.
@@ -25,7 +25,8 @@ enum class Blocked : uint8_t {
 struct Fact {
   uint64_t uid = 0;
   xlen_t pc = 0, next_pc = 0;
-  uint32_t inst = 0;
+  uint32_t inst = 0;          // with RVC=1 a compressed instruction is given expanded
+  uint8_t len = 4;            // instruction length in bytes (2 or 4; RVC=1)
   bool forced_jump = false;   // pc differed from the core's next pc
   Blocked blocked = Blocked::None;
   bool trapped = false;       // the step took a trap (undone: state restored, pc+4)
@@ -52,7 +53,7 @@ struct Fact {
 class Bridge {
 public:
   Bridge(RefCpuContext *ctx, uint32_t ram_base, uint32_t ram_bytes);
-  const Fact &dispatch(uint64_t uid, xlen_t pc, uint32_t inst);
+  const Fact &dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t len = 4);
   void rewind_after(int64_t uid);   // keep entries with uid <= given (-1: drop all)
   void commit(uint64_t uid);        // must be the oldest entry
   // Instructions can also be fetched from the boot ROM region (word-backed MMIO in the core).

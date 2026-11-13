@@ -19,10 +19,11 @@ static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1>
   resp.valid = true;
   resp.entry_valid = entry_valid;
   resp.pc = entry.slot_pc[req.ftq_offset];
+  resp.is_rvc = entry.slot_rvc[req.ftq_offset];
   resp.pred_taken = entry.pred_taken_mask[req.ftq_offset];
   resp.next_pc = entry.next_pc;
   // FE_PAIR: a taken branch followed by a slot of a different fetch block (the group continues at its target)
-  if (entry.pred_taken_mask[req.ftq_offset] && req.ftq_offset + 1 < entry.nslots && entry.slot_pc[req.ftq_offset + 1] != entry.slot_pc[req.ftq_offset] + 4)
+  if (entry.pred_taken_mask[req.ftq_offset] && req.ftq_offset + 1 < entry.nslots && entry.slot_pc[req.ftq_offset + 1] != entry.slot_pc[req.ftq_offset] + ilen_of(entry.slot_rvc[req.ftq_offset]))
     resp.next_pc = entry.slot_pc[req.ftq_offset + 1];
 }
 
@@ -111,6 +112,7 @@ void PreIduQueue::comb_accept_front() {
   block.nslots = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
     block.slot_pc[i] = wires->in.pc[i];
+    block.slot_rvc[i] = wires->in.is_rvc[i];
     block.pred_taken_mask[i] = wires->in.predict_dir[i];
     if (wires->in.valid[i]) block.nslots = i + 1;
   }
@@ -131,6 +133,7 @@ void PreIduQueue::comb_accept_front() {
     e.valid = true;
     e.inst = wires->in.inst[i];
     e.pc = wires->in.pc[i];
+    e.is_rvc = wires->in.is_rvc[i];
     e.page_fault_inst = wires->in.page_fault_inst[i];
     e.ftq_idx = ftq_idx;
     e.ftq_offset = i;
@@ -210,6 +213,7 @@ void PreIduQueue::comb_commit_info() {
     const uint32_t idx = commit.uop->ftq_idx, off = commit.uop->ftq_offset;
     if (idx < FTQ_SIZE && ftq_valid[idx]) {
       resp.pc = ftq_lookup_entries[idx].slot_pc[off];
+      resp.is_rvc = ftq_lookup_entries[idx].slot_rvc[off];
       resp.pred_taken = ftq_lookup_entries[idx].pred_taken_mask[off];
     }
 

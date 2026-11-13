@@ -21,6 +21,9 @@ CXXFLAGS += -DXLEN=$(XLEN)
 # F/D (EXP-030): FP=1 (default; rv32 and rv64) needs a librefcpu built with the same FP (RefCpuState carries the FP registers); FP=0 = no floating point
 FP ?= 1
 CXXFLAGS += -DFP=$(FP)
+# C extension (EXP-038): RVC=1 needs a librefcpu built with RVC=1 (inst_len, halfword fetch); default 0
+RVC ?= 0
+CXXFLAGS += -DRVC=$(RVC)
 ZLIB_CFLAGS := $(shell pkg-config --silence-errors --cflags zlib)
 ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)
 CXXFLAGS += $(ZLIB_CFLAGS)

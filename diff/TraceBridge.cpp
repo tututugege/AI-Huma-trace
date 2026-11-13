@@ -89,7 +89,7 @@ inline bool touches_fcsr(uint32_t inst) {
 
 // Control-flow outcome computed from the register file, independent of the core's execution
 // (used when the instruction was not executed: blocked fetch, undone trap).
-static bool eval_control(xlen_t pc, uint32_t inst, const xlen_t *gpr, bool &taken, xlen_t &next) {
+static bool eval_control(xlen_t pc, uint32_t inst, const xlen_t *gpr, bool &taken, xlen_t &next, uint32_t len) {
   const uint32_t op = bits(inst, 6, 0), f3 = bits(inst, 14, 12);
   const xlen_t a = gpr[bits(inst, 19, 15)], b = gpr[bits(inst, 24, 20)];
   if (op == 0x6f) { taken = true; next = pc + immJ(inst); return true; }
@@ -104,7 +104,7 @@ static bool eval_control(xlen_t pc, uint32_t inst, const xlen_t *gpr, bool &take
   case 7: taken = a >= b; break;
   default: taken = false; break;
   }
-  next = taken ? pc + immB(inst) : pc + 4;
+  next = taken ? pc + immB(inst) : pc + len;
   return true;
 }
 
@@ -144,11 +144,12 @@ const Fact *Bridge::find(uint64_t uid) const {
   return r;
 }
 
-const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
+const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t len) {
   auto *e = new Entry();
   e->f.uid = uid;
   e->f.pc = pc;
   e->f.inst = inst;
+  e->f.len = static_cast<uint8_t>(len);
   RefCpuState st;
   refcpu_get_state(ctx_, &st);
   // The undo log restores pc to what it was before this dispatch, forced jump included.
@@ -230,7 +231,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
   bool data_xlate_ok = true;
   if (e->f.is_load || e->f.is_store)
     data_xlate_ok = refcpu_translate_data(ctx_, e->f.vaddr, e->f.is_store ? 2 : 1, &data_pa);
-  const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + 4 <= (uint64_t)boot_base_ + boot_bytes_;   // (pc >= 2^32 is never in the boot ROM)
+  const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + len <= (uint64_t)boot_base_ + boot_bytes_;   // (pc >= 2^32 is never in the boot ROM)
   if (pc_xlate_ok && !in_ram(pc_pa, 4) && !in_boot) blk = Blocked::PcOutOfRam;
   else if (inst == 0x00100073) blk = Blocked::Ebreak;
   else if (e->f.is_load || e->f.is_store) {
@@ -247,8 +248,8 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
     // a jump if the window continues elsewhere. rd keeps its old value: wrong-path only.
     e->rd = 0;
     bool tk; xlen_t nx;
-    if (eval_control(pc, inst, st.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; st.pc = nx; }
-    else st.pc = pc + 4;
+    if (eval_control(pc, inst, st.gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; st.pc = nx; }
+    else st.pc = pc + len;
     refcpu_set_state(ctx_, &st);
     e->f.next_pc = st.pc;
     chain_.push_back(e);
@@ -288,9 +289,9 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst) {
     // A trap writes only pc, privilege and the trap CSRs; rd is untouched.
     undo_into(&stats, after, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before,
               e->priv_before, e->resv_valid_before, e->resv_addr_before, 0, 0);
-    after.pc = pc + 4;
+    after.pc = pc + len;
     { bool tk; xlen_t nx;
-      if (eval_control(pc, inst, after.gpr, tk, nx)) { e->f.br_taken = tk; e->f.control_valid = true; after.pc = nx; } }
+      if (eval_control(pc, inst, after.gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; after.pc = nx; } }
     refcpu_set_state(ctx_, &after);
     e->rd = 0;
     e->f.next_pc = after.pc;
@@ -373,9 +374,9 @@ bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   if (!t) return false;
   const uint32_t rd = bits(t->f.inst, 11, 7);
   if (rd == 0) return false;
-  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; };
+  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; uint32_t len; };
   std::vector<Re> younger;
-  for (auto *e : chain_) if (e->f.uid > uid) younger.push_back({e->f.uid, e->f.pc, e->f.inst});
+  for (auto *e : chain_) if (e->f.uid > uid) younger.push_back({e->f.uid, e->f.pc, e->f.inst, e->f.len});
   const int64_t saved = stats.rewinds;
   rewind_after((int64_t)uid);
   stats.rewinds = saved;  // not a pipeline rewind
@@ -392,7 +393,7 @@ bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   t->f.rd_value = value;
   stats.patches++;
   const uint64_t d = stats.dispatched, fj = stats.forced_jumps;
-  for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst);
+  for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst, r.len);
   stats.replayed += younger.size();
   stats.dispatched = d;  // replays are not new dispatches
   stats.forced_jumps = fj;
@@ -427,14 +428,14 @@ size_t Bridge::kill_older_than(uint64_t uid) {
   while (killed < chain_.size() && chain_[killed]->f.uid != uid) killed++;  // entries before the committing one
   if (killed == chain_.size()) return 0;  // not in the chain
   if (!killed) return 0;
-  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; };
+  struct Re { uint64_t uid; xlen_t pc; uint32_t inst; uint32_t len; };
   std::vector<Re> younger;
-  for (size_t i = killed; i < chain_.size(); i++) younger.push_back({chain_[i]->f.uid, chain_[i]->f.pc, chain_[i]->f.inst});
+  for (size_t i = killed; i < chain_.size(); i++) younger.push_back({chain_[i]->f.uid, chain_[i]->f.pc, chain_[i]->f.inst, chain_[i]->f.len});
   const int64_t saved = stats.rewinds;
   rewind_after(-1);  // undoes the killed entries and everything younger (the chain starts with the killed ones)
   stats.rewinds = saved;
   const uint64_t d = stats.dispatched, fj = stats.forced_jumps;
-  for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst);
+  for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst, r.len);
   stats.replayed += younger.size();
   stats.dispatched = d;
   stats.forced_jumps = fj;

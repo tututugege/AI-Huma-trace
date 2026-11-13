@@ -106,11 +106,11 @@ inline void resolve_branch(ExuInst &inst) {
     br_taken = true;  // killed instruction: no fact, outcome unobservable
   }
   const bool pred_taken = inst->ftq_pred_taken;
-  const xlen_t pred_target = pred_taken ? static_cast<xlen_t>(inst->ftq_next_pc) : inst_pc + 4;
+  const xlen_t pred_target = pred_taken ? static_cast<xlen_t>(inst->ftq_next_pc) : inst_pc + ilen_of(inst->is_rvc);
   inst.mispred = !((br_taken && pred_taken && pred_target == pc_br) ||
                    (!br_taken && !pred_taken));
   inst.br_taken = br_taken;
-  inst.diag_val = br_taken ? pc_br : (inst_pc + 4);
+  inst.diag_val = br_taken ? pc_br : (inst_pc + ilen_of(inst->is_rvc));
 }
 
 }  // namespace fu

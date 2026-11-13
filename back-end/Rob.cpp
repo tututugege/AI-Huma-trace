@@ -366,6 +366,7 @@ void Rob::single_actions(const Uop &u) {
     if (flush_inst || intr) {
       Assert(w.ftq_rob_pc_resp.resp[0].valid);
       pc = w.ftq_rob_pc_resp.resp[0].pc;
+      bc.is_rvc = w.ftq_rob_pc_resp.resp[0].is_rvc;
       bc.flush = true;
       bc.exception = rob_is_exception(u) || intr || (!intr && rob_type(u) == EBREAK && is_semihost_marker(pc));
       bc.pc = pc;
@@ -494,7 +495,7 @@ void Rob::comb_fire() {
       ctouch(idx);
       if (tbhook::enabled) {
         const auto &d = e.uop->dbg;
-        tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, idx);
+        tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, idx, ilen_of(e.uop->is_rvc));
       }
       m++;
     }
@@ -512,7 +513,7 @@ void Rob::comb_fire() {
     e.uop.cplt_mask = 0;
     if (tbhook::enabled) {
       const auto &d = e.uop->dbg;
-      tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, make_rob_idx(enq_ptr, i));
+      tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, make_rob_idx(enq_ptr, i), ilen_of(e.uop->is_rvc));
     }
     enq = true;
   }

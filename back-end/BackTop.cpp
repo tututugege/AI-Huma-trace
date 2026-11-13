@@ -320,7 +320,7 @@ void BackTop::comb_outputs() {
     } else if (rob_bcast.exception) {
       out.redirect_pc = csr2front.trap_pc;
     } else {
-      out.redirect_pc = rob_bcast.pc + 4;
+      out.redirect_pc = rob_bcast.pc + ilen_of(rob_bcast.is_rvc);
     }
     BE_LOG("flush redirect_pc=0x%08x", (uint32_t)out.redirect_pc);
   }

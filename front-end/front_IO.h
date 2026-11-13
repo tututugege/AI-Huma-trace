@@ -56,6 +56,7 @@ struct front_top_out {
   wire1_t commit_stall;
   uint8_t commit_upd_free = 255, commit_tq_free = 255;  // BPU update / uBTB train queue free entries (EXP-028)
   pc_t pc[BACKEND_FETCH_WIDTH];
+  wire1_t is_rvc[BACKEND_FETCH_WIDTH] = {};   // 16-bit instruction (RVC=1); the instruction word is then the expanded 32-bit equivalent
   inst_word_t instructions[BACKEND_FETCH_WIDTH];
   wire1_t predict_dir[BACKEND_FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;

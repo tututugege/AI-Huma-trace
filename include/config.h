@@ -49,6 +49,13 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 // ============================================================
 // Frontend / Backend Width
 // ============================================================
+// C extension (EXP-038, function-model RVC=1).  RVC=0 (default): every instruction is 4 bytes.  With RVC=1 an instruction is 2 or 4 bytes; the
+// front end tells the back end which (is_rvc, one bit per instruction) and every "pc + 4" of the back end is pc + ilen_of(is_rvc).
+#ifndef RVC
+#define RVC 0
+#endif
+constexpr bool kRvc = (RVC != 0);
+constexpr uint32_t ilen_of(bool is_rvc) { return is_rvc ? 2u : 4u; }
 constexpr int FETCH_WIDTH = 8;
 #ifndef CFG_BACKEND_FETCH_WIDTH
 #define CFG_BACKEND_FETCH_WIDTH 8   // = FETCH_WIDTH (16 was a leftover; EXP-001)

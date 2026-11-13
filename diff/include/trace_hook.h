@@ -17,7 +17,7 @@ extern uint64_t inject_miss;
 uint32_t mem_read(uint32_t paddr);
 // Bookkeeping of overrides: kind 0 branch dir, 1 jump target, 2 agu addr, 3 store data, 4 csr wdata.
 void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_idx);
-void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx);
+void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx, uint32_t len = 4);
 void on_mispredict(uint64_t branch_uid);          // keep entries with uid <= branch_uid
 void on_commit(uint64_t uid);
 // Global pipeline flush caused by committing instruction `uid` (-1: none valid), or by an interrupt

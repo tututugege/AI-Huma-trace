@@ -120,6 +120,7 @@ struct UopS {
   wire<1> ftq_entry_valid;
   wire<1> ftq_resp_valid;
   wire<1> ftq_pred_taken;
+  wire<1> is_rvc;       // 16-bit (compressed) instruction (RVC=1): pc + 2 instead of pc + 4
   DebugMeta dbg;
 };
 
