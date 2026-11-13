@@ -104,8 +104,8 @@ static bpuf::BpuPipe::Txn g_pipe_txn;
 static bpuf::Decision g_pipe_dec;
 static bool g_pipe_txn_valid = false;
 static const bool g_use_pipe = bpuf::cfg_pipe() > 0;
-void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {  // fast-warmup replay (EXP-011)
-  if (g_use_pipe) bpu_pipe.warm_commit(pc, type, dir, target); else bpu_instance.warm_commit(pc, type, dir, target);
+void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {  // fast-warmup replay (EXP-011)
+  if (g_use_pipe) bpu_pipe.warm_commit(pc, type, dir, target, rvc); else bpu_instance.warm_commit(pc, type, dir, target, rvc);
 }
 void front_warm_finish() { if (g_use_pipe) bpu_pipe.warm_finish(); else bpu_instance.warm_finish(); }
 
@@ -432,13 +432,14 @@ void FrontComb::run_bpu() {
   bpu_input.refetch = global_refetch;
   bpu_input.refetch_pd = global_refetch && !in.refetch;
   bpu_input.rf_valid = in.refetch && in.rf_valid;
-  bpu_input.rf_blk = in.rf_blk; bpu_input.rf_slot = in.rf_slot; bpu_input.rf_type = in.rf_type; bpu_input.rf_pc = in.rf_pc;
+  bpu_input.rf_blk = in.rf_blk; bpu_input.rf_slot = in.rf_slot; bpu_input.rf_type = in.rf_type; bpu_input.rf_pc = in.rf_pc; bpu_input.rf_is_rvc = in.rf_is_rvc;
   bpu_input.pd = rd.pd_snapshot;
   bpu_input.refetch_address = in.refetch ? in.refetch_address : rd.predecode_refetch_address_snapshot;
   bpu_input.icache_read_ready = bpu_can_run && !rd.fetch_addr_fifo_full_latch_snapshot;
   bpu_input.ptab_size = rd.ptab_rd_snapshot.size > 255 ? 255 : rd.ptab_rd_snapshot.size;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     bpu_input.in_update_base_pc[i] = in.predict_base_pc[i];
+    bpu_input.in_update_is_rvc[i] = in.update_is_rvc[i];
     bpu_input.in_upd_valid[i] = in.back2front_valid[i];
     bpu_input.in_actual_dir[i] = in.actual_dir[i];
     bpu_input.in_actual_br_type[i] = in.actual_br_type[i];

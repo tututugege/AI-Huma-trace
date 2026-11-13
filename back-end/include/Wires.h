@@ -25,6 +25,7 @@ struct Back_out {
   uint16_t rf_blk = 0;
   uint8_t rf_slot = 0, rf_type = 0;
   wire<XLEN> rf_pc = 0;
+  wire<1> rf_is_rvc = 0;
   InstEntry commit_entry[COMMIT_WIDTH];
 
   wire<32> sstatus;

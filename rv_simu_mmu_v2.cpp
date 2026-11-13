@@ -774,6 +774,7 @@ void SimCpu::back2front_comb() {
   front.back2front_1.rf_slot = back.out.rf_slot;
   front.back2front_1.rf_type = back.out.rf_type;
   front.back2front_1.rf_pc = back.out.rf_pc;
+  front.back2front_1.rf_is_rvc = back.out.rf_is_rvc;
   front.back2front_1.itlb_flush = back.out.itlb_flush;
   front.back2front_1.fence_i = back.out.fence_i;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
@@ -798,6 +799,7 @@ void SimCpu::back2front_comb() {
     if (front.back2front_1.back2front_valid[i]) {
       front.back2front_1.predict_dir[i] = ftq_info.pred_taken;
       front.back2front_1.predict_base_pc[i] = ftq_info.pc;
+      front.back2front_1.update_is_rvc[i] = ftq_info.is_rvc;
       front.back2front_1.actual_dir[i] =
           ((*inst)->type == JAL || (*inst)->type == JALR) ? true : inst->br_taken;
       front.back2front_1.actual_target[i] =

@@ -28,7 +28,9 @@ struct front_top_in {
   wire16_t rf_blk;
   wire8_t rf_slot, rf_type;
   pc_t rf_pc;
+  wire1_t rf_is_rvc;       // the mispredicted branch is a 16-bit instruction
   pc_t predict_base_pc[COMMIT_WIDTH];
+  wire1_t update_is_rvc[COMMIT_WIDTH];   // the committed instruction is a 16-bit instruction
   wire1_t predict_dir[COMMIT_WIDTH];
   wire1_t actual_dir[COMMIT_WIDTH];
   br_type_t actual_br_type[COMMIT_WIDTH];

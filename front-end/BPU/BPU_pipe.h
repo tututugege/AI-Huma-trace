@@ -117,12 +117,13 @@ struct UbEnt {
   uint8_t ctr = 0;        // 2 b: taken hint (conditional branches)
   uint8_t nd_t = 0;       // 4 b: conditional branches up to and including the taken branch
   uint8_t nd_nt = 0;      // 4 b: conditional branches in the block if it falls through
+  bool rvc = false;       // 1 b: the taken branch is a 16-bit instruction (RAS push value pc + 2)
   uint32_t target = 0;    // 30 b: target word address
   uint8_t trip = 0;       // 4 b (BPO_LOOP): executions of this single-block loop per visit, 0 = unknown
   bool tconf = false;     // 1 b: the same trip count was seen twice in a row
 };
 enum UbEvKind : uint8_t { UE_TAKEN = 0, UE_FALL = 1, UE_NTSLOT = 2, UE_TRIP = 3 };
-struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; uint16_t hh = 0; pc_t target = 0; };
+struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; uint16_t hh = 0; pc_t target = 0; bool rvc = false; };
 
 // One set-associative table of UbEnt (the S0 uBTB, and the optional S1 level BPO_L1_*).
 struct UbTab {
@@ -158,6 +159,7 @@ struct MainOut {                 // result of the compare / select stage
   bool taken = false;
   uint8_t nbits = 0, bits = 0, ras_op = 0;
   target_addr_t ras_val = 0;
+  bool rvc = false;              // the taken branch is a 16-bit instruction
   bool dir[FW] = {};
   PredMeta meta;
 };
@@ -206,6 +208,7 @@ struct Decision {                // outcome of the last stage, computed from reg
 
 struct UpdEnt {
   pc_t pc = 0;
+  bool rvc = false;
   bool dir = false, pred = false, alt = false, loop_used = false;
   br_type_t type = BR_NONCTL;
   target_addr_t target = 0;
@@ -366,7 +369,7 @@ class BpuPipe {
     g.bits = (e.type == BR_DIRECT && e.nd_t > 0) ? (1u << (e.nd_t - 1)) : 0;
     if (e.type == BR_RET && rcnt > 0) g.next = rtop;
     if (hist_) { g.nbits = hsym_; g.bits = hsym(bpc, g.next); }
-    if (br_call(e.type)) { g.ras_op = 1; g.ras_val = bpc + 4; }
+    if (br_call(e.type)) { g.ras_op = 1; g.ras_val = bpc + ilen_of(e.rvc); }
     else if (e.type == BR_RET) g.ras_op = 2;
     return g;
   }
@@ -418,6 +421,7 @@ class BpuPipe {
       const uint32_t bk = bank_of(pc);
       const pc_t bpc = bank_pc_of(pc);
       const br_type_t ty = TypePred::select(pc, r.ty[i]);
+      const bool rvc = TypePred::select_rvc(pc, r.ty[i]);
       TagePred tp;
       tage_[bk].select(b.tix[i], r.tg[i], tp);
       const bool taken = ty == BR_NONCTL ? false
@@ -432,7 +436,7 @@ class BpuPipe {
         target_addr_t tgt = Btb::select(bpc, ty, r.bt[i], &src, tp.tag, &itt);
         if (ty == BR_RET && b.ck.ras_cnt > 0) { tgt = b.ck.ras_top; src = 7; }
         o.meta.ps_info[i] = ps_pack(ty, src, tp.used_alt) | (itt ? 0x80 : 0);
-        o.next = tgt; o.slot = i; o.type = ty; o.taken = true;
+        o.next = tgt; o.slot = i; o.type = ty; o.taken = true; o.rvc = rvc;
         taken_found = true;
       }
       if (!spec_done) {
@@ -440,7 +444,7 @@ class BpuPipe {
         else if (ty == BR_DIRECT) { o.bits |= uint8_t(taken) << o.nbits; o.nbits++; }
         if (taken) {
           spec_done = true;
-          if (br_call(ty)) { o.ras_op = 1; o.ras_val = pc + 4; }
+          if (br_call(ty)) { o.ras_op = 1; o.ras_val = pc + ilen_of(rvc); }
           else if (ty == BR_RET) o.ras_op = 2;
         }
       }
@@ -493,7 +497,7 @@ class BpuPipe {
       UbEv e; e.start = n.tr_start; e.slot = slot; e.type = ty; e.nd = n.tr_nd; e.hh = n.tr_hh;
       ah_push(n, pc, taken, in.in_actual_targets[i], ty);   // history after this instruction = history at the start of the next block
       if (taken) {
-        e.kind = UE_TAKEN; e.target = in.in_actual_targets[i];
+        e.kind = UE_TAKEN; e.target = in.in_actual_targets[i]; e.rvc = in.in_update_is_rvc[i];
         ub_event(n, t, e);
         if (loop_) {   // single-block loop: the block ends with a taken conditional branch back to its own start
           if (ty == BR_DIRECT && e.target == n.tr_start) {
@@ -503,7 +507,7 @@ class BpuPipe {
         }
         n.tr_start = e.target; n.tr_nd = 0; n.tr_expect = e.target; n.tr_hh = ah_low(n);
       } else {
-        const pc_t nxt = pc + 4;
+        const pc_t nxt = pc + ilen_of(in.in_update_is_rvc[i]);
         if (ty == BR_DIRECT && in.in_pred_dir[i]) {   // predicted taken, was not: the front end restarts at pc + 4
           e.kind = UE_NTSLOT; ub_event(n, t, e);
           if (loop_) trip_end(n, t);
@@ -511,7 +515,7 @@ class BpuPipe {
         } else if (nxt >= bnd) {                      // sequential block end
           if (n.tr_nd > 0) { e.kind = UE_FALL; ub_event(n, t, e); }
           if (loop_) trip_end(n, t);
-          n.tr_start = nxt; n.tr_nd = 0; n.tr_hh = ah_low(n);
+          n.tr_start = bnd; n.tr_nd = 0; n.tr_hh = ah_low(n);   // the next fetch block starts at the block end (RVC=1: an instruction that straddles it starts before nxt = its end; tr_expect stays nxt)
         }
         n.tr_expect = nxt;
       }
@@ -566,7 +570,7 @@ class BpuPipe {
         nw[w].ctr = ev.type == BR_DIRECT ? (nw[w].ctr < 3 ? nw[w].ctr + 1 : 3) : 3;
       }
       if (nw[w].target != (ev.target >> SLOT_SHIFT)) { nw[w].trip = 0; nw[w].tconf = false; }
-      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT;
+      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT; nw[w].rvc = ev.rvc;
     } else if (ev.kind == UE_FALL && !any && !hist_) {
       int w = -1;
       for (int i = 0; w < 0 && i < W_; i++) if (!nw[i].v) w = i;
@@ -586,17 +590,17 @@ class BpuPipe {
     if (repair_ == 2) n.sras = rc.rf;
     if (repair_ == 3) n.sras = n.aras;   // history repair only, RAS from the committed state
     for (uint32_t i = 0; i < rslot; i++) if (!hist_ && rc.ptype[i] == BR_DIRECT) n.spec.push(false);
-    const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + 4) : true;
+    const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + ilen_of(in.rf_is_rvc)) : true;
     if (hist_) { if (tk) { const uint8_t sy = hsym(in.rf_pc, in.refetch_address); for (int k = 0; k < hsym_; k++) n.spec.push((sy >> k) & 1); } }
     else if (in.rf_type == BR_DIRECT) n.spec.push(tk);
-    if (br_call(in.rf_type)) n.sras.push(in.rf_pc + 4); else if (in.rf_type == BR_RET) n.sras.pop();
+    if (br_call(in.rf_type)) n.sras.push(in.rf_pc + ilen_of(in.rf_is_rvc)); else if (in.rf_type == BR_RET) n.sras.pop();
     return true;
   }
 
   // ---- table updates ----------------------------------------------------------------------------------------------------------
   static UpdEnt make_ent(const InputPayload &in, int i) {
     UpdEnt e;
-    e.pc = in.in_update_base_pc[i];
+    e.pc = in.in_update_base_pc[i]; e.rvc = in.in_update_is_rvc[i];
     e.dir = in.in_actual_dir[i]; e.pred = in.in_pred_dir[i]; e.alt = in.in_alt_pred[i];
     e.loop_used = in.in_loop_used[i];
     e.type = in.in_actual_br_type[i]; e.target = in.in_actual_targets[i];
@@ -619,7 +623,7 @@ class BpuPipe {
   }
   void type_update(const UpdEnt &e, Txn &t) const {
     TypeWr &w = t.type[t.n_type];
-    type_.update(e.pc, e.type, w);
+    type_.update(e.pc, e.type, w, e.rvc);
     if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }
   }
 
@@ -708,7 +712,7 @@ class BpuPipe {
  public:
   // Fast-warmup replay (EXP-011): one committed instruction in program order, applied straight to the tables, the architectural
   // history / RAS and the uBTB (through the same block tracker the commit stream uses).
-  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {
+  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false) {
     State &n = (*stp_);
     const br_type_t pty = type_.predict(pc);
     const uint32_t b = bank_of(pc);
@@ -720,19 +724,19 @@ class BpuPipe {
     } else {
       const bool pred = pty == BR_NONCTL ? false : (pty == BR_RET || pty == BR_CALL || br_ind(pty) || pty == BR_JAL) ? true : tp.pred;
       push_arch(n.arch, pc, dir, target, type);
-      TypeWr tw; type_.update(pc, type, tw); type_.commit(tw);
+      TypeWr tw; type_.update(pc, type, tw, rvc); type_.commit(tw);
       if (type == BR_DIRECT) {
         TageUpd u;
         std::memset(&u, 0, sizeof(u));
         u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn;
         for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
         TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
-      } else if (br_call(type)) n.aras.push(pc + 4);
+      } else if (br_call(type)) n.aras.push(pc + ilen_of(rvc));
       else if (type == BR_RET) n.aras.pop();
       BtbWr bw; btb_[b].update(bpc, type, dir, target, bw, tp.idx, tp.tag); btb_[b].commit(bw);
       static InputPayload in{};
       in.in_upd_valid[0] = true; in.in_update_base_pc[0] = pc; in.in_actual_br_type[0] = type; in.in_actual_dir[0] = dir;
-      in.in_actual_targets[0] = target; in.in_pred_dir[0] = pred;
+      in.in_actual_targets[0] = target; in.in_pred_dir[0] = pred; in.in_update_is_rvc[0] = rvc;
       for (int i = 1; i < CW; i++) in.in_upd_valid[i] = false;
       TrkCnt t;
       Trk tmp = n;
@@ -752,7 +756,7 @@ class BpuPipe {
     }
     // non-control: advance the block tracker as well
     static InputPayload in2{};
-    in2.in_upd_valid[0] = true; in2.in_update_base_pc[0] = pc; in2.in_actual_br_type[0] = BR_NONCTL; in2.in_actual_dir[0] = false;
+    in2.in_upd_valid[0] = true; in2.in_update_base_pc[0] = pc; in2.in_actual_br_type[0] = BR_NONCTL; in2.in_actual_dir[0] = false; in2.in_update_is_rvc[0] = rvc;
     for (int i = 1; i < CW; i++) in2.in_upd_valid[i] = false;
     TrkCnt t;
     Trk tmp = n;
@@ -870,7 +874,7 @@ class BpuPipe {
     UbEv e; e.start = d.blk->base; e.hh = d.blk->hh; e.src = 1;
     if (d.out.taken) {
       if (g.taken && g.slot == d.out.slot && g.next == d.out.next && g.nbits == d.out.nbits && g.type == d.out.type) return;
-      e.kind = UE_TAKEN; e.slot = d.out.slot; e.type = d.out.type; e.nd = d.out.nbits; e.target = d.out.next;
+      e.kind = UE_TAKEN; e.slot = d.out.slot; e.type = d.out.type; e.nd = d.out.nbits; e.target = d.out.next; e.rvc = d.out.rvc;
     } else if (g.taken) {
       e.kind = UE_NTSLOT; e.slot = g.slot; e.type = g.type;
     } else if (!hist_ && d.out.nbits > 0 && (!g.hit || g.nbits != d.out.nbits)) {
@@ -1028,6 +1032,8 @@ class BpuPipe {
       t.s_pair_ovr_b = d.ovr_b; t.s_pair_unfit = d.pair_unfit; t.s_ovr_next = why == 1; t.s_ovr_hist = why == 2; t.s_ovr_ras = why == 3; t.s_ovr_miss = !d.og.hit;
       if (why == 1) {
         const S0Guess &g = d.og;
+        { static const bool dbg2 = std::getenv("BPU_OVR_DBG2") != nullptr; static int budget2 = 16;
+          if (dbg2 && budget2-- > 0) std::printf("[BPU_OVR_DBG2] base=%x hit=%d s0: taken=%d next=%x slot=%d | main: taken=%d next=%x slot=%d type=%d\n", (unsigned)d.obase, (int)g.hit, (int)g.taken, (unsigned)g.next, (int)g.slot, (int)d.oout.taken, (unsigned)d.oout.next, (int)d.oout.slot, (int)d.oout.type); }
         if (g.taken && !d.oout.taken) t.s_ov_t2n = 1;
         else if (!g.taken && d.oout.taken) t.s_ov_n2t = 1;
         else if (br_ind(d.oout.type)) t.s_ov_ind = 1;
@@ -1056,7 +1062,7 @@ class BpuPipe {
       const br_type_t ty = in.in_actual_br_type[i];
       t.s_commit++; t.s_cond += ty == BR_DIRECT; t.s_cond_mp += ty == BR_DIRECT && in.in_pred_dir[i] != in.in_actual_dir[i];
       push_arch(n.arch, in.in_update_base_pc[i], ty != BR_NONCTL && in.in_actual_dir[i], in.in_actual_targets[i], ty);
-      if (br_call(ty)) n.aras.push(in.in_update_base_pc[i] + 4);
+      if (br_call(ty)) n.aras.push(in.in_update_base_pc[i] + ilen_of(in.in_update_is_rvc[i]));
       else if (ty == BR_RET) n.aras.pop();
     }
     if (refetch) {

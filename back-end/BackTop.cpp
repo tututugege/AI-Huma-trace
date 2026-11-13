@@ -312,6 +312,7 @@ void BackTop::comb_outputs() {
       out.rf_blk = pre->ftq_blk_id(fi, out.rf_slot);
       out.rf_type = idu->br_latch.br_type;
       out.rf_pc = pre->ftq_slot_pc(fi, out.rf_slot);
+      out.rf_is_rvc = pre->ftq_slot_rvc(fi, out.rf_slot);
     }
   } else {
     out.mispred = true;

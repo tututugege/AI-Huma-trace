@@ -495,7 +495,7 @@ class Btb {
 // ---------------------------------------------------------------------------
 // Branch-type predictor (banked, set-associative)
 // ---------------------------------------------------------------------------
-struct TypeEntry { bool valid; type_pred_tag_t tag; br_type_t type; type_pred_conf_t conf; type_pred_age_t age; };
+struct TypeEntry { bool valid; type_pred_tag_t tag; br_type_t type; type_pred_conf_t conf; type_pred_age_t age; bool rvc; };   // rvc: the branch is a 16-bit instruction (RAS push value pc + 2)
 struct TypeWr { bool en = false; uint32_t bank = 0, set = 0, way = 0; TypeEntry e{}; };
 
 class TypePred {
@@ -526,8 +526,18 @@ class TypePred {
     for (auto &e : r.way) if (e.valid && e.tag == tg) return e.type;
     return BR_NONCTL;
   }
+  static bool select_rvc(pc_t pc, const Raw &r) {
+    uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);
+    for (auto &e : r.way) if (e.valid && e.tag == tg) return e.rvc;
+    return false;
+  }
+  bool predict_rvc(pc_t pc) const {
+    uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);
+    for (auto &e : t_[b][s]) if (e.valid && e.tag == tg) return e.rvc;
+    return false;
+  }
 
-  void update(pc_t pc, br_type_t type, TypeWr &w) const {
+  void update(pc_t pc, br_type_t type, TypeWr &w, bool rvc = false) const {
     w = TypeWr{};
     uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);
     const TypeEntry(&set)[TYPE_PRED_WAY_NUM] = t_[b][s];
@@ -546,7 +556,7 @@ class TypePred {
     w.en = true;
     w.way = hit >= 0 ? hit : vic;
     TypeEntry e = hit >= 0 ? set[w.way] : TypeEntry{};
-    e.valid = true; e.tag = tg;
+    e.valid = true; e.tag = tg; e.rvc = rvc;
     if (hit >= 0 && e.type == type) {
       if (e.conf < TYPE_PRED_CONF_MAX) e.conf++;
       if (e.age < TYPE_PRED_AGE_MAX) e.age++;
@@ -575,6 +585,7 @@ struct InputPayload {
   wire1_t icache_read_ready;
   // commit-stream update
   pc_t in_update_base_pc[CW];
+  wire1_t in_update_is_rvc[CW];   // the committed instruction is 16 bits (RVC=1): its fall-through / return address is pc + 2
   wire1_t in_upd_valid[CW];
   wire1_t in_actual_dir[CW];
   br_type_t in_actual_br_type[CW];
@@ -588,7 +599,7 @@ struct InputPayload {
   uint8_t ptab_size;  // BPU_PIPE: PTAB occupancy (credit for the blocks in flight)
   PdInfo pd;
   wire1_t rf_valid;    // BPA_REPAIR: the refetch is a backend branch mispredict
-  uint16_t rf_blk; uint8_t rf_slot, rf_type; pc_t rf_pc;
+  uint16_t rf_blk; uint8_t rf_slot, rf_type; pc_t rf_pc; wire1_t rf_is_rvc;
   wire1_t refetch_pd;  // BPU_PIPE statistics: the refetch comes from the predecode checker (not the back end)
 };
 
@@ -737,7 +748,7 @@ class Bpu {
           else if (ty == BR_DIRECT) t.spec_dir[t.spec_n++] = taken;
           if (taken) {
             spec_done = true;
-            if (br_call(ty)) { t.spec_ras = 1; t.spec_ras_val = pc + 4; }
+            if (br_call(ty)) { t.spec_ras = 1; t.spec_ras_val = pc + ilen_of(type_.predict_rvc(pc)); }
             else if (ty == BR_RET) t.spec_ras = 2;
           }
         }
@@ -789,7 +800,7 @@ class Bpu {
     bool enq[NB] = {}, enq_nonctl[NB] = {};
     for (int i = 0; i < CW; i++) {
       if (!in.in_upd_valid[i]) continue;
-      type_.update(in.in_update_base_pc[i], in.in_actual_br_type[i], t.type[i]);
+      type_.update(in.in_update_base_pc[i], in.in_actual_br_type[i], t.type[i], in.in_update_is_rvc[i]);
       const uint32_t b = bank_of(in.in_update_base_pc[i]);
       const bool is_ctl = in.in_actual_br_type[i] != BR_NONCTL;
       t.st_ctl += is_ctl;
@@ -818,7 +829,7 @@ class Bpu {
   // TAGE, BTB/indirect target cache, histories, RAS) is applied immediately instead of through the update queue; the
   // prediction metadata comes from a predict() on the architectural history. warm_finish() copies the committed
   // history to the speculative one.
-  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target) {
+  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false) {
     const br_type_t pty = type_.predict(pc);
     if (type == BR_NONCTL) {
       if (pty != BR_NONCTL) { TypeWr tw; type_.update(pc, type, tw); type_.commit(tw); }
@@ -830,7 +841,7 @@ class Bpu {
     tage_[b].predict(bpc, arch_.fh, tp);
     const bool pred = pty == BR_NONCTL ? false
                       : (pty == BR_RET || pty == BR_CALL || br_ind(pty) || pty == BR_JAL) ? true : tp.pred;
-    TypeWr tw; type_.update(pc, type, tw); type_.commit(tw);
+    TypeWr tw; type_.update(pc, type, tw, rvc); type_.commit(tw);
     if (cfg_hist() && dir) { const uint8_t sy = hist_sym(pc, target); for (int k = 0; k < cfg_hsym(); k++) arch_.push((sy >> k) & 1); }
     if (type == BR_DIRECT) {
       TageUpd u;
@@ -839,7 +850,7 @@ class Bpu {
       for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
       TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
       if (!cfg_hist()) arch_.push(dir);
-    } else if (br_call(type)) arch_ras_.push(pc + 4);
+    } else if (br_call(type)) arch_ras_.push(pc + ilen_of(rvc));
     else if (type == BR_RET) arch_ras_.pop();
     BtbWr bw; btb_[b].update(bpc, type, dir, target, bw, tp.idx, tp.tag); btb_[b].commit(bw);
   }
@@ -867,7 +878,7 @@ class Bpu {
       if (ty == BR_DIRECT) {
         if (!cfg_hist()) arch_.push(in.in_actual_dir[i]);
         if (in.in_pred_dir[i] != in.in_actual_dir[i]) spec_ = arch_;
-      } else if (br_call(ty)) arch_ras_.push(in.in_update_base_pc[i] + 4);
+      } else if (br_call(ty)) arch_ras_.push(in.in_update_base_pc[i] + ilen_of(in.in_update_is_rvc[i]));
       else if (ty == BR_RET) arch_ras_.pop();
     }
     if (in.refetch) {
@@ -877,10 +888,10 @@ class Bpu {
         if (rc.valid && rc.id == in.rf_blk && rc.base + SLOT_BYTES * in.rf_slot == in.rf_pc) {
           spec_ = rc.h; spec_ras_ = cfg_repair() == 3 ? arch_ras_ : rc.r;   // 3: history repair only, RAS from the committed state
           for (int i = 0; i < in.rf_slot; i++) if (!cfg_hist() && rc.ptype[i] == BR_DIRECT) spec_.push(false);
-          const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + 4) : true;
+          const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + ilen_of(in.rf_is_rvc)) : true;
           if (cfg_hist()) { if (tk) { const uint8_t sy = hist_sym(in.rf_pc, in.refetch_address); for (int k = 0; k < cfg_hsym(); k++) spec_.push((sy >> k) & 1); } }
           else if (in.rf_type == BR_DIRECT) spec_.push(tk);
-          if (br_call(in.rf_type)) spec_ras_.push(in.rf_pc + 4); else if (in.rf_type == BR_RET) spec_ras_.pop();
+          if (br_call(in.rf_type)) spec_ras_.push(in.rf_pc + ilen_of(in.rf_is_rvc)); else if (in.rf_type == BR_RET) spec_ras_.pop();
           done = true; repair_stats()[0]++;
         } else repair_stats()[1]++;
       }
