@@ -136,6 +136,9 @@ const Fact *Bridge::find(uint64_t uid) const {
     if (chain_[mid]->f.uid < uid) lo = mid + 1; else hi = mid;
   }
   const Fact *r = lo < chain_.size() && chain_[lo]->f.uid == uid ? &chain_[lo]->f : nullptr;
+  // The chain is not always sorted by uid (an instruction can be dispatched again out of order after a rewind / replay): a miss of the binary search
+  // is confirmed by a linear scan (a hit is always right).  Without this, Linux lost facts and the kernel oopsed (EXP-036 regression, fixed 2026-11-13).
+  if (!r) for (auto *e : chain_) if (e->f.uid == uid) { r = &e->f; break; }
 #ifdef BRIDGE_FIND_CHECK
   const Fact *lin = nullptr;
   for (auto *e : chain_) if (e->f.uid == uid) { lin = &e->f; break; }
