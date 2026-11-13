@@ -16,7 +16,7 @@ fd-basic.bin,0,0,962
 fd-fcvt.bin,0,0,1491
 fd-fdiv.bin,0,0,1615
 fd-fsqrt.bin,0,0,1351
-fd-matmul.bin,0,0,27221
+fd-matmul.bin,0,0,27218
 fence-i-self-modify.bin,0,0,1299
 fib.bin,0,0,1051
 goldbach.bin,0,0,3035
@@ -24,7 +24,7 @@ if-else.bin,0,0,1274
 illegal-instruction-trap.bin,0,0,1094
 interrupt-vectored.bin,0,0,3420
 itt-dispatch.bin,0,0,194884
-leap-year.bin,0,0,1506
+leap-year.bin,0,0,1507
 load-store-aligned.bin,0,0,1701
 matrix-mul.bin,0,0,2542
 max.bin,0,0,1535
@@ -39,12 +39,12 @@ pf-stress.bin,0,0,620545
 prime.bin,0,0,11858
 quick-sort.bin,0,0,3636
 recursion.bin,0,0,2630
-rvc-fencei.bin,0,0,109664
-rvc-flow.bin,0,0,512190
+rvc-fencei.bin,0,0,121874
+rvc-flow.bin,0,0,511853
 rvc-irq.bin,0,0,7135
-rvc-straddle.bin,0,0,9895
-rvc-sv32.bin,0,0,2594
-select-sort.bin,0,0,4136
+rvc-straddle.bin,0,0,9919
+rvc-sv32.bin,0,0,2609
+select-sort.bin,0,0,4137
 shift.bin,0,0,1321
 shuixianhua.bin,0,0,5168
 software-interrupt-vectored.bin,0,0,2015
