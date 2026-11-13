@@ -55,6 +55,7 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 #define RVC 0
 #endif
 constexpr bool kRvc = (RVC != 0);
+constexpr int RVC_ENABLE = kRvc ? 1 : 0;   // (exported to the RTL configuration package)
 constexpr uint32_t ilen_of(bool is_rvc) { return is_rvc ? 2u : 4u; }
 // Fetch geometry: a fetch block / group covers FETCH_BYTES bytes, split into slots.  A slot is one 4-byte instruction word (RVC=0: 8 slots) or one
 // 2-byte position (RVC=1: 16 slots; an instruction starts at any slot, a 4-byte one occupies two).  Predictor indexes, bank numbers and slot -> pc
