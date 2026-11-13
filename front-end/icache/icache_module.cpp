@@ -61,6 +61,29 @@ inline uint32_t icache_word_addr(uint32_t ppn, uint32_t pc) {
 
 #define CONFIG_ICACHE_MMIO_UNCACHE_LIMIT 0x40000000u
 
+struct XlStats {   // RVC=1 second line statistics (printed at exit)
+  uint64_t candidates = 0, blocked_same_page = 0, blocked_page_cross = 0, fills = 0;
+  ~XlStats() { if (candidates) std::printf("[ICACHE_XL] second-line candidates (answered or converted)=%llu, converted: next line missing=%llu, next page=%llu\n", (unsigned long long)candidates, (unsigned long long)blocked_same_page, (unsigned long long)blocked_page_cross); }
+};
+XlStats g_xl_stats;
+}  // namespace
+bool icache_peek_hit(uint32_t index, uint32_t ptag);   // icache.cpp: functional tag peek (the second tag read port of the RVC=1 second line)
+namespace {
+
+// RVC=1 second line: does a request at `pc` (physical page ppn) need the first halfword of the next line?  Its group reaches the last halfword of the
+// line and that halfword may start a 32-bit instruction (low two bits 11).  (The data is read from the functional memory here; the RTL reads it from
+// the data array of the hit way.)
+inline bool xl_candidate(uint32_t pc, uint32_t ppn) {
+  if (!kRvc) return false;
+  if ((pc & (ICACHE_LINE_SIZE - 1u)) + FETCH_BYTES <= ICACHE_LINE_SIZE - 2u) return false;
+  const uint32_t line = ((ppn << 12) | (pc & 0xfffu)) & ~(static_cast<uint32_t>(ICACHE_LINE_SIZE) - 1u);
+  if (line < static_cast<uint32_t>(CONFIG_ICACHE_MMIO_UNCACHE_LIMIT)) return false;
+  const uint32_t last_half = tbhook::mem_read(line + ICACHE_LINE_SIZE - 4u) >> 16;
+  return (last_half & 3u) == 3u;
+}
+// the next line is in the same page (and set index + 1)
+inline bool xl_same_page(uint32_t pc) { return ((pc >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u)) != ICACHE_SET_NUM - 1u; }
+
 inline bool icache_paddr_is_uncache(uint32_t paddr) {
   return paddr < static_cast<uint32_t>(CONFIG_ICACHE_MMIO_UNCACHE_LIMIT);
 }
@@ -151,6 +174,9 @@ void ICache::reset() {
   lookup_index_next = 0;
   io.regs.lookup_pc_r = 0;
   lookup_pc_next = 0;
+  io.regs.xl_phase_r = false;
+  io.regs.xl_done_r = false;
+  io.regs.xl_pc_r = 0;
   sram_load_fire = false;
 
 }
@@ -293,6 +319,8 @@ void ICache::lookup(uint32_t index) {
     io.reg_write.lookup_pending_r = false;
     io.reg_write.lookup_index_r = 0;
     io.reg_write.lookup_pc_r = 0;
+    io.reg_write.xl_phase_r = false;
+    io.reg_write.xl_done_r = false;
     io.reg_write.ifu_req_ready_r = req_ready_w;
     return;
   }
@@ -545,6 +573,16 @@ void ICache::eval_state_machine() {
     perf_state_next.axi_read_start_cycle = 0;
   };
 
+  // RVC=1 second line: the second line is present (hit, filled, or its page faulted): the original request is replayed once without the check
+  auto complete_xl = [&]() {
+    io.reg_write.req_pc_r = io.regs.xl_pc_r;
+    io.reg_write.req_index_r = (io.regs.xl_pc_r >> offset_bits) & (set_num - 1u);
+    io.reg_write.xl_phase_r = false;
+    io.reg_write.xl_done_r = true;
+    io.out.ifu_resp_valid = false;
+    req_ready_w = false;
+  };
+
   auto finish_refill = [&](uint32_t replace_way,
                            const char *debug_tag) {
     const bool single_word = icache_req_is_uncache(io.regs);
@@ -569,7 +607,11 @@ void ICache::eval_state_machine() {
       io.table_write.valid = true;
     }
 
-    if (!io.in.refetch && !io.in.flush) {
+    const bool xl_fill = io.regs.xl_phase_r && !io.in.refetch && !io.in.flush;
+    if (xl_fill) {
+      complete_xl();
+    } else if (!io.in.refetch && !io.in.flush) {
+      io.reg_write.xl_done_r = false;
       io.out.ifu_resp_valid = true;
       io.out.ifu_resp_single_word = single_word;
       io.out.ifu_resp_paddr = ((io.regs.ppn_r & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
@@ -578,7 +620,7 @@ void ICache::eval_state_machine() {
 
       }
     }
-    req_ready_w = true;
+    if (!xl_fill) req_ready_w = true;
   };
 
   switch (state) {
@@ -610,7 +652,11 @@ void ICache::eval_state_machine() {
       uint32_t index = (io.in.pc >> offset_bits) & (set_num - 1u);
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
-      if (lookup_hit_valid_w && lookup_data_ready_w) {
+      // RVC=1 second line: the request needs the first halfword of the next line and it is not there (or is in the next page): not a response yet
+      // (the request is registered below and handled as a two-phase request)
+      const bool xl_block_fast = lookup_hit_valid_w && lookup_data_ready_w && !io.regs.xl_done_r && xl_candidate(io.in.pc, io.in.ppn & 0xFFFFF) &&
+                                 (!xl_same_page(io.in.pc) || !icache_peek_hit(((io.in.pc >> offset_bits) & (set_num - 1u)) + 1u, io.in.ppn & 0xFFFFF));
+      if (lookup_hit_valid_w && lookup_data_ready_w && !xl_block_fast) {
         io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = false;
@@ -622,7 +668,7 @@ void ICache::eval_state_machine() {
         fast_bypass_fire = true;
         state_next = IDLE;
         break;
-      } else if (lookup_hit_valid_w) {
+      } else if (lookup_hit_valid_w && !lookup_data_ready_w) {
         io.out.lookup_data_req_valid = true;
         io.out.lookup_data_req_index = index;
         io.out.lookup_data_req_way = lookup_hit_way_w;
@@ -634,7 +680,13 @@ void ICache::eval_state_machine() {
     }
 
     if (io.regs.req_valid_r && io.in.ppn_valid) {
+      if (io.in.page_fault && io.regs.xl_phase_r) {   // the next page of an RVC=1 second line faults: replay the original request without it
+        complete_xl();
+        state_next = IDLE;
+        break;
+      }
       if (io.in.page_fault) {
+        io.reg_write.xl_done_r = false;
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = true;
         if (SIM_DEBUG_PRINT_ACTIVE &&
@@ -654,15 +706,58 @@ void ICache::eval_state_machine() {
 
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
-      io.out.ifu_resp_valid = lookup_hit_valid_w && lookup_data_ready_w;
-      req_ready_w = lookup_hit_valid_w && lookup_data_ready_w;
-      if (lookup_hit_valid_w && lookup_data_ready_w) {
+      const bool xl_on = io.regs.xl_phase_r;
+      const bool resp_hit = lookup_hit_valid_w && lookup_data_ready_w;
+      bool xl_blk = false;   // RVC=1 second line needed and not present
+      if (!xl_on && resp_hit && !io.regs.xl_done_r) {
+        const uint32_t cur_pc = io.regs.req_pc_r;
+        xl_blk = xl_candidate(cur_pc, io.in.ppn & 0xFFFFF) &&
+                 (!xl_same_page(cur_pc) || !icache_peek_hit(((cur_pc >> offset_bits) & (set_num - 1u)) + 1u, io.in.ppn & 0xFFFFF));
+      }
+      if (!xl_on && resp_hit && !io.regs.xl_done_r && xl_candidate(io.regs.req_pc_r, io.in.ppn & 0xFFFFF)) { g_xl_stats.candidates++; if (xl_blk) (xl_same_page(io.regs.req_pc_r) ? g_xl_stats.blocked_same_page : g_xl_stats.blocked_page_cross)++; }
+      io.out.ifu_resp_valid = resp_hit && !xl_on && !xl_blk;
+      req_ready_w = io.out.ifu_resp_valid;
+      if (xl_on && lookup_hit_valid_w) {   // the next line is present: replay the original request
+        complete_xl();
+        state_next = IDLE;
+      } else if (io.out.ifu_resp_valid) {
+        io.reg_write.xl_done_r = false;
         io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         if (SIM_DEBUG_PRINT_ACTIVE &&
             icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
 
         }
         state_next = IDLE;
+      } else if (xl_blk) {   // two-phase request: the registered request becomes the next line (a normal miss, or a translation of the next page first)
+        const uint64_t cur_pc = io.regs.req_pc_r;   // full width (rv64 kernel addresses)
+        const int txid = io.regs.miss_txid_valid_r ? static_cast<int>(io.regs.miss_txid_r) : alloc_free_txid(io.regs);
+        if (!xl_same_page(cur_pc)) {
+          io.reg_write.xl_phase_r = true;
+          io.reg_write.xl_pc_r = cur_pc;
+          io.reg_write.req_pc_r = ((cur_pc >> 12) + 1u) << 12;
+          io.reg_write.req_index_r = 0;
+          state_next = IDLE;
+        } else if (txid < 0) {
+          state_next = IDLE;
+        } else {
+          io.reg_write.xl_phase_r = true;
+          io.reg_write.xl_pc_r = cur_pc;
+          io.reg_write.req_pc_r = (cur_pc & ~(static_cast<uint64_t>(ICACHE_LINE_SIZE) - 1u)) + ICACHE_LINE_SIZE;
+          io.reg_write.req_index_r = ((cur_pc >> offset_bits) & (set_num - 1u)) + 1u;
+          io.reg_write.ppn_r = io.in.ppn;
+          io.reg_write.dcache_probe_inflight_r = false;
+          io.reg_write.dcache_probe_done_r = false;
+          io.reg_write.dcache_probe_hit_r = false;
+          io.reg_write.dcache_probe_word_r = 0;
+          io.reg_write.miss_txid_valid_r = true;
+          io.reg_write.miss_txid_r = static_cast<uint8_t>(txid & 0xF);
+          io.reg_write.miss_ready_seen_r = false;
+          perf_state_next.miss_penalty_active = true;
+          perf_state_next.miss_penalty_start_cycle = static_cast<uint64_t>(sim_time);
+          perf_state_next.axi_read_active = false;
+          perf_state_next.axi_read_start_cycle = 0;
+          state_next = SWAP_IN;
+        }
       } else if (lookup_hit_valid_w) {
         io.out.lookup_data_req_valid = true;
         io.out.lookup_data_req_index = io.regs.req_index_r;

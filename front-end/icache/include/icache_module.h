@@ -137,6 +137,13 @@ struct ICache_regs_t {
   reg<1> lookup_pending_r = false;
   reg<ICACHE_INDEX_BITS> lookup_index_r = 0;
   reg<XLEN> lookup_pc_r = 0;
+
+  // RVC=1 second line: a request whose group reaches the last halfword of its line (a 32-bit instruction may start there) needs the first halfword of
+  // the next line.  xl_phase_r: the registered request is temporarily the next line (a normal request that fills / translates it, no response);
+  // xl_pc_r: the original pc; xl_done_r: the original request is replayed with its second line present.
+  reg<1> xl_phase_r = false;
+  reg<1> xl_done_r = false;
+  reg<XLEN> xl_pc_r = 0;
 };
 
 // Generalized-IO note:
