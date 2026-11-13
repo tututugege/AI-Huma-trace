@@ -13,11 +13,13 @@ one() {
   SIM_MAX_CYCLES=$lim perl -e 'alarm shift; exec @ARGV' "${DEADLINE:-900}" "$SIM" "$b" > "$OUT/logs/$t.log" 2>&1; rc=$?
   c=$(grep -a -o 'sim-time(cycle)= *[0-9]*' "$OUT/logs/$t.log" | tail -1 | grep -o '[0-9]*$')
   if [ -n "$WRITE" ]; then echo "$t,$rc,0,${c:-NA}"; return; fi
+  # tests that report their own result on the UART (tests/rvc): the pass line must be there, a fail line is a failure
+  if grep -a -q RVC_TEST_FAIL "$OUT/logs/$t.log" || { case $t in rvc-fencei*|rvc-irq*) ! grep -a -q RVC_TEST_PASS "$OUT/logs/$t.log";; *) false;; esac; }; then echo "FAIL $t (self-check)"; return; fi
   if [ "$c" = "$base" ] && [ $rc -eq 0 -o $rc -eq 1 ]; then echo "PASS $t $c"; else echo "FAIL $t base=$base got=${c:-none} rc=$rc"; fi
 }
 export -f one; export SIM OUT BASE DEADLINE WRITE
 list=$(ls "$T"/build_c/tests/*/*.bin | grep -v "memory-stress/\|load-store/\|smc-")
-list="$list $T/build_c/gen/rvc-flow/rvc-flow.bin $T/build_c/gen/rvc-straddle/rvc-straddle.bin $T/build_c/gen/rvc-sv32/rvc-sv32.bin"
+list="$list $T/build_c/gen/rvc-flow/rvc-flow.bin $T/build_c/gen/rvc-straddle/rvc-straddle.bin $T/build_c/gen/rvc-sv32/rvc-sv32.bin $T/build_c/gen/rvc-fencei/rvc-fencei.bin $T/build_c/gen/rvc-irq/rvc-irq.bin"
 [ -n "$FULL" ] && list="$list $T/build_c/gen/rvc-alu/rvc-alu.bin $T/build_c/gen/rvc-mem/rvc-mem.bin $T/build_c/gen/fd-rvc-mem/fd-rvc-mem.bin"
 echo $list | tr ' ' '\n' | xargs -P "$JOBS" -I{} bash -c 'one {}' > "$OUT/result.txt"
 if [ -n "$WRITE" ]; then { echo "test,status,wall_s,cycles"; sort "$OUT/result.txt"; } > "$WRITE"; echo "wrote $WRITE ($(wc -l < "$WRITE") lines)"; exit 0; fi

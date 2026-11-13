@@ -10,5 +10,6 @@ bash scripts/build_tests.sh . build_c/tests | grep -v ' OK$'
 bash scripts/build_tests.sh . build_c/tests memory-stress-small smc-addi smc-div pf-stress itt-dispatch load-store-aligned | grep -v ' OK$'
 bash scripts/build_tests.sh . build_c/tests fd-basic fd-fcvt fd-fdiv fd-fsqrt fd-matmul | grep -v ' OK$'
 W=$(mktemp -d); python3 "$GEN" "$W" 32 >/dev/null
+EXTRA_DIR="$T/tests/rvc" bash scripts/build_tests.sh . build_c/gen rvc-fencei rvc-irq | grep -v " OK$"
 EXTRA_DIR="$W" bash scripts/build_tests.sh . build_c/gen rvc-alu rvc-mem fd-rvc-mem rvc-flow rvc-straddle rvc-sv32 | grep -v ' OK$'
 rm -rf "$W"
