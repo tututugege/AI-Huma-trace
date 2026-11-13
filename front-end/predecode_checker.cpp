@@ -38,17 +38,18 @@ void predecode_checker_comb(const predecode_checker_read_data &input,
   }
 
   if (input.inp_regs.multi) {
-    // Segment by segment: a segment is a run of valid slots with consecutive pcs. The branch that ends a segment must lead to the pc of the next
-    // segment (or, in the last one, to the predicted next fetch address); a branch that does not is a predecode flush and drops everything after it.
+    // Segment (= fetch block) by segment: the branch that ends a segment must lead to the pc of the next segment (or, in the last one, to the predicted
+    // next fetch address); a branch that does not is a predecode flush and drops everything after it.  RVC=1: a segment may contain slots that are not
+    // instruction starts (in_range but not valid), and the sequential continuation of a segment is behind its last instruction.
     const predecode_checker_in &in = input.inp_regs;
     int i = 0, segno = 0;
-    while (i < FETCH_WIDTH && in.inst_valid[i]) {
+    while (i < FETCH_WIDTH && in.in_range[i]) {
       int e = i;
-      while (e + 1 < FETCH_WIDTH && in.inst_valid[e + 1] && in.pc[e + 1] == in.pc[e] + 4) e++;
-      const bool last = !(e + 1 < FETCH_WIDTH && in.inst_valid[e + 1]);
+      while (e + 1 < FETCH_WIDTH && in.in_range[e + 1] && !in.seg_first[e + 1]) e++;
+      const bool last = !(e + 1 < FETCH_WIDTH && in.in_range[e + 1]);
       const fetch_addr_t claimed = last ? in.predict_next_fetch_address : in.pc[e + 1];
-      int ft = -1;
-      for (int k = i; k <= e; k++) if (output.predict_dir_corrected[k]) { ft = k; break; }
+      int ft = -1, lv = -1;
+      for (int k = i; k <= e; k++) { if (in.inst_valid[k]) lv = k; if (ft < 0 && output.predict_dir_corrected[k]) ft = k; }
       fetch_addr_t corrected;
       int keep = e + 1;
       if (ft >= 0) {
@@ -56,7 +57,7 @@ void predecode_checker_comb(const predecode_checker_read_data &input,
         corrected = (ty == PREDECODE_DIRECT_JUMP_NO_JAL || ty == PREDECODE_JAL) ? in.predecode_target_address[ft] : claimed;
         keep = ft + 1;
       } else {
-        corrected = last ? in.seq_next_pc : in.pc[e] + 4;
+        corrected = last ? in.seq_next_pc : (lv >= 0 ? in.pc[lv] + (in.is_rvc[lv] ? 2 : 4) : in.pc[e] + SLOT_BYTES);
       }
       if (corrected != claimed) {
         output.predict_next_fetch_address_corrected = corrected;

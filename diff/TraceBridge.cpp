@@ -369,6 +369,10 @@ void Bridge::rewind_after(int64_t uid) {
 }
 
 void Bridge::commit(uint64_t uid) {
+  // TB_PCTRACE=<file>: the committed instruction stream ("uid pc"; pc 0 = the entry is not in the chain), for comparing two configurations: the architectural
+  // stream must not depend on the front end's timing (FE_PAIR on / off, ...).  scripts/stream_cmp.sh
+  static FILE *tf = std::getenv("TB_PCTRACE") ? std::fopen(std::getenv("TB_PCTRACE"), "w") : nullptr;
+  if (tf) { const Fact *ff = find(uid); std::fprintf(tf, "%llu %llx\n", (unsigned long long)uid, ff ? (unsigned long long)ff->pc : 0ull); }
   if (chain_.empty() || chain_.front()->f.uid != uid) return;
   // The word the front end fetched must be the word the function model executed (a second half read from the wrong physical page, a stale I$ line):
   // the back end decodes the front end's word, the facts come from the function model, so a difference would otherwise only show up later as a wrong result.

@@ -115,10 +115,7 @@ struct PdChkStats {
   }
 };
 static PdChkStats g_pd_stats;
-static const bool g_rvc_pair_guard = [] {
-  if (kRvc && bpuf::cfg_pair() != 0) { std::fprintf(stderr, "FE_PAIR is not supported with RVC=1\n"); std::exit(2); }
-  return true;
-}();
+
 static bool lh_valid = false;             // RVC=1 "last half": the next group begins with the second half of an instruction that started in the last slot of the group before
 static pc_t lh_pc = 0;                    // ... and that group starts at this pc
 static bool pend_valid = false;           // FE_PAIR: ICache request in flight and its second block
@@ -597,17 +594,26 @@ void FrontComb::write_instruction_fifo() {
     }
   }
   if constexpr (kRvc) {   // instruction starts: from slot 0 (start_a) or, when slot 0 is the second half of the previous block's last instruction, from slot 1 (start_b)
+    // FE_PAIR: the group may hold two fetch blocks; each block's first slot is an instruction start and a block's last instruction (a 32-bit branch whose
+    // window is complete) does not run into the next block's first slot.
     int n = 0;
     while (n < FETCH_WIDTH && gv[n]) n++;
+    auto boundary = [&](int k) { return k > 0 && k < n && gpc[k] != gpc[k - 1] + SLOT_BYTES; };
     for (int pass = 0; pass < 2; pass++) {
       wire1_t *st = pass ? fifo_in.start_b : fifo_in.start_a;
-      for (int pos = pass; pos < n; pos += fifo_in.is_rvc[pos] ? 1 : 2) st[pos] = true;
+      int pos = pass;
+      while (pos < n) {
+        st[pos] = true;
+        int nxt = pos + (fifo_in.is_rvc[pos] ? 1 : 2);
+        for (int k = pos + 1; k < nxt && k < n; k++) if (boundary(k)) { nxt = k; break; }
+        pos = nxt;
+      }
     }
   }
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && ic_out.inst_valid[pr.a_len - 1] && !ic_out.fetch_single_word) {   // FE_PAIR: next pc after the last valid slot
     int last = -1;
     for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_in.inst_valid[i]) last = i;
-    fifo_in.seq_next_pc = fifo_in.pc[last] + 4u;
+    fifo_in.seq_next_pc = fifo_in.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
     (void)fused;
   } else
   fifo_in.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
@@ -646,11 +652,11 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
       if (!cut && fifo_head.inst_valid[i] && fifo_head.pc[i] != ptab_head.predict_base_pc[i]) cut = true;
       if (cut) { fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0; }
     }
-    for (int i = 1; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && fifo_head.pc[i] != fifo_head.pc[i - 1] + 4) multi = true;
+    for (int i = 1; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && fifo_head.pc[i] != fifo_head.pc[i - 1] + SLOT_BYTES) multi = true;
     if (cut) {  // the group lost slots: its sequential continuation is the pc after the last usable slot
       int last = -1;
       for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i]) last = i;
-      if (last >= 0) fifo_head.seq_next_pc = fifo_head.pc[last] + 4u;
+      if (last >= 0) fifo_head.seq_next_pc = fifo_head.pc[last] + SLOT_BYTES;
     }
   } else
   for (int i = 0; i < FETCH_WIDTH; i++) {
@@ -658,6 +664,11 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
       printf("ERROR: fifo pc[%d]: %llx != ptab pc[%d]: %llx\n", i, (unsigned long long)fifo_head.pc[i], i, (unsigned long long)ptab_head.predict_base_pc[i]);
       exit(1);
     }
+  }
+  wire1_t grp_in_range[FETCH_WIDTH] = {}, grp_seg_first[FETCH_WIDTH] = {};   // for the multi-block check: slots of the group, and the first slot of each block
+  for (int i = 0; i < FETCH_WIDTH; i++) {
+    grp_in_range[i] = fifo_head.inst_valid[i];
+    grp_seg_first[i] = i > 0 && fifo_head.inst_valid[i] && fifo_head.inst_valid[i - 1] && fifo_head.pc[i] != fifo_head.pc[i - 1] + SLOT_BYTES;
   }
   int rvc_n = 0, rvc_last = -1;   // RVC=1: slots in range, and the last slot that starts an instruction
   bool rvc_straddle = false;
@@ -675,12 +686,12 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     g_rvc_stats.groups++; g_rvc_stats.slots_in_range += rvc_n; g_rvc_stats.carry_used += use_b;
     for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i]) { g_rvc_stats.insts++; g_rvc_stats.insts_rvc += fifo_head.is_rvc[i]; }
     rvc_straddle = rvc_last >= 0 && rvc_last == rvc_n - 1 && !fifo_head.is_rvc[rvc_last] && !fifo_head.page_fault_inst[rvc_last];
-    if (rvc_straddle) { g_rvc_stats.straddle++; if (((fifo_head.pc[0] + rvc_n * SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
+    if (rvc_straddle) { g_rvc_stats.straddle++; if (((fifo_head.pc[rvc_n - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
   }
   predecode_checker_in checker_in;
   front_checker_input_comb(fifo_head, ptab_head, checker_in);
   checker_in.multi = multi;
-  for (int i = 0; i < FETCH_WIDTH; i++) { checker_in.pc[i] = fifo_head.pc[i]; checker_in.inst_valid[i] = fifo_head.inst_valid[i]; }
+  for (int i = 0; i < FETCH_WIDTH; i++) { checker_in.pc[i] = fifo_head.pc[i]; checker_in.inst_valid[i] = fifo_head.inst_valid[i]; checker_in.in_range[i] = grp_in_range[i]; checker_in.seg_first[i] = grp_seg_first[i]; checker_in.is_rvc[i] = fifo_head.is_rvc[i]; }
   predecode_checker_read_data checker_rd{};
   predecode_checker_seq_read(&checker_in, &checker_rd);
   predecode_checker_comb(checker_rd, checker_out);
@@ -710,9 +721,11 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     } }
   if constexpr (kRvc) {   // the next group starts with the second half of this group's last instruction if it straddles and the fetch continues sequentially
     bool any_taken = false;
-    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) any_taken = true;
+    int last_seg = 0;   // FE_PAIR: only the last block of the group decides whether the fetch continues sequentially (a taken branch that ends the first block does not)
+    for (int i = 0; i < FETCH_WIDTH; i++) if (grp_seg_first[i]) last_seg = i;
+    for (int i = last_seg; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) any_taken = true;
     lh_updated = true;
-    lh_new_pc = fifo_head.pc[0] + rvc_n * SLOT_BYTES;
+    lh_new_pc = fifo_head.pc[rvc_n > 0 ? rvc_n - 1 : 0] + (rvc_n > 0 ? SLOT_BYTES : 0);   // the position after the group's last slot
     // a predecode flush that continues sequentially (corrected target = the end of this group) keeps the carry: the refetched group still begins with the
     // second half of the straddling instruction
     lh_new_valid = rvc_straddle && !any_taken && (!checker_out.predecode_flush_enable || checker_out.predict_next_fetch_address_corrected == lh_new_pc);

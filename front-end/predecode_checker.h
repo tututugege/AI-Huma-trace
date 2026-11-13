@@ -17,6 +17,10 @@ struct predecode_checker_in {
   wire1_t multi;
   pc_t pc[FETCH_WIDTH];
   wire1_t inst_valid[FETCH_WIDTH];
+  // multi-block groups: slots that are inside the group (before RVC=1 drops the non-start ones), slots that begin a block, 16-bit instructions
+  wire1_t in_range[FETCH_WIDTH];
+  wire1_t seg_first[FETCH_WIDTH];
+  wire1_t is_rvc[FETCH_WIDTH];
 };
 
 struct predecode_checker_out {
