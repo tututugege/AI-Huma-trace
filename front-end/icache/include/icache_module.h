@@ -144,6 +144,8 @@ struct ICache_regs_t {
   reg<1> xl_phase_r = false;
   reg<1> xl_done_r = false;
   reg<XLEN> xl_pc_r = 0;
+  reg<20> xl_ppn_r = 0;      // translation of the second line (the next page when the line is in the next page)
+  reg<1> xl_fault_r = false; // ... which faulted
 };
 
 // Generalized-IO note:

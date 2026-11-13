@@ -177,6 +177,8 @@ void ICache::reset() {
   io.regs.xl_phase_r = false;
   io.regs.xl_done_r = false;
   io.regs.xl_pc_r = 0;
+  io.regs.xl_ppn_r = 0;
+  io.regs.xl_fault_r = false;
   sram_load_fire = false;
 
 }
@@ -574,7 +576,9 @@ void ICache::eval_state_machine() {
   };
 
   // RVC=1 second line: the second line is present (hit, filled, or its page faulted): the original request is replayed once without the check
-  auto complete_xl = [&]() {
+  auto complete_xl = [&](uint32_t xl_ppn, bool xl_fault) {
+    io.reg_write.xl_ppn_r = xl_ppn & 0xFFFFF;
+    io.reg_write.xl_fault_r = xl_fault;
     io.reg_write.req_pc_r = io.regs.xl_pc_r;
     io.reg_write.req_index_r = (io.regs.xl_pc_r >> offset_bits) & (set_num - 1u);
     io.reg_write.xl_phase_r = false;
@@ -608,8 +612,15 @@ void ICache::eval_state_machine() {
     }
 
     const bool xl_fill = io.regs.xl_phase_r && !io.in.refetch && !io.in.flush;
+    // RVC=1: a line that was just filled for a request that needs its second line is not answered from the fill: the request is replayed (it is a
+    // hit now), and the replay starts the second-line fetch
+    const bool xl_after_fill = !xl_fill && !single_word && !io.regs.xl_phase_r && !io.regs.xl_done_r && !io.in.refetch && !io.in.flush &&
+                               xl_candidate(io.regs.req_pc_r, io.regs.ppn_r) &&
+                               (!xl_same_page(io.regs.req_pc_r) || !icache_peek_hit(((io.regs.req_pc_r >> offset_bits) & (set_num - 1u)) + 1u, io.regs.ppn_r));
     if (xl_fill) {
-      complete_xl();
+      complete_xl(io.regs.ppn_r, false);
+    } else if (xl_after_fill) {
+      req_ready_w = false;
     } else if (!io.in.refetch && !io.in.flush) {
       io.reg_write.xl_done_r = false;
       io.out.ifu_resp_valid = true;
@@ -620,7 +631,7 @@ void ICache::eval_state_machine() {
 
       }
     }
-    if (!xl_fill) req_ready_w = true;
+    if (!xl_fill && !xl_after_fill) req_ready_w = true;
   };
 
   switch (state) {
@@ -681,7 +692,7 @@ void ICache::eval_state_machine() {
 
     if (io.regs.req_valid_r && io.in.ppn_valid) {
       if (io.in.page_fault && io.regs.xl_phase_r) {   // the next page of an RVC=1 second line faults: replay the original request without it
-        complete_xl();
+        complete_xl(0, true);
         state_next = IDLE;
         break;
       }
@@ -718,7 +729,7 @@ void ICache::eval_state_machine() {
       io.out.ifu_resp_valid = resp_hit && !xl_on && !xl_blk;
       req_ready_w = io.out.ifu_resp_valid;
       if (xl_on && lookup_hit_valid_w) {   // the next line is present: replay the original request
-        complete_xl();
+        complete_xl(io.in.ppn, false);
         state_next = IDLE;
       } else if (io.out.ifu_resp_valid) {
         io.reg_write.xl_done_r = false;
