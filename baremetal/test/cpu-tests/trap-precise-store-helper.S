@@ -12,8 +12,11 @@ store_ecall_store:
     sw a1, 0(a0)
     .globl precise_ecall_site
 precise_ecall_site:
+    .option push
+    .option norvc          # the handler skips 8 bytes: ecall + this 4-byte store
     ecall
     sw a3, 0(a2)           # must be skipped/squashed by the handler
+    .option pop
     ret
 
     .align 2

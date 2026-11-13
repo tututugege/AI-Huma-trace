@@ -77,6 +77,8 @@ external_supervisor_entry:
 
     .balign 64
 external_supervisor_vectors:
+    .option push
+    .option norvc   # a vector table of 4-byte slots
     j external_unexpected_vector   # synchronous exceptions
     j external_unexpected_vector   # SSIP
     j external_unexpected_vector
@@ -87,6 +89,7 @@ external_supervisor_vectors:
     j external_unexpected_vector
     j external_unexpected_vector
     j external_supervisor_vector   # SEIP
+    .option pop
 
 external_unexpected_vector:
     li t0, 0x1c

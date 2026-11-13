@@ -76,6 +76,21 @@ runs programs with `TB_CHECK=1`, `scripts/gate.sh` runs a list of binaries into 
 directories. Details (old-design regression switches, big-program cycle counts, small-LLC check, lockstep shadows and differential tests):
 [docs/PROJECT.md](docs/PROJECT.md).
 
+### C extension (`RVC=1`, EXP-038)
+
+`RVC=1` makes the front end fetch 2-byte positions (16 slots per 32-byte block) and accept 16-bit compressed instructions; `RVC=0` (default) is unchanged
+(gate 64/64). It needs a `librefcpu.a` built from `function-model` with the same `XLEN`, `FP` and `RVC` (`make XLEN=32 FP=1 RVC=1 librefcpu.a`).
+
+```bash
+make BUILD_DIR=build_rvc XLEN=32 RVC=1 REFCPU_LIB=<librefcpu built with RVC=1>
+scripts/build_rvc_tests.sh                                           # build_c/tests (C-compiled cpu-tests), build_c/gen (function-model's generated C stress tests)
+bash scripts/run_gate_c.sh build_rvc/simulator results/gate_c        # cycles equal to results/baseline/baseline_c.csv; FULL=1 adds the long generated tests
+```
+
+Design (XiangShan-style, see `docs/EXPLORATION.md` EXP-038 in the top-level repository): per-slot predecode with RVC expansion, instruction starts from two
+chains (`start_a` / `start_b`) selected by the "last half" carry of the previous group, valid-slot masks with gaps, `is_rvc` per instruction to the back end.
+`RVC_DBG=1` / `BPU_OVR_DBG=1` print predecode-flush / uBTB-override diagnostics.
+
 ## Relation to the other repositories
 
 - `function-model`: the functional core `librefcpu` (rv32/rv64, XLEN compile-time), the source of the facts.

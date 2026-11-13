@@ -25,6 +25,8 @@ clear_mstatus_mie:
 
     .balign 64
 vector_base:
+    .option push
+    .option norvc   # a vector table of 4-byte slots
     j unexpected_vector   # direct exceptions
     j unexpected_vector
     j unexpected_vector
@@ -33,6 +35,7 @@ vector_base:
     j unexpected_vector
     j unexpected_vector
     j machine_timer_vector
+    .option pop
 
 unexpected_vector:
     li t0, 0x1c

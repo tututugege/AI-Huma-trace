@@ -62,10 +62,13 @@ software_supervisor_entry:
 
     .balign 64
 machine_software_vectors:
+    .option push
+    .option norvc   # a vector table of 4-byte slots
     j software_unexpected_vector
     j software_unexpected_vector
     j software_unexpected_vector
     j machine_software_vector
+    .option pop
 
 machine_software_vector:
     addi sp, sp, -24
@@ -101,8 +104,11 @@ machine_software_vector:
 
     .balign 64
 supervisor_software_vectors:
+    .option push
+    .option norvc   # a vector table of 4-byte slots
     j software_unexpected_vector
     j supervisor_software_vector
+    .option pop
 
 supervisor_software_vector:
     addi sp, sp, -24
