@@ -17,7 +17,8 @@
 
 namespace msd {
 
-inline const bool on = lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) != 0 && lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC) != 0;
+inline const bool on = XLEN == 32 &&   // the stale-value evaluation below works on 32-bit values: not valid for rv64
+                       lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) != 0 && lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC) != 0;
 // LSU_MS_DATA bit mask: 1 = branches resolve on stale values (mispredict redirect), 2 = tainted loads/stores use the stale address (not
 // modelled yet: counted only), 4 = tainted store data goes into the STQ, 8 = evaluator self check against the facts (debug).
 inline const unsigned mode = lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) == 1 ? 1u | 4u : lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA);

@@ -132,6 +132,8 @@ public:
     }
 
     if (paddr == OPENSBI_TIMER_LOW_ADDR) {
+      { static const bool dbg = std::getenv("TB_TIMER_DBG") != nullptr; static unsigned long long n = 0;
+        if (dbg && (++n <= 20 || n % 20000 == 0)) std::fprintf(stderr, "[TIMER_DBG] read #%llu mtime=%llu sim_time=%llu offset=%llu cmp=%llx\n", n, (unsigned long long)effective_timer_value(), (unsigned long long)current_sim_time_u64(), (unsigned long long)timer_offset_, (unsigned long long)timer_cmp_); }
       return static_cast<uint32_t>(effective_timer_value());
     }
     if (paddr == OPENSBI_TIMER_HIGH_ADDR) {

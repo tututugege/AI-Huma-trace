@@ -1018,7 +1018,7 @@ void RealLsu::comb_exe2lsu_p() {
     e.vaddr = inst.result;
     if (msd::on && (msd::mode & 2)) {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
       const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
-      e.m_atnt = f && f->is_store && f->vaddr != (uint32_t)inst.result;
+      e.m_atnt = f && f->is_store && f->vaddr != static_cast<xlen_t>(inst.result);
     }
     e.pa_v = 0;
     e.paddr = 0;
@@ -1076,7 +1076,7 @@ void RealLsu::comb_exe2lsu_p() {
     e.vaddr = inst.result;
     if (msd::on && (msd::mode & 2)) {  // a load whose base register was stale reads the stale address
       const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
-      e.atnt = f && f->is_load && f->vaddr != (uint32_t)inst.result;
+      e.atnt = f && f->is_load && f->vaddr != static_cast<xlen_t>(inst.result);
     }
     e.dest_preg = inst.dest_preg;
     e.pa_v = 0;

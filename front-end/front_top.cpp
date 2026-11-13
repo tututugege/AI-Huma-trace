@@ -698,7 +698,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
         if (!fifo_head.inst_valid[i]) continue;
         const predecode_type_t ty = fifo_head.predecode_type[i];
         if (ty == PREDECODE_NON_BRANCH) continue;
-        const uint32_t pc = fifo_head.pc[i], inst = fifo_head.instructions[i];
+        const pc_t pc = fifo_head.pc[i]; const uint32_t inst = fifo_head.instructions[i];
         const bool taken = checker_out.predict_dir_corrected[i];
         const uint32_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];
         if (multi && i >= checker_out.keep_n) break;

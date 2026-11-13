@@ -51,14 +51,14 @@ struct PLdq {
   wire<BR_MASK_WIDTH> br_mask = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<3> func3 = 0;
-  wire<32> vaddr = 0;
+  wire<XLEN> vaddr = 0;
   wire<1> pa_v = 0;           // paddr valid (translated once; replays skip the DTLB)
   wire<32> paddr = 0;
   wire<1> mmio = 0;
   wire<1> pf = 0;
   wire<1> lrsc = 0;           // LR (reservation is set at write-back)
   wire<1> miss = 0;           // saw a DCache miss (TMA statistics only)
-  wire<32> result = 0;        // MMIO read data / faulting vaddr
+  wire<XLEN> result = 0;      // MMIO read data / faulting vaddr
   wire<STQ_IDX_WIDTH> snap_idx = 0;  // youngest older store + 1 (allocation tail at dispatch)
   wire<1> snap_flag = 0;
   wire<3> rcause = 0;
@@ -83,7 +83,7 @@ struct PStq {
   wire<32> pc = 0;            // store PC (predictor mode 1)
   wire<16> sset = 0;          // store-set id of the store PC
   wire<1> va_v = 0;           // STA arrived (vaddr[11:0] + size known: partial CAM can compare)
-  wire<32> vaddr = 0;
+  wire<XLEN> vaddr = 0;
   wire<1> pa_v = 0;           // DTLB hit: paddr known
   wire<32> paddr = 0;
   wire<1> data_v = 0;
