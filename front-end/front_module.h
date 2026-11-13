@@ -38,6 +38,7 @@ struct instruction_FIFO_entry {
   wire1_t is_rvc[FETCH_WIDTH];
   wire1_t start_a[FETCH_WIDTH];
   wire1_t start_b[FETCH_WIDTH];
+  uint16_t raw16[FETCH_WIDTH] = {};   // RVC=1: the first halfword of the window at each slot, as fetched (before expansion)
 };
 
 struct instruction_FIFO_read_data {
