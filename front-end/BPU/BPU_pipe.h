@@ -123,6 +123,9 @@ struct UbEnt {
   bool tconf = false;     // 1 b: the same trip count was seen twice in a row
 };
 enum UbEvKind : uint8_t { UE_TAKEN = 0, UE_FALL = 1, UE_NTSLOT = 2, UE_TRIP = 3 };
+// uBTB targets hold the low 32 bits of the target slot address (UB_TGT_BITS); the upper bits come from the block's own address (a jump out of the 4 GiB
+// region is then mispredicted and corrected at S_D).  For rv32 this is the identity.
+inline pc_t ub_expand(uint32_t t, pc_t ref) { return (ref & ~static_cast<pc_t>(0xffffffffu)) | static_cast<pc_t>(static_cast<uint32_t>(t << SLOT_SHIFT)); }
 struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; uint16_t hh = 0; pc_t target = 0; bool rvc = false; };
 
 // One set-associative table of UbEnt (the S0 uBTB, and the optional S1 level BPO_L1_*).
@@ -302,8 +305,8 @@ class BpuPipe {
   uint64_t rep_ok_ = 0, rep_miss_ = 0, pair_blocks_ = 0, pair_ovr_b_ = 0, pair_unfit_ = 0;
 
   static pc_t block_bnd(pc_t base) {
-    const uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-    const uint32_t plus = base + FW * SLOT_BYTES;
+    const pc_t mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1);   // pc_t wide (rv64 kernel addresses are above 2^32)
+    const pc_t plus = base + FW * SLOT_BYTES;
     return (base & mask) != (plus & mask) ? (plus & mask) : plus;
   }
   // 32 B window (one block-bank row, BPO_BANKBLK): the unit of banking by fetch block
@@ -357,14 +360,14 @@ class BpuPipe {
       if (!(e.v && e.tag == tag)) continue;
       if (!g.hit) { g.hit = true; g.nbits = hist_ ? 0 : e.nd_nt; }
       bool tk = e.taken && base + SLOT_BYTES * e.slot < bnd && (e.type != BR_DIRECT || e.ctr >= 2);
-      if (tk && loop_ && e.type == BR_DIRECT && e.tconf && e.trip && (e.target << SLOT_SHIFT) == base && uint32_t(lpc) + 1 == e.trip) tk = false;   // predicted loop exit
+      if (tk && loop_ && e.type == BR_DIRECT && e.tconf && e.trip && ub_expand(e.target, base) == base && uint32_t(lpc) + 1 == e.trip) tk = false;   // predicted loop exit
       if (tk && (best < 0 || e.slot < tb.e[set * tb.W + best].slot)) best = w;
     }
     if (best < 0) return g;
     const UbEnt &e = tb.e[set * tb.W + best];
     const pc_t bpc = base + SLOT_BYTES * e.slot;
     g.taken = true; g.slot = e.slot; g.type = e.type;
-    g.next = e.target << SLOT_SHIFT;
+    g.next = ub_expand(e.target, base);
     g.nbits = e.nd_t;
     g.bits = (e.type == BR_DIRECT && e.nd_t > 0) ? (1u << (e.nd_t - 1)) : 0;
     if (e.type == BR_RET && rcnt > 0) g.next = rtop;
@@ -407,7 +410,7 @@ class BpuPipe {
   // block-bank rows read by the block's S1 access (BPO_BANKBLK): the 32 B windows it covers (1, or 2 if it straddles a window boundary)
   void bb_reads(const Blk &b, Txn &t) const {
     if (!b.valid || !bb_) return;
-    const uint32_t w0 = win_of(b.base), w1 = win_of(b.bnd - 4);
+    const uint32_t w0 = win_of(b.base), w1 = win_of(b.bnd - SLOT_BYTES);
     t.bb_rd[w0 % bb_]++;
     if (w1 != w0) t.bb_rd[w1 % bb_]++;
   }
@@ -553,7 +556,7 @@ class BpuPipe {
     if (ev.kind == UE_TRIP) {
       for (int w = 0; w < W_; w++) {
         UbEnt &e = nw[w];
-        if (e.v && e.tag == tag && e.taken && e.type == BR_DIRECT && e.slot == ev.slot && (e.target << SLOT_SHIFT) == ev.start) {
+        if (e.v && e.tag == tag && e.taken && e.type == BR_DIRECT && e.slot == ev.slot && ub_expand(e.target, ev.start) == ev.start) {
           if (e.trip == ev.nd) e.tconf = true; else { e.trip = ev.nd; e.tconf = false; }
         }
       }
@@ -569,7 +572,7 @@ class BpuPipe {
       } else {
         nw[w].ctr = ev.type == BR_DIRECT ? (nw[w].ctr < 3 ? nw[w].ctr + 1 : 3) : 3;
       }
-      if (nw[w].target != (ev.target >> SLOT_SHIFT)) { nw[w].trip = 0; nw[w].tconf = false; }
+      if (nw[w].target != static_cast<uint32_t>(ev.target >> SLOT_SHIFT)) { nw[w].trip = 0; nw[w].tconf = false; }
       nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT; nw[w].rvc = ev.rvc;
     } else if (ev.kind == UE_FALL && !any && !hist_) {
       int w = -1;
@@ -659,7 +662,7 @@ class BpuPipe {
   void update_queue(const InputPayload &in, State &n, Txn &t) const {
     const uint32_t rdm = read_mask((*stp_).R[0]);
     uint8_t bbr[MAXBB] = {};
-    if (bb_ && (*stp_).R[0].valid) { const Blk &b = (*stp_).R[0]; bbr[win_of(b.base) % bb_] = 1; bbr[win_of(b.bnd - 4) % bb_] = 1; }
+    if (bb_ && (*stp_).R[0].valid) { const Blk &b = (*stp_).R[0]; bbr[win_of(b.base) % bb_] = 1; bbr[win_of(b.bnd - SLOT_BYTES) % bb_] = 1; }
     uint32_t wrm = 0;
     int nw = 0, kn = 0;
     UpdEnt keep[MAXUQ];
