@@ -1,4 +1,5 @@
 #include "../function-model/include/rvc.h"
+#include "trace_hook.h"
 #include "BPU/BPU.h"
 #include "BPU/BPU_pipe.h"
 #include "Pmu.h"
@@ -681,8 +682,10 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     bool any_taken = false;
     for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) any_taken = true;
     lh_updated = true;
-    lh_new_valid = rvc_straddle && !any_taken && !checker_out.predecode_flush_enable;
     lh_new_pc = fifo_head.pc[0] + rvc_n * SLOT_BYTES;
+    // a predecode flush that continues sequentially (corrected target = the end of this group) keeps the carry: the refetched group still begins with the
+    // second half of the straddling instruction
+    lh_new_valid = rvc_straddle && !any_taken && (!checker_out.predecode_flush_enable || checker_out.predict_next_fetch_address_corrected == lh_new_pc);
   }
   if (g_use_pipe) {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
     bpuf::PdInfo &pd = pd_next;
@@ -757,7 +760,10 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
   }
   {   // RVC=1 last-half state
     bool nv = lh_updated ? lh_new_valid : rd.lh_valid_snapshot;
-    if (global_refetch || global_reset || predecode_flush) nv = false;
+    // a back-end redirect (or reset) drops the carry; a predecode flush drops it unless the flushed group itself set it (sequential continuation),
+    // and the refetch cycle that follows a predecode flush keeps it
+    if (global_reset || in.refetch) nv = false;
+    else if (predecode_flush && !(lh_updated && lh_new_valid)) nv = false;
     state.next_lh_valid = nv; state.next_lh_pc = lh_updated ? lh_new_pc : rd.lh_pc_snapshot;
   }
   state.next_predecode_refetch = predecode_flush;

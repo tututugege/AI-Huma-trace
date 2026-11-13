@@ -380,7 +380,9 @@ void Rob::single_actions(const Uop &u) {
     else if (u.page_fault_store) { bc.page_fault_store = true; bc.trap_val = u.diag_val; }
     else if (u.page_fault_load) { bc.page_fault_load = true; bc.trap_val = u.diag_val; }
     else if (u.page_fault_inst) { bc.page_fault_inst = true; bc.trap_val = pc; }
-    else if (u.illegal_inst) { bc.illegal_inst = true; bc.trap_val = u.diag_val; }
+    else if (u.illegal_inst) { bc.illegal_inst = true; bc.trap_val = u.diag_val;
+      static const bool dbg = std::getenv("RVC_ILL_DBG") != nullptr; static int budget = 10;
+      if (dbg && budget-- > 0) std::printf("[RVC_ILL_DBG] commit illegal: pc=%x tval=%x is_rvc=%d dbg.inst=%08x\n", (unsigned)pc, (unsigned)u.diag_val, (int)u->is_rvc, (unsigned)u->dbg.instruction); }
     else if (t == EBREAK && is_semihost_marker(pc)) { bc.breakpoint = true; bc.trap_val = pc; }  // breakpoint exception, cause 3, tval = pc
     else if (t == EBREAK) ctx->exit_reason = ExitReason::EBREAK;
     else if (wfi) { /* retires without leaving the simulator */ }

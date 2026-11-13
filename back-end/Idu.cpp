@@ -68,6 +68,8 @@ void Idu::comb_decode() {
       u->dbg.instruction = e.inst;
     } else {
       decode(u, e.inst);
+      if (u.illegal_inst) { static const bool dbg = std::getenv("RVC_ILL_DBG") != nullptr; static int budget = 20;
+        if (dbg && budget-- > 0) std::printf("[RVC_ILL_DBG] decode illegal: pc=%x inst=%08x is_rvc=%d ftq_idx=%d off=%d\n", (unsigned)e.pc, (unsigned)e.inst, (int)e.is_rvc, (int)e.ftq_idx, (int)e.ftq_offset); }
     }
     u->dbg.pc = e.pc;
     u->is_rvc = e.is_rvc;
