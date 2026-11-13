@@ -60,15 +60,15 @@ IrqState eval_interrupts(xlen_t mstatus, xlen_t mie, xlen_t mip, xlen_t mideleg,
 void Csr::init() {
 #if XLEN == 64
 #if FP
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | 0x14112B;   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x14112B | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
 #else
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | 0x141103;   // MXL = 2: U/S/M, RV64 I/A/M/B
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x141103 | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B
 #endif
 #else
 #if FP
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x4014112B;                    // U/S/M, RV32 I/A/M/B/F/D
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x4014112B | (kRvc ? 4 : 0);                    // U/S/M, RV32 I/A/M/B/F/D
 #else
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103;                    // U/S/M, RV32 I/A/M/B
+  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103 | (kRvc ? 4 : 0);                    // U/S/M, RV32 I/A/M/B
 #endif
 #endif
   CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
