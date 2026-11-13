@@ -100,6 +100,21 @@ struct RvcFeStats {
   }
 };
 static RvcFeStats g_rvc_stats;
+// Predecode-checker statistics (printed at exit): how long a flushing group waits at the FIFO head before the check can run (the check needs the
+// front-to-back FIFO to have room), and how much younger work is queued behind it -- what an earlier check stage would save.
+struct PdChkStats {
+  uint64_t groups = 0, flushes = 0, flush_blocked = 0, blocked_cycles = 0, queued_behind = 0, blocked_all_cycles = 0, by_reason[4] = {0, 0, 0, 0};
+  uint64_t head_blocked = 0;   // cycles of the current head spent ready-but-blocked by a full front-to-back FIFO
+  ~PdChkStats() {
+    if (groups == 0) return;
+    std::printf("[PD_CHK] groups checked=%llu flushes=%llu (%.2f%% of groups) | flush groups that waited blocked at the head=%llu (%.1f%% of flushes, %.2f cycles each on average) | younger groups queued behind a flushing one=%.2f on average | all blocked cycles=%llu | flush kind: first taken is a direct branch or jal=%llu, a jalr=%llu, none (predicted taken where the group has no taken branch)=%llu\n",
+                (unsigned long long)groups, (unsigned long long)flushes, 100.0 * flushes / groups, (unsigned long long)flush_blocked,
+                flushes ? 100.0 * flush_blocked / flushes : 0.0, flush_blocked ? double(blocked_cycles) / flush_blocked : 0.0,
+                flushes ? double(queued_behind) / flushes : 0.0, (unsigned long long)blocked_all_cycles,
+                (unsigned long long)by_reason[1], (unsigned long long)by_reason[2], (unsigned long long)by_reason[3]);
+  }
+};
+static PdChkStats g_pd_stats;
 static const bool g_rvc_pair_guard = [] {
   if (kRvc && bpuf::cfg_pair() != 0) { std::fprintf(stderr, "FE_PAIR is not supported with RVC=1\n"); std::exit(2); }
   return true;
@@ -616,6 +631,11 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     accumulate_ptab_req(req.ptab_req, step);
   }
 
+  {   // PD_CHK statistics
+    const bool head_ready = !rd.fifo_empty_latch_snapshot && (!rd.ptab_empty_latch_snapshot || (!global_reset && !global_refetch && ptab_written)) && !global_reset && !global_refetch;
+    if (global_reset || global_refetch) g_pd_stats.head_blocked = 0;
+    else if (head_ready && rd.front2back_fifo_full_latch_snapshot) { g_pd_stats.head_blocked++; g_pd_stats.blocked_all_cycles++; }
+  }
   if (!fifo_read_enable) return;
   static const bool pair_on = bpuf::cfg_pair() != 0;
   bool multi = false;
@@ -664,6 +684,16 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
   predecode_checker_read_data checker_rd{};
   predecode_checker_seq_read(&checker_in, &checker_rd);
   predecode_checker_comb(checker_rd, checker_out);
+  g_pd_stats.groups++;
+  if (checker_out.predecode_flush_enable) {
+    g_pd_stats.flushes++;
+    if (g_pd_stats.head_blocked) { g_pd_stats.flush_blocked++; g_pd_stats.blocked_cycles += g_pd_stats.head_blocked; }
+    g_pd_stats.queued_behind += fifo_rd.size > 0 ? fifo_rd.size - 1 : 0;
+    int kind = 3;
+    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) { kind = (fifo_head.predecode_type[i] == PREDECODE_DIRECT_JUMP_NO_JAL || fifo_head.predecode_type[i] == PREDECODE_JAL) ? 1 : 2; break; }
+    g_pd_stats.by_reason[kind]++;
+  }
+  g_pd_stats.head_blocked = 0;
   if (checker_out.predecode_flush_enable) {
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
