@@ -17,7 +17,7 @@
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
 static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #ifndef BPU_BANK_NUM
-#define BPU_BANK_NUM 8
+#define BPU_BANK_NUM FETCH_WIDTH
 #endif
 
 // RAS feature switch:

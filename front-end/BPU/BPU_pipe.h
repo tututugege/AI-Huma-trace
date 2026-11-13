@@ -113,7 +113,7 @@ struct UbEnt {
   uint16_t tag = 0;       // 10 b
   bool taken = false;     // 1 b: the block ends with a taken branch (else: fall-through block that has conditional branches)
   uint8_t type = 0;       // 3 b
-  uint8_t slot = 0;       // 3 b: word offset of the taken branch in the block
+  uint8_t slot = 0;       // 3 b (4 b with RVC): slot offset of the taken branch in the block
   uint8_t ctr = 0;        // 2 b: taken hint (conditional branches)
   uint8_t nd_t = 0;       // 4 b: conditional branches up to and including the taken branch
   uint8_t nd_nt = 0;      // 4 b: conditional branches in the block if it falls through
@@ -131,12 +131,12 @@ struct UbTab {
   void init(int n, int w, int tb, int h) { N = n; W = w; S = n > 0 ? n / w : 1; tagb = tb; hb = h; e.assign(n, UbEnt{}); }
   uint32_t index(pc_t base, uint32_t hh = 0) const {
     hh &= (1u << hb) - 1;
-    const uint32_t w = base >> 2, k = ceil_log2_u32(S);
+    const uint32_t w = base >> SLOT_SHIFT, k = ceil_log2_u32(S);
     return (w ^ (w >> k) ^ (hh * 0x9e5u)) & (S - 1);
   }
   uint16_t tag(pc_t base, uint32_t hh = 0) const {
     hh &= (1u << hb) - 1;
-    return (((base >> 2) >> ceil_log2_u32(S)) ^ (hh << 2)) & mask_of(tagb);
+    return (((base >> SLOT_SHIFT) >> ceil_log2_u32(S)) ^ (hh << 2)) & mask_of(tagb);
   }
 };
 
@@ -300,7 +300,7 @@ class BpuPipe {
 
   static pc_t block_bnd(pc_t base) {
     const uint32_t mask = ~(ICACHE_LINE_SIZE - 1);
-    const uint32_t plus = base + FW * 4;
+    const uint32_t plus = base + FW * SLOT_BYTES;
     return (base & mask) != (plus & mask) ? (plus & mask) : plus;
   }
   // 32 B window (one block-bank row, BPO_BANKBLK): the unit of banking by fetch block
@@ -353,15 +353,15 @@ class BpuPipe {
       const UbEnt &e = tb.e[set * tb.W + w];
       if (!(e.v && e.tag == tag)) continue;
       if (!g.hit) { g.hit = true; g.nbits = hist_ ? 0 : e.nd_nt; }
-      bool tk = e.taken && base + 4u * e.slot < bnd && (e.type != BR_DIRECT || e.ctr >= 2);
-      if (tk && loop_ && e.type == BR_DIRECT && e.tconf && e.trip && (e.target << 2) == base && uint32_t(lpc) + 1 == e.trip) tk = false;   // predicted loop exit
+      bool tk = e.taken && base + SLOT_BYTES * e.slot < bnd && (e.type != BR_DIRECT || e.ctr >= 2);
+      if (tk && loop_ && e.type == BR_DIRECT && e.tconf && e.trip && (e.target << SLOT_SHIFT) == base && uint32_t(lpc) + 1 == e.trip) tk = false;   // predicted loop exit
       if (tk && (best < 0 || e.slot < tb.e[set * tb.W + best].slot)) best = w;
     }
     if (best < 0) return g;
     const UbEnt &e = tb.e[set * tb.W + best];
-    const pc_t bpc = base + 4u * e.slot;
+    const pc_t bpc = base + SLOT_BYTES * e.slot;
     g.taken = true; g.slot = e.slot; g.type = e.type;
-    g.next = e.target << 2;
+    g.next = e.target << SLOT_SHIFT;
     g.nbits = e.nd_t;
     g.bits = (e.type == BR_DIRECT && e.nd_t > 0) ? (1u << (e.nd_t - 1)) : 0;
     if (e.type == BR_RET && rcnt > 0) g.next = rtop;
@@ -374,14 +374,14 @@ class BpuPipe {
   // ---- main predictor: index (S0), read (S1), select (S_D) -----------------------------------------------------------------
   template <class B> void main_index(B &b, const HistRing &h) const {
     for (int i = 0; i < FW; i++) {
-      const pc_t pc = b.base + i * 4;
+      const pc_t pc = b.base + i * SLOT_BYTES;
       if (pc >= b.bnd) continue;
       Tage::index(bank_pc_of(pc), h.fh, b.tix[i]);
     }
   }
   template <class B> void main_read(const B &b, MainRaw &r) const {
     for (int i = 0; i < FW; i++) {
-      const pc_t pc = b.base + i * 4;
+      const pc_t pc = b.base + i * SLOT_BYTES;
       if (pc >= b.bnd) continue;
       const uint32_t bk = bank_of(pc);
       type_.read(pc, r.ty[i]); tage_[bk].read(b.tix[i], r.tg[i]); btb_[bk].read(bank_pc_of(pc), r.bt[i], b.tix[i].idx);
@@ -389,7 +389,7 @@ class BpuPipe {
   }
   static void count_reads(const Blk &b, Txn &t) {
     for (int i = 0; i < FW; i++) {
-      const pc_t pc = b.base + i * 4;
+      const pc_t pc = b.base + i * SLOT_BYTES;
       if (pc >= b.bnd) continue;
       const uint32_t bk = bank_of(pc);
       t.p_ty[bk].rd++; t.p_tg[bk].rd++; t.p_bt[bk].rd++;
@@ -398,7 +398,7 @@ class BpuPipe {
   static uint32_t read_mask(const Blk &b) {
     uint32_t m = 0;
     if (!b.valid) return 0;
-    for (int i = 0; i < FW; i++) if (b.base + i * 4 < b.bnd) m |= 1u << bank_of(b.base + i * 4);
+    for (int i = 0; i < FW; i++) if (b.base + i * SLOT_BYTES < b.bnd) m |= 1u << bank_of(b.base + i * SLOT_BYTES);
     return m;
   }
   // block-bank rows read by the block's S1 access (BPO_BANKBLK): the 32 B windows it covers (1, or 2 if it straddles a window boundary)
@@ -413,7 +413,7 @@ class BpuPipe {
     o.next = b.bnd;
     bool taken_found = false, spec_done = false;
     for (int i = 0; i < FW; i++) {
-      const pc_t pc = b.base + i * 4;
+      const pc_t pc = b.base + i * SLOT_BYTES;
       if (pc >= b.bnd) continue;
       const uint32_t bk = bank_of(pc);
       const pc_t bpc = bank_pc_of(pc);
@@ -487,7 +487,7 @@ class BpuPipe {
       const br_type_t ty = in.in_actual_br_type[i];
       if (!n.tr_v || pc != n.tr_expect || pc >= block_bnd(n.tr_start)) { n.tr_v = true; n.tr_start = pc; n.tr_nd = 0; n.tr_hh = ah_low(n); }
       const pc_t bnd = block_bnd(n.tr_start);
-      const uint8_t slot = (pc - n.tr_start) >> 2;
+      const uint8_t slot = (pc - n.tr_start) >> SLOT_SHIFT;
       if (ty == BR_DIRECT && n.tr_nd < 8) n.tr_nd++;
       const bool taken = ty != BR_NONCTL && in.in_actual_dir[i];
       UbEv e; e.start = n.tr_start; e.slot = slot; e.type = ty; e.nd = n.tr_nd; e.hh = n.tr_hh;
@@ -533,7 +533,7 @@ class BpuPipe {
     const uint16_t tag = tb.tag(ev.start, ev.hh);
     wmask = 0;
     for (int w = 0; w < W_; w++) nw[w] = tb.e[set * W_ + w];
-    const int limit = ev.kind == UE_TAKEN ? ev.slot : ev.kind == UE_FALL ? 8 : ev.kind == UE_TRIP ? 0 : ev.slot + 1;
+    const int limit = ev.kind == UE_TAKEN ? ev.slot : ev.kind == UE_FALL ? FW : ev.kind == UE_TRIP ? 0 : ev.slot + 1;
     int same = -1, fall = -1;
     bool any = false;
     uint8_t nd_nt = ev.nd;
@@ -549,7 +549,7 @@ class BpuPipe {
     if (ev.kind == UE_TRIP) {
       for (int w = 0; w < W_; w++) {
         UbEnt &e = nw[w];
-        if (e.v && e.tag == tag && e.taken && e.type == BR_DIRECT && e.slot == ev.slot && (e.target << 2) == ev.start) {
+        if (e.v && e.tag == tag && e.taken && e.type == BR_DIRECT && e.slot == ev.slot && (e.target << SLOT_SHIFT) == ev.start) {
           if (e.trip == ev.nd) e.tconf = true; else { e.trip = ev.nd; e.tconf = false; }
         }
       }
@@ -565,8 +565,8 @@ class BpuPipe {
       } else {
         nw[w].ctr = ev.type == BR_DIRECT ? (nw[w].ctr < 3 ? nw[w].ctr + 1 : 3) : 3;
       }
-      if (nw[w].target != (ev.target >> 2)) { nw[w].trip = 0; nw[w].tconf = false; }
-      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> 2;
+      if (nw[w].target != (ev.target >> SLOT_SHIFT)) { nw[w].trip = 0; nw[w].tconf = false; }
+      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT;
     } else if (ev.kind == UE_FALL && !any && !hist_) {
       int w = -1;
       for (int i = 0; w < 0 && i < W_; i++) if (!nw[i].v) w = i;
@@ -580,8 +580,8 @@ class BpuPipe {
   // BPA_REPAIR: rebuild spec history / RAS = checkpoint of the mispredicted branch's block + earlier slots (not taken) + the branch's actual outcome
   bool repair_blk(const InputPayload &in, State &n) const {
     const RecP &rc = rec_[in.rf_blk & 255];
-    const uint32_t rslot = (in.rf_pc - rc.base) >> 2;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
-    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && rc.base + 4u * rslot == in.rf_pc)) return false;
+    const uint32_t rslot = (in.rf_pc - rc.base) >> SLOT_SHIFT;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
+    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && rc.base + SLOT_BYTES * rslot == in.rf_pc)) return false;
     restore(rc.ck, n.spec, n.sras);
     if (repair_ == 2) n.sras = rc.rf;
     if (repair_ == 3) n.sras = n.aras;   // history repair only, RAS from the committed state
@@ -831,7 +831,7 @@ class BpuPipe {
       d.pair = true;
       main_select(b.b2, b.b2.raw, d.outB);
       S0Guess g2 = b.b2.g;
-      const int lenA = d.out.slot + 1, lenB = d.outB.taken ? d.outB.slot + 1 : int((b.b2.bnd - b.b2.base) >> 2);
+      const int lenA = d.out.slot + 1, lenB = d.outB.taken ? d.outB.slot + 1 : int((b.b2.bnd - b.b2.base) >> SLOT_SHIFT);
       if (!d.out.taken || lenA != b.g.slot + 1 || lenA + lenB > FW) {   // the final prediction does not fit the fetched group: back to one block, the second one is fetched again as a normal block
         d.pair = false; d.ovr = true; d.pair_unfit = true;
       } else {
@@ -940,14 +940,14 @@ class BpuPipe {
       if (pm && ty_ok && mode_ >= 2 && D_ >= 2 && b.g.hit && b.g.taken && int(b.g.slot) + 1 < FW) {
         const int lenA = b.g.slot + 1;
         const pc_t T = b.g.next;
-        if ((T & 3) == 0 && T != b.base + 4u * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
+        if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
           HistRing sp2 = sp; RasC sr2 = sr;
           push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, sp2, sr2);
           const uint8_t lp2 = n.lp_cnt;
           BlkB c;   // the second block is a normal fetch block (natural end), it must fit into the slots the first one leaves
           c.valid = true; c.base = T; c.bnd = block_bnd(T); c.hh = spec_hh(sp2);
           c.g = s0_lookup(ub0_, T, c.hh, c.bnd, sr2.cnt, sr2.top(), lp2);
-          const int room = FW - lenA, natlen = int((c.bnd - T) >> 2);
+          const int room = FW - lenA, natlen = int((c.bnd - T) >> SLOT_SHIFT);
           const int lenB = c.g.taken ? c.g.slot + 1 : natlen;
           if (lenB <= room) {
             c.ck = take_ckpt(sp2, sr2); c.ck.lp_cnt = lp2;
@@ -975,7 +975,7 @@ class BpuPipe {
         const int lenA = d.out.slot + 1;
         const BlkB &c = d.blk->b2;
         out.ptab_pcs_valid = true;
-        for (int i = 0; i < FW; i++) { out.out_pred_pc[i] = i < lenA ? d.blk->base + 4u * i : c.base + 4u * (i - lenA); if (i >= lenA) out.out_pred_dir[i] = false; }
+        for (int i = 0; i < FW; i++) { out.out_pred_pc[i] = i < lenA ? d.blk->base + SLOT_BYTES * i : c.base + SLOT_BYTES * (i - lenA); if (i >= lenA) out.out_pred_dir[i] = false; }
         for (int j = 0; lenA + j < FW; j++) {
           const int di = lenA + j;
           out.out_pred_dir[di] = d.outB.dir[j];

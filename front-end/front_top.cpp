@@ -111,7 +111,7 @@ static pc_t sequential_next_pc(pc_t fetch_pc, const wire1_t *inst_valid) {
   while (valid_prefix < FETCH_WIDTH && inst_valid[valid_prefix]) {
     ++valid_prefix;
   }
-  pc_t next_pc = fetch_pc + valid_prefix * 4u;
+  pc_t next_pc = fetch_pc + valid_prefix * SLOT_BYTES;   // RVC=1 (S2): next pc after the last valid instruction, gaps allowed
   const pc_t line_mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1u);
   if ((next_pc & line_mask) != (fetch_pc & line_mask)) {
     next_pc &= line_mask;
@@ -133,7 +133,7 @@ static void front_ptab_write_comb(const bpuf::OutputPayload &bpu_output, wire1_t
   ptab_in.write_enable = true;
   for (int i = 0; i < FETCH_WIDTH; i++) {
     ptab_in.predict_dir[i] = bpu_output.out_pred_dir[i];
-    ptab_in.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * 4);
+    ptab_in.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * SLOT_BYTES);
   }
   ptab_in.meta = bpu_output.meta;
   ptab_in.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
@@ -511,7 +511,7 @@ void FrontComb::write_instruction_fifo() {
   if (fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc) pr = fetch_addr_head.pair;
   else if (rd.pend_valid_snapshot && rd.pend_addr_snapshot == ic_out.fetch_pc) pr = rd.pend_pair_snapshot;
   inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire1_t gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
-  for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * 4); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
+  for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * SLOT_BYTES); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
   ipf::demand(ic_out.fetch_paddr);
   bool fused = false;
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1]) {
@@ -522,7 +522,7 @@ void FrontComb::write_instruction_fifo() {
       if (ok) nok++; else { nbad++; if ((ic_out.fetch_pc >> 12) != (pr.addr2 >> 12)) npg++; } }
     for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
       const int j = i - pr.a_len;
-      gpc[i] = pr.addr2 + 4u * j;
+      gpc[i] = pr.addr2 + SLOT_BYTES * j;
       gv[i] = ok && j < pr.b_len; gpf[i] = false; grp[i] = ok && j < pr.b_len ? w2[j] : INST_NOP;
     }
     fused = ok;

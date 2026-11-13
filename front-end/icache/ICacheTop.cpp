@@ -19,7 +19,7 @@
 #include "include/icache_module.h"
 
 #define ICACHE_TOP_TRUE_GLUE_KERNEL_FETCH_WIDTH FETCH_WIDTH
-#define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_WORDS (ICACHE_LINE_SIZE / 4)
+#define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_WORDS (ICACHE_LINE_SIZE / SLOT_BYTES)   // slots per line
 #define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_SIZE ICACHE_LINE_SIZE
 
 
@@ -144,7 +144,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
     out.fetch_single_word = in.module_ifu_resp_single_word;
     out.fetch_page_fault = in.module_ifu_page_fault;
     const uint32_t mask = ICACHE_LINE_SIZE - 1u;
-    const int base_idx = static_cast<int>((in.module_ifu_resp_pc & mask) / 4u);
+    const int base_idx = static_cast<int>((in.module_ifu_resp_pc & mask) / SLOT_BYTES);
     if (in.module_ifu_resp_single_word) {
       out.fetch_group[0] =
           in.module_ifu_page_fault ? INST_NOP : tbhook::mem_read(in.module_resp_paddr);
@@ -160,7 +160,7 @@ TrueGlueOutput eval_true_glue(const TrueGlueInput &in) {
         }
         out.fetch_group[i] = in.module_ifu_page_fault
                                  ? INST_NOP
-                                 : tbhook::mem_read(in.module_resp_paddr + 4u * i);
+                                 : tbhook::fetch_window_at(in.module_resp_paddr + SLOT_BYTES * i);
         out.page_fault_inst[i] = in.module_ifu_page_fault;
         out.inst_valid[i] = true;
       }
@@ -927,7 +927,7 @@ bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int n
   const uint32_t pb = (a_paddr & ~0xFFFu) | (b_vpc & 0xFFFu);
   const uint32_t index = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
   if (!icache_peek_hit(index, pb >> 12)) return false;
-  for (int i = 0; i < nwords; ++i) words[i] = tbhook::mem_read(pb + 4u * i);
+  for (int i = 0; i < nwords; ++i) words[i] = tbhook::fetch_window_at(pb + SLOT_BYTES * i);
   return true;
 }
 

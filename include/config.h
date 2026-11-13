@@ -56,9 +56,15 @@ constexpr uint64_t MAX_SIM_TIME = 1000000000000ULL; // 1T cycles (very large)
 #endif
 constexpr bool kRvc = (RVC != 0);
 constexpr uint32_t ilen_of(bool is_rvc) { return is_rvc ? 2u : 4u; }
-constexpr int FETCH_WIDTH = 8;
+// Fetch geometry: a fetch block / group covers FETCH_BYTES bytes, split into slots.  A slot is one 4-byte instruction word (RVC=0: 8 slots) or one
+// 2-byte position (RVC=1: 16 slots; an instruction starts at any slot, a 4-byte one occupies two).  Predictor indexes, bank numbers and slot -> pc
+// maps all use SLOT_SHIFT / SLOT_BYTES.  The decode width stays 8 either way.
+constexpr int FETCH_BYTES = 32;
+constexpr int SLOT_SHIFT = kRvc ? 1 : 2;
+constexpr int SLOT_BYTES = 1 << SLOT_SHIFT;
+constexpr int FETCH_WIDTH = FETCH_BYTES / SLOT_BYTES;
 #ifndef CFG_BACKEND_FETCH_WIDTH
-#define CFG_BACKEND_FETCH_WIDTH 8   // = FETCH_WIDTH (16 was a leftover; EXP-001)
+#define CFG_BACKEND_FETCH_WIDTH FETCH_WIDTH   // = FETCH_WIDTH (16 was a leftover; EXP-001)
 #endif
 constexpr int BACKEND_FETCH_WIDTH = CFG_BACKEND_FETCH_WIDTH;
 constexpr int DECODE_WIDTH = 8;
@@ -814,8 +820,8 @@ static_assert((ICACHE_LINE_SIZE % 4) == 0,
               "ICACHE_LINE_SIZE must be word-aligned (multiple of 4 bytes)");
 static_assert(is_power_of_two_u64(ICACHE_LINE_SIZE),
               "ICACHE_LINE_SIZE must be a power of two");
-static_assert(FETCH_WIDTH * 4 <= ICACHE_LINE_SIZE,
-              "FETCH_WIDTH*4 must be <= ICACHE_LINE_SIZE");
+static_assert(FETCH_BYTES <= ICACHE_LINE_SIZE,
+              "FETCH_BYTES must be <= ICACHE_LINE_SIZE");
 static_assert(ICACHE_WAY_NUM > 0, "ICACHE_WAY_NUM must be positive");
 static_assert(ICACHE_OFFSET_BITS > 0, "ICACHE_OFFSET_BITS must be positive");
 static_assert(ICACHE_INDEX_BITS > 0, "ICACHE_INDEX_BITS must be positive");

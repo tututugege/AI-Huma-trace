@@ -15,6 +15,10 @@ bool fs_dirty_at_commit(uint64_t uid);
 extern uint64_t inject_miss;
 // Functional memory read (instruction words, page-table entries): the core's memory in trace mode.
 uint32_t mem_read(uint32_t paddr);
+// the 32-bit window that starts at a 2-byte aligned address (RVC=1 fetch); the same as mem_read for a 4-byte aligned address
+inline uint32_t fetch_window_at(uint32_t paddr) {
+  return (paddr & 2u) ? ((mem_read(paddr & ~3u) >> 16) | (mem_read((paddr & ~3u) + 4u) << 16)) : mem_read(paddr);
+}
 // Bookkeeping of overrides: kind 0 branch dir, 1 jump target, 2 agu addr, 3 store data, 4 csr wdata.
 void note_override(int kind, uint32_t computed, uint32_t injected, uint32_t rob_idx);
 void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx, uint32_t len = 4);

@@ -86,7 +86,7 @@ inline int cfg_hist() { static const int v = env_int("BPO_HIST", 1); return v; }
 inline int cfg_hsym() { static const int v = env_int("BPO_HSYM", 3); return v; }
 inline uint8_t hist_sym(pc_t bpc, pc_t tgt) {
   static const int hs = cfg_hsym();
-  const uint32_t v = (bpc >> 2) ^ (tgt >> 2) ^ ((bpc >> 2) >> 7);
+  const uint32_t v = (bpc >> SLOT_SHIFT) ^ (tgt >> SLOT_SHIFT) ^ ((bpc >> SLOT_SHIFT) >> 7);
   uint32_t r = 0;
   for (int i = 0; i < 32; i += hs) r ^= (v >> i) & ((1u << hs) - 1);
   return uint8_t(r);
@@ -107,9 +107,9 @@ inline int cfg_ubtb() { static const int v = env_int("BPU_UBTB", 0); return v; }
 // statistics-only prediction record of one slot (BPA_STATS): predicted type (3 b), target source (3 b, see Btb::select; 7 = RAS), use-alt (1 b)
 inline uint8_t ps_pack(int ty, int src, bool used_alt) { return uint8_t((ty & 7) | ((src & 7) << 3) | (used_alt ? 0x40 : 0)); }
 
-inline uint32_t bank_of(pc_t pc) { return (pc >> 2) % NB; }
+inline uint32_t bank_of(pc_t pc) { return (pc >> SLOT_SHIFT) % NB; }
 inline pc_t bank_pc_of(pc_t pc) {
-  if ((NB & (NB - 1)) != 0) return ((pc >> 2) / NB) << 2;
+  if ((NB & (NB - 1)) != 0) return ((pc >> SLOT_SHIFT) / NB) << SLOT_SHIFT;
   return pc >> ceil_log2_u32(NB);
 }
 
@@ -208,7 +208,7 @@ class Tage {
   static bool provider_weak(int pcpn, uint8_t cnt) { return pcpn >= TN || weak(cnt); }
 
   void predict(pc_t pc, const uint32_t fh[FH_N_MAX][TN], TagePred &o) const {
-    const uint32_t w = static_cast<uint32_t>(pc >> 2);   // index hashes use the low 32 bits of the word address
+    const uint32_t w = static_cast<uint32_t>(pc >> SLOT_SHIFT);   // index hashes use the low 32 bits of the word address
     uint32_t b = w & TAGE_BASE_IDX_MASK;
     int pcpn = TN, altpcpn = TN;
     for (int i = 0; i < TN; i++) {
@@ -233,7 +233,7 @@ class Tage {
   }
   // Pipelined access (BPU_PIPE): index generation (comb, S0), array read (S1), compare/select (comb, S2).
   static void index(pc_t pc, const uint32_t fh[FH_N_MAX][TN], Idx &o) {
-    const uint32_t w = pc >> 2;
+    const uint32_t w = pc >> SLOT_SHIFT;
     o.base = w & TAGE_BASE_IDX_MASK;
     for (int i = 0; i < TN; i++) {
       o.tag[i] = (fh[1][i] ^ fh[2][i] ^ w) & tcfg().tagmask[i];
@@ -275,7 +275,7 @@ class Tage {
       cnt[i] = cnt_[i][w.idx[i]];
       useful[i] = useful_[i][w.idx[i]];
     }
-    const uint32_t bidx = (u.bank_pc >> 2) & TAGE_BASE_IDX_MASK;
+    const uint32_t bidx = (u.bank_pc >> SLOT_SHIFT) & TAGE_BASE_IDX_MASK;
     const uint8_t base_cnt = base_[bidx];
 
     // LSFR (4-bit): shift in bit0^bit3
@@ -384,8 +384,8 @@ class Btb {
     if (3 * wd < 32) x ^= pcw >> (3 * wd);
     return (x ^ salt) & mask;
   }
-  static uint32_t btb_idx(pc_t pc) { return hash(static_cast<uint32_t>(pc >> 2), BTB_IDX_MASK, 0x9e3779b9u); }
-  static btb_tag_t btb_tag(pc_t pc) { return static_cast<btb_tag_t>(((pc >> 2) >> ceil_log2_u32(BTB_ENTRY_NUM)) & BTB_TAG_MASK); }
+  static uint32_t btb_idx(pc_t pc) { return hash(static_cast<uint32_t>(pc >> SLOT_SHIFT), BTB_IDX_MASK, 0x9e3779b9u); }
+  static btb_tag_t btb_tag(pc_t pc) { return static_cast<btb_tag_t>(((pc >> SLOT_SHIFT) >> ceil_log2_u32(BTB_ENTRY_NUM)) & BTB_TAG_MASK); }
   static uint8_t useful_next(uint8_t v, bool ok) { return ok ? (v < 7 ? v + 1 : v) : (v > 0 ? v - 1 : 0); }
   template <class S, int N>
   static int hit_way(const S (&set)[N], uint32_t tag) {
@@ -502,7 +502,7 @@ class TypePred {
   TypeEntry t_[NB][TYPE_PRED_SET_NUM][TYPE_PRED_WAY_NUM];
   static void locate(pc_t pc, uint32_t &bank, uint32_t &set, type_pred_tag_t &tag) {
     bank = bank_of(pc);
-    const uint32_t w = static_cast<uint32_t>(bank_pc_of(pc) >> 2);
+    const uint32_t w = static_cast<uint32_t>(bank_pc_of(pc) >> SLOT_SHIFT);
     set = w & TYPE_PRED_SET_MASK;
     tag = (w >> ceil_log2_u32(TYPE_PRED_SET_NUM)) & TYPE_PRED_TAG_MASK;
   }
@@ -695,7 +695,7 @@ class Bpu {
     const bool refetch = in.refetch;
     const pc_t base = refetch ? in.refetch_address : pc_;
     const pc_t mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1);
-    const pc_t plus = base + FW * 4;
+    const pc_t plus = base + FW * SLOT_BYTES;
     const pc_t boundary = (base & mask) != (plus & mask) ? (plus & mask) : plus;
     const bool go_pred = in.icache_read_ready || refetch;
 
@@ -709,7 +709,7 @@ class Bpu {
       bool taken_found = false, spec_done = false;
       t.do_spec = !refetch;
       for (int i = 0; i < FW; i++) {
-        const pc_t pc = base + i * 4;
+        const pc_t pc = base + i * SLOT_BYTES;
         if (pc >= boundary) continue;
         const uint32_t b = bank_of(pc);
         const pc_t bpc = bank_pc_of(pc);
@@ -874,7 +874,7 @@ class Bpu {
       bool done = false;
       if (cfg_repair() && in.rf_valid) {
         const RecB &rc = rec_[in.rf_blk & 255];
-        if (rc.valid && rc.id == in.rf_blk && rc.base + 4u * in.rf_slot == in.rf_pc) {
+        if (rc.valid && rc.id == in.rf_blk && rc.base + SLOT_BYTES * in.rf_slot == in.rf_pc) {
           spec_ = rc.h; spec_ras_ = cfg_repair() == 3 ? arch_ras_ : rc.r;   // 3: history repair only, RAS from the committed state
           for (int i = 0; i < in.rf_slot; i++) if (!cfg_hist() && rc.ptype[i] == BR_DIRECT) spec_.push(false);
           const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + 4) : true;
