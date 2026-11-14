@@ -819,7 +819,7 @@ void SimCpu::back2front_comb() {
         if (commit_extra.src1_areg == 1 && (*inst)->dest_areg == 0 &&
             commit_extra.imm == 0)
           br_type = BR_RET;
-        else if (bpuf::cfg_icall() && (*inst)->dest_areg == 1)
+        else if ((*inst)->dest_areg == 1)
           br_type = BR_ICALL;
         else
           br_type = BR_IDIRECT;

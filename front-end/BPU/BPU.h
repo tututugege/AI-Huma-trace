@@ -53,7 +53,7 @@ struct TageCfg {
   }
 };
 // BPA_ITT: history-indexed indirect target tables (ITTAGE-like) added to the BTB bank. BPA_ITTH="2" (or "1,3"): the TAGE history table(s) whose index/tag
-// are reused (ascending history length), BPA_ITTN entries per table and bank, BPA_ITTCONF=0 minimum confidence to use a hit.
+// are reused (ascending history length), BPA_ITTN entries per table and bank.
 // Default (EXP-025, the RTL design): three tables on TAGE history tables 1, 2, 3 (13 / 32 / 119 bits), 64 entries each per bank (192 entries, 42 bits each:
 // 64.5 Kb for 8 banks; the single 256-entry table it replaces was 86 Kb). Compile-time defaults CFG_ITT_H / CFG_ITT_SIZE, env still overrides.
 #ifndef CFG_ITT_H
@@ -64,12 +64,12 @@ struct TageCfg {
 #endif
 constexpr int ITT_MAX = 3, ITT_NMAX = 1024;
 struct IttCfg {
-  int n = 0, size = CFG_ITT_SIZE, minconf = 0, h[ITT_MAX] = {};
+  int n = 0, size = CFG_ITT_SIZE, h[ITT_MAX] = {};
   IttCfg() {
     const char *v = std::getenv("BPA_ITTH");   // unset: the compile-time default; empty string: ITT off
     if (!v) v = CFG_ITT_H;
     for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; }
-    size = env_int("BPA_ITTN", CFG_ITT_SIZE); minconf = env_int("BPA_ITTCONF", 0);
+    size = env_int("BPA_ITTN", CFG_ITT_SIZE);
     if (n && (size < 2 || size > ITT_NMAX || (size & (size - 1)))) { std::printf("[BPA] bad BPA_ITTN\n"); std::exit(1); }
     for (int i = 0; i < n; i++) if (h[i] < 0 || h[i] >= TN) { std::printf("[BPA] bad BPA_ITTH\n"); std::exit(1); }
   }
@@ -81,7 +81,6 @@ inline uint32_t fh_len(int k, int i) { return tcfg().fl[k][i]; }
 
 // BPO_HIST=1 (docs/BPU_OPT.md): the global history holds one symbol of BPO_HSYM bits (folded from pc and target) per TAKEN branch;
 // not-taken conditional branches push nothing. Default 0 = one direction bit per conditional branch.
-inline int cfg_hist() { static const int v = env_int("BPO_HIST", 1); return v; }
 inline int cfg_hsym() { static const int v = env_int("BPO_HSYM", 3); return v; }
 inline uint8_t hist_sym(pc_t bpc, pc_t tgt) {
   static const int hs = cfg_hsym();
@@ -95,10 +94,8 @@ inline uint64_t &pd_flush_count() { static uint64_t n = 0; return n; }   // stat
 // block, predicted types of its slots) keyed by a block sequence number that travels in the PredMeta to the back end FTQ; the back end returns it with
 // the slot and type of the mispredicted branch, and the BPU rebuilds the history / RAS as: checkpoint + earlier (not taken) slots + the branch's actual outcome.
 // Default 0: spec history / RAS are copied from the committed state (which lacks every older in-flight branch, call and return).
-inline int cfg_repair() { static const int v = env_int("BPA_REPAIR", 3); return v; }
 inline uint64_t *repair_stats() { static uint64_t n[2] = {0, 0}; return n; }   // [0] repaired, [1] record not found / mismatch
 // BPU_ICALL=1: a jalr with rd = ra that is not a return is a call (BR_ICALL: indirect target + RAS push). 0 = such a jalr is BR_IDIRECT (old design).
-inline int cfg_icall() { static const int v = env_int("BPU_ICALL", 1); return v; }
 inline bool br_ind(int t) { return t == BR_IDIRECT || t == BR_ICALL; }
 inline bool br_call(int t) { return t == BR_CALL || t == BR_ICALL; }
 
@@ -421,7 +418,7 @@ class Btb {
     const int h = hit_way(r.btb, btb_tag(pc));
     if (br_ind(type)) {
       if (ttag) for (int k = icfg().n - 1; k >= 0; k--)
-        if (r.it[k].valid && r.it[k].tag == ttag[icfg().h[k]] && r.it[k].conf >= icfg().minconf) { if (itt) *itt = true; if (src) *src = 3; return r.it[k].target; }
+        if (r.it[k].valid && r.it[k].tag == ttag[icfg().h[k]]) { if (itt) *itt = true; if (src) *src = 3; return r.it[k].target; }
       if (src) *src = h >= 0 ? 5 : 6;
       return h >= 0 ? r.btb[h].bta : pc + 4;
     }
@@ -437,7 +434,7 @@ class Btb {
     const Way(&set)[BTB_WAY_NUM] = btb_[btb_idx(pc)];
     const int h = hit_way(set, btb_tag(pc));
     if (br_ind(type)) {
-      if (tidx && icfg().n) { const IttEnt *e = itt_hit(tidx, ttag); if (e && e->conf >= icfg().minconf) { if (itt) *itt = true; if (src) *src = 3; return e->target; } }
+      if (tidx && icfg().n) { const IttEnt *e = itt_hit(tidx, ttag); if (e) { if (itt) *itt = true; if (src) *src = 3; return e->target; } }
       if (src) *src = h >= 0 ? 5 : 6;
       return h >= 0 ? set[h].bta : pc + 4;
     }

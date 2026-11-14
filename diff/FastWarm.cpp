@@ -207,7 +207,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       bool dir = true;
       if (op == 0x63) { dir = info.br_taken; }
       else if (op == 0x6f) type = (bits(inst, 11, 7) == 1) ? BR_CALL : BR_JAL;
-      else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bpuf::cfg_icall() && bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
+      else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
       front_warm_commit(pc, type, dir, dir ? narrow_pc(post.pc, "warm-up target") : pc + info.inst_len, info.inst_len == 2);
       ++st.branches;
     } else {

@@ -768,7 +768,6 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     pd.valid = true;
     pd.flush = predecode_flush;
     if (predecode_flush) {
-      const bool hist = bpuf::cfg_hist();
       for (int i = 0; i < FETCH_WIDTH; i++) {
         if (!fifo_head.inst_valid[i]) continue;
         const predecode_type_t ty = fifo_head.predecode_type[i];
@@ -777,9 +776,8 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
         const bool taken = checker_out.predict_dir_corrected[i];
         const uint32_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];
         if (multi && i >= checker_out.keep_n) break;
-        if (ty == PREDECODE_DIRECT_JUMP_NO_JAL && !hist) { pd.bits |= uint8_t(taken) << pd.nbits; pd.nbits++; }
         if (!taken) continue;
-        if (hist) { pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::cfg_hsym(); }
+        pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::cfg_hsym();
         const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
         if (pd.ras_op == 0) {
           if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
