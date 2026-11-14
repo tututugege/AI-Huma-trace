@@ -152,6 +152,56 @@ static pc_t sequential_next_pc(pc_t fetch_pc, const wire1_t *inst_valid) {
   return next_pc;
 }
 
+// ---- RVC=1 head fix (C910-style carry); the RTL counterpart is rtl/frontend/front_head_fix.sv ----
+// Slot / pc conventions of RVC=1: a slot is a 2-byte position (FETCH_WIDTH = 16 per 32-byte block), slot i of a group has pc base + 2 * i.  A 32-bit
+// instruction that starts in the last slot of a group is not delivered by that group: its first halfword is carried (lh_data) and the next sequential
+// group (pc[0] == lh_pc) assembles it in its slot 0, with pc = group pc - 2 (the only slot whose pc is not base + 2 * i) and is_rvc = 0; the instruction
+// chain of that group then starts at slot 1 (start_b).  Slots that do not start an instruction are invalid (NON_BRANCH).
+struct RvcHeadFix {
+  bool carry_used = false;   // slot 0 was assembled from the carried halfword
+  int n = 0;                 // slots of the group (valid prefix before the fix)
+  bool straddle = false;     // the last slot starts a 32-bit instruction that this group cannot complete
+  uint16_t low = 0;          // ... and this is its first halfword
+};
+static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool lh_valid, pc_t lh_pc, uint16_t lh_data) {
+  RvcHeadFix r;
+  auto drop = [&](int i) { head.inst_valid[i] = false; head.predecode_type[i] = PREDECODE_NON_BRANCH; head.predecode_target_address[i] = 0; };
+  r.carry_used = lh_valid && lh_pc == head.pc[0] && head.inst_valid[0];
+  if (r.carry_used) {
+    const pc_t ipc = head.pc[0] - SLOT_BYTES;
+    const uint32_t word = (uint32_t(head.raw16[0]) << 16) | lh_data;
+    head.instructions[0] = word;
+    head.is_rvc[0] = false;
+    head.pc[0] = ipc;
+    ptab.predict_base_pc[0] = ipc;
+    predecode_in in{word, ipc};
+    predecode_read_data rd{};
+    PredecodeResult res{};
+    predecode_seq_read(&in, &rd);
+    predecode_comb(rd, res);
+    head.predecode_type[0] = res.type;
+    head.predecode_target_address[0] = res.target_address;
+  }
+  const wire1_t *chain = r.carry_used ? head.start_b : head.start_a;
+  while (r.n < FETCH_WIDTH && head.inst_valid[r.n]) r.n++;
+  for (int i = 0; i < FETCH_WIDTH; i++) {
+    if (!head.inst_valid[i] || chain[i] || (r.carry_used && i == 0)) continue;
+    if (ptab.predict_dir[i]) g_rvc_stats.taken_nonstart++;
+    drop(i);
+  }
+  const int last = r.n - 1;   // the last slot of the group: a 32-bit start there lacks its upper half
+  if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last]) {
+    r.straddle = true;
+    r.low = head.raw16[last];
+    if (ptab.predict_dir[last]) g_rvc_stats.taken_nonstart++;
+    drop(last);
+  }
+  g_rvc_stats.groups++; g_rvc_stats.slots_in_range += r.n; g_rvc_stats.carry_used += r.carry_used;
+  for (int i = 0; i < FETCH_WIDTH; i++) if (head.inst_valid[i]) { g_rvc_stats.insts++; g_rvc_stats.insts_rvc += head.is_rvc[i]; }
+  if (r.straddle) { g_rvc_stats.straddle++; if (((head.pc[last] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
+  return r;
+}
+
 // ============================================================================
 // Small combinational blocks
 // ============================================================================
@@ -678,48 +728,12 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     grp_in_range[i] = fifo_head.inst_valid[i];
     grp_seg_first[i] = i > 0 && fifo_head.inst_valid[i] && fifo_head.inst_valid[i - 1] && fifo_head.pc[i] != fifo_head.pc[i - 1] + SLOT_BYTES;
   }
-  int rvc_n = 0, rvc_last = -1;   // RVC=1: slots in range, and the last slot that starts an instruction
+  int rvc_n = 0;   // RVC=1: slots of the group (before the head fix)
   bool rvc_straddle = false;
   uint16_t carry_low = 0;
   if constexpr (kRvc) {
-    // C910-style carry.  If the previous group ended with a 32-bit instruction whose first halfword it carried, slot 0 is the second halfword: the instruction is
-    // assembled here (word = {slot 0 halfword, carried halfword}, pc = this group's pc - 2) and sits in slot 0; the instruction chain then continues from slot 1.
-    const bool use_b = rd.lh_valid_snapshot && rd.lh_pc_snapshot == fifo_head.pc[0] && fifo_head.inst_valid[0];
-    if (use_b) {
-      const pc_t ipc = fifo_head.pc[0] - SLOT_BYTES;
-      const uint32_t word = (uint32_t(fifo_head.raw16[0]) << 16) | rd.lh_data_snapshot;
-      fifo_head.instructions[0] = word;
-      fifo_head.is_rvc[0] = false;
-      fifo_head.pc[0] = ipc;
-      ptab_head.predict_base_pc[0] = ipc;
-      predecode_in predecode_inp{word, ipc};
-      predecode_read_data predecode_rd{};
-      PredecodeResult result{};
-      predecode_seq_read(&predecode_inp, &predecode_rd);
-      predecode_comb(predecode_rd, result);
-      fifo_head.predecode_type[0] = result.type;
-      fifo_head.predecode_target_address[0] = result.target_address;
-    }
-    const wire1_t *m = use_b ? fifo_head.start_b : fifo_head.start_a;
-    while (rvc_n < FETCH_WIDTH && fifo_head.inst_valid[rvc_n]) rvc_n++;
-    for (int i = 0; i < FETCH_WIDTH; i++) {
-      if (!fifo_head.inst_valid[i]) continue;
-      if (m[i] || (use_b && i == 0)) { rvc_last = i; continue; }
-      if (ptab_head.predict_dir[i]) g_rvc_stats.taken_nonstart++;
-      fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0;
-    }
-    // a 32-bit instruction that starts at the last slot of the group cannot be completed from this group: it is not delivered here, its first halfword is
-    // carried to the next group (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line).
-    for (int i = (use_b ? 1 : 0); i < rvc_n; i++) {
-      if (!fifo_head.inst_valid[i] || fifo_head.is_rvc[i] || fifo_head.page_fault_inst[i] || !(m[i])) continue;
-      if (i + 1 < rvc_n) continue;
-      rvc_straddle = true; carry_low = fifo_head.raw16[i];
-      fifo_head.inst_valid[i] = false; fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; fifo_head.predecode_target_address[i] = 0;
-      if (ptab_head.predict_dir[i]) g_rvc_stats.taken_nonstart++;
-    }
-    g_rvc_stats.groups++; g_rvc_stats.slots_in_range += rvc_n; g_rvc_stats.carry_used += use_b;
-    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i]) { g_rvc_stats.insts++; g_rvc_stats.insts_rvc += fifo_head.is_rvc[i]; }
-    if (rvc_straddle) { g_rvc_stats.straddle++; if (((fifo_head.pc[rvc_n - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
+    const RvcHeadFix hf = rvc_head_fix(fifo_head, ptab_head, rd.lh_valid_snapshot, rd.lh_pc_snapshot, rd.lh_data_snapshot);
+    rvc_n = hf.n; rvc_straddle = hf.straddle; carry_low = hf.low;
   }
   predecode_checker_in checker_in;
   front_checker_input_comb(fifo_head, ptab_head, checker_in);
@@ -742,16 +756,6 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
   }
-  if (kRvc) { static const bool dbg = std::getenv("RVC_DBG") != nullptr; static int budget = 40;
-    if (dbg && checker_out.predecode_flush_enable && budget-- > 0) {
-      std::printf("[RVC_DBG] flush pc0=%x predicted_next=%x corrected=%x seq_next=%x n=%d valid=", (unsigned)fifo_head.pc[0], (unsigned)ptab_head.predict_next_fetch_address, (unsigned)checker_out.predict_next_fetch_address_corrected, (unsigned)fifo_head.seq_next_pc, rvc_n);
-      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)fifo_head.inst_valid[i]);
-      std::printf(" dir=");
-      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)ptab_head.predict_dir[i]);
-      std::printf(" type=");
-      for (int i = 0; i < FETCH_WIDTH; i++) std::printf("%d", (int)fifo_head.predecode_type[i]);
-      std::printf("\n");
-    } }
   if constexpr (kRvc) {   // the next group starts with the second half of this group's last instruction if it straddles and the fetch continues sequentially
     bool any_taken = false;
     int last_seg = 0;   // FE_PAIR: only the last block of the group decides whether the fetch continues sequentially (a taken branch that ends the first block does not)
