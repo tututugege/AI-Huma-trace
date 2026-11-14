@@ -257,6 +257,7 @@ class BpuPipe {
     BtbWr btb[NB];
     TypeWr type[CW + MAXP];
     uint8_t n_type = 0;
+    uint32_t ty_lane = 0;              // banks whose type lane an update of the queue used this cycle
     PortUse p_ty[NB], p_tg[NB], p_bt[NB];
     // statistics increments (no architectural effect)
     uint8_t s_ov_t2n = 0, s_ov_n2t = 0, s_ov_ind = 0, s_ov_ret = 0, s_ov_oth = 0;
@@ -574,6 +575,7 @@ class BpuPipe {
   void type_update(const UpdEnt &e, Txn &t) const {
     TypeWr &w = t.type[t.n_type];
     type_.update(e.pc, e.type, w, e.rvc);
+    t.ty_lane |= 1u << bank_of(e.pc);
     if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }
   }
 
@@ -952,9 +954,9 @@ class BpuPipe {
       if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
     update_queue(in, n, t);
-    // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when the
-    // bank has no write this cycle (otherwise the stale entry causes another predecode flush and the clear is retried).
-    if (in.pd.valid && in.pd.nb_valid && t.n_type < CW + MAXP && t.p_ty[bank_of(in.pd.nb_pc)].wr == 0) {
+    // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when no
+    // update of the queue uses the bank's type lane this cycle (otherwise the stale entry causes another predecode flush and the clear is retried).
+    if (in.pd.valid && in.pd.nb_valid && !((t.ty_lane >> bank_of(in.pd.nb_pc)) & 1)) {
       TypeWr &w = t.type[t.n_type];
       type_.update(in.pd.nb_pc, BR_NONCTL, w);
       if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }

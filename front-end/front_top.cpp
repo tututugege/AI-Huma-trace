@@ -644,7 +644,7 @@ void FrontComb::write_instruction_fifo() {
     if (nv > 0) {
       // the upper half of the last window is in the same cache line as the slot: the fetch can deliver it with the group
       rvc_up16 = uint16_t(grp[nv - 1] >> 16);
-      rvc_up_ok = ((gpc[nv - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) != 0;
+      rvc_up_ok = !ic_out.fetch_single_word && ((gpc[nv - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) != 0;
       grp[nv - 1] &= 0xffffu;   // (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line)
     }
   }
