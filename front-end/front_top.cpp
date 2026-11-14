@@ -203,6 +203,14 @@ static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool 
 // Small combinational blocks
 // ============================================================================
 
+// Alignment fingerprint of a PTAB write (see BPU/fpr.h)
+static void fpr_ptab(const PTAB_in &p) {
+  if (!fpr::on()) return;
+  uint32_t m = 0;
+  for (int i = 0; i < FETCH_WIDTH; i++) m |= uint32_t(p.predict_dir[i]) << i;
+  fpr::pt(static_cast<uint32_t>(p.predict_base_pc[0]), static_cast<uint32_t>(p.predict_next_fetch_address), m);
+}
+
 // PTAB write port from the BPU output.
 static void front_ptab_write_comb(const bpuf::OutputPayload &bpu_output, wire1_t global_reset,
                                   wire1_t global_refetch, PTAB_in &ptab_in) {
@@ -463,6 +471,7 @@ void FrontComb::read_fifos() {
     bpu_done = true;
     ptab_bypass = bpu_output.PTAB_write_enable;
     if (ptab_bypass) { front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in); ptab_in.write_enable = true; ptab_written = true; }
+    if (ptab_bypass) fpr_ptab(ptab_in);
   }
   const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.fetch_addr_fifo_empty_latch_snapshot &&
                                       !global_reset && !global_refetch && pipe_head_ok;
@@ -502,6 +511,7 @@ void FrontComb::read_fifos() {
 
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
 void FrontComb::run_bpu() {
+  fpr::set_cycle(front_ctx ? front_ctx->perf.cycle : 0);
   if (bpu_done) return;
   const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot;
   bpu_can_run = (!bpu_stall || global_reset || global_refetch);
@@ -683,6 +693,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
       bpu_output.PTAB_write_enable && !global_reset && !global_refetch;
   if (ptab_can_write && !ptab_written) {
     front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in);
+    fpr_ptab(ptab_in);
     PTAB_out unused_out{};
     PtabCombOut step{};
     PTAB_comb_calc(&ptab_in, &ptab_rd, &unused_out, &ptab_rd, &step);

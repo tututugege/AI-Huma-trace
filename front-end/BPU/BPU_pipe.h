@@ -13,6 +13,7 @@
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
+#include "fpr.h"
 #include <type_traits>
 #include <utility>
 
@@ -557,6 +558,7 @@ class BpuPipe {
     return e;
   }
   void apply_table_update(const UpdEnt &e, Txn &t) const {
+    fpr::up(static_cast<uint32_t>(e.pc), e.dir, e.type, static_cast<uint32_t>(e.target), e.pred, e.pcpn, e.rvc);
     const uint32_t b = bank_of(e.pc);
     const pc_t bpc = bank_pc_of(e.pc);
     if (e.type == BR_DIRECT) {
