@@ -88,7 +88,7 @@ struct PStq {
   wire<1> pa_v = 0;           // DTLB hit: paddr known
   wire<32> paddr = 0;
   wire<1> data_v = 0;
-  wire<32> data = 0;
+  wire<XLEN> data = 0;
   wire<3> func3 = 0;
   wire<1> pf = 0, mmio = 0, lrsc = 0, sc_pass = 0, suppress = 0;
   wire<1> trp = 0;            // STA DTLB retry pending
