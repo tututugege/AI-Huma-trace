@@ -163,7 +163,7 @@ static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", CFG_LSU_MS
 static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
 static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
 static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
-static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> 2) ^ (pc >> (2 + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }
+static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> SLOT_SHIFT) ^ (pc >> (SLOT_SHIFT + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }   // (RVC=1: instructions are 2-byte aligned)
 static std::vector<uint16_t> g_ssit;
 static unsigned g_ssit_next = 1;
 static inline uint16_t ss_get(uint32_t pc) {

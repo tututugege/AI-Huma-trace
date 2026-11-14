@@ -413,7 +413,7 @@ class Btb {
     if (tidx) for (int k = 0; k < icfg().n; k++) r.it[k] = itt_[k][tidx[icfg().h[k]] & (icfg().size - 1)];
     for (int w = 0; w < BTB_WAY_NUM; w++) r.btb[w] = btb_[btb_idx(pc)][w];
   }
-  // src (statistics only): 1 BTB hit, 2 BTB miss (pc+4), 3 ITT, 5 indirect fallback to BTB, 6 indirect miss (pc+4)
+  // src (statistics only): 1 BTB hit, 2 BTB miss (fall-through), 3 ITT, 5 indirect fallback to BTB, 6 indirect miss (fall-through)
   static target_addr_t select(pc_t pc, br_type_t type, const Raw &r, int *src, const tage_tag_t *ttag, bool *itt, pc_t fall) {   // pc: the bank-local pc (BTB tag); fall: the real fall-through address used when the BTB misses
     const int h = hit_way(r.btb, btb_tag(pc));
     if (br_ind(type)) {
@@ -427,22 +427,6 @@ class Btb {
       return h >= 0 ? r.btb[h].bta : fall;
     }
     return fall;
-  }
-
-  // bank_pc is the bank-local pc, exactly what the RTL hands the bank
-  target_addr_t predict(pc_t pc, br_type_t type, int *src = nullptr, const tage_idx_t *tidx = nullptr, const tage_tag_t *ttag = nullptr, bool *itt = nullptr) const {
-    const Way(&set)[BTB_WAY_NUM] = btb_[btb_idx(pc)];
-    const int h = hit_way(set, btb_tag(pc));
-    if (br_ind(type)) {
-      if (tidx && icfg().n) { const IttEnt *e = itt_hit(tidx, ttag); if (e) { if (itt) *itt = true; if (src) *src = 3; return e->target; } }
-      if (src) *src = h >= 0 ? 5 : 6;
-      return h >= 0 ? set[h].bta : pc + 4;
-    }
-    if (type == BR_DIRECT || type == BR_CALL || type == BR_JAL || type == BR_RET) {
-      if (src) *src = h >= 0 ? 1 : 2;
-      return h >= 0 ? set[h].bta : pc + 4;
-    }
-    return pc + 4;
   }
 
   void update(pc_t pc, br_type_t type, bool dir, target_addr_t addr, BtbWr &w, const tage_idx_t *tidx = nullptr, const tage_tag_t *ttag = nullptr) const {

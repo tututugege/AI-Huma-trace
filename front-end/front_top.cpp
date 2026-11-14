@@ -200,6 +200,7 @@ static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool 
     predecode_comb(rd, res);
     head.predecode_type[last] = res.type;
     head.predecode_target_address[last] = res.target_address;
+    head.seq_next_pc = head.pc[last] + 2 * SLOT_BYTES;   // the instruction is complete now: the sequential continuation is behind it, not in the middle of it
   } else if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last]) {
     r.straddle = true;
     r.low = head.raw16[last];
