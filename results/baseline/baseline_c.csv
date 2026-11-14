@@ -13,10 +13,12 @@ div.bin,0,0,1709
 dummy.bin,0,0,638
 fact.bin,0,0,1121
 fd-basic.bin,0,0,962
+fd-cold.bin,0,0,1170
 fd-fcvt.bin,0,0,1490
 fd-fdiv.bin,0,0,1598
 fd-fsqrt.bin,0,0,1322
 fd-matmul.bin,0,0,27218
+fdoff.bin,0,0,6871
 fence-i-self-modify.bin,0,0,1299
 fib.bin,0,0,1051
 goldbach.bin,0,0,3035

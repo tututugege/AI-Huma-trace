@@ -808,6 +808,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   if (tbhook::poison && !l.pf && !l.mmio) wb.result ^= 0xA5C3A5C3u;
   wb.dest_preg = l.dest_preg;
   wb.page_fault_load = l.pf;
+  wb.illegal_inst = l.illegal;
   wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
   const bool second = l.second;
@@ -1082,6 +1083,7 @@ void RealLsu::comb_exe2lsu_p() {
     e.pa_v = 0;
     e.paddr = 0;
     e.func3 = inst->func3;
+    e.illegal = inst.illegal_inst;
     e.st = L_PIPE;
     e.snap_idx = inst.stq_idx;
     e.snap_flag = inst.stq_flag;

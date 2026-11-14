@@ -31,6 +31,7 @@ enum class LoadState : uint8_t {
 };
 
 struct LdqEntry {
+  wire<1> illegal_inst;   // F/D: the load is illegal (mstatus.FS = Off), reported through the write-back
   LoadState load_state;
   wire<1> v_addr_valid;
   wire<XLEN> v_addr;

@@ -218,6 +218,7 @@ void RealLsu::handle_load_req(const MicroOp &inst) {
   e.p_addr_valid = false;
   e.p_addr = 0;
   e.func3 = inst->func3;
+  e.illegal_inst = inst.illegal_inst;
   e.load_state = LoadState::WaitTlb;
   e.stq_snapshot.idx = inst.stq_idx;
   e.stq_snapshot.flag = inst.stq_flag;
@@ -687,6 +688,7 @@ void RealLsu::comb_lsu2exe() {
     if (tbhook::poison && !l.page_fault && !l.is_mmio) wb.result ^= 0xA5C3A5C3u;
     wb.dest_preg = l.dest_preg;
     wb.page_fault_load = l.page_fault;
+    wb.illegal_inst = l.illegal_inst;
     wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
     wb.is_mmio = l.is_mmio;
     wires->lsu2exe.wb_req[issue_ld].valid = true;

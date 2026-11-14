@@ -56,6 +56,7 @@ struct PLdq {
   wire<32> paddr = 0;
   wire<1> mmio = 0;
   wire<1> pf = 0;
+  wire<1> illegal = 0;        // F/D: the load is illegal (mstatus.FS = Off), reported through the write-back
   wire<1> lrsc = 0;           // LR (reservation is set at write-back)
   wire<1> miss = 0;           // saw a DCache miss (TMA statistics only)
   wire<XLEN> result = 0;      // MMIO read data / faulting vaddr
