@@ -21,7 +21,6 @@
 #include <cstring>
 #include <vector>
 
-bpuf::Bpu &front_bpu_instance();
 void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false);
 void front_warm_finish();
 void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);

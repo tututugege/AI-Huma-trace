@@ -67,8 +67,6 @@ struct Front2BackCombOut {
 struct PendingBpuSeqTxn {
   wire1_t valid = false;
   wire1_t reset = false;
-  bpuf::InputPayload inp;
-  bpuf::Bpu::Txn req;
 };
 
 struct PendingFrontState {

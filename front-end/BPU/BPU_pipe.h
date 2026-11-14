@@ -8,10 +8,8 @@
 //                  squashed, S0 is redirected, history / RAS are restored from the per-block checkpoint.
 //   commit side    commit stream -> block tracker -> uBTB train queue -> uBTB write; commit stream -> table updates.
 //
-// BPU_PIPE=1  step (a): the main prediction is computed at S0 on the table state of that cycle with the exact history and only
-//             delayed to S_D (same predictions as the zero-bubble model).
-// BPU_PIPE=2  step (b): real S0 / S1 / S_D split; history and RAS are advanced at S0 from the uBTB guess and repaired on override.
-// BPU_PIPE=3  step (c): (b) plus an update queue whose writes are arbitrated against the S1 reads (single-port arrays).
+// (Earlier variants BPU_PIPE=0..2 -- the zero-bubble predictor, the S0-exact history variant and the one-queue-per-bank update path --
+// were removed; git history has them.  The update queue's writes are arbitrated against the S1 reads: the arrays are single-ported.)
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
@@ -20,7 +18,6 @@
 
 namespace bpuf {
 
-inline int cfg_pipe() { static const int v = env_int("BPU_PIPE", 3); return v; }
 inline int cfg_s0_entries() { static const int v = env_int("BPU_S0_ENTRIES", 128); return v; }
 inline int cfg_s0_ways() { static const int v = env_int("BPU_S0_WAYS", 4); return v; }
 inline int cfg_main_lat() { static const int v = env_int("BPU_MAIN_LAT", 2); return v; }
@@ -194,7 +191,6 @@ struct Blk {
   RasC rf;                       // BPA_REPAIR=2: full RAS copy (ideal checkpoint)
   Tage::Idx tix[FW];
   MainRaw raw;
-  MainOut shadow;                // BPU_PIPE=1 only
 };
 
 struct Decision {                // outcome of the last stage, computed from registers only
@@ -251,9 +247,7 @@ class BpuPipe {
     Blk R[MAXD];                       // R[0] = S1 ... R[D-1] = S_D
     HistRing spec, arch;
     RasC sras, aras;
-    UpdEnt q_old[Q_DEPTH][NB];         // modes 1, 2: one queue per bank
-    uint8_t wr[NB] = {}, rd[NB] = {}, cnt[NB] = {};
-    UpdEnt uq[MAXUQ];                  // mode 3
+    UpdEnt uq[MAXUQ];
     uint8_t uq_n = 0;
   };
 
@@ -289,7 +283,7 @@ class BpuPipe {
   };
 
  private:
-  int mode_ = 0, D_ = 2, N_ = 128, W_ = 2, S_ = 64, UQ_ = 8, P_ = 2;
+  int D_ = 2, N_ = 128, W_ = 2, S_ = 64, UQ_ = 8, P_ = 2;
   int loop_ = 0, bb_ = 0, merge_ = 1, ubmain_ = 0, tqd_ = 4, hist_ = 0, hsym_ = 2, hb_ = 0, pdck_ = 0, hb1_ = 0;
   // The pipeline registers are double-buffered: comb() builds the next value in *nxp_ (from *stp_), commit() flips the two.
   // (R[k] for k >= D_ is never written and stays Blk{} in both buffers.)
@@ -458,7 +452,6 @@ class BpuPipe {
   bool disagree(const MainOut &m, const S0Guess &g, int &why) const {
     why = 0;
     if (m.next != g.next) { why = 1; return true; }
-    if (mode_ == 1) return false;  // exact history / RAS were already applied at S0
     if (m.nbits != g.nbits || m.bits != g.bits) { why = 2; return true; }
     if (m.ras_op != g.ras_op || (m.ras_op == 1 && m.ras_val != g.ras_val)) { why = 3; return true; }
     return false;
@@ -630,33 +623,6 @@ class BpuPipe {
     if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }
   }
 
-  // Old rule: one entry per bank, second update to a bank in a cycle is dropped; type predictor updated straight from the commit stream.
-  void update_old(const InputPayload &in, State &n, Txn &t) const {
-    for (int b = 0; b < NB; b++) {
-      if ((*stp_).cnt[b] == 0) continue;
-      apply_table_update((*stp_).q_old[(*stp_).rd[b]][b], t);
-      n.rd[b] = ((*stp_).rd[b] + 1) % Q_DEPTH; n.cnt[b]--;
-    }
-    bool enq[NB] = {}, enq_nonctl[NB] = {};
-    for (int i = 0; i < CW; i++) {
-      if (!in.in_upd_valid[i]) continue;
-      const UpdEnt e = make_ent(in, i);
-      type_update(e, t);
-      const uint32_t b = bank_of(e.pc);
-      const bool ctl = e.type != BR_NONCTL;
-      t.s_upd_ctl += ctl;
-      if (enq[b] || n.cnt[b] >= Q_DEPTH) {
-        if (ctl) {
-          t.s_upd_drop++;
-          if (enq[b]) { t.s_ctl_drop_sb++; t.s_ctl_drop_nonctl += enq_nonctl[b]; } else t.s_ctl_drop_full++;
-        }
-        continue;
-      }
-      enq[b] = true; enq_nonctl[b] = !ctl; t.s_nonctl_enq += !ctl;
-      n.q_old[n.wr[b]][b] = e;
-      n.wr[b] = (n.wr[b] + 1) % Q_DEPTH; n.cnt[b]++;
-    }
-  }
   // Update queue: control updates only; an entry is written when its bank has no S1 read this cycle (reads win), at most P_ writes
   // per cycle, one per bank. A full queue drops the new entry.
   void update_queue(const InputPayload &in, State &n, Txn &t) const {
@@ -778,36 +744,33 @@ class BpuPipe {
   }
   void warm_finish() { (*stp_).spec = (*stp_).arch; (*stp_).sras = (*stp_).aras; }
 
-  BpuPipe() { if (cfg_pipe() > 0) reset(); }
+  BpuPipe() { reset(); }
   const Stats &stats() const { return stats_; }
-  int mode() const { return mode_; }
   int depth() const { return D_; }
   int s0_entries() const { return N_; }
 
   void reset() {
-    mode_ = cfg_pipe(); D_ = cfg_main_lat(); N_ = cfg_s0_entries(); W_ = cfg_s0_ways(); S_ = N_ / W_; UQ_ = cfg_updq(); P_ = cfg_upd_ports();
+    D_ = cfg_main_lat(); N_ = cfg_s0_entries(); W_ = cfg_s0_ways(); S_ = N_ / W_; UQ_ = cfg_updq(); P_ = cfg_upd_ports();
     if (D_ < 1 || D_ > MAXD) { std::printf("[BPU_PIPE] BPU_MAIN_LAT must be 1..%d\n", MAXD); std::exit(1); }
     if (N_ < 2 || (N_ & (N_ - 1)) || W_ < 1 || W_ > MAXW || (W_ & (W_ - 1)) || N_ < W_) { std::printf("[BPU_PIPE] BPU_S0_ENTRIES / BPU_S0_WAYS must be powers of two (ways <= %d)\n", MAXW); std::exit(1); }
     if (UQ_ < 1 || UQ_ > MAXUQ || P_ < 1 || P_ > MAXP) { std::printf("[BPU_PIPE] bad BPU_UPDQ / BPU_UPD_PORTS\n"); std::exit(1); }
     loop_ = cfg_loop();
     if (loop_ && !cfg_hist()) { std::printf("[BPU_PIPE] BPO_LOOP needs BPO_HIST=1\n"); std::exit(1); }
     repair_ = cfg_repair();
-    if (repair_ && mode_ < 2) { std::printf("[BPU_PIPE] BPA_REPAIR needs BPU_PIPE>=2\n"); std::exit(1); }
     for (auto &r : rec_) r.valid = false;
     pdck_ = cfg_pdckpt();
-    if (pdck_ && mode_ < 2) { std::printf("[BPU_PIPE] BPO_PDCKPT needs BPU_PIPE>=2\n"); std::exit(1); }
     hist_ = cfg_hist(); hsym_ = cfg_hsym(); hb_ = cfg_ub_hbits(); hb1_ = cfg_l1_hbits();
     if (hb_ < 0 || hb_ > 16 || hb1_ < 0 || hb1_ > 16) { std::printf("[BPU_PIPE] BPO_UB_HBITS / BPO_L1_HBITS 0..16\n"); std::exit(1); }
     const int hmax = hb_ > hb1_ ? hb_ : hb1_;
     hb_ = hmax;   // history bits tracked: the larger of the two
     if (hist_ && (hsym_ < 1 || hsym_ > 4)) { std::printf("[BPU_PIPE] BPO_HSYM 1..4\n"); std::exit(1); }
     bb_ = cfg_bankblk(); merge_ = cfg_upd_merge(); ubmain_ = cfg_ub_main(); tqd_ = cfg_tq();
-    if (bb_ < 0 || bb_ > MAXBB || (bb_ == 1) || (bb_ & (bb_ - 1)) || (bb_ && mode_ < 3)) { std::printf("[BPU_PIPE] BPO_BANKBLK must be 0 or a power of two in 2..%d and needs BPU_PIPE=3\n", MAXBB); std::exit(1); }
+    if (bb_ < 0 || bb_ > MAXBB || (bb_ == 1) || (bb_ & (bb_ - 1))) { std::printf("[BPU_PIPE] BPO_BANKBLK must be 0 or a power of two in 2..%d and needs BPU_PIPE=3\n", MAXBB); std::exit(1); }
     if (tqd_ < 1 || tqd_ > TQ) { std::printf("[BPU_PIPE] BPO_TQ 1..%d\n", TQ); std::exit(1); }
     ub0_.init(N_, W_, cfg_ub_tag(), cfg_ub_hbits());
     {
       const int l1n = cfg_l1_entries(), l1w = cfg_l1_ways();
-      if (l1n && (l1n & (l1n - 1) || l1w < 1 || l1w > MAXW || (l1w & (l1w - 1)) || l1n < l1w || mode_ < 2 || D_ < 2)) { std::printf("[BPU_PIPE] bad BPO_L1_ENTRIES / BPO_L1_WAYS (needs BPU_PIPE>=2, BPU_MAIN_LAT>=2)\n"); std::exit(1); }
+      if (l1n && (l1n & (l1n - 1) || l1w < 1 || l1w > MAXW || (l1w & (l1w - 1)) || l1n < l1w || D_ < 2)) { std::printf("[BPU_PIPE] bad BPO_L1_ENTRIES / BPO_L1_WAYS (needs BPU_MAIN_LAT>=2)\n"); std::exit(1); }
       ub1_.init(l1n, l1w, cfg_ub_tag(), hb1_);
     }
     sb_[0] = State{}; sb_[1] = State{}; stp_ = &sb_[0]; nxp_ = &sb_[1];
@@ -828,8 +791,7 @@ class BpuPipe {
     d.out = MainOut{}; d.outB = MainOut{}; d.oout = MainOut{}; d.ock = Ckpt{}; d.obase = 0; d.og = S0Guess{};
     d.valid = true;
     d.blk = &b;
-    if (mode_ == 1) d.out = b.shadow;
-    else if (D_ == 1) { MainRaw raw; main_read(b, raw); main_select(b, raw, d.out); }  // read and compare in one cycle
+    if (D_ == 1) { MainRaw raw; main_read(b, raw); main_select(b, raw, d.out); }  // read and compare in one cycle
     else main_select(b, b.raw, d.out);
     int why;
     d.ovr = disagree(d.out, b.g, why);
@@ -927,15 +889,7 @@ class BpuPipe {
       b.ck.lp_cnt = lpc;
       if (repair_ == 2) b.rf = sr;
       main_index(b, sp);
-      if (mode_ == 1) {
-        MainRaw raw;
-        main_read(b, raw);
-        count_reads(b, t);
-        main_select(b, raw, b.shadow);
-        push_bits(b.shadow.nbits, b.shadow.bits, b.shadow.ras_op, b.shadow.ras_val, n.spec, n.sras);
-      } else {
-        push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
-      }
+      push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       n.pc = b.g.next;
       n.lp_cnt = lp_next(lpc, b.base, b.g.taken, b.g.next, b.g.type);
       out.icache_read_valid = true;
@@ -944,7 +898,7 @@ class BpuPipe {
       // FE_PAIR: the guess is a taken branch -> also look up the block at its target (spec history / RAS as left by the first block)
       const int pm = cfg_pair();   // FE_PAIR bits: 1 on; 2 = not after a return; 4 = not after a call; 8 = not after an indirect jump; 16 = not after a conditional branch
       const bool ty_ok = !((pm & 2) && b.g.type == BR_RET) && !((pm & 4) && br_call(b.g.type)) && !((pm & 8) && br_ind(b.g.type)) && !((pm & 16) && b.g.type == BR_DIRECT) && !((pm & 32) && b.g.type == BR_JAL);
-      if (pm && ty_ok && mode_ >= 2 && D_ >= 2 && b.g.hit && b.g.taken && int(b.g.slot) + 1 < FW) {
+      if (pm && ty_ok && D_ >= 2 && b.g.hit && b.g.taken && int(b.g.slot) + 1 < FW) {
         const int lenA = b.g.slot + 1;
         const pc_t T = b.g.next;
         if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
@@ -1012,7 +966,7 @@ class BpuPipe {
     // shift; the block in S1 is read this cycle and its raw array data rides along into the next stage register
     for (int k = D_ - 1; k >= 1; k--) n.R[k] = (*stp_).R[k - 1];
     n.R[0] = Blk{};
-    if (mode_ >= 2 && (*stp_).R[0].valid) {
+    if ((*stp_).R[0].valid) {
       count_reads((*stp_).R[0], t);
       bb_reads((*stp_).R[0], t);
       if (D_ >= 2) main_read((*stp_).R[0], n.R[1].raw);
@@ -1080,7 +1034,7 @@ class BpuPipe {
       n.lp_cnt = 0;
       if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
-    if (mode_ >= 3) update_queue(in, n, t); else update_old(in, n, t);
+    update_queue(in, n, t);
     // uBTB training: head of the train queue is written, new events are appended behind it
     if ((*stp_).tq_n > 0) {
       const UbEv &e = (*stp_).tq[0];
@@ -1093,20 +1047,18 @@ class BpuPipe {
     }
     if (!refetch) sd_event(d, n, t);
     if (ubmain_ != 2) ub_track(in, n, t.tc);
-    out.upd_free = mode_ >= 3 ? uint8_t(UQ_ - (*stp_).uq_n) : 255;   // EXP-028 compact ROB commit credits (registered)
+    out.upd_free = uint8_t(UQ_ - (*stp_).uq_n);   // EXP-028 compact ROB commit credits (registered)
     out.tq_free = uint8_t(tqd_ - (*stp_).tq_n);
   }
 
   void commit(const Txn &t) {
-    // declared port counts: S1 reads one set per bank and array; updates write one per bank and array (the type table takes up to
-    // CW writes in the old update path); with the update queue the arrays are single-ported (read + write <= 1).
+    // declared port counts: S1 reads one set per bank and array; updates write one per bank and array; the arrays are single-ported.
     for (int b = 0; b < NB; b++) {
       const PortUse *p[3] = {&t.p_ty[b], &t.p_tg[b], &t.p_bt[b]};
       static const char *nm[3] = {"type", "tage", "btb"};
       for (int a = 0; a < 3; a++) {
-        const int wr_max = (a == 0 && mode_ < 3) ? CW : 1;
-        if (p[a]->rd > 1 || p[a]->wr > wr_max || (mode_ >= 3 && !bb_ && p[a]->rd + p[a]->wr > 1)) {
-          std::printf("[BPU_PIPE] ERROR: port limit exceeded on %s bank %d: rd=%d wr=%d (mode %d)\n", nm[a], b, p[a]->rd, p[a]->wr, mode_);
+        if (p[a]->rd > 1 || p[a]->wr > 1 || (!bb_ && p[a]->rd + p[a]->wr > 1)) {
+          std::printf("[BPU_PIPE] ERROR: port limit exceeded on %s bank %d: rd=%d wr=%d\n", nm[a], b, p[a]->rd, p[a]->wr);
           std::exit(1);
         }
       }
@@ -1141,9 +1093,9 @@ class BpuPipe {
 
   void print_stats() const {
     const Stats &s = stats_;
-    std::printf("[BPU_PIPE] mode=%d main_lat=%d s0_entries=%d x%d-way updq=%d upd_ports=%d cycles=%llu blocks=%llu s0_hit=%llu s0_hit_taken=%llu "
+    std::printf("[BPU_PIPE] main_lat=%d s0_entries=%d x%d-way updq=%d upd_ports=%d cycles=%llu blocks=%llu s0_hit=%llu s0_hit_taken=%llu "
                 "overrides=%llu (next=%llu hist=%llu ras=%llu; s0 miss=%llu) squashed=%llu refetch=%llu s0_stall_ptab=%llu\n",
-                mode_, D_, N_, W_, UQ_, P_, (unsigned long long)s.cyc, (unsigned long long)s.blocks, (unsigned long long)s.s0_hit,
+                D_, N_, W_, UQ_, P_, (unsigned long long)s.cyc, (unsigned long long)s.blocks, (unsigned long long)s.s0_hit,
                 (unsigned long long)s.s0_hit_taken, (unsigned long long)s.ovr, (unsigned long long)s.ovr_next, (unsigned long long)s.ovr_hist,
                 (unsigned long long)s.ovr_ras, (unsigned long long)s.ovr_miss, (unsigned long long)s.squashed, (unsigned long long)s.refetch, (unsigned long long)s.s0_stall_ptab);
     std::printf("[BPA_REPAIR] repair=%d repaired=%llu record_missing=%llu\n", repair_, (unsigned long long)rep_ok_, (unsigned long long)rep_miss_);

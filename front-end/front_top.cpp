@@ -126,18 +126,15 @@ static SimContext *front_ctx = nullptr;
 
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
 
-static bpuf::Bpu bpu_instance;
-bpuf::Bpu &front_bpu_instance() { return bpu_instance; }  // fast-warmup replay (EXP-011)
-// BPU_PIPE: pipelined predictor (default off). Its per-cycle decision and transaction are kept in statics (large, only used when on).
+// The pipelined predictor; its per-cycle decision and transaction are kept in statics (large).
 static bpuf::BpuPipe bpu_pipe;
 static bpuf::BpuPipe::Txn g_pipe_txn;
 static bpuf::Decision g_pipe_dec;
 static bool g_pipe_txn_valid = false;
-static const bool g_use_pipe = bpuf::cfg_pipe() > 0;
 void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {  // fast-warmup replay (EXP-011)
-  if (g_use_pipe) bpu_pipe.warm_commit(pc, type, dir, target, rvc); else bpu_instance.warm_commit(pc, type, dir, target, rvc);
+  bpu_pipe.warm_commit(pc, type, dir, target, rvc);
 }
-void front_warm_finish() { if (g_use_pipe) bpu_pipe.warm_finish(); else bpu_instance.warm_finish(); }
+void front_warm_finish() { bpu_pipe.warm_finish(); }
 
 static pc_t sequential_next_pc(pc_t fetch_pc, const wire1_t *inst_valid) {
   uint32_t valid_prefix = 0;
@@ -452,7 +449,7 @@ void FrontComb::read_fifos() {
   // max(0, D-2) cycles old, so a block is never inside the ICache before the decision on its predecessor.
   bool pipe_head_ok = true;
   fetch_addr_in.drop_tail_n = 0;
-  if (g_use_pipe) {
+  {
     bpu_pipe.decide(global_refetch, g_pipe_dec);
     const auto &fa = rd.fetch_addr_fifo_rd_snapshot;
     const int min_age = bpu_pipe.depth() > 2 ? bpu_pipe.depth() - 2 : 0;
@@ -461,7 +458,7 @@ void FrontComb::read_fifos() {
   }
   // FE_RFAST bit1: the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
   bool ptab_bypass = false;
-  if (g_use_pipe && (bpuf::cfg_rfast() & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
+  if ((bpuf::cfg_rfast() & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
     run_bpu();
     bpu_done = true;
     ptab_bypass = bpu_output.PTAB_write_enable;
@@ -506,8 +503,8 @@ void FrontComb::read_fifos() {
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
 void FrontComb::run_bpu() {
   if (bpu_done) return;
-  const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot || (!g_use_pipe && rd.ptab_full_latch_snapshot);
-  bpu_can_run = ((!bpu_stall && (g_use_pipe || !bpu_instance.bubble())) || global_reset || global_refetch);
+  const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot;
+  bpu_can_run = (!bpu_stall || global_reset || global_refetch);
 
   bpuf::InputPayload bpu_input{};
   bpu_input.refetch = global_refetch;
@@ -538,14 +535,11 @@ void FrontComb::run_bpu() {
   PendingBpuSeqTxn &txn = req.bpu_seq_txn;
   txn.valid = true;
   txn.reset = in.reset;
-  txn.inp = bpu_input;
   if (in.reset) {
     bpu_output.fetch_address = RESET_PC;
-  } else if (g_use_pipe) {
+  } else {
     bpu_pipe.comb(bpu_input, g_pipe_dec, bpu_output, g_pipe_txn);
     g_pipe_txn_valid = true;
-  } else {
-    bpu_instance.comb(bpu_input, bpu_output, txn.req);
   }
 }
 
@@ -686,7 +680,7 @@ void FrontComb::write_instruction_fifo() {
 // for a refetch.
 void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address) {
   const bool ptab_can_write =
-      bpu_output.PTAB_write_enable && (g_use_pipe || !rd.ptab_full_latch_snapshot) && !global_reset && !global_refetch;
+      bpu_output.PTAB_write_enable && !global_reset && !global_refetch;
   if (ptab_can_write && !ptab_written) {
     front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in);
     PTAB_out unused_out{};
@@ -768,7 +762,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     lh_new_data = carry_low;
     lh_new_valid = rvc_straddle && !any_taken && (!checker_out.predecode_flush_enable || checker_out.predict_next_fetch_address_corrected == lh_new_pc);
   }
-  if (g_use_pipe) {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
+  {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
     bpuf::PdInfo &pd = pd_next;
     pd = bpuf::PdInfo{};
     pd.valid = true;
@@ -892,9 +886,9 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
       else if (ic_out.perf_miss_busy) pf.feo_cause = PMU_FEO_LOSS_ICMISS;
       else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
       else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
-        if (g_use_pipe && g_pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
-        else if (g_use_pipe && g_pipe_txn.s_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
-        else if (rd.fetch_addr_fifo_full_latch_snapshot || (g_use_pipe && g_pipe_txn.s_stall_ptab)) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
+        if (g_pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
+        else if (g_pipe_txn.s_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
+        else if (rd.fetch_addr_fifo_full_latch_snapshot || g_pipe_txn.s_stall_ptab) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
         else pf.feo_cause = PMU_FEO_LOSS_BPUOTHER;
       }
       else if (!ic_out.icache_read_ready) pf.feo_cause = PMU_FEO_LOSS_ICNOTRDY;
@@ -968,9 +962,8 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   (void)inp;
   (void)reset;
   if (req.bpu_seq_txn.valid) {
-    if (req.bpu_seq_txn.reset) { bpu_instance.reset(); if (g_use_pipe) bpu_pipe.reset(); }
-    else if (g_use_pipe) { if (g_pipe_txn_valid) bpu_pipe.commit(g_pipe_txn); g_pipe_txn_valid = false; }
-    else bpu_instance.commit(req.bpu_seq_txn.inp, req.bpu_seq_txn.req);
+    if (req.bpu_seq_txn.reset) bpu_pipe.reset();
+    else { if (g_pipe_txn_valid) bpu_pipe.commit(g_pipe_txn); g_pipe_txn_valid = false; }
   }
   fetch_address_FIFO_seq_write(&req.fetch_addr_fifo_req);
   instruction_FIFO_seq_write(&req.fifo_req);
