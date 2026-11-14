@@ -80,7 +80,7 @@ struct HistRing {
 };
 
 // Circular return-address stack: pointer + count; repaired from (ptr, cnt, top value).
-struct RasC {
+struct RasC {   // the committed RAS: a circular stack
   target_addr_t st[RAS_DEPTH] = {};
   uint8_t ptr = 0, cnt = 0;  // 5 b, 6 b
   target_addr_t top() const { return st[ptr]; }
@@ -88,11 +88,29 @@ struct RasC {
   void pop() { if (cnt > 0) { ptr = (ptr + RAS_DEPTH - 1) % RAS_DEPTH; cnt--; } }
 };
 
+// The speculative RAS (as XiangShan's): an append-only queue.  A push writes a new slot at tosw (its nos link points to the entry below), a pop only moves
+// tosr back along the nos links, so no entry is overwritten before it is no longer reachable and a checkpoint of the pointers is exact (a circular stack
+// overwrites the slot below the top when a wrong-path push follows a pop).  cnt = depth (saturates at RAS_DEPTH: the oldest entry is forgotten).
+constexpr int RASQ = 64;
+struct RasQ {
+  target_addr_t st[RASQ] = {};
+  uint8_t nos[RASQ] = {};
+  uint8_t tosr = 0, tosw = 0, cnt = 0;
+  target_addr_t top() const { return st[tosr]; }
+  void push(target_addr_t v) { st[tosw] = v; nos[tosw] = tosr; tosr = tosw; tosw = (tosw + 1) % RASQ; if (cnt < RAS_DEPTH) cnt++; }
+  void pop() { if (cnt > 0) { tosr = nos[tosr]; cnt--; } }
+  static RasQ from_commit(const RasC &a) {   // the speculative RAS rebuilt from the committed stack (bottom first)
+    RasQ q;
+    for (int k = int(a.cnt) - 1; k >= 0; k--) q.push(a.st[(a.ptr + RAS_DEPTH - k) % RAS_DEPTH]);
+    return q;
+  }
+};
+
 // Per fetch block checkpoint, stored next to the block in the stage registers (state before the block's S0 push).
 struct Ckpt {
   uint32_t head = 0;                    // 8 b
   uint32_t fh[FH_N_MAX][TN] = {};       // 12 folded histories (<= 11 b each)
-  uint8_t ras_ptr = 0, ras_cnt = 0;     // 5 b, 6 b
+  uint8_t ras_tosr = 0, ras_tosw = 0, ras_cnt = 0;   // the speculative RAS: read / write pointers (6 b each), depth
   target_addr_t ras_top = 0;            // 32 b
   uint8_t lp_cnt = 0;                   // 4 b: consecutive S0 issues of the same single-block loop (BPO_LOOP)
 };
@@ -232,7 +250,8 @@ class BpuPipe {
     uint8_t epoch = 0;                 // BPA_REPAIR: bumped whenever spec is overwritten by arch (the history ring is re-based: older checkpoints no longer index it)
     Blk R[MAXD];                       // R[0] = S1 ... R[D-1] = S_D
     HistRing spec, arch;
-    RasC sras, aras;
+    RasQ sras;
+    RasC aras;
     UpdEnt uq[MAXUQ];
     uint8_t uq_n = 0;
   };
@@ -293,17 +312,17 @@ class BpuPipe {
   static uint32_t win_of(pc_t pc) { return pc >> 5; }
   static uint32_t bb_of(pc_t pc, int n) { return win_of(pc) % n; }
 
-  static Ckpt take_ckpt(const HistRing &h, const RasC &r) {
+  static Ckpt take_ckpt(const HistRing &h, const RasQ &r) {
     Ckpt c;
     c.head = h.head;
     std::memcpy(c.fh, h.fh, sizeof(c.fh));
-    c.ras_ptr = r.ptr; c.ras_cnt = r.cnt; c.ras_top = r.top();
+    c.ras_tosr = r.tosr; c.ras_tosw = r.tosw; c.ras_cnt = r.cnt; c.ras_top = r.top();
     return c;
   }
-  static void restore(const Ckpt &c, HistRing &h, RasC &r) {
+  static void restore(const Ckpt &c, HistRing &h, RasQ &r) {
     h.head = c.head;
     std::memcpy(h.fh, c.fh, sizeof(h.fh));
-    r.ptr = c.ras_ptr; r.cnt = c.ras_cnt; r.st[r.ptr] = c.ras_top;
+    r.tosr = c.ras_tosr; r.tosw = c.ras_tosw; r.cnt = c.ras_cnt;   // pointers only: the queue keeps what they reach
   }
   uint8_t lp_next(uint8_t c, pc_t base, bool taken, pc_t next, uint8_t type) const {
     if (!loop_) return 0;
@@ -317,7 +336,7 @@ class BpuPipe {
     const uint8_t b = hsym(bpc, tgt);
     for (int i = 0; i < hsym_; i++) h.push((b >> i) & 1);
   }
-  static void push_bits(uint8_t n, uint8_t bits, uint8_t ras_op, target_addr_t ras_val, HistRing &h, RasC &r) {
+  static void push_bits(uint8_t n, uint8_t bits, uint8_t ras_op, target_addr_t ras_val, HistRing &h, RasQ &r) {
     for (int i = 0; i < n; i++) h.push((bits >> i) & 1);
     if (ras_op == 1) r.push(ras_val); else if (ras_op == 2) r.pop();
   }
@@ -537,10 +556,11 @@ class BpuPipe {
   // BPA_REPAIR: rebuild spec history / RAS = checkpoint of the mispredicted branch's block + earlier slots (not taken) + the branch's actual outcome
   bool repair_blk(const InputPayload &in, State &n) const {
     const RecP &rc = rec_[in.rf_blk & 255];
-    const uint32_t rslot = (in.rf_pc - rc.base) >> SLOT_SHIFT;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
-    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && rc.base + SLOT_BYTES * rslot == in.rf_pc)) return false;
+    // a carried instruction (RVC=1: its first halfword is the last slot of the previous block) is completed in slot 0 of this block, its pc is the block's base - SLOT_BYTES
+    const bool carried = rc.valid && in.rf_pc + SLOT_BYTES == rc.base;
+    const uint32_t rslot = carried ? 0 : (in.rf_pc - rc.base) >> SLOT_SHIFT;   // slot within the block (the back end's slot is the offset in the fetch group, which differs for the second block of a pair)
+    if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && (carried || rc.base + SLOT_BYTES * rslot == in.rf_pc))) return false;
     restore(rc.ck, n.spec, n.sras);
-    n.sras = n.aras;   // history repair only, RAS from the committed state
     const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + ilen_of(in.rf_is_rvc)) : true;
     if (tk) { const uint8_t sy = hsym(in.rf_pc, in.refetch_address); for (int k = 0; k < hsym_; k++) n.spec.push((sy >> k) & 1); }
     if (br_call(in.rf_type)) n.sras.push(in.rf_pc + ilen_of(in.rf_is_rvc)); else if (in.rf_type == BR_RET) n.sras.pop();
@@ -686,7 +706,7 @@ class BpuPipe {
     }
     n.tr_v = tmp.tr_v; n.tr_start = tmp.tr_start; n.tr_expect = tmp.tr_expect; n.tr_nd = tmp.tr_nd; n.lt_v = tmp.lt_v; n.lt_start = tmp.lt_start; n.lt_slot = tmp.lt_slot; n.lt_cnt = tmp.lt_cnt;
   }
-  void warm_finish() { (*stp_).spec = (*stp_).arch; (*stp_).sras = (*stp_).aras; }
+  void warm_finish() { (*stp_).spec = (*stp_).arch; (*stp_).sras = RasQ::from_commit((*stp_).aras); }
 
   BpuPipe() { reset(); }
   const Stats &stats() const { return stats_; }
@@ -799,7 +819,7 @@ class BpuPipe {
     }
 
     // S0: look up the block starting at pc with the given speculative history / RAS, enter it into S1 and push the fetch address
-    auto s0_issue = [&](pc_t pc, const HistRing &sp, const RasC &sr, uint8_t lpc) {
+    auto s0_issue = [&](pc_t pc, const HistRing &sp, const RasQ &sr, uint8_t lpc) {
       Blk &b = n.R[0];   // n.R[0] is Blk{} here (cleared above; at most one block is issued per cycle)
       b.valid = true;
       b.base = pc;
@@ -821,7 +841,7 @@ class BpuPipe {
         const int lenA = b.g.slot + 1;
         const pc_t T = b.g.next;
         if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
-          HistRing sp2 = sp; RasC sr2 = sr;
+          HistRing sp2 = sp; RasQ sr2 = sr;
           push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, sp2, sr2);
           const uint8_t lp2 = n.lp_cnt;
           BlkB c;   // the second block is a normal fetch block (natural end), it must fit into the slots the first one leaves
@@ -903,7 +923,7 @@ class BpuPipe {
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
       n.lp_cnt = lp_next(d.ock.lp_cnt, d.obase, d.oout.taken, d.oout.next, d.oout.type);
-      if ((cfg_bfast() & 2) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit1
+      if ((cfg_bfast() & 2) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit1
       int why; disagree(d.oout, d.og, why);
       t.s_pair_ovr_b = d.ovr_b; t.s_pair_unfit = d.pair_unfit; t.s_ovr_next = why == 1; t.s_ovr_hist = why == 2; t.s_ovr_ras = why == 3; t.s_ovr_miss = !d.og.hit;
       if (why == 1) {
@@ -922,7 +942,7 @@ class BpuPipe {
       }
     } else if (l1_override((*stp_).R[0], n, t)) {
       // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
-      if ((cfg_bfast() & 1) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit0
+      if ((cfg_bfast() & 1) && in.icache_read_ready && int(in.ptab_size) + 1 < PTAB_SIZE - 1) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(n.pc, sp, sr, n.lp_cnt); }   // FE_BFAST bit0
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
       int inflight = 0;
@@ -948,10 +968,10 @@ class BpuPipe {
         t.s_pd_restore = 1;
       } else if (in.rf_valid && repair_blk(in, n)) {
         t.s_rep_ok = 1;
-      } else { n.spec = n.arch; n.sras = n.aras; t.s_rep_miss = in.rf_valid; n.epoch = (*stp_).epoch + 1; }
+      } else { n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); t.s_rep_miss = in.rf_valid; n.epoch = (*stp_).epoch + 1; }
       n.pq_n = 0;
       n.lp_cnt = 0;
-      if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
+      if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
     update_queue(in, n, t);
     // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when no
