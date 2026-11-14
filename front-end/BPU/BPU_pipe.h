@@ -402,7 +402,7 @@ class BpuPipe {
       o.meta.ps_info[i] = ps_pack(ty, 0, tp.used_alt);
       if (taken && !taken_found) {
         int src = 0; bool itt = false;
-        target_addr_t tgt = Btb::select(bpc, ty, r.bt[i], &src, tp.tag, &itt);
+        target_addr_t tgt = Btb::select(bpc, ty, r.bt[i], &src, tp.tag, &itt, pc + ilen_of(rvc));   // a BTB miss falls through (the real pc, not the bank-local one)
         if (ty == BR_RET && b.ck.ras_cnt > 0) { tgt = b.ck.ras_top; src = 7; }
         o.meta.ps_info[i] = ps_pack(ty, src, tp.used_alt) | (itt ? 0x80 : 0);
         o.next = tgt; o.slot = i; o.type = ty; o.taken = true; o.rvc = rvc;
@@ -952,6 +952,13 @@ class BpuPipe {
       if ((cfg_rfast() & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasC sr = n.sras; s0_issue(in.refetch_address, sp, sr, 0); }   // FE_RFAST bit0
     }
     update_queue(in, n, t);
+    // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when the
+    // bank has no write this cycle (otherwise the stale entry causes another predecode flush and the clear is retried).
+    if (in.pd.valid && in.pd.nb_valid && t.n_type < CW + MAXP && t.p_ty[bank_of(in.pd.nb_pc)].wr == 0) {
+      TypeWr &w = t.type[t.n_type];
+      type_.update(in.pd.nb_pc, BR_NONCTL, w);
+      if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }
+    }
     // uBTB training: head of the train queue is written, new events are appended behind it
     if ((*stp_).tq_n > 0) {
       const UbEv &e = (*stp_).tq[0];

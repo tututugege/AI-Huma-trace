@@ -187,7 +187,20 @@ static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool 
     drop(i);
   }
   const int last = r.n - 1;   // the last slot of the group: a 32-bit start there lacks its upper half
-  if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last]) {
+  // a predicted-taken straddler whose upper half is in the same cache line is delivered complete: dropping it would lose the prediction (the fetch has
+  // already moved to the target, nothing would ever complete the instruction) and cost a predecode flush
+  if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last] &&
+      ptab.predict_dir[last] && head.up_ok) {
+    const uint32_t word = (uint32_t(head.up16) << 16) | head.raw16[last];
+    head.instructions[last] = word;
+    predecode_in in{word, head.pc[last]};
+    predecode_read_data rd{};
+    PredecodeResult res{};
+    predecode_seq_read(&in, &rd);
+    predecode_comb(rd, res);
+    head.predecode_type[last] = res.type;
+    head.predecode_target_address[last] = res.target_address;
+  } else if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last]) {
     r.straddle = true;
     r.low = head.raw16[last];
     if (ptab.predict_dir[last]) g_rvc_stats.taken_nonstart++;
@@ -623,11 +636,18 @@ void FrontComb::write_instruction_fifo() {
     fused = ok;
     if (!ok) for (int i = pr.a_len; i < FETCH_WIDTH; i++) gv[i] = false;   // the group stays the first block only; the PTAB entry (with the second block) then fails the check below
   }
+  uint16_t rvc_up16 = 0; bool rvc_up_ok = false;
   if constexpr (kRvc) {   // C910-style carry: the window of the last slot of a group has no upper half (a 32-bit instruction starting there is carried to the next group)
     int nv = 0;
     while (nv < FETCH_WIDTH && gv[nv]) nv++;
-    if (nv > 0) grp[nv - 1] &= 0xffffu;   // (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line)
+    if (nv > 0) {
+      // the upper half of the last window is in the same cache line as the slot: the fetch can deliver it with the group
+      rvc_up16 = uint16_t(grp[nv - 1] >> 16);
+      rvc_up_ok = ((gpc[nv - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) != 0;
+      grp[nv - 1] &= 0xffffu;   // (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line)
+    }
   }
+  fifo_in.up16 = rvc_up16; fifo_in.up_ok = rvc_up_ok;
   for (int i = 0; i < FETCH_WIDTH; i++) {
     fifo_in.raw16[i] = uint16_t(grp[i] & 0xffffu);
     fifo_in.fetch_group[i] = grp[i];
@@ -779,6 +799,8 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     pd.valid = true;
     pd.flush = predecode_flush;
     if (predecode_flush) {
+      for (int i = 0; i < FETCH_WIDTH; i++)   // a taken prediction on an instruction that is not a branch (a dropped slot is not one: the carried instruction may be)
+        if (fifo_head.inst_valid[i] && ptab_head.predict_dir[i] && fifo_head.predecode_type[i] == PREDECODE_NON_BRANCH) { pd.nb_valid = true; pd.nb_pc = fifo_head.pc[i]; break; }
       for (int i = 0; i < FETCH_WIDTH; i++) {
         if (!fifo_head.inst_valid[i]) continue;
         const predecode_type_t ty = fifo_head.predecode_type[i];

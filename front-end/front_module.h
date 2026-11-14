@@ -39,6 +39,8 @@ struct instruction_FIFO_entry {
   wire1_t start_a[FETCH_WIDTH];
   wire1_t start_b[FETCH_WIDTH];
   uint16_t raw16[FETCH_WIDTH] = {};   // RVC=1: the first halfword of the window at each slot, as fetched (before expansion)
+  uint16_t up16 = 0;                  // RVC=1: the upper halfword of the window of the group's last slot (before the carry mask) ...
+  wire1_t up_ok = 0;                  // ... and whether it is in the same cache line as the slot (the fetch can deliver it with the group)
 };
 
 struct instruction_FIFO_read_data {
