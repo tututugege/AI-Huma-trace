@@ -123,7 +123,6 @@ struct PreIssueIO {
 };
 
 // Backward-compatible alias for existing modules.
-using PreIduIssueIO = PreIssueIO;
 
 struct RobCommitIO {
 

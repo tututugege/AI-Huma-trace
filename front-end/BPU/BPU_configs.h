@@ -33,7 +33,6 @@ static_assert(TAGE_IDX_WIDTH > 0 && TAGE_IDX_WIDTH <= 16,
 
 
 
-#define BPU_TYPE_IDX_MASK (BPU_TYPE_ENTRY_NUM - 1)
 
 
 
@@ -70,13 +69,11 @@ static_assert(TAGE_IDX_WIDTH > 0 && TAGE_IDX_WIDTH <= 16,
 
 
 
-#define TAGE_SC_IDX_MASK (TAGE_SC_ENTRY_NUM - 1)
 
 
 
 
 
-#define TAGE_SC_PATH_MASK ((1u << TAGE_SC_PATH_BITS) - 1u)
 
 
 
@@ -105,7 +102,6 @@ static_assert(is_power_of_two_u64(TC_ENTRY_NUM),
 static_assert(TC_ENTRY_NUM <= (1u << 16),
               "TC_ENTRY_NUM too large for current tc_idx_t typing");
 
-#define TAGE_TAG_MASK ((1 << TAGE_TAG_WIDTH) - 1)
 #define TAGE_IDX_MASK ((1 << TAGE_IDX_WIDTH) - 1)
 #define TAGE_BASE_IDX_MASK ((1 << TAGE_BASE_IDX_WIDTH) - 1)
 
@@ -117,10 +113,6 @@ static_assert(TC_ENTRY_NUM <= (1u << 16),
 
 #define BTB_IDX_MASK    (BTB_ENTRY_NUM - 1)
 #define BTB_TAG_MASK    ((1 << BTB_TAG_LEN) - 1)
-#define BTB_TYPE_IDX_MASK (BTB_TYPE_ENTRY_NUM - 1)
-#define BHT_IDX_MASK    (BHT_ENTRY_NUM - 1)
-#define TC_ENTRY_MASK   (TC_ENTRY_NUM - 1)
-#define TC_TAG_MASK     ((1 << TC_TAG_LEN) - 1)
 
 // Branch Types
 #define BR_DIRECT 0 // only cond now

@@ -394,7 +394,6 @@ private:
   uint32_t llc_mem_read_issue_seen_addr_ = 0;
   uint8_t llc_mem_read_issue_seen_size_ = 0;
   ARIssueMeta_t ar_issue_c[2] = {};
-  static constexpr uint32_t kMappedLlcWindowBytes = 4u << 20;
 };
 
 } // namespace axi_interconnect

@@ -9,7 +9,6 @@
 
 using xlen_t = refcpu_xlen_t;
 using sxlen_t = int64_t;
-constexpr unsigned kXlen = XLEN;
 
 // the low 32 bits of a value that must fit the model's 32-bit pc / address fields
 inline uint32_t narrow_pc(xlen_t v, const char *what = "pc") {

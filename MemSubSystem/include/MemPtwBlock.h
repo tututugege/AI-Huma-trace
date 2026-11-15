@@ -3,7 +3,6 @@
 #include "PtwWalkPort.h"
 #include "ref.h"
 #include "types.h"
-#define PTW_COMPACT_CORE_KERNEL_TOP_EVENT_SLOTS LSU_LDU_COUNT
 #include <array>
 #include <cstddef>
 #include <cstdio>

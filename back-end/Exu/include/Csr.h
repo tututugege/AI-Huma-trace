@@ -4,8 +4,6 @@
 #include <cstdlib>
 #include <cstdio>
 
-#define M_MODE_ECALL 0xb
-#define CSR_W 0b01
 #define CSR_S 0b10
 #define CSR_C 0b11
 

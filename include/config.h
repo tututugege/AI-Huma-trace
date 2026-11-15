@@ -10,7 +10,6 @@
 #if XLEN != 64
 #error "only XLEN=64 is supported on main (rv32: branch rv32-legacy)"
 #endif
-constexpr int XLEN_BITS = XLEN;
 
 // F/D (EXP-030): the standard floating-point extensions, rv32 and rv64 (the function model's FP; Zfinx no longer exists).  The build
 // passes -DFP=<0|1> (default 1); the same value must be used for librefcpu.a.  FP=0 is a core without floating point.
@@ -309,8 +308,6 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #define CFG_LSU_MS_DATA 7
 #endif
 constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
-constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
-constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
 // Front-end fast paths (EXP-019, docs/history/FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Integrated defaults: RFAST 15 (all four bits), BFAST 0; envs FE_RFAST / FE_BFAST override. FE_PAIR / FE_IPF are model-only, env only, default 0.
 //   FE_RFAST bit0 BPU issues the first block in the redirect cycle, bit1 PTAB write-to-read bypass, bit2 I-cache ready right after a
 //   redirect, bit3 pre-IDU buffer bypass.  FE_BFAST bit0 / bit1: the corrected block issues in the same cycle after an S1 (L1) / S_D override.
@@ -721,11 +718,6 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
 };
 
 // per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)
-constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
-constexpr int IQ_LD_SIZE = CFG_LD_IQ_SIZE;
-constexpr int IQ_STA_SIZE = CFG_STA_IQ_SIZE;
-constexpr int IQ_STD_SIZE = CFG_STD_IQ_SIZE;
-constexpr int IQ_BR_SIZE = CFG_BR_IQ_SIZE;
 // per-queue enqueue widths (dispatch write ports per cycle), exported for the RTL config package
 constexpr int IQ_INT_ENQ_WIDTH = CFG_INT_IQ_ENQ_WIDTH;
 constexpr int IQ_LD_ENQ_WIDTH = CFG_LD_IQ_ENQ_WIDTH;
@@ -751,10 +743,7 @@ constexpr int MAX_IQ_SIZE = calculate_max_iq_size();
 constexpr int IQ_READY_NUM_WIDTH = bit_width_for_count(MAX_IQ_SIZE + 1);
 
 
-constexpr int LSU_LOAD_WINDOW_WIDTH = LSU_LDU_COUNT * 5;
-constexpr int LSU_STORE_WINDOW_WIDTH = LSU_STA_COUNT * 5;
 constexpr int LSU_PEPLAY_WAIT_CYCLES = 4;
-constexpr int LSU_REPLAY_WAIT_CYCLES_WIDTH = clog2(LSU_PEPLAY_WAIT_CYCLES+1);
 constexpr int LSU_WAIT_MSHR_FILL = 1;
 
 

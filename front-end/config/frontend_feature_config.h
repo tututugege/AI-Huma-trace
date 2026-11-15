@@ -12,7 +12,6 @@
 #endif
 
 // BPU top-level switches
-#define SPECULATIVE_ON
 // 统一使用全局 config.h 中的 constexpr 宽度配置，避免前后端不一致。
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
 static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
@@ -23,7 +22,6 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 // RAS feature switch:
 // - keep this macro defined   => enable RAS prediction for BR_RET
 // - comment out this macro    => disable RAS and fallback to BTB target
-#define ENABLE_BPU_RAS
 #ifndef RAS_DEPTH
 #define RAS_DEPTH 32
 #endif

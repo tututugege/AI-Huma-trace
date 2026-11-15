@@ -19,7 +19,6 @@ public:
   static constexpr uint32_t kUartRegRxTxDll = 0x0u;
   static constexpr uint32_t kUartRegIerDlm = 0x1u;
   static constexpr uint32_t kUartRegIirFcr = 0x2u;
-  static constexpr uint32_t kUartRegLcr = 0x3u;
   static constexpr uint32_t kUartRegLsr = 0x5u;
   static constexpr uint8_t kUartLcrDlab = 0x80u;
   static constexpr uint8_t kUartLsrThre = 0x20u;
@@ -357,9 +356,6 @@ private:
   static constexpr uint32_t kOcsdcResponse2 = 0x0c;
   static constexpr uint32_t kOcsdcResponse3 = 0x10;
   static constexpr uint32_t kOcsdcResponse4 = 0x14;
-  static constexpr uint32_t kOcsdcControl = 0x1c;
-  static constexpr uint32_t kOcsdcTimeout = 0x20;
-  static constexpr uint32_t kOcsdcClockDivider = 0x24;
   static constexpr uint32_t kOcsdcSoftwareReset = 0x28;
   static constexpr uint32_t kOcsdcPowerControl = 0x2c;
   static constexpr uint32_t kOcsdcCapability = 0x30;
@@ -372,8 +368,6 @@ private:
   static constexpr uint32_t kOcsdcDstSrcAddr = 0x60;
 
   static constexpr uint32_t kCmdIntCc = 0x0001;
-  static constexpr uint32_t kCmdIntEi = 0x0002;
-  static constexpr uint32_t kCmdIntCte = 0x0004;
   static constexpr uint32_t kDatIntCc = 0x0001;
   static constexpr uint32_t kDatIntTrs = 0x0001;
   static constexpr uint32_t kXpsIsr = 0x00;

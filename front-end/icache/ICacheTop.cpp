@@ -18,9 +18,6 @@
 #include "config.h"
 #include "include/icache_module.h"
 
-#define ICACHE_TOP_TRUE_GLUE_KERNEL_FETCH_WIDTH FETCH_WIDTH
-#define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_WORDS (ICACHE_LINE_SIZE / SLOT_BYTES)   // slots per line
-#define ICACHE_TOP_TRUE_GLUE_KERNEL_LINE_SIZE ICACHE_LINE_SIZE
 
 
 #if __has_include("AXI_Interconnect_IO.h")

@@ -38,12 +38,8 @@
 #define ICACHE_USE_SRAM_MODEL 0
 // Fixed latency (cycles). Latency=1 means data available next cycle.
 // Latency=0 is treated as 1 when SRAM model is enabled.
-#define ICACHE_SRAM_FIXED_LATENCY 1
 // Random latency enable (1=random, 0=fixed)
-#define ICACHE_SRAM_RANDOM_DELAY 0
 // Random latency range (inclusive). Values <1 are clamped to 1.
-#define ICACHE_SRAM_RANDOM_MIN 1
-#define ICACHE_SRAM_RANDOM_MAX 4
 // Unified lookup latency interface:
 // - 0: register-style lookup (same-cycle set read path)
 // - 1..N: SRAM-style lookup with N-cycle response latency model
@@ -63,13 +59,7 @@ constexpr uint32_t icache_constexpr_ceil_log2(uint32_t value,
 
 // Compatibility aliases for the packed ICache interface. The source of truth
 // remains include/config.h; the V1 names are only kept for generated glue.
-static constexpr uint32_t ICACHE_V1_OFFSET_BITS = ICACHE_OFFSET_BITS;
-static constexpr uint32_t ICACHE_V1_INDEX_BITS = ICACHE_INDEX_BITS;
-static constexpr uint32_t ICACHE_V1_SET_NUM = ICACHE_SET_NUM;
-static constexpr uint32_t ICACHE_V1_WORD_BITS = ICACHE_WORD_BITS;
-static constexpr uint32_t ICACHE_V1_WORD_BYTES = ICACHE_V1_WORD_BITS / 8u;
 static constexpr uint32_t ICACHE_V1_WORD_NUM = ICACHE_WORD_NUM;
-static constexpr uint32_t ICACHE_V1_TAG_BITS = ICACHE_TAG_BITS;
 static constexpr uint32_t ICACHE_V1_WAYS = ICACHE_WAY_NUM;
 static constexpr uint32_t ICACHE_V1_WAY_BITS =
     icache_constexpr_ceil_log2(ICACHE_V1_WAYS);

@@ -5,8 +5,6 @@
 
 #define AXI_DUAL_PORT_MMIO_TOTAL_SIZE 3u
 #define AXI_DUAL_PORT_AXI_SIZE_32B 2u
-#define AXI_DUAL_PORT_AXI_SIZE_256B 5u
-#define AXI_DUAL_PORT_DDR_BEAT_BYTES 32u
 #define AXI_DUAL_PORT_AXI_ID_MASK_FOR_WIDTH(width) \
   ((uint32_t)((width) >= 8u ? 0xFFu : ((1u << (width)) - 1u)))
 

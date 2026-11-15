@@ -3,8 +3,6 @@
 #include "xlen_cast.h"
 #include <cstdint>
 
-#define RISCV_MODE_U 0b00
-#define RISCV_MODE_S 0b01
 #define RISCV_MODE_M 0b11
 
 #define BITMASK(bits) ((1ull << (bits)) - 1)

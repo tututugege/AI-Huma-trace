@@ -14,7 +14,6 @@ using std::hex;
 using std::string;
 
 // Legacy branch-mask alias used across LSU/dispatch paths.
-using mask_t = wire<BR_MASK_WIDTH>;
 
 // ==========================================
 // [Instruction & Pipeline Definitions]
@@ -52,13 +51,8 @@ constexpr uint8_t ADD = 0b00000;
 constexpr uint8_t SWAP = 0b00001;
 constexpr uint8_t LR = 0b00010;
 constexpr uint8_t SC = 0b00011;
-constexpr uint8_t XOR = 0b00100;
 constexpr uint8_t OR = 0b01000;
-constexpr uint8_t AND = 0b01100;
-constexpr uint8_t MIN = 0b10000;
 constexpr uint8_t MAX = 0b10100;
-constexpr uint8_t MINU = 0b11000;
-constexpr uint8_t MAXU = 0b11100;
 } // namespace AmoOp
 
 // ==========================================

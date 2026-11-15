@@ -8,7 +8,6 @@
 #include "config.h"
 #include <cstdint>
 
-constexpr int LDQ_STQ_IDX_WIDTH = clog2(LDQ_SIZE + STQ_SIZE);
 constexpr int MAX_IDX_WIDTH = clog2(std::max(LDQ_SIZE, STQ_SIZE));
 class SimContext;
 

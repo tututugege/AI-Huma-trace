@@ -78,14 +78,12 @@ constexpr uint16_t MAX_READ_TRANSACTION_WORDS =
 // Master IDs
 constexpr uint8_t MASTER_ICACHE = 0;
 constexpr uint8_t MASTER_DCACHE_R = 1;
-constexpr uint8_t MASTER_UNCORE_LSU_R = 2;
 constexpr uint8_t MASTER_EXTRA_R = 3;
 
 constexpr uint8_t MASTER_DCACHE_W = 0;
 constexpr uint8_t MASTER_UNCORE_LSU_W = 1;
 
 // Legacy aliases kept for source compatibility while simulator wiring migrates.
-constexpr uint8_t MASTER_MMU = MASTER_UNCORE_LSU_R;
 constexpr uint8_t MASTER_EXTRA_W = MASTER_UNCORE_LSU_W;
 
 // ============================================================================

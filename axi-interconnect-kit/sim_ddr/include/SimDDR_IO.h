@@ -71,14 +71,11 @@ static_assert(sizeof(axi_strb_t) >= AXI_STRB_STORAGE_BYTES,
 // ============================================================================
 constexpr uint8_t AXI_BURST_FIXED = 0b00;
 constexpr uint8_t AXI_BURST_INCR = 0b01;
-constexpr uint8_t AXI_BURST_WRAP = 0b10;
 
 // ============================================================================
 // AXI4 Response Types
 // ============================================================================
 constexpr uint8_t AXI_RESP_OKAY = 0b00;
-constexpr uint8_t AXI_RESP_EXOKAY = 0b01;
-constexpr uint8_t AXI_RESP_SLVERR = 0b10;
 constexpr uint8_t AXI_RESP_DECERR = 0b11;
 
 // ============================================================================
