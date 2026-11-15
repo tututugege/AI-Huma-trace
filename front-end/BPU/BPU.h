@@ -92,17 +92,6 @@ struct Hist {
   }
 };
 
-struct Ras {
-  target_addr_t stack[RAS_DEPTH] = {};
-  int count = 0;
-  void push(target_addr_t v) {
-    if (count < RAS_DEPTH) { stack[count++] = v; return; }
-    for (int i = 1; i < RAS_DEPTH; i++) stack[i - 1] = stack[i];
-    stack[RAS_DEPTH - 1] = v;
-  }
-  void pop() { if (count > 0) count--; }
-};
-
 // ---------------------------------------------------------------------------
 // TAGE direction predictor (one per bank)
 // ---------------------------------------------------------------------------

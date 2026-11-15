@@ -12,15 +12,6 @@ static bool dcache_req_id_is_lsu(uint32_t req_id) {
 } // namespace
 
 namespace {
-enum class L1DReplayReason {
-    Conflict,
-    BankConflict,
-    MshrFull,
-    WaitMshrHit,
-    WaitMshrFirstAlloc,
-    WaitMshrFillReq,
-    WaitMshrFillWrite,
-};
 
 static bool l1d_perf_is_lsu_req(uint32_t req_id) {
     return dcache_req_id_is_lsu(req_id);

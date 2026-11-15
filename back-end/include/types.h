@@ -180,11 +180,6 @@ inline InstEntry Uop::to_inst_entry(wire<1> valid) const {
   return e;
 }
 
-struct UopEntry {
-  wire<1> valid;
-  MicroOp uop;
-};
-
 struct WakeInfo {
   wire<1> valid;
   wire<PRF_IDX_WIDTH> preg;

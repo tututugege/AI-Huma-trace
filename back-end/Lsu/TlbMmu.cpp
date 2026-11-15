@@ -3,13 +3,7 @@
 #include "ref.h"
 
 namespace {
-#ifndef CONFIG_ITLB_FOCUS_VADDR_BEGIN
-#define CONFIG_ITLB_FOCUS_VADDR_BEGIN 0u
-#endif
 
-#ifndef CONFIG_ITLB_FOCUS_VADDR_END
-#define CONFIG_ITLB_FOCUS_VADDR_END 0u
-#endif
 
 
 // Sv32 (rv32): 2 levels of 10-bit VPNs, 9-bit ASID in satp[30:22]; Sv39 (rv64): 3 levels of 9-bit VPNs, 16-bit ASID in satp[59:44]

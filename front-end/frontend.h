@@ -10,9 +10,6 @@
 #ifndef RESET_PC
 #define RESET_PC 0x00000000
 #endif
-#ifndef PMEM_OFFSET
-#define PMEM_OFFSET RESET_PC
-#endif
 
 /* ICache model selection:
  * - default: True ICache

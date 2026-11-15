@@ -723,9 +723,6 @@ static_assert(AXI_KIT_MMIO_SIZE == CONFIG_AXI_KIT_MMIO_SIZE,
 #define DCACHE_LOG AXI_KIT_DCACHE_LOG
 #endif
 
-#ifndef UART_BASE
-#define UART_BASE AXI_KIT_UART_BASE
-#endif
 
 #ifndef MMIO_BASE
 #define MMIO_BASE AXI_KIT_MMIO_BASE

@@ -365,16 +365,6 @@ struct PtwWalkResp {
   wire<8> leaf_level = {}; // Sv32: 1 = L1 (megapage) leaf, 0 = L0 leaf; Sv39: 2 = 1 GiB, 1 = 2 MiB, 0 = 4 KiB
 };
 
-struct PtwMemRespIO {
-  wire<1> valid = {};
-  wire<XLEN> data = {};   // the PTE: one word on rv32, two on rv64
-};
-
-struct PtwWalkRespIO {
-  wire<1> valid = {};
-  PtwWalkResp resp = {};
-};
-
 struct MemReqMeta {
   wire<ROB_IDX_WIDTH> rob_idx;
 
@@ -386,32 +376,6 @@ struct MemRespMeta {
   bool is_cache_miss;
 
   MemRespMeta() { std::memset(this, 0, sizeof(MemRespMeta)); }
-};
-
-struct MemReqIO {
-
-  wire<1> en = {};
-  wire<1> wen = {};
-  wire<32> addr = {};
-  wire<32> wdata = {};
-  wire<8> wstrb = {};
-
-  MemReqMeta meta = {};
-};
-
-struct MemReadyIO {
-
-  wire<1> ready = {};
-};
-
-struct MemRespIO {
-
-  wire<1> wen = {};
-  wire<1> valid = {};
-  wire<32> data = {};
-
-  wire<32> addr = {};
-  MemRespMeta meta = {};
 };
 
 struct PeripheralReqIO {

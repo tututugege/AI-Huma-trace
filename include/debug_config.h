@@ -104,29 +104,14 @@ constexpr uint64_t MMU_LOG_START = LOG_START;
 
 // Perf snapshot at a specific sim-time(cycle):
 // 0 = disabled, N > 0 = capture committed(total/load/store) at cycle N.
-#ifndef CONFIG_PERF_SNAPSHOT_SIM_TIME
-#define CONFIG_PERF_SNAPSHOT_SIM_TIME 0
-#endif
 
 // Periodic perf snapshots:
 // - INTERVAL=0: disabled
 // - BEGIN/END: capture window (inclusive)
 // - MAX: max snapshot records kept (avoid huge logs)
-#ifndef CONFIG_PERF_PERIODIC_SNAPSHOT_INTERVAL
-#define CONFIG_PERF_PERIODIC_SNAPSHOT_INTERVAL 0
-#endif
 
-#ifndef CONFIG_PERF_PERIODIC_SNAPSHOT_BEGIN
-#define CONFIG_PERF_PERIODIC_SNAPSHOT_BEGIN 26000
-#endif
 
-#ifndef CONFIG_PERF_PERIODIC_SNAPSHOT_END
-#define CONFIG_PERF_PERIODIC_SNAPSHOT_END 35000
-#endif
 
-#ifndef CONFIG_PERF_PERIODIC_SNAPSHOT_MAX
-#define CONFIG_PERF_PERIODIC_SNAPSHOT_MAX 256
-#endif
 
 
 // Diagnostic switch:
@@ -138,32 +123,11 @@ constexpr uint64_t MMU_LOG_START = LOG_START;
 #define CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN 0
 #endif
 
-#ifndef CONFIG_DIFF_DEBUG_MEMTRACE_DUMP_COUNT
-#define CONFIG_DIFF_DEBUG_MEMTRACE_DUMP_COUNT 5000
-#endif
 
-#ifndef CONFIG_DIFF_DEBUG_MEMTRACE_BUFFER_SIZE
-#define CONFIG_DIFF_DEBUG_MEMTRACE_BUFFER_SIZE 262144
-#endif
 
-#ifndef CONFIG_DEADLOCK_REPLAY_TRACE_DUMP_COUNT
-#define CONFIG_DEADLOCK_REPLAY_TRACE_DUMP_COUNT 0
-#endif
 
-#ifndef CONFIG_DEADLOCK_REPLAY_TRACE_BUFFER_SIZE
-#define CONFIG_DEADLOCK_REPLAY_TRACE_BUFFER_SIZE 131072
-#endif
 
-#ifndef CONFIG_DEBUG_SATP_WRITE_LOG_MAX
-#define CONFIG_DEBUG_SATP_WRITE_LOG_MAX 32
-#endif
 
-#ifndef CONFIG_DEBUG_PTW_WALK_RESP_DETAIL_MAX
-#define CONFIG_DEBUG_PTW_WALK_RESP_DETAIL_MAX 128
-#endif
 
 // Lightweight LSU STQ invariant checks.
 // Set to 1 when debugging queue/pointer consistency issues.
-#ifndef LSU_LIGHT_ASSERT
-#define LSU_LIGHT_ASSERT 0
-#endif

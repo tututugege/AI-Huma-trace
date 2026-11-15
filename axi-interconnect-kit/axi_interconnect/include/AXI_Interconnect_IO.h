@@ -259,15 +259,4 @@ struct WriteMasterPort_t {
 // AXI-Interconnect Combined IO
 // ============================================================================
 
-struct AXI_Interconnect_IO_t {
-  // Upstream: Read Masters (3 ports)
-  ReadMasterPort_t read_masters[NUM_READ_MASTERS];
-
-  // Upstream: Write Masters (2 ports)
-  WriteMasterPort_t write_masters[NUM_WRITE_MASTERS];
-
-  // Downstream: AXI4 to SimDDR
-  // (Use SimDDR_IO_t from sim_ddr module)
-};
-
 } // namespace axi_interconnect

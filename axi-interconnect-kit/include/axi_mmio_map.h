@@ -16,9 +16,6 @@ static constexpr AxiMmioRange kAxiMmioRanges[] = {
 #define MMIO_RANGE_BASE MMIO_BASE
 #endif
 
-#ifndef MMIO_RANGE_SIZE
-#define MMIO_RANGE_SIZE MMIO_SIZE
-#endif
 
 static inline bool is_mmio_addr(uint32_t addr) {
   for (const auto &range : kAxiMmioRanges) {
