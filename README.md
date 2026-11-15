@@ -12,7 +12,7 @@ Every change must keep the gate's cycle counts (`results/baseline/baseline.csv`)
 merged to main. Project-wide rules (branches, merge procedure, `MAIN_RECORDS.md`, `EXPLORATION.md`, TODO) live in the AI-Huma
 repository that contains the three parts (`docs/WORKFLOW.md`, `docs/GUIDE.md`).
 
-ISA: rv32imafd by default (F/D since 2026-11-12, EXP-030; Zfinx was removed); rv64imafd with `-DXLEN=64` (EXP-029); `FP=0` builds a core without floating point. Not done: C, the SPEC rv64 flow,
+ISA: rv64imafd (F/D since 2026-11-12, EXP-030; Zfinx was removed; `RVC=1` adds C, EXP-038); `FP=0` builds a core without floating point. rv32 was removed from main (branch `rv32-legacy`); the `XLEN==32` conditionals left in the sources are dead code. Not done: C, the SPEC rv64 flow,
 Sv39 in the FastWarm replay.
 
 ## Documents
@@ -32,20 +32,15 @@ Needs a C++20 compiler, zlib, and the `function-model` repository next to this o
 submodule `third_party/DRAMsim3` (`git submodule update --init third_party/DRAMsim3`); the Makefile builds it into
 `build_dramsim3/libdramsim3.a` (`gmake DS3=0` uses the old fixed-latency SimDDR instead).
 
-rv32 (default):
+rv64 (the only configuration on main; rv32 lives on the branch `rv32-legacy`):
 
 ```bash
 gmake -C function-model librefcpu.a LDFLAGS="-lz"     # builds ../function-model (build artifact, not tracked)
 gmake -j4 LDFLAGS="-lz"                               # build/simulator; macOS: -lstdc++fs does not exist, so override LDFLAGS
 ```
 
-rv64: the register width is a compile-time parameter of both repositories, object files are not tagged with it, so build the rv64
-`librefcpu.a` in a separate copy or after a clean of the function-model checkout, and use a separate build directory here:
-
-```bash
-gmake -C <function-model copy> XLEN=64 librefcpu.a
-gmake -j4 XLEN=64 BUILD_DIR=build64 REFCPU_LIB=<function-model copy>/librefcpu.a LDFLAGS="-lz"
-```
+The register width is a compile-time parameter (`XLEN`, default 64) of both repositories; object files are not tagged with it, so
+after a switch of `XLEN` / `FP` / `RVC` build `librefcpu.a` in a separate copy of the function-model and use a separate `BUILD_DIR`.
 
 After changing compile flags use a clean `BUILD_DIR`. Configuration macros (`CFG_*`, see `include/config.h`) are overridden with
 `gmake EXTRA_CXXFLAGS="-DCFG_...=..." BUILD_DIR=build_x`. Core frequency: `gmake CPU_FREQ_MHZ=...` or the `CPU_FREQ_MHZ` environment variable.
@@ -65,8 +60,7 @@ All variables: [docs/ENV_VARS.md](docs/ENV_VARS.md).
 ## Gate (run after every change)
 
 ```bash
-scripts/build_tests.sh . build/tests                   # Homebrew LLVM, riscv32; extras: ... build/tests memory-stress-small smc-addi smc-div pf-stress
-scripts/build_vm_tests.sh . build/vm                   # 4 paging tests
+scripts/build_tests.sh . build/tests                   # Homebrew LLVM, riscv64; extras: ... build/tests memory-stress-small smc-addi smc-div pf-stress
 bash scripts/run_gate.sh build/simulator results/gate  # parallel; pass = cycles equal to results/baseline/baseline.csv
 ```
 
@@ -79,10 +73,10 @@ directories. Details (old-design regression switches, big-program cycle counts, 
 ### C extension (`RVC=1`, EXP-038)
 
 `RVC=1` makes the front end fetch 2-byte positions (16 slots per 32-byte block) and accept 16-bit compressed instructions; `RVC=0` (default) is unchanged
-(gate 64/64). It needs a `librefcpu.a` built from `function-model` with the same `XLEN`, `FP` and `RVC` (`make XLEN=32 FP=1 RVC=1 librefcpu.a`).
+(gate 64/64). It needs a `librefcpu.a` built from `function-model` with the same `XLEN`, `FP` and `RVC` (`make FP=1 RVC=1 librefcpu.a`).
 
 ```bash
-make BUILD_DIR=build_rvc XLEN=32 RVC=1 REFCPU_LIB=<librefcpu built with RVC=1>
+make BUILD_DIR=build_rvc RVC=1 REFCPU_LIB=<librefcpu built with RVC=1>
 scripts/build_rvc_tests.sh                                           # build_c/tests (C-compiled cpu-tests), build_c/gen (function-model's generated C stress tests)
 bash scripts/run_gate_c.sh build_rvc/simulator results/gate_c        # cycles equal to results/baseline/baseline_c.csv; FULL=1 adds the long generated tests
 ```
@@ -93,7 +87,7 @@ chains (`start_a` / `start_b`) selected by the "last half" carry of the previous
 
 ## Relation to the other repositories
 
-- `function-model`: the functional core `librefcpu` (rv32/rv64, XLEN compile-time), the source of the facts.
+- `function-model`: the functional core `librefcpu` (rv64, XLEN compile-time), the source of the facts.
 - `rtl`: the SystemVerilog implementation. Its configuration package is generated from `include/config.h` (`rtl/scripts/gen_cfg.sh`
   with the same defaults and overrides); the RTL `fm_gate.sh` compares its cycles with the model's (with `LSU_PIPE_NOWD=1`).
 - AI-Huma (parent repository): `docs/MAIN_RECORDS.md` (performance and verification per merge to main), `docs/EXPLORATION.md` (EXP-xxx).

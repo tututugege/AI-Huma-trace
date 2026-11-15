@@ -3,9 +3,9 @@
 #include "base_types.h"
 #include "debug_config.h"
 
-// Register width of the core (32: rv32, 64: rv64); set by the build (-DXLEN=64) and by the RTL package generator.
+// Register width of the core (64: rv64; 32 = rv32 only on branch rv32-legacy); set by the build (-DXLEN=64) and by the RTL package generator.
 #ifndef XLEN
-#define XLEN 32
+#define XLEN 64
 #endif
 constexpr int XLEN_BITS = XLEN;
 

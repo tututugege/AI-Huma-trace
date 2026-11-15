@@ -1,7 +1,7 @@
 # AI-Huma / trace-model: project record
 
 AI-Huma is the whole project (AI + human working together; also a nod to Rem's magic). It has three parts:
-- `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core (rv32imab, rv64imab since 2026-11-12; `XLEN` is a compile-time parameter);
+- `function-model` (`~/personal/AI-Huma/function-model`): the functional RISC-V core (rv64; rv32 only on the branch `rv32-legacy`; `XLEN` is a compile-time parameter, default 64);
   built as `librefcpu.a`. Used here through the symlink `function-model/` -> `../function-model` (the sibling repository in the AI-Huma layout).
 - `trace-model` (this repo): the project's timing model and exploration platform, fed with facts by the function model.
 - `rtl` (`~/personal/AI-Huma/rtl`): the SystemVerilog implementation; its configuration package is generated from this repo's
@@ -77,8 +77,8 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
 1. `gmake LDFLAGS="-lz" -j4` (macOS: no -lstdc++fs, hence the `LDFLAGS` override). DRAMsim3 is on by default (EXP-006): it is the pinned git submodule `third_party/DRAMsim3` (`git submodule update --init third_party/DRAMsim3` after cloning), compiled by the Makefile into `build_dramsim3/libdramsim3.a` (`gmake dramsim3`; no cmake, no shared library). `gmake DS3=0` builds the old fixed-latency SimDDR. Core frequency: `gmake CPU_FREQ_MHZ=...` (default 1000) or the `CPU_FREQ_MHZ` environment variable at run time. After changing flags use a clean `BUILD_DIR`.
 1b. `gmake -C function-model librefcpu.a LDFLAGS="-lz"` first on a fresh checkout (builds `../function-model`; build artifact, not tracked). Needs the function-model repository next to this one.
 2. `scripts/build_tests.sh . build/tests` plus `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div pf-stress`
-   (Homebrew LLVM, riscv32; the extras are not built by default) and `scripts/build_vm_tests.sh . build/vm` (4 paging tests).
-3. `scripts/run_gate.sh build/simulator results/gate`: 64 tests (the cpu-tests, the 4 paging tests and the extras of `tests/extra`; `memory-stress`, `load-store` and `smc-*` are excluded by the script, see its `grep -v`; `baseline.csv` also lists them), pass = cycles equal to `results/baseline/baseline.csv`
+   (Homebrew LLVM, riscv64; the extras are not built by default).
+3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests (the cpu-tests and the extras of `tests/extra`; `memory-stress`, `load-store` and `smc-*` are excluded by the script, see its `grep -v`; `baseline.csv` also lists them), pass = cycles equal to `results/baseline/baseline.csv`
    (regenerated 2026-11-11 with the compact ROB (EXP-028) as the default, before that 2026-11-09 with the write buffer (EXP-024); `baseline_nopf.csv` is the prefetcher-off variant of the same baseline: `PF_ENABLE=0` reproduces it, it may be behind main).
    All end with difftest Success, 0 TB_CHECK mismatches. `LSU_PIPE_NOWD=1` is not needed for the gate (the baseline is the model's own cycle count); it is needed for any cycle comparison with the RTL.
    **Old-design regression** (old LSU + old BPU, the main of 2026-11-06): `LSU_PIPE=0 BPU_PIPE=0 BPO_HIST=0 BPO_HSYM=2 BPA_REPAIR=0 BPA_ITTH= BPO_PDCKPT=0 BPO_L1_ENTRIES=0 BPO_BANKBLK=0 BPU_ICALL=0 BASELINE=results/baseline/legacy_lsu_baseline.csv scripts/run_gate.sh ...`
@@ -131,7 +131,7 @@ Not touched since the distillation: MemSubSystem peripherals (PeripheralModel.h,
   as a mispredict asserts in ME mode (the baseline free-list sanity check already treats it as unreachable; never hit in the gate,
   the big programs, Linux or SPEC quick).
 
-## F/D floating point (EXP-030; default on, rv32 and rv64; Zfinx removed)
+## F/D floating point (EXP-030; default on; Zfinx removed)
 F/D is the default build (`FP=1`; the function-model's `librefcpu.a` must be built with the same `FP`: `RefCpuState` carries `fpr[32]` and `fcsr`). `FP=0` is a core without any floating point (no Zfinx either: the old `UOP_FP` / `FuKind::FPU` path and the tests `zfinx*`, `matmul_fpu` are gone; `tests/extra/fd-*` are their F/D versions). Integer code has identical cycles with and without F/D.
 rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers return 8 for funct3 3 with F/D), `fcvt.l/lu` and `fmv.x.d/fmv.d.x` do not exist (the function model traps them, so the model does too), `mstatus.SD` is bit 31.
 - **Registers and tags.** Separate FP physical register file (`CFG_FPRF_NUM` 96, 32 architectural), FP RAT / free list / per-branch RAT checkpoints in `Ren`. In the
@@ -163,3 +163,11 @@ rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers r
 issue queue (reservations of squashed uops are not released, a small pessimism). FP loads write through the LSU and are not limited, only counted. Exit statistics `[FP_PORTS]`: FU writes per cycle, FP load write-backs per cycle,
 FP reads of the FP queue's issued uops per cycle, FP store-data reads per cycle. `scripts/fp_bench.sh <sim> <work> [ports...]` builds the six kernels of `tests/fp/fpbench.c` and sweeps the limit.
 
+
+
+## rv32 removed (2026-11-16)
+
+main is rv64 only. `XLEN` defaults to 64 (Makefile, `include/config.h`), the test scripts default to `riscv64 / rv64ima / lp64 / medany`, the four Sv32
+paging tests (`baremetal/vm-*`) and their script, the rv32 prebuilt ELFs and the legacy-LSU baselines were deleted, and `results/baseline/baseline.csv`,
+`baseline_nopf.csv`, `baseline_c.csv` were regenerated on rv64 (62 / 62 / 67 programs, all difftest Success; `fdoff`, `matmul_soft` and `string` are not part
+of the gate). The `rv32-legacy` branch keeps the previous main. Old rv32 cycle counts quoted in the documents above are historical.

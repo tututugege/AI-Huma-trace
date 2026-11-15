@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build upstream baremetal cpu-tests with Homebrew LLVM (riscv32) instead of /opt/riscv32 gcc.
+# Build upstream baremetal cpu-tests with Homebrew LLVM (riscv64) instead of a gcc toolchain.
 # Usage: build_tests.sh <simulator-repo> <outdir> [test...]   (default: all cpu-tests)
 set -uo pipefail
 SIMREPO=$1; OUT=$2; shift 2
 L=${LLVM:-/opt/homebrew/opt/llvm/bin}
 BM=$SIMREPO/baremetal; TD=$BM/test/cpu-tests; EX=${EXTRA_DIR:-$(cd "$(dirname "$0")/.." && pwd)/tests/extra}
-ARCH=${ARCH:-rv32ima_zicsr_zifencei}
+ARCH=${ARCH:-rv64ima_zicsr_zifencei}
 mkdir -p "$OUT"
 sed -e 's/(wxa!ri)/(wxa)/' -e 's/^\( *\)\. = __stack_size;/\1. += __stack_size;/' -e 's/\(\.stack ORIGIN[^:]*\):/\1 (NOLOAD) :/' "$BM/link.lds" > "$OUT/link.lds.0"
 python3 - "$OUT/link.lds.0" "$OUT/link.lds" <<'PY'
@@ -16,9 +16,9 @@ t=t.replace("  .dma_buffer","  .bss (NOLOAD) : { *(.sbss .sbss.* .bss .bss.* COM
 open(sys.argv[2],"w").write(t)
 PY
 tests=("$@"); [ ${#tests[@]} -eq 0 ] && tests=($(cd "$TD" && ls *.c | sed 's/\.c$//'))
-CF="--target=${TARGET:-riscv32} -march=$ARCH -mabi=${ABI:-ilp32} -O2 -ffp-contract=off -mcmodel=${CMODEL:-medlow} -mstrict-align -ffreestanding -fno-builtin -nostdlib -I$BM -I$BM/include"
+CF="--target=${TARGET:-riscv64} -march=$ARCH -mabi=${ABI:-lp64} -O2 -ffp-contract=off -mcmodel=${CMODEL:-medany} -mstrict-align -ffreestanding -fno-builtin -nostdlib -I$BM -I$BM/include"
 # F/D tests (fd-*, tests/extra): the same flags with the F and D extensions and the double-float ABI
-CFD=${CF/-march=$ARCH -mabi=${ABI:-ilp32}/-march=${ARCH/ima/imafd} -mabi=${ABI:-ilp32}d}
+CFD=${CF/-march=$ARCH -mabi=${ABI:-lp64}/-march=${ARCH/ima/imafd} -mabi=${ABI:-lp64}d}
 for t in "${tests[@]}"; do
   d=$OUT/$t; mkdir -p "$d"; objs=()
   D=$TD; [ -f "$EX/$t.c" ] && D=$EX
