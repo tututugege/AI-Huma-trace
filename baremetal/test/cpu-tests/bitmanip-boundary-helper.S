@@ -20,7 +20,11 @@
     unary hw_cpop,   0x60251513
     unary hw_sext_b, 0x60451513
     unary hw_sext_h, 0x60551513
+#if __riscv_xlen == 64
+    unary hw_rev8,   0x6b855513   /* rev8 on rv64 swaps all 8 bytes (imm 0x6b8) */
+#else
     unary hw_rev8,   0x69855513
+#endif
     unary hw_orc_b,  0x28755513
 
     binary hw_sh1add, 0x20b52533

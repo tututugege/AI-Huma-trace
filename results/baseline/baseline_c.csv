@@ -3,7 +3,7 @@ add-longlong.bin,0,0,1433
 add.bin,0,0,1398
 atomic-boundary.bin,0,0,2107
 bit.bin,0,0,1541
-bitmanip-boundary.bin,0,0,2545
+bitmanip-boundary.bin,0,0,2598
 bubble-sort.bin,0,0,4589
 crc32.bin,0,0,2070
 csr-alias-boundary.bin,0,0,2007
