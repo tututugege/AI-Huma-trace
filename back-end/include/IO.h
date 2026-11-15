@@ -103,14 +103,6 @@ struct FtqCommitInfoResp {
   pcpn_t pcpn;
   tage_idx_t tage_idx[4];
   tage_tag_t tage_tag[4];
-  wire<1> sc_pred;
-  tage_scl_meta_sum_t sc_sum;
-  tage_scl_meta_idx_t sc_idx[BPU_SCL_META_NTABLE];
-  wire<1> loop_used;
-  wire<1> loop_hit;
-  wire<1> loop_pred;
-  tage_loop_meta_idx_t loop_idx;
-  tage_loop_meta_tag_t loop_tag;
   wire<8> ps_info;  // statistics only (BPA_STATS)
 
   FtqCommitInfoResp() { std::memset(this, 0, sizeof(FtqCommitInfoResp)); }

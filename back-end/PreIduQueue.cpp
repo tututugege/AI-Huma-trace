@@ -219,14 +219,6 @@ void PreIduQueue::comb_commit_info() {
       resp.alt_pred = m.alt_pred[off];
       resp.pcpn = m.pcpn[off];
       resp.ps_info = m.ps_info[off];
-      resp.sc_pred = m.sc_pred[off];
-      resp.sc_sum = m.sc_sum[off];
-      for (int t = 0; t < BPU_SCL_META_NTABLE; t++) resp.sc_idx[t] = m.sc_idx[off][t];
-      resp.loop_used = m.loop_used[off];
-      resp.loop_hit = m.loop_hit[off];
-      resp.loop_pred = m.loop_pred[off];
-      resp.loop_idx = m.loop_idx[off];
-      resp.loop_tag = m.loop_tag[off];
       for (int k = 0; k < 4; k++) {
         resp.tage_idx[k] = m.tage_idx[off][k];
         resp.tage_tag[k] = m.tage_tag[off][k];

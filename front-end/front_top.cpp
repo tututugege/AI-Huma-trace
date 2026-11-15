@@ -480,7 +480,7 @@ void FrontComb::read_fifos() {
   }
   // FE_RFAST bit1: the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
   bool ptab_bypass = false;
-  if ((bpuf::cfg_rfast() & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
+  if ((FE_RFAST & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
     run_bpu();
     bpu_done = true;
     ptab_bypass = bpu_output.PTAB_write_enable;
@@ -553,7 +553,6 @@ void FrontComb::run_bpu() {
       bpu_input.in_tage_tags[i][j] = in.tage_tag[i][j];
       bpu_input.in_tage_idxs[i][j] = in.tage_idx[i][j];
     }
-    bpu_input.in_loop_used[i] = in.loop_used[i];
   }
 
   PendingBpuSeqTxn &txn = req.bpu_seq_txn;
@@ -811,7 +810,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
         const pc_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];   // XLEN wide (rv64: a uint32_t here dropped the sign extension of the history symbol's input)
         if (multi && i >= checker_out.keep_n) break;
         if (!taken) continue;
-        pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::cfg_hsym();
+        pd.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd.nbits; pd.nbits += bpuf::HSYM_BITS;
         const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
         if (pd.ras_op == 0) {
           if (ty == PREDECODE_JAL && rd_ == 1) { pd.ras_op = 1; pd.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
@@ -919,8 +918,8 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
       else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
       else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
         if (g_pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
-        else if (g_pipe_txn.s_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
-        else if (rd.fetch_addr_fifo_full_latch_snapshot || g_pipe_txn.s_stall_ptab) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
+        else if (g_pipe_txn.pmu_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
+        else if (rd.fetch_addr_fifo_full_latch_snapshot || g_pipe_txn.pmu_ptab_stall) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
         else pf.feo_cause = PMU_FEO_LOSS_BPUOTHER;
       }
       else if (!ic_out.icache_read_ready) pf.feo_cause = PMU_FEO_LOSS_ICNOTRDY;

@@ -497,16 +497,6 @@ void SimCpu::back2front_comb() {
     for (int j = 0; j < 4; j++) {
       front.back2front_1.tage_tag[i][j] = 0;
     }
-    front.back2front_1.sc_pred[i] = false;
-    front.back2front_1.sc_sum[i] = 0;
-    for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-      front.back2front_1.sc_idx[i][t] = 0;
-    }
-    front.back2front_1.loop_used[i] = false;
-    front.back2front_1.loop_hit[i] = false;
-    front.back2front_1.loop_pred[i] = false;
-    front.back2front_1.loop_idx[i] = 0;
-    front.back2front_1.loop_tag[i] = 0;
 
     if (front.back2front_1.back2front_valid[i]) {
       front.back2front_1.predict_dir[i] = ftq_info.pred_taken;
@@ -540,16 +530,6 @@ void SimCpu::back2front_comb() {
       front.back2front_1.actual_br_type[i] = br_type;
       front.back2front_1.alt_pred[i] = ftq_info.alt_pred;
       front.back2front_1.pcpn[i] = ftq_info.pcpn;
-      front.back2front_1.sc_pred[i] = ftq_info.sc_pred;
-      front.back2front_1.sc_sum[i] = ftq_info.sc_sum;
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) {
-        front.back2front_1.sc_idx[i][t] = ftq_info.sc_idx[t];
-      }
-      front.back2front_1.loop_used[i] = ftq_info.loop_used;
-      front.back2front_1.loop_hit[i] = ftq_info.loop_hit;
-      front.back2front_1.loop_pred[i] = ftq_info.loop_pred;
-      front.back2front_1.loop_idx[i] = ftq_info.loop_idx;
-      front.back2front_1.loop_tag[i] = ftq_info.loop_tag;
       for (int j = 0; j < 4; j++) { // TN_MAX = 4 (分支预测相关索引)
         front.back2front_1.tage_idx[i][j] = ftq_info.tage_idx[j];
         front.back2front_1.tage_tag[i][j] = ftq_info.tage_tag[j];

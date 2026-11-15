@@ -199,18 +199,6 @@ static constexpr int tage_scl_ctr_t_BITS = TAGE_SC_L_CTR_BITS;
 using tage_scl_theta_t = wire16_t;
 static constexpr int tage_scl_theta_t_BITS = 16;
 
-// -----------------------------------------------------------------------------
-// TAGE-SC-L metadata plumbing types (predict -> FTQ -> commit -> BPU)
-// -----------------------------------------------------------------------------
-using tage_scl_meta_idx_t = wire_for_bits_t<BPU_SCL_META_IDX_BITS>;
-static constexpr int tage_scl_meta_idx_t_BITS = BPU_SCL_META_IDX_BITS;
-using tage_scl_meta_sum_t = wire16_t;
-static constexpr int tage_scl_meta_sum_t_BITS = 16;
-
-using tage_loop_meta_idx_t = wire_for_bits_t<BPU_LOOP_META_IDX_BITS>;
-static constexpr int tage_loop_meta_idx_t_BITS = BPU_LOOP_META_IDX_BITS;
-using tage_loop_meta_tag_t = wire_for_bits_t<BPU_LOOP_META_TAG_BITS>;
-static constexpr int tage_loop_meta_tag_t_BITS = BPU_LOOP_META_TAG_BITS;
 using tage_loop_tag_t = wire_for_bits_t<TAGE_LOOP_TAG_BITS>;
 static constexpr int tage_loop_tag_t_BITS = TAGE_LOOP_TAG_BITS;
 using tage_loop_iter_t = wire_for_bits_t<TAGE_LOOP_ITER_BITS>;
@@ -282,14 +270,6 @@ struct PredMetaT {
   pcpn_t pcpn[N];
   tage_idx_t tage_idx[N][TN_MAX];
   tage_tag_t tage_tag[N][TN_MAX];
-  wire1_t sc_pred[N];
-  tage_scl_meta_sum_t sc_sum[N];
-  tage_scl_meta_idx_t sc_idx[N][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[N];
-  wire1_t loop_hit[N];
-  wire1_t loop_pred[N];
-  tage_loop_meta_idx_t loop_idx[N];
-  tage_loop_meta_tag_t loop_tag[N];
   wire16_t blk_id[N];  // BPA_REPAIR: sequence number of the fetch block (key of the BPU's checkpoint record)
   wire8_t ps_info[N];  // statistics only (BPA_STATS, docs/BPU_ACC.md): predicted type / target source / use-alt of the slot; no consumer in the pipeline
 
@@ -304,14 +284,6 @@ struct PredMetaT {
         tage_idx[i][j] = s.tage_idx[i][j];
         tage_tag[i][j] = s.tage_tag[i][j];
       }
-      sc_pred[i] = s.sc_pred[i];
-      sc_sum[i] = s.sc_sum[i];
-      for (int t = 0; t < BPU_SCL_META_NTABLE; ++t) sc_idx[i][t] = s.sc_idx[i][t];
-      loop_used[i] = s.loop_used[i];
-      loop_hit[i] = s.loop_hit[i];
-      loop_pred[i] = s.loop_pred[i];
-      loop_idx[i] = s.loop_idx[i];
-      loop_tag[i] = s.loop_tag[i];
       ps_info[i] = s.ps_info[i];
       blk_id[i] = s.blk_id[i];
     }

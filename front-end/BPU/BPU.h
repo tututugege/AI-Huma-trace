@@ -9,92 +9,55 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
-#include <vector>
 
 namespace bpuf {
 
 constexpr int NB = BPU_BANK_NUM, FW = FETCH_WIDTH, CW = COMMIT_WIDTH, TN = TN_MAX;
 
-// EXP-010: realistic prediction latency. BPU_BUBBLE=B: after a predicted-taken fetch group the BPU idles B cycles (the main
-// TAGE/BTB predictor is B+1 cycles deep and the fall-through address is fetched meanwhile). BPU_UBTB=N: an N-entry direct-mapped
-// 1-cycle target table (tag 12 b) hides the bubble when it holds the same target. Both default to 0 (= old zero-bubble model).
-inline int env_int(const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; }
-
-// ---- docs/BPU_ACC.md: TAGE parameters ---------------------------------------------------------------------------------------------
-// BPA_HLEN="8,13,32,119"  history length per tagged table (<= 255 bits; run time). The other parameters are fixed to the RTL design:
-// TAGE_TAG_WIDTH-bit tags, 3-bit tagged counters, 2-bit useful counters, one use-alt counter, allocation in the lowest free table or (1/3)
-// the next one, one useful-bit reset row every 2^11 updates. (The run-time sweeps BPA_TAGW / CNTW / UW / WEAK / UALT / ALLOC / URST and the
-// statistical corrector BPA_SC* found no gain and were removed with EXP-028's switch clean-up.)
-inline std::vector<int> env_list(const char *n, std::vector<int> d) {
-  const char *v = std::getenv(n);
-  if (!v || !*v) return d;
-  std::vector<int> r;
-  for (const char *c = v; *c;) { r.push_back(std::atoi(c)); while (*c && *c != ',') c++; if (*c == ',') c++; }
-  while (!r.empty() && int(r.size()) < int(d.size())) r.push_back(r.back());
-  return r;
-}
+// ---- TAGE parameters (fixed to the RTL design) ------------------------------------------------------------------------------------
+// History lengths 8 / 13 / 32 / 119 bits, TAGE_TAG_WIDTH-bit tags, 3-bit tagged counters, 2-bit useful counters, one use-alt counter,
+// allocation in the lowest free table or (1/3) the next one, one useful-bit reset row every 2^11 updates.
 struct TageCfg {
   uint32_t ghr[TN] = {}, fl[FH_N_MAX][TN] = {}, tagw[TN] = {}, tagmask[TN] = {};
   static constexpr int uw = 2, ualt = 1, urst = 11, cmax = 7, chalf = 4;   // 3-bit counters, 2-bit useful
-  int hlen_max = 0;
   TageCfg() {
-    const std::vector<int> dh = (TN == 4) ? std::vector<int>{8, 13, 32, 119} : (TN == 5) ? std::vector<int>{5, 9, 17, 40, 119} : (TN == 6) ? std::vector<int>{4, 7, 12, 22, 42, 119} : (TN == 3) ? std::vector<int>{8, 24, 119} : (TN == 2) ? std::vector<int>{13, 119} : std::vector<int>(TN, 32);
-    const std::vector<int> h = env_list("BPA_HLEN", dh);
+    static_assert(TN == 4, "history lengths are given for 4 tagged tables");
+    static constexpr uint32_t hlen[TN] = {8, 13, 32, 119};
     for (int i = 0; i < TN; i++) {
-      ghr[i] = h[i]; tagw[i] = TAGE_TAG_WIDTH;
-      if (ghr[i] < 1 || ghr[i] > 255) { std::printf("[BPA] bad BPA_HLEN\n"); std::exit(1); }
+      ghr[i] = hlen[i]; tagw[i] = TAGE_TAG_WIDTH;
       tagmask[i] = (1u << tagw[i]) - 1;
-      if (int(ghr[i]) > hlen_max) hlen_max = ghr[i];
-      // folded lengths: index fold 11 b (or the history length if shorter), tag folds = tag width and tag width - 1 (8 and 7 with the default 8-bit tags)
+      // folded lengths: index fold 11 b (or the history length if shorter), tag folds = tag width and tag width - 1
       fl[0][i] = ghr[i] < 11 ? ghr[i] : 11;
       fl[1][i] = ghr[i] < tagw[i] ? ghr[i] : tagw[i];
       fl[2][i] = ghr[i] < tagw[i] - 1 ? ghr[i] : tagw[i] - 1;
     }
   }
 };
-// BPA_ITT: history-indexed indirect target tables (ITTAGE-like) added to the BTB bank. BPA_ITTH="2" (or "1,3"): the TAGE history table(s) whose index/tag
-// are reused (ascending history length), BPA_ITTN entries per table and bank.
-// Default (EXP-025, the RTL design): three tables on TAGE history tables 1, 2, 3 (13 / 32 / 119 bits), 64 entries each per bank (192 entries, 42 bits each:
-// 64.5 Kb for 8 banks; the single 256-entry table it replaces was 86 Kb). Compile-time defaults CFG_ITT_H / CFG_ITT_SIZE, env still overrides.
-#ifndef CFG_ITT_H
-#define CFG_ITT_H "1,2,3"
-#endif
-#ifndef CFG_ITT_SIZE
-#define CFG_ITT_SIZE 64
-#endif
-constexpr int ITT_MAX = 3, ITT_NMAX = 1024;
+// ITT (EXP-025): history-indexed indirect target tables added to the BTB bank, three tables on TAGE history tables 1, 2, 3
+// (13 / 32 / 119 bits) whose index / tag they reuse, 64 entries each per bank.
+constexpr int ITT_MAX = 3;
 struct IttCfg {
-  int n = 0, size = CFG_ITT_SIZE, h[ITT_MAX] = {};
-  IttCfg() {
-    const char *v = std::getenv("BPA_ITTH");   // unset: the compile-time default; empty string: ITT off
-    if (!v) v = CFG_ITT_H;
-    for (const char *c = v; *c;) { if (n < ITT_MAX) h[n++] = std::atoi(c); while (*c && *c != ',') c++; if (*c == ',') c++; }
-    size = env_int("BPA_ITTN", CFG_ITT_SIZE);
-    if (n && (size < 2 || size > ITT_NMAX || (size & (size - 1)))) { std::printf("[BPA] bad BPA_ITTN\n"); std::exit(1); }
-    for (int i = 0; i < n; i++) if (h[i] < 0 || h[i] >= TN) { std::printf("[BPA] bad BPA_ITTH\n"); std::exit(1); }
-  }
+  static constexpr int n = ITT_MAX, size = 64;
+  static constexpr int h[ITT_MAX] = {1, 2, 3};
 };
-inline const IttCfg &icfg() { static const IttCfg c; return c; }
+inline constexpr IttCfg icfg() { return IttCfg{}; }
 inline const TageCfg &tcfg() { static const TageCfg c; return c; }
 inline uint32_t ghr_len(int i) { return tcfg().ghr[i]; }
 inline uint32_t fh_len(int k, int i) { return tcfg().fl[k][i]; }
 
-// BPO_HIST=1 (docs/BPU_OPT.md): the global history holds one symbol of BPO_HSYM bits (folded from pc and target) per TAKEN branch;
-// not-taken conditional branches push nothing. Default 0 = one direction bit per conditional branch.
-inline int cfg_hsym() { static const int v = env_int("BPO_HSYM", 3); return v; }
+// The global history holds one symbol of HSYM_BITS bits (folded from pc and target) per TAKEN branch; not-taken branches push nothing.
+constexpr int HSYM_BITS = 3;
 inline uint8_t hist_sym(pc_t bpc, pc_t tgt) {
-  static const int hs = cfg_hsym();
+  constexpr int hs = HSYM_BITS;
   const uint32_t v = (bpc >> SLOT_SHIFT) ^ (tgt >> SLOT_SHIFT) ^ ((bpc >> SLOT_SHIFT) >> 7);
   uint32_t r = 0;
   for (int i = 0; i < 32; i += hs) r ^= (v >> i) & ((1u << hs) - 1);
   return uint8_t(r);
 }
-inline uint64_t &pd_flush_count() { static uint64_t n = 0; return n; }   // statistics only: predecode-checker flushes seen by the BPU
 // BPA_REPAIR=1: exact history / RAS repair at a backend branch mispredict. The BPU keeps a checkpoint record per fetch block (state before the
 // block, predicted types of its slots) keyed by a block sequence number that travels in the PredMeta to the back end FTQ; the back end returns it with
 // the slot and type of the mispredicted branch, and the BPU rebuilds the history / RAS as: checkpoint + earlier (not taken) slots + the branch's actual outcome.
 // Default 0: spec history / RAS are copied from the committed state (which lacks every older in-flight branch, call and return).
-inline uint64_t *repair_stats() { static uint64_t n[2] = {0, 0}; return n; }   // [0] repaired, [1] record not found / mismatch
 // BPU_ICALL=1: a jalr with rd = ra that is not a return is a call (BR_ICALL: indirect target + RAS push). 0 = such a jalr is BR_IDIRECT (old design).
 inline bool br_ind(int t) { return t == BR_IDIRECT || t == BR_ICALL; }
 inline bool br_call(int t) { return t == BR_CALL || t == BR_ICALL; }
@@ -174,7 +137,6 @@ struct TageUpd {
   int pcpn;
   tage_tag_t tag[TN];
   tage_idx_t idx[TN];
-  bool loop_used;
 };
 
 class Tage {
@@ -281,7 +243,7 @@ class Tage {
 
     if (pcpn < TN) {
       const bool praw = taken(cnt[pcpn]);
-      const bool provider_used = !u.loop_used;
+      const bool provider_used = true;
       const bool alt_used = provider_used && (tpred == u.alt);
       uint8_t nu = useful[pcpn];
       bool wu = false;
@@ -368,7 +330,7 @@ struct BtbWr {
 class Btb {
   struct Way { btb_tag_t tag; target_addr_t bta; bool valid; wire3_t useful; };
   Way btb_[BTB_ENTRY_NUM][BTB_WAY_NUM];
-  IttEnt itt_[ITT_MAX][ITT_NMAX];
+  IttEnt itt_[ITT_MAX][IttCfg::size];
 
   static constexpr int width(uint32_t m) { int w = 0; while (m) { w++; m >>= 1; } return w; }
   static uint32_t hash(uint32_t pcw, uint32_t mask, uint32_t salt) {
@@ -399,7 +361,7 @@ class Btb {
   Btb() { std::memset(this, 0, sizeof(*this)); }
   // ITT lookup: the longest-history hit (index and tag come from the TAGE index generation, tags/indices carried in the prediction meta)
   const IttEnt *itt_hit(const tage_idx_t *idx, const tage_tag_t *tag, int *which = nullptr) const {
-    const IttCfg &c = icfg();
+    constexpr IttCfg c = icfg();
     for (int k = c.n - 1; k >= 0; k--) {
       const IttEnt &e = itt_[k][idx[c.h[k]] & (c.size - 1)];
       if (e.valid && e.tag == tag[c.h[k]]) { if (which) *which = k; return &e; }
@@ -445,7 +407,7 @@ class Btb {
     }
 
     if (dir && br_ind(type) && tidx && icfg().n) {
-      const IttCfg &c = icfg();
+      constexpr IttCfg c = icfg();
       int prov = -1;
       for (int k = c.n - 1; k >= 0; k--) { const IttEnt &e = itt_[k][tidx[c.h[k]] & (c.size - 1)]; if (e.valid && e.tag == ttag[c.h[k]]) { prov = k; break; } }
       int alloc_from = 0;
@@ -576,7 +538,6 @@ struct InputPayload {
   pcpn_t in_pcpn[CW];
   tage_tag_t in_tage_tags[CW][TN];
   tage_idx_t in_tage_idxs[CW][TN];
-  wire1_t in_loop_used[CW];
   uint8_t ptab_size;  // BPU_PIPE: PTAB occupancy (credit for the blocks in flight)
   PdInfo pd;
   wire1_t rf_valid;    // BPA_REPAIR: the refetch is a backend branch mispredict

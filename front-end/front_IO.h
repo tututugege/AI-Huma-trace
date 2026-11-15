@@ -39,14 +39,6 @@ struct front_top_in {
   pcpn_t pcpn[COMMIT_WIDTH];
   tage_idx_t tage_idx[COMMIT_WIDTH][4]; // TN_MAX = 4
   tage_tag_t tage_tag[COMMIT_WIDTH][4]; // TN_MAX = 4
-  wire1_t sc_pred[COMMIT_WIDTH];
-  tage_scl_meta_sum_t sc_sum[COMMIT_WIDTH];
-  tage_scl_meta_idx_t sc_idx[COMMIT_WIDTH][BPU_SCL_META_NTABLE];
-  wire1_t loop_used[COMMIT_WIDTH];
-  wire1_t loop_hit[COMMIT_WIDTH];
-  wire1_t loop_pred[COMMIT_WIDTH];
-  tage_loop_meta_idx_t loop_idx[COMMIT_WIDTH];
-  tage_loop_meta_tag_t loop_tag[COMMIT_WIDTH];
   wire1_t FIFO_read_enable;
   CsrStatusIO *csr_status;
 };

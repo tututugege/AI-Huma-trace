@@ -191,9 +191,6 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #define TAGE_SC_L_OVERRIDE_MARGIN 4
 #endif
 
-// NOTE: metadata plumbing sizes are defined in `include/config.h` as
-// `BPU_SCL_META_*` / `BPU_LOOP_META_*` to keep front/back consistent.
-
 // BTB configs
 #ifndef BTB_ENTRY_NUM
 #define BTB_ENTRY_NUM 256

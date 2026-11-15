@@ -79,15 +79,6 @@ static_assert(DECODE_WIDTH <= FETCH_WIDTH,
 constexpr int COMMIT_WIDTH = DECODE_WIDTH;
 
 // ============================================================
-// Shared Branch-Predictor Metadata Sizes
-// ============================================================
-
-constexpr int BPU_SCL_META_NTABLE = 8;
-constexpr int BPU_SCL_META_IDX_BITS = 16;
-constexpr int BPU_LOOP_META_IDX_BITS = 16;
-constexpr int BPU_LOOP_META_TAG_BITS = 16;
-
-// ============================================================
 // Cache / AXI Configuration
 // ============================================================
 
