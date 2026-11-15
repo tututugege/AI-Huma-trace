@@ -13,27 +13,25 @@ namespace {
 
 
 // Sv32 (rv32): 2 levels of 10-bit VPNs, 9-bit ASID in satp[30:22]; Sv39 (rv64): 3 levels of 9-bit VPNs, 16-bit ASID in satp[59:44]
-constexpr int kLevels = XLEN == 64 ? 3 : 2;
-constexpr int kVpnBits = XLEN == 64 ? 9 : 10;
+constexpr int kLevels = 3;
+constexpr int kVpnBits = 9;
 
 inline uint16_t sv_asid(vaddr_t satp) {
-  if (XLEN == 64) return static_cast<uint16_t>((satp >> 44) & 0xFFFFu);
-  return static_cast<uint16_t>((satp >> 22) & 0x1FFu);
+  return static_cast<uint16_t>((satp >> 44) & 0xFFFFu);
 }
 // translation enabled in satp (Sv32: MODE bit 31; Sv39: MODE = 8)
 inline bool sv_enabled(vaddr_t satp) {
-  return XLEN == 64 ? (satp >> 60) == 8 : (satp & 0x80000000u) != 0;
+  return (satp >> 60) == 8;
 }
 // Sv39 virtual addresses must be sign-extended from bit 38 (always true on Sv32)
 inline bool va_canonical(vaddr_t v) {
-  if (XLEN != 64) return true;
   const int64_t top = static_cast<int64_t>(v) >> 38;
   return top == 0 || top == -1;
 }
-constexpr uint64_t kPpnMask = XLEN == 64 ? 0xFFFFFFFFFFFull : 0x3FFFFFull;
+constexpr uint64_t kPpnMask = 0xFFFFFFFFFFFull;
 // untranslated address as a physical one; above the 32-bit physical space it maps to an address outside RAM
 inline uint32_t identity_pa(vaddr_t v) {
-  return (XLEN == 64 && (static_cast<uint64_t>(v) >> 32) != 0) ? 0x7fffffffu : static_cast<uint32_t>(v);
+  return ((static_cast<uint64_t>(v) >> 32) != 0) ? 0x7fffffffu : static_cast<uint32_t>(v);
 }
 inline uint32_t vpn_at(vaddr_t v, int level) {
   return static_cast<uint32_t>((v >> (12 + kVpnBits * level)) & ((1u << kVpnBits) - 1));
@@ -419,7 +417,7 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   refill.entry.global = (wr.leaf_pte & PTE_G) != 0;
   refill.entry.asid = asid;
   refill.entry.level = static_cast<uint32_t>(wr.leaf_level) & 3u;
-  refill.entry.vpn2 = XLEN == 64 ? vpn_at(in.v_addr, 2) : 0u;
+  refill.entry.vpn2 = vpn_at(in.v_addr, 2);
   refill.entry.vpn1 = vpn_at(in.v_addr, 1);
   refill.entry.vpn0 = vpn_at(in.v_addr, 0);
   refill.entry.ppn = (static_cast<uint64_t>(wr.leaf_pte) >> 10) & kPpnMask;
@@ -730,7 +728,7 @@ void TlbMmu::schedule_refill(vaddr_t v_addr, uint16_t asid, uint8_t level,
   refill.entry.global = global;
   refill.entry.asid = asid;
   refill.entry.level = level;
-  refill.entry.vpn2 = XLEN == 64 ? vpn_at(v_addr, 2) : 0u;
+  refill.entry.vpn2 = vpn_at(v_addr, 2);
   refill.entry.vpn1 = vpn_at(v_addr, 1);
   refill.entry.vpn0 = vpn_at(v_addr, 0);
   refill.entry.ppn = (pte >> 10) & kPpnMask;

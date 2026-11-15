@@ -14,7 +14,7 @@ class SimContext;
 class PtwMemPort;
 
 // register-width virtual address / satp (Sv32 on rv32, Sv39 on rv64)
-using vaddr_t = std::conditional_t<(XLEN == 64), uint64_t, uint32_t>;
+using vaddr_t = uint64_t;
 
 class TlbMmu {
 public:
@@ -68,7 +68,7 @@ public:
     reg<10> vpn2 = 0; // Sv39 only
     reg<10> vpn1 = 0;
     reg<10> vpn0 = 0;
-    reg<XLEN == 64 ? 44 : 22> ppn = 0; // Sv32 PPN is 22 bits, Sv39 44 bits
+    reg<44> ppn = 0; // Sv32 PPN is 22 bits, Sv39 44 bits
     reg<8> perm = 0; // bit[0:7]=V,R,W,X,U,G,A,D
   };
 

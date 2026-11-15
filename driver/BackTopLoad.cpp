@@ -42,18 +42,13 @@ static void write_boot_stub(uint32_t a1_value, uint32_t jump_value) {
   pmem_write(at, 0xf1402573);  // csrrs a0, mhartid, zero
   at += 4;
   auto li_hi = [&](uint32_t reg, uint32_t v) {
-    if (XLEN == 64) {
-      uint32_t sh = 21;   // v = imm << sh with imm < 2048 (the platform addresses are multiples of 2 MiB)
-      while (sh > 0 && (v & ((1u << sh) - 1))) sh--;
-      const uint32_t imm = v >> sh;
-      pmem_write(at, (imm << 20) | (reg << 7) | 0x13);   // addi reg, zero, imm
-      at += 4;
-      pmem_write(at, (sh << 20) | (reg << 15) | (1u << 12) | (reg << 7) | 0x13);   // slli reg, reg, sh
-      at += 4;
-    } else {
-      pmem_write(at, (v & 0xfffff000u) | (reg << 7) | 0x37);   // lui reg, v >> 12
-      at += 4;
-    }
+    uint32_t sh = 21;   // v = imm << sh with imm < 2048 (the platform addresses are multiples of 2 MiB)
+    while (sh > 0 && (v & ((1u << sh) - 1))) sh--;
+    const uint32_t imm = v >> sh;
+    pmem_write(at, (imm << 20) | (reg << 7) | 0x13);   // addi reg, zero, imm
+    at += 4;
+    pmem_write(at, (sh << 20) | (reg << 15) | (1u << 12) | (reg << 7) | 0x13);   // slli reg, reg, sh
+    at += 4;
   };
   li_hi(11, a1_value);  // a1
   li_hi(5, jump_value);  // t0
@@ -84,8 +79,8 @@ constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
 constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
 // format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
 // rv64: 4 = integer state, 5 = F/D build; rv32: 3 = integer state (2 older), 6 = F/D build (CPU_state carries the FP registers and fcsr follows it)
-constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 3u);
-constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 2u);
+constexpr uint16_t kCkptFormatVersion = (FP ? 5u : 4u);
+constexpr uint16_t kCkptLegacyFormatVersion = (FP ? 5u : 4u);
 
 typedef struct CkptHeader {
   uint32_t magic;

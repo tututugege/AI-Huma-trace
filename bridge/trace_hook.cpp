@@ -149,7 +149,7 @@ void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending) {
 // The model's results are 32-bit values (not widened yet): a load result is the sign (or, for lwu, zero) extension of
 // that value to the register width, everything else is zero-extended.
 static xlen_t widen_result(const ExecObs &o, uint32_t inst) {
-  if (XLEN == 64 && o.op == UOP_LOAD && ((inst >> 12) & 7) <= 2)   // lb / lh / lw: sign-extended 32-bit pattern; lbu/lhu/lwu zero, ld full width
+  if (o.op == UOP_LOAD && ((inst >> 12) & 7) <= 2)   // lb / lh / lw: sign-extended 32-bit pattern; lbu/lhu/lwu zero, ld full width
     return static_cast<xlen_t>(static_cast<sxlen_t>(static_cast<int32_t>(o.result)));
   return o.result;
 }

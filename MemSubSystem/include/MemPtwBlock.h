@@ -287,7 +287,7 @@ private:
       nxt_.walk_active = true;
       nxt_.walk_state = WalkState::L1_REQ;
       nxt_.walk_l1_pte = 0;
-      nxt_.walk_level = XLEN == 64 ? 2 : 1;   // Sv39: three levels, Sv32: two
+      nxt_.walk_level = 2;   // Sv39: three levels
       nxt_.walk_rr_next = (owner == Client::DTLB) ? Client::ITLB
                                                   : Client::DTLB;
     };
@@ -328,7 +328,7 @@ private:
     // PTE address: table base + VPN[level] * PTE size (Sv32: 10-bit VPNs, 4-byte PTEs; Sv39: 9-bit VPNs, 8-byte PTEs).  The
     // physical address must fit this SoC's 32-bit space (an Sv39 PPN is 44 bits).
     auto pte_addr = [&](uint64_t ppn, uint32_t level) -> uint32_t {
-      const uint32_t vpn_bits = XLEN == 64 ? 9 : 10, pte_shift = XLEN == 64 ? 3 : 2;
+      const uint32_t vpn_bits = 9, pte_shift = 3;
       const uint64_t vpn = (static_cast<uint64_t>(req.vaddr) >> (12 + vpn_bits * level)) & ((1ull << vpn_bits) - 1);
       const uint64_t a = (ppn << 12) + (vpn << pte_shift);
       if ((a >> 32) != 0) {
@@ -338,12 +338,11 @@ private:
       return static_cast<uint32_t>(a);
     };
     if (state.walk_state == WalkState::L1_REQ) {
-      const uint64_t root_ppn = XLEN == 64 ? (static_cast<uint64_t>(req.satp) & 0xFFFFFFFFFFFull)
-                                           : (static_cast<uint64_t>(req.satp) & 0x3FFFFF);
+      const uint64_t root_ppn = (static_cast<uint64_t>(req.satp) & 0xFFFFFFFFFFFull);
       out.issue_walk_read = true;
       out.walk_read_addr = pte_addr(root_ppn, state.walk_level);
     } else if (state.walk_state == WalkState::L2_REQ) {
-      const uint64_t ppn = XLEN == 64 ? ((state.walk_l1_pte >> 10) & 0xFFFFFFFFFFFull) : ((state.walk_l1_pte >> 10) & 0x3FFFFF);
+      const uint64_t ppn = ((state.walk_l1_pte >> 10) & 0xFFFFFFFFFFFull);
       out.issue_walk_read = true;
       out.walk_read_addr = pte_addr(ppn, state.walk_level);
     }
@@ -550,10 +549,10 @@ private:
     if (nxt_.walk_state == WalkState::L1_WAIT_RESP || nxt_.walk_state == WalkState::L2_WAIT_RESP) {
       const uint8_t level = nxt_.walk_level;
       // Sv39: PTE bits 63:54 are reserved (Svnapot / Svpbmt are not implemented): a PTE with any of them set faults
-      const bool reserved_bits = XLEN == 64 && (pte >> 54) != 0;
+      const bool reserved_bits = (pte >> 54) != 0;
       // the PPN bits below a superpage's level must be zero (Sv32: PPN[0] = pte[19:10]; Sv39: PPN[level-1:0])
-      const uint64_t ppn = (pte >> 10) & (XLEN == 64 ? 0xFFFFFFFFFFFull : 0x3FFFFFull);
-      const uint32_t vpn_bits = XLEN == 64 ? 9 : 10;
+      const uint64_t ppn = (pte >> 10) & 0xFFFFFFFFFFFull;
+      const uint32_t vpn_bits = 9;
       const bool misaligned = level > 0 && (ppn & ((1ull << (vpn_bits * level)) - 1)) != 0;
       if (!v || (!r && w) || reserved_bits) {
         publish_fault();

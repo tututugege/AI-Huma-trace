@@ -8,16 +8,12 @@
 #include <cstdlib>
 
 using xlen_t = refcpu_xlen_t;
-#if XLEN == 64
 using sxlen_t = int64_t;
-#else
-using sxlen_t = int32_t;
-#endif
 constexpr unsigned kXlen = XLEN;
 
 // the low 32 bits of a value that must fit the model's 32-bit pc / address fields
 inline uint32_t narrow_pc(xlen_t v, const char *what = "pc") {
-  if (XLEN == 64 && (v >> 32) != 0) {
+  if ((v >> 32) != 0) {
     std::fprintf(stderr, "[xlen] %s 0x%llx does not fit 32 bits: the timing model is not widened yet\n", what,
                  static_cast<unsigned long long>(v));
     std::exit(2);
@@ -34,5 +30,5 @@ inline xlen_t cause_to_xlen(uint32_t cause) {
 }
 // translation enabled in satp: Sv32 (bit 31) on rv32, Sv39 (MODE = 8) on rv64
 inline bool satp_on(xlen_t satp) {
-  return XLEN == 64 ? (satp >> 60) == 8 : ((satp >> 31) & 1) != 0;
+  return (satp >> 60) == 8;
 }

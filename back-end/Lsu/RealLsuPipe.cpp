@@ -234,7 +234,7 @@ bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t
   constexpr uint32_t XB = XLEN / 8;   // the unit of the model: one word (rv32) / one aligned dword (rv64)
   if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
   const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.func3);
-  if (XLEN == 64 && off + lw > XB) return false;   // crosses the unit: not modelled
+  if (off + lw > XB) return false;   // crosses the unit: not modelled
   const uint32_t head = S.stq_head;
   uint32_t older;
   {
@@ -252,7 +252,7 @@ bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t
   }
   if (!have) {
     word = tbhook::mem_read(W);
-    if (XLEN == 64) word |= xlen_t(tbhook::mem_read(W + 4)) << 32;
+    word |= xlen_t(tbhook::mem_read(W + 4)) << 32;
   }
   for (uint32_t rank = 0; rank < older; rank++) {
     const uint32_t j = (head + rank) % STQ_SIZE;

@@ -10,7 +10,6 @@ namespace {
 // TB_TRACE_TRAP=1 prints every trap the CSR model takes (cause, epc, tval, target)
 bool trace_traps() { static const bool on = std::getenv("TB_TRACE_TRAP") != nullptr; return on; }
 // mstatus bits visible through sstatus / writable (as in the function model: rv64 has no SD tracking, UXL = SXL = 2 are read-only)
-#if XLEN == 64
 #if FP
 constexpr xlen_t kSstatusMask = 0x80000003000DE133ull;   // SD included (FS = Dirty)
 #else
@@ -19,17 +18,6 @@ constexpr xlen_t kSstatusMask = 0x00000003000DE133ull;
 constexpr xlen_t kSstatusWriteMask = 0x00000000000DE133ull;
 constexpr xlen_t kMstatusWriteMask = 0x00000000007FF9BBull;
 constexpr xlen_t kMstatusReset = 0x0000000A00000000ull;
-#else
-constexpr uint32_t kSstatusMask = 0x800DE133;
-#if FP
-constexpr uint32_t kSstatusWriteMask = 0x000DE133;   // SD (bit 31) follows FS: read-only
-constexpr uint32_t kMstatusWriteMask = 0x007FF9BB;
-#else
-constexpr uint32_t kSstatusWriteMask = 0x800DE133;
-constexpr uint32_t kMstatusWriteMask = 0x807FF9BB;
-#endif
-constexpr uint32_t kMstatusReset = 0;
-#endif
 // Interrupt CSRs per the privileged spec (no N extension, same as the function model): mie holds SSIE/MSIE/STIE/MTIE/SEIE/MEIE;
 // the supervisor views sie / sip show only the bits delegated by mideleg (mideleg holds SSI/STI/SEI), and sip can only write SSIP.
 constexpr uint32_t kMipMask = 0x00000aaa, kMieMask = 0x00000aaa, kDelegBits = 0x00000222;
@@ -57,18 +45,10 @@ IrqState eval_interrupts(xlen_t mstatus, xlen_t mie, xlen_t mip, xlen_t mideleg,
 }  // namespace
 
 void Csr::init() {
-#if XLEN == 64
 #if FP
   CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x14112B | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
 #else
   CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x141103 | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B
-#endif
-#else
-#if FP
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x4014112B | (kRvc ? 4 : 0);                    // U/S/M, RV32 I/A/M/B/F/D
-#else
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = 0x40141103 | (kRvc ? 4 : 0);                    // U/S/M, RV32 I/A/M/B
-#endif
 #endif
   CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
   CSR_RegFile[csr_sstatus] = CSR_RegFile_1[csr_sstatus] = kMstatusReset & kSstatusMask;
@@ -253,7 +233,7 @@ void Csr::comb_csr_write() {
   } else if (csr_idx == number_satp) {
     const xlen_t old_satp = CSR_RegFile[csr_satp];
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
-    if (!(XLEN == 64 && (csr_wdata >> 60) != 0 && (csr_wdata >> 60) != 8)) CSR_RegFile_1[csr_satp] = csr_wdata;
+    if (!((csr_wdata >> 60) != 0 && (csr_wdata >> 60) != 8)) CSR_RegFile_1[csr_satp] = csr_wdata;
     if (old_satp != csr_wdata)
       debug_ptw_trace::record_satp_write(static_cast<uint32_t>(old_satp), static_cast<uint32_t>(csr_wdata), static_cast<uint8_t>(privilege));
   } else {
