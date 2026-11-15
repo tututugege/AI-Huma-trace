@@ -1,5 +1,7 @@
 # AXI Interconnect Kit
 
+> **trace-model copy (2026-11-15):** the runtime submodule controls (`mode` 0 / 2, the mapped LLC window, the flush-and-reconfigure handshake, `AXI_SUBMODULE_MODE` / `AXI_SUBMODULE_OFFSET`) and the multi-tick divider were deleted from this vendored copy; the LLC always runs in mode 1. The sections below that describe them are history.
+
 Standalone AXI4 memory subsystem extracted from the simulator.
 
 ## Current Mainline

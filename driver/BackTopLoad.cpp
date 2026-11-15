@@ -1,0 +1,470 @@
+#include "BackTop.h"
+#include "PhysMemory.h"
+#include "RealLsu.h"
+#include "config.h"
+#include "RefCore.h"
+#include "mmio_address_map.h"
+#include "ref.h"
+#include "util.h"
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <vector>
+#include <zlib.h>
+
+// Image / flash / SD loading and checkpoint restore.
+
+void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege);
+
+// --- 辅助函数：简化 zlib 读写 POD 类型 ---
+template <typename T>
+void gz_write_pod(gzFile file, const T &data) {
+  if (gzwrite(file, &data, sizeof(T)) != sizeof(T)) {
+    Assert(0 && "Error writing data to gzip file.");
+  }
+}
+
+template <typename T>
+void gz_read_pod(gzFile file, T &data) {
+  if (gzread(file, &data, sizeof(T)) != sizeof(T)) {
+    Assert(0 && "Error reading data from gzip file.");
+  }
+}
+
+namespace {
+// Boot stub at address 0 (the CPU starts there): a0 = mhartid, a1 = the devicetree address, jump to `jump`.  On rv64 `lui`
+// sign-extends (0x80000000 would become 0xffffffff80000000), so the constants are built with addi + slli instead; the
+// function model's own stub does the same.
+static void write_boot_stub(uint32_t a1_value, uint32_t jump_value) {
+  uint32_t at = 0;
+  pmem_write(at, 0xf1402573);  // csrrs a0, mhartid, zero
+  at += 4;
+  auto li_hi = [&](uint32_t reg, uint32_t v) {
+    if (XLEN == 64) {
+      uint32_t sh = 21;   // v = imm << sh with imm < 2048 (the platform addresses are multiples of 2 MiB)
+      while (sh > 0 && (v & ((1u << sh) - 1))) sh--;
+      const uint32_t imm = v >> sh;
+      pmem_write(at, (imm << 20) | (reg << 7) | 0x13);   // addi reg, zero, imm
+      at += 4;
+      pmem_write(at, (sh << 20) | (reg << 15) | (1u << 12) | (reg << 7) | 0x13);   // slli reg, reg, sh
+      at += 4;
+    } else {
+      pmem_write(at, (v & 0xfffff000u) | (reg << 7) | 0x37);   // lui reg, v >> 12
+      at += 4;
+    }
+  };
+  li_hi(11, a1_value);  // a1
+  li_hi(5, jump_value);  // t0
+  pmem_write(at, 0x00028067);  // jalr zero, 0(t0)
+}
+
+void seed_uart_io_words() {
+  constexpr uint32_t kUartLsrThre = 0x20u;
+  constexpr uint32_t kUartLsrTemt = 0x40u;
+  constexpr uint32_t kUartIirNoInt = 0x01u;
+  constexpr uint32_t kUartIirFifoEnabled = 0xc0u;
+  constexpr uint32_t kUartMsrCts = 0x10u;
+  constexpr uint32_t kUartMsrDsr = 0x20u;
+  constexpr uint32_t kUartMsrDcd = 0x80u;
+
+  pmem_write(UART_ADDR_BASE + 0x00u,
+             (kUartIirNoInt | kUartIirFifoEnabled) << 16);
+  pmem_write(UART_ADDR_BASE + 0x04u,
+             0x00000003u |
+                 ((kUartLsrThre | kUartLsrTemt) << 8) |
+                 ((kUartMsrCts | kUartMsrDsr | kUartMsrDcd) << 16));
+  pmem_write(UART_ADDR_BASE + 0x08u, 0);
+}
+
+constexpr uint64_t kCkptSimpointRamBytes = RAM_SIZE;
+constexpr uint64_t kGzChunkSize = 1ULL * 1024 * 1024 * 1024;
+constexpr uint64_t kMaxCkptIoRangeSize = 64ULL * 1024 * 1024;
+constexpr uint32_t kCkptMagic = 0x006d6552u; // "Rem\0" little-endian
+// format versions: 3 (rv32; 2 = older rv32 without the SDRAM size), 4 (rv64: CPU_state with 64-bit registers)
+// rv64: 4 = integer state, 5 = F/D build; rv32: 3 = integer state (2 older), 6 = F/D build (CPU_state carries the FP registers and fcsr follows it)
+constexpr uint16_t kCkptFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 3u);
+constexpr uint16_t kCkptLegacyFormatVersion = (XLEN == 64) ? (FP ? 5u : 4u) : (FP ? 6u : 2u);
+
+typedef struct CkptHeader {
+  uint32_t magic;
+  uint16_t format_ver;
+  uint16_t privilege_mode;
+  uint32_t ram_size;
+  uint32_t io_range_count;
+} CkptHeader;
+
+typedef struct CkptIoRange {
+  uint32_t base;
+  uint32_t size;
+} CkptIoRange;
+
+// Like gz_read_exact for the big RAM / SDRAM images: the data is read through a small buffer and only pages that differ
+// from what is there already are written, so the zero pages of a calloc'ed 2 GiB image never become resident.
+void gz_read_sparse(gzFile file, uint8_t *dst, uint64_t total_bytes) {
+  constexpr size_t kPage = 4096;
+  std::vector<uint8_t> buf(1u << 20);
+  uint64_t done = 0;
+  while (done < total_bytes) {
+    const size_t want = static_cast<size_t>(std::min<uint64_t>(buf.size(), total_bytes - done));
+    size_t got = 0;
+    while (got < want) {
+      const int r = gzread(file, buf.data() + got, static_cast<unsigned int>(want - got));
+      if (r < 0) Assert(0 && "Error: gzread failed during checkpoint restore.");
+      if (r == 0) Assert(0 && "Error: Unexpected EOF during checkpoint restore.");
+      got += static_cast<size_t>(r);
+    }
+    for (size_t off = 0; off < want; off += kPage) {
+      const size_t n = std::min(kPage, want - off);
+      if (std::memcmp(dst + done + off, buf.data() + off, n) != 0) std::memcpy(dst + done + off, buf.data() + off, n);
+    }
+    done += want;
+  }
+}
+
+void gz_read_exact(gzFile file, uint8_t *dst, uint64_t total_bytes) {
+  uint64_t remain = total_bytes;
+  while (remain > 0) {
+    const unsigned int chunk = static_cast<unsigned int>(
+        remain > kGzChunkSize ? kGzChunkSize : remain);
+    const int read_bytes = gzread(file, dst, chunk);
+    if (read_bytes < 0) {
+      Assert(0 && "Error: gzread failed during checkpoint restore.");
+    }
+    if (read_bytes == 0) {
+      Assert(0 && "Error: Unexpected EOF during checkpoint restore.");
+    }
+    dst += read_bytes;
+    remain -= static_cast<uint64_t>(read_bytes);
+  }
+}
+
+} // namespace
+
+void BackTop::load_image(const std::string &filename) {
+  std::ifstream inst_data(filename, std::ios::binary);
+  if (!inst_data.is_open()) {
+    Assert(0 && "Error: Image does not exist");
+  }
+
+  inst_data.seekg(0, std::ios::end);
+  std::streamsize size = inst_data.tellg();
+  inst_data.seekg(0, std::ios::beg);
+
+  if (size < 0 || static_cast<uint64_t>(size) > RAM_SIZE) {
+    Assert(0 && "Image too large for configured RAM window.");
+  }
+  if (!inst_data.read(reinterpret_cast<char *>(pmem_ram_ptr()), size)) {
+    Assert(0 && "读取文件失败！");
+  }
+
+  inst_data.close();
+
+  write_boot_stub(0x83e00000u, 0x80000000u);
+  seed_uart_io_words();
+
+  refcore_seed_devices();
+
+}
+
+// Architectural state taken from the reference model / a checkpoint that the timing model itself uses: PC, privilege,
+// CSRs (address translation, interrupts, traps) and the LR/SC reservation.
+void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
+  number_PC = state.pc;
+  csr->privilege = csr->privilege_1 = privilege;
+  for (int i = 0; i < CSR_NUM; i++) csr->CSR_RegFile[i] = csr->CSR_RegFile_1[i] = state.csr[i];
+  lsu->cur.lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
+  lsu->cur.lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
+}
+
+void BackTop::restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file) {
+  std::string final_name = filename;
+  gzFile file = gzopen(final_name.c_str(), "rb");
+  if (!file && final_name.find(".gz") == std::string::npos) {
+    final_name += ".gz";
+    file = gzopen(final_name.c_str(), "rb");
+  }
+  if (!file) {
+    Assert(0 && "Error: Could not open checkpoint file");
+  }
+
+  struct CkptCpuState {  // layout of CPU_state in the checkpoint; read and discarded
+    xlen_t gpr[32];
+#if FP
+    uint64_t fpr[32];
+#endif
+    xlen_t csr[21];
+    xlen_t pc;
+    uint32_t store_addr;
+    xlen_t store_data;
+    uint32_t store_strb;
+    bool store;
+    bool reserve_valid;
+    uint32_t reserve_addr;
+  };
+
+  CkptHeader ckpt_header = {};
+  gz_read_pod(file, ckpt_header);
+  if (ckpt_header.magic != kCkptMagic) {
+    std::cerr << "Error: Invalid checkpoint magic." << std::endl;
+    std::exit(1);
+  }
+  if (ckpt_header.format_ver != kCkptFormatVersion && ckpt_header.format_ver != kCkptLegacyFormatVersion) {
+    std::cerr << "Error: Unsupported checkpoint version: " << ckpt_header.format_ver << std::endl;
+    std::exit(1);
+  }
+  uint32_t checkpoint_sdram_size = 0;
+  if (ckpt_header.format_ver >= kCkptFormatVersion) {
+    gz_read_pod(file, checkpoint_sdram_size);
+    if (checkpoint_sdram_size != PMEM_SDRAM_SIZE) {
+      std::cerr << "Error: SDRAM checkpoint size is incompatible: file=0x" << std::hex << checkpoint_sdram_size
+                << " sim=0x" << PMEM_SDRAM_SIZE << std::dec << std::endl;
+      std::exit(1);
+    }
+  }
+  if (ckpt_header.ram_size == 0 || ckpt_header.ram_size > kCkptSimpointRamBytes) {
+    std::cerr << "Error: RAM-only checkpoint size is incompatible: file=0x" << std::hex << ckpt_header.ram_size
+              << " sim=0x" << kCkptSimpointRamBytes << std::dec << std::endl;
+    std::exit(1);
+  }
+
+  // The CPU state and the devices are not injected: they are set by the restore program. Read the state only to get to
+  // the interval length (0 for a special checkpoint).
+  CkptCpuState discarded_state;
+  uint64_t interval_inst_count = 0;
+  gz_read_pod(file, discarded_state);
+#if FP
+  uint32_t discarded_fcsr = 0;
+  gz_read_pod(file, discarded_fcsr);
+#endif
+  gz_read_pod(file, interval_inst_count);
+  ckpt_interval_inst_count = interval_inst_count;
+
+  if (pmem_ram_ptr() == nullptr || pmem_sdram_ptr() == nullptr) {
+    Assert(0 && "Error: Memory backends not allocated during checkpoint restore.");
+  }
+  pmem_clear_all();
+  std::cout << "Restoring Memory (front-door restore: the CPU state is set by the restore program)... format=simpoint-v"
+            << ckpt_header.format_ver << std::endl;
+  gz_read_sparse(file, reinterpret_cast<uint8_t *>(pmem_ram_ptr()), ckpt_header.ram_size);
+  if (checkpoint_sdram_size != 0) {
+    gz_read_sparse(file, reinterpret_cast<uint8_t *>(pmem_sdram_ptr()), checkpoint_sdram_size);
+  }
+  gzclose(file);
+
+  // The restore program goes into the boot window (words at 0x0; the core fetches the reset code from there).
+  std::ifstream stub(stub_file, std::ios::binary);
+  if (!stub.is_open()) {
+    Assert(0 && "Error: restore program (stub) does not exist");
+  }
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stub)), std::istreambuf_iterator<char>());
+  if (bytes.empty() || bytes.size() > BOOT_IO_SIZE || (bytes.size() & 3u) != 0) {
+    Assert(0 && "Error: restore program must be a non-empty word array that fits the boot window");
+  }
+  for (size_t off = 0; off < bytes.size(); off += 4) {
+    const uint32_t word = static_cast<uint32_t>(bytes[off]) | (static_cast<uint32_t>(bytes[off + 1]) << 8) |
+                          (static_cast<uint32_t>(bytes[off + 2]) << 16) | (static_cast<uint32_t>(bytes[off + 3]) << 24);
+    pmem_write(static_cast<uint32_t>(off), word);
+  }
+  seed_uart_io_words();  // device defaults, as for a normal boot
+  std::cout << "[CKPT] Restored DDR and SDRAM; restore program: " << (bytes.size() / 4) << " instructions from "
+            << stub_file << std::endl;
+
+  refcore_seed_devices();
+}
+
+void BackTop::restore_from_ref() {
+  CPU_state state;
+  uint8_t privilege;
+  refcore_get_state(state, privilege);
+  install_arch_state(state, privilege);
+
+  // Ensure the pipeline starts with a refetch from the restored PC
+  out.flush = true;
+  out.redirect_pc = state.pc;
+
+}
+
+void BackTop::restore_checkpoint(const std::string &filename) {
+
+  std::string final_name = filename;
+  gzFile file = gzopen(final_name.c_str(), "rb");
+  if (!file && final_name.find(".gz") == std::string::npos) {
+    final_name += ".gz";
+    file = gzopen(final_name.c_str(), "rb");
+  }
+
+  if (!file) {
+    Assert(0 && "Error: Could not open checkpoint file");
+  }
+
+  // 与 SimpleSim/save_checkpoint 写入格式保持一致，确保反序列化对齐。
+  // 注意：reserve_* 当前在本模拟器中暂未使用，但必须读取以避免流错位。
+  typedef struct Ckpt_CPU_state {
+    xlen_t gpr[32];
+#if FP
+    uint64_t fpr[32];
+#endif
+    xlen_t csr[21];
+    xlen_t pc;
+
+    uint32_t store_addr;
+    xlen_t store_data;
+    uint32_t store_strb;
+    bool store;
+    bool reserve_valid;
+    uint32_t reserve_addr;
+  } Ckpt_CPU_state;
+
+  Ckpt_CPU_state ckpt_state;
+  CkptHeader ckpt_header = {};
+  uint64_t interval_inst_count;
+
+  // 1. 恢复 header + 状态
+  gz_read_pod(file, ckpt_header);
+  if (ckpt_header.magic != kCkptMagic) {
+    std::cerr << "Error: Invalid checkpoint magic." << std::endl;
+    std::exit(1);
+  }
+  if (ckpt_header.format_ver != kCkptFormatVersion &&
+      ckpt_header.format_ver != kCkptLegacyFormatVersion) {
+    std::cerr << "Error: Unsupported checkpoint version: "
+              << ckpt_header.format_ver << std::endl;
+    std::exit(1);
+  }
+  uint32_t checkpoint_sdram_size = 0;
+  if (ckpt_header.format_ver >= kCkptFormatVersion) {
+    gz_read_pod(file, checkpoint_sdram_size);
+    if (checkpoint_sdram_size != PMEM_SDRAM_SIZE) {
+      std::cerr << "Error: SDRAM checkpoint size is incompatible: file=0x"
+                << std::hex << checkpoint_sdram_size << " sim=0x"
+                << PMEM_SDRAM_SIZE << std::dec << std::endl;
+      std::exit(1);
+    }
+  }
+  if (ckpt_header.ram_size == 0 ||
+      ckpt_header.ram_size > kCkptSimpointRamBytes) {
+    std::cerr << "Error: RAM-only checkpoint size is incompatible: file=0x"
+              << std::hex << ckpt_header.ram_size << " sim=0x"
+              << kCkptSimpointRamBytes << std::dec << std::endl;
+    std::exit(1);
+  }
+
+  gz_read_pod(file, ckpt_state);
+#if FP
+  uint32_t ckpt_fcsr = 0;
+  gz_read_pod(file, ckpt_fcsr);
+#endif
+  gz_read_pod(file, interval_inst_count);
+  ckpt_interval_inst_count = interval_inst_count;
+
+  CPU_state state;
+  memcpy(state.gpr, ckpt_state.gpr, sizeof(state.gpr));
+#if FP
+  memcpy(state.fpr, ckpt_state.fpr, sizeof(state.fpr));
+  state.fcsr = ckpt_fcsr;
+#endif
+  memcpy(state.csr, ckpt_state.csr, sizeof(state.csr));
+  state.pc = ckpt_state.pc;
+  state.store_addr = ckpt_state.store_addr;
+  state.store_data = ckpt_state.store_data;
+  state.store_strb = ckpt_state.store_strb;
+  state.store = ckpt_state.store;
+  state.reserve_valid = ckpt_state.reserve_valid;
+  state.reserve_addr = ckpt_state.reserve_addr;
+
+  // 初始化新字段
+  state.instruction = 0;
+  state.page_fault_inst = false;
+  state.page_fault_load = false;
+  state.page_fault_store = false;
+  state.inst_idx = 0;
+
+  const uint8_t restored_privilege = static_cast<uint8_t>(ckpt_header.privilege_mode & 0x3u);
+  install_arch_state(state, restored_privilege);
+
+  // 2. 恢复内存
+  if (pmem_ram_ptr() == nullptr || pmem_sdram_ptr() == nullptr) {
+    Assert(0 &&
+           "Error: Memory backends not allocated during checkpoint restore.");
+  }
+  pmem_clear_all();
+
+  std::cout << "Restoring Memory... format=simpoint-v"
+            << ckpt_header.format_ver << "(header+ranges)"
+            << " file_ram=0x" << std::hex << ckpt_header.ram_size
+            << " sim_ram=0x" << kCkptSimpointRamBytes << std::dec
+            << std::endl;
+
+  uint8_t *ram_dst = reinterpret_cast<uint8_t *>(pmem_ram_ptr());
+  gz_read_sparse(file, ram_dst, ckpt_header.ram_size);
+  if (checkpoint_sdram_size != 0) {
+    uint8_t *sdram_dst = reinterpret_cast<uint8_t *>(pmem_sdram_ptr());
+    gz_read_sparse(file, sdram_dst, checkpoint_sdram_size);
+  }
+
+  if (ckpt_header.io_range_count > 64u) {
+    Assert(0 && "Error: unreasonable checkpoint MMIO range count");
+  }
+  if (ckpt_header.format_ver >= kCkptFormatVersion &&
+      ckpt_header.io_range_count !=
+          sizeof(kCheckpointMmioRanges) / sizeof(kCheckpointMmioRanges[0])) {
+    Assert(0 && "Error: checkpoint v3 MMIO range count mismatch");
+  }
+
+  uint32_t restored_mmio_ranges = 0;
+  for (uint32_t i = 0; i < ckpt_header.io_range_count; ++i) {
+    CkptIoRange range{};
+    gz_read_pod(file, range);
+    if (range.size > kMaxCkptIoRangeSize) {
+      Assert(0 && "Error: checkpoint MMIO range is unreasonably large");
+    }
+
+    const SimMmioRange *expected = nullptr;
+    if (ckpt_header.format_ver >= kCkptFormatVersion) {
+      expected = &kCheckpointMmioRanges[i];
+      if (range.base != expected->base || range.size != expected->size) {
+        Assert(0 && "Error: checkpoint v3 MMIO layout mismatch");
+      }
+    } else {
+      for (const auto &candidate : kCheckpointMmioRanges) {
+        if (range.base == candidate.base && range.size == candidate.size) {
+          expected = &candidate;
+          break;
+        }
+      }
+    }
+
+    std::vector<uint8_t> payload(range.size, 0);
+    gz_read_exact(file, payload.data(), payload.size());
+    if (expected == nullptr) {
+      std::cout << "[CKPT][MMIO] Skipping legacy range base=0x" << std::hex
+                << range.base << " size=0x" << range.size << std::dec
+                << std::endl;
+      continue;
+    }
+    if ((range.size & 0x3u) != 0) {
+      Assert(0 && "Error: checkpoint MMIO range is not word aligned");
+    }
+    for (uint32_t off = 0; off < range.size; off += 4u) {
+      const uint32_t word = static_cast<uint32_t>(payload[off + 0]) |
+                            (static_cast<uint32_t>(payload[off + 1]) << 8) |
+                            (static_cast<uint32_t>(payload[off + 2]) << 16) |
+                            (static_cast<uint32_t>(payload[off + 3]) << 24);
+      pmem_write(range.base + off, word);
+    }
+    ++restored_mmio_ranges;
+  }
+
+  gzclose(file);
+  std::cout << "[CKPT] Restored DDR, SDRAM and " << restored_mmio_ranges
+            << " MMIO ranges." << std::endl;
+  std::cout << "Checkpoint restored from " << final_name << std::endl;
+
+  refcore_init_ckpt(state, restored_privilege);
+
+  // Ensure the pipeline starts with a refetch from the restored PC
+  out.flush = true;
+  out.redirect_pc = state.pc;
+}

@@ -75,8 +75,6 @@ static void PTAB_comb_impl(const PTAB_in &inp, const PTAB_read_data &rd, PtabCom
   out.out_regs.empty = (next_size == 0);
 }
 
-void PTAB_comb(const PtabCombIn &in, PtabCombOut &out) { PTAB_comb_impl(in.inp, in.rd, out); }
-
 namespace {
 
 class PTABModel {

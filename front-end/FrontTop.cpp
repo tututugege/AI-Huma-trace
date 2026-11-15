@@ -1,7 +1,6 @@
 #include "FrontTop.h"
 #include "config.h"
 #include "front_module.h"
-#include "oracle.h"
 #include "train_IO.h"
 #include "util.h"
 #include <cstring>
@@ -79,9 +78,3 @@ void FrontTop::step_bpu() {
   comb_bpu();
   seq_write_bpu();
 }
-
-void FrontTop::step_oracle() {
-  sync_icache_ptw_ports(*this);
-  get_oracle(in, out);
-}
-

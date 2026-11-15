@@ -159,7 +159,7 @@ struct Uop {
   wire<1> rob_defer;    // LSU memory-dependence speculation: PRF write / wake-up only, the ROB completion bit comes with a later write-back
   wire<1> ftq_is_last;  // set on the mispredicting branch inside the ROB
   wire<1> is_mmio;      // set when the LSU executes an MMIO access
-  wire<1> early_woken;  // LSU_PIPE_L2: the consumers of this load were already woken by the LSU (no PRF-register wake-up)
+  wire<1> early_woken;  // the consumers of this load were already woken by the LSU (no PRF-register wake-up)
 
   UopType op;
   TmaMeta tma;

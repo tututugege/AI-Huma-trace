@@ -160,27 +160,6 @@ void pmem_memcpy_to_ram(uint32_t ram_paddr, const void *src, size_t len) {
   std::memcpy(reinterpret_cast<uint8_t *>(p_memory) + off, src, len);
 }
 
-void pmem_memcpy_from_ram(void *dst, uint32_t ram_paddr, size_t len) {
-  pmem_require_ready("memcpy_from_ram");
-  if (len == 0) {
-    return;
-  }
-  if (len > UINT32_MAX) {
-    pmem_fatal("memcpy_from_ram", ram_paddr, len);
-  }
-  if (!pmem_is_ram_addr(ram_paddr, static_cast<uint32_t>(len))) {
-    pmem_fatal("memcpy_from_ram", ram_paddr, len);
-  }
-  if (pmem_is_sdram_addr(ram_paddr, static_cast<uint32_t>(len))) {
-    const size_t off = static_cast<size_t>(ram_paddr - PMEM_SDRAM_BASE);
-    std::memcpy(dst, reinterpret_cast<const uint8_t *>(g_sdram_memory) + off,
-                len);
-    return;
-  }
-  const size_t off = static_cast<size_t>(ram_paddr - PMEM_RAM_BASE);
-  std::memcpy(dst, reinterpret_cast<const uint8_t *>(p_memory) + off, len);
-}
-
 uint32_t *pmem_ram_ptr() {
   return p_memory;
 }

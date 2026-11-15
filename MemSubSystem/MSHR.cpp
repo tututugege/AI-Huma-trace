@@ -36,16 +36,6 @@ void merge_store_into_entry(MSHREntry &entry, const MSHRReq &req) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 static MSHR *g_dbg_mshr = nullptr;
-void mshr_debug_dump() {  // called when the ROB detects a deadlock
-    if (!g_dbg_mshr) return;
-    const MSHR_STATE &s = g_dbg_mshr->cur;
-    std::fprintf(stderr, "[MSHR] count=%d hold_valid=%d hold_id=%d\n", int(s.mshr_count), int(s.axi_resp_hold_valid), int(s.axi_resp_hold_id));
-    for (int i = 0; i < DCACHE_MSHR_ENTRIES; i++) {
-        const MSHREntry &e = s.mshr_entries[i];
-        std::fprintf(stderr, "[MSHR]  %d valid=%d issued=%d addr=%08x pf=%d no_fill=%d lsu=%d\n", i, int(e.valid), int(e.issued),
-                     unsigned(e.addr), int(e.is_prefetch), int(e.no_fill), int(e.lsu_origin));
-    }
-}
 
 void MSHR::init()
 {

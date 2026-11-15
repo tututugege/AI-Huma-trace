@@ -1,4 +1,3 @@
-#include "BeginCheck.h"
 #include "Csr.h"
 #include "Pmu.h"
 #include "Idu.h"
@@ -21,14 +20,6 @@ void Idu::init() {
   tag_vec[0] = tag_vec_1[0] = false;  // tag 0 is "no branch"
   now_br_mask = now_br_mask_1 = 0;
   br_latch = br_latch_1 = {};
-}
-
-// The working copies already equal the registered state (seq() copies them back).
-void Idu::comb_begin() {
-  BEGIN_EQ(tag_vec_1, tag_vec);
-  BEGIN_EQ(br_mask_cp_1, br_mask_cp);
-  BEGIN_EQ(now_br_mask_1, now_br_mask);
-  BEGIN_EQ(br_latch_1, br_latch);
 }
 
 // Decode the instructions of the pre-decode queue and give every branch a tag/mask. A younger instruction depends on all

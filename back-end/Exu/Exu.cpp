@@ -1,4 +1,3 @@
-#include "BeginCheck.h"
 #include "Exu.h"
 #include "Wires.h"
 #include "config.h"
@@ -326,21 +325,20 @@ void Exu::comb_exec() {
     }
   }
 
-  if (tbhook::enabled)
-    for (int p = 0; p < ISSUE_WIDTH; p++) {
-      if (!w.exu2rob.entry[p].valid) continue;
-      const auto &u = w.exu2rob.entry[p].uop;
-      tbhook::ExecObs o;
-      o.rob_idx = u.rob_idx;
-      o.uid_dbg = (uint64_t)u->dbg.inst_idx;
-      o.op = (int)decode_uop_type(u.op);
-      o.result = u.result;
-      o.diag_val = u.diag_val;
-      o.br_taken = u.br_taken;
-      o.mispred = u.mispred;
-      o.page_fault = u.page_fault_inst || u.page_fault_load || u.page_fault_store;
-      tbhook::on_exec(o);
-    }
+  for (int p = 0; p < ISSUE_WIDTH; p++) {
+    if (!w.exu2rob.entry[p].valid) continue;
+    const auto &u = w.exu2rob.entry[p].uop;
+    tbhook::ExecObs o;
+    o.rob_idx = u.rob_idx;
+    o.uid_dbg = (uint64_t)u->dbg.inst_idx;
+    o.op = (int)decode_uop_type(u.op);
+    o.result = u.result;
+    o.diag_val = u.diag_val;
+    o.br_taken = u.br_taken;
+    o.mispred = u.mispred;
+    o.page_fault = u.page_fault_inst || u.page_fault_load || u.page_fault_store;
+    tbhook::on_exec(o);
+  }
 
   w.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
   w.exu2id.mispred = mispred;

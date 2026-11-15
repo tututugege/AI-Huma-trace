@@ -34,17 +34,12 @@ constexpr uint32_t SIM_DDR_READ_TO_WRITE_TURNAROUND = AXI_KIT_SIM_DDR_READ_TO_WR
 constexpr uint32_t SIM_DDR_WRITE_TO_READ_TURNAROUND = AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND;
 
 class SimDDR {
-  friend struct DdrShadowAccess;  // lockstep test hook (DDR_SHADOW builds)
 public:
   void init();
   void comb_outputs();  // ready/valid/response outputs from the registered state (run before the masters evaluate)
   void comb_inputs() {} // kept for symmetry with AXI_Interconnect: everything is decided in comb_outputs
   void comb() { comb_outputs(); comb_inputs(); }
   void seq();
-  bool idle_quiescent() const {
-    return pend_.empty() && fifo_ == 0 && resp_.empty() && rd_.empty() && accept_cd_ == 0 && drain_cd_ == 0 &&
-           !drain_mode_ && turn_cd_ == 0 && !switch_pending_;
-  }
 
   SimDDR_IO_t io;
 #ifdef SIM_DDR_DS3

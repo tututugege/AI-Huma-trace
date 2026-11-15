@@ -1,5 +1,4 @@
 #include "Wires.h"
-#include "BeginCheck.h"
 #include "Ren.h"
 #include "Pmu.h"
 #include "MsData.h"
@@ -88,29 +87,6 @@ void Ren::init() {
   memcpy(alloc_checkpoint_head_1, alloc_checkpoint_head, sizeof(alloc_checkpoint_head));
 }
 
-// The working copies already equal the registered state (seq() copies them back).
-void Ren::comb_begin() {
-  BEGIN_EQ(inst_r_1, inst_r);
-  BEGIN_EQ(inst_valid_1, inst_valid);
-  BEGIN_EQ(spec_RAT_1, spec_RAT);
-  BEGIN_EQ(arch_RAT_1, arch_RAT);
-  BEGIN_EQ(RAT_checkpoint_1, RAT_checkpoint);
-  BEGIN_EQ(free_list_1, free_list);
-  BEGIN_EQ(free_head_1, free_head);
-  BEGIN_EQ(free_head_commit_1, free_head_commit);
-  BEGIN_EQ(free_tail_1, free_tail);
-  BEGIN_EQ(alloc_checkpoint_head_1, alloc_checkpoint_head);
-#if FP
-  BEGIN_EQ(fp_spec_RAT_1, fp_spec_RAT);
-  BEGIN_EQ(fp_arch_RAT_1, fp_arch_RAT);
-  BEGIN_EQ(fp_RAT_checkpoint_1, fp_RAT_checkpoint);
-  BEGIN_EQ(fp_free_list_1, fp_free_list);
-  BEGIN_EQ(fp_free_head_1, fp_free_head);
-  BEGIN_EQ(fp_free_head_commit_1, fp_free_head_commit);
-  BEGIN_EQ(fp_free_tail_1, fp_free_tail);
-  BEGIN_EQ(fp_alloc_checkpoint_head_1, fp_alloc_checkpoint_head);
-#endif
-}
 
 // Move elimination bound. The architectural state after a move commits equals the speculative RAT right after its
 // rename, so the architectural reference count of the source register never exceeds the speculative one. A move is

@@ -42,7 +42,6 @@ public:
 
   void init();
   void sync_mmio_devices_from_backing();
-  void reinit_frontend_after_restore();
   void restore_pc(pc_t pc);
   void cycle();
   void front_comb_before_back();
@@ -51,7 +50,6 @@ public:
   void peripheral_resp_hold_comb();
   void peripheral_resp_hold_seq();
   void back2front_comb();
-  bool ready_to_exit() const;
   uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }
   // 由 SimContext 在提交路径调用的本地辅助逻辑。
   void commit_sync(InstInfo *inst, int commit_slot);

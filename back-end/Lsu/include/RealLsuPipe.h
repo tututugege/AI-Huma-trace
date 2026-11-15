@@ -1,4 +1,4 @@
-// RealLsuPipe.h -- state of the staged LSU (switch LSU_PIPE / CFG_LSU_PIPE). Design: docs/LSU_PIPE.md.
+// RealLsuPipe.h -- state of the staged LSU. Design: docs/LSU_PIPE.md.
 // Every field has a declared width (wire<N>); registers live in LsuPipeState (pcur = registered value, pnxt = next value).
 #pragma once
 
@@ -32,7 +32,7 @@ enum PLd : uint8_t {
   L_WBP = 6,      // result ready, waiting for a load write-back port
   L_MMW = 7,      // MMIO load waiting to be the oldest instruction
   L_MMR = 8,      // MMIO load on the bus
-  L_WB3 = 9,      // LSU_PIPE_L2 bit 1: decided at L2, in the L3 register, writes back next cycle
+  L_WB3 = 9,      // cut a: decided at L2, in the L3 register, writes back next cycle
   L_SPD = 10,     // memory speculation: written back (consumers woken) but passed an unknown-address older store; ROB completion pending
 };
 // replay cause (3 bits)
@@ -68,11 +68,9 @@ struct PLdq {
   wire<2> rtype = 0;                 // ReplayType of the last DCache response
   wire<EPOCH_W> epoch = 0;
   wire<6> wd = 0;             // DCache response watchdog (cycles in DCW)
-  wire<1> sw = 0;             // LSU_PIPE_L2: consumers already woken at L2 (no second wake-up at write-back)
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
   wire<32> pc = 0;            // load PC (memory-dependence predictor)
-  wire<16> sset = 0;          // store-set id of the load PC (predictor mode 1)
   wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
   bool atnt = false;          // LSU_MS_DATA: the address came from a stale register
@@ -82,7 +80,6 @@ struct PLdq {
 
 struct PStq {
   wire<32> pc = 0;            // store PC (predictor mode 1)
-  wire<16> sset = 0;          // store-set id of the store PC
   wire<1> va_v = 0;           // STA arrived (vaddr[11:0] + size known: partial CAM can compare)
   wire<XLEN> vaddr = 0;
   wire<1> pa_v = 0;           // DTLB hit: paddr known
@@ -125,24 +122,17 @@ struct PL12 {
   wire<1> mmio = 0;
   wire<1> cand_v = 0;         // partial CAM: youngest older store that may conflict
   wire<STQ_IDX_WIDTH> cand = 0;
-  wire<1> rpl = 0;            // the load came from a replay register (LSU_PIPE_L2 bit 128)
   wire<1> dcblk = 0;          // DCache request not launched: the port has a pending hidden retry -> short replay
 };
-// L2/L3 register (LSU_PIPE_L2 bit 1): the direct completion decided at L2 of load port p
+// L2/L3 register (cut a): the direct completion decided at L2 of load port p
 struct PL3 {
   wire<1> v = 0;
   wire<LDQ_IDX_WIDTH> ldq = 0;
-};
-// cancel of a speculative wake-up (registered at the end of L2, applied before the next select)
-struct PSf {
-  wire<1> v = 0;
-  wire<PRF_IDX_WIDTH> preg = 0;
 };
 // replay register: entry picked by a replay port, re-enters at L1
 struct PRp {
   wire<1> v = 0;
   wire<LDQ_IDX_WIDTH> ldq = 0;
-  wire<3> age = 0;            // cycles the register waited for a free L1 slot (saturating)
 };
 
 constexpr int WB_MAX = 32;      // write-buffer entries at most (runtime value LSU_PIPE_WBUF)
@@ -170,7 +160,6 @@ struct LsuPipeState {
   wire<STQ_IDX_WIDTH> stq_commit = 0;      // head + ccount
   PL12 l12[LD];
   PL3 l3[LD];
-  PSf sf[LD];
   PRp rp[RP_MAX];
   PRp srp;                                  // STA replay register (stq index)
   wire<STQ_IDX_WIDTH> srp_ptr = 0;          // round-robin start of the STA replay register pick (fairness: no starvation of walk owners)
@@ -200,12 +189,12 @@ struct PCycle {
   PSta s1[STA];
   bool wbd_v[LD] = {};           // L2 direct completion on load port p
   uint8_t wbd_ldq[LD] = {};
-  stq_mask_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); LSU_PIPE_CUT bit 16
+  stq_mask_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); cut G
   uint8_t st_rwpre[STQ_SIZE] = {};     // their replay wait before the wake
   stq_mask_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)
   bool fill = false;
   uint32_t fill_addr = 0;
-  int mmio_ld = -1;              // LDQ entry whose MMIO response arrived this cycle (LSU_PIPE_CUT bit 64: exempt from the F cut)
+  int mmio_ld = -1;              // LDQ entry whose MMIO response arrived this cycle (FM: exempt from the F cut)
 };
 
 }  // namespace lp

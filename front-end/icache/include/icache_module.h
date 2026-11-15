@@ -238,7 +238,6 @@ public:
   ICache();
 
   void reset();
-  void comb();
   void comb_lookup_meta();
   void comb_lookup_data();
   void eval_state_machine();
@@ -248,11 +247,6 @@ public:
   ICache_IO_t io;
   ICache_perf_t perf;
 
-  // Debug
-  void log_state();
-  void log_tag(uint32_t index);
-  void log_valid(uint32_t index);
-  void log_pipeline();
   int valid_line_num() { return -1; }
 
 private:

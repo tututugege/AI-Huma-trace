@@ -68,17 +68,13 @@ public:
   CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
 
   void init();
-  void comb();
   void comb_outputs();
   void comb_inputs();
   void seq();
-  void dcache_fast_comb(bool inject_slow_request);
-  void dcache_fast_seq(bool sample_mshr_perf = false);
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
   void on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3);
   bool consume_dma_write(uint32_t &paddr, size_t &size);
-  void load_sdcard_image(const std::string &path);
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);
@@ -91,19 +87,6 @@ public:
                const axi_interconnect::AXI_LLCPerfCounters_t &perf);
 
   RealDcache  &get_dcache()  { return dcache_; }
-  bool dcache_domain_quiescent() const {
-    if (!dcache_.idle_quiescent() || !mshr_.idle_quiescent() ||
-        !wb_.idle_quiescent()) {
-      return false;
-    }
-    for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
-      if (dcache_resp_meta_cur_[i].valid || dcache_resp_meta_nxt_[i].valid ||
-          dcache_resp_pending_meta_[i].valid) {
-        return false;
-      }
-    }
-    return true;
-  }
   MSHR        &get_mshr()    { return mshr_; }
   WriteBuffer &get_wb()      { return wb_; }
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }

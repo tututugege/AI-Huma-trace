@@ -72,8 +72,6 @@ struct AXI_LLC_ReadReqIn_t {
   wire<8> total_size = 0;
   wire<4> id = 0;
   wire<1> bypass = false;
-  wire<1> direct_mapped = false;
-  wire<1> mode2_ddr_aligned = false;
 };
 
 struct AXI_LLC_ReadReqOut_t {
@@ -98,8 +96,6 @@ struct AXI_LLC_WriteReqIn_t {
   wire<8> total_size = 0;
   wire<4> id = 0;
   wire<1> bypass = false;
-  wire<1> direct_mapped = false;
-  wire<1> mode2_ddr_aligned = false;
 };
 
 struct AXI_LLC_WriteReqOut_t {
@@ -151,7 +147,6 @@ struct AXI_LLC_MemOut_t {
   wire<1> read_req_valid = false;
   wire<32> read_req_addr = 0;
   wire<8> read_req_size = 0;
-  wire<1> read_req_mode2_ddr_aligned = false;
   wire<4> read_req_id = 0;
   wire<1> read_resp_ready = false;
   wire<1> write_req_valid = false;
@@ -159,7 +154,6 @@ struct AXI_LLC_MemOut_t {
   WideWriteData_t write_req_data{};
   WideWriteStrb_t write_req_strobe{};
   wire<8> write_req_size = 0;
-  wire<1> write_req_mode2_ddr_aligned = false;
   wire<4> write_req_id = 0;
   wire<1> write_resp_ready = false;
 };
@@ -229,7 +223,6 @@ struct AXI_LLCMissEntry_t {
   bool bypass = false;
   bool is_prefetch = false;
   bool is_write = false;
-  bool mode2_ddr_aligned = false;
   bool prefetch_train = false;
   bool mem_req_issued = false;
   bool refill_valid = false;
@@ -258,8 +251,6 @@ struct AXI_LLCPrefetchReq_t {
 struct AXI_LLCWritePendingReq_t {
   bool valid = false;
   bool bypass = false;
-  bool direct_mapped = false;
-  bool mode2_ddr_aligned = false;
   uint8_t master = 0;
   uint8_t id = 0;
   uint8_t total_size = 0;
@@ -271,8 +262,6 @@ struct AXI_LLCWritePendingReq_t {
 struct AXI_LLCWriteCtx_t {
   bool valid = false;
   bool bypass = false;
-  bool direct_mapped = false;
-  bool mode2_ddr_aligned = false;
   bool lookup_pending = false;
   bool mem_issued = false;
   bool mem_done = false;
@@ -318,8 +307,6 @@ struct AXI_LLC_Regs_t {
   bool lookup_is_invalidate_r = false;
   bool lookup_is_write_r = false;
   bool lookup_is_bypass_r = false;
-  bool lookup_is_direct_mapped_r = false;
-  bool lookup_is_mode2_ddr_aligned_r = false;
   bool prefetch_stream_valid_r = false;
   uint32_t prefetch_last_miss_line_r = 0;
   uint8_t prefetch_quiet_cycles_r = 0;
@@ -447,7 +434,6 @@ private:
   bool can_accept_invalidate_line_now(uint32_t line_addr) const;
   bool has_dirty_or_write_hazard(const AXI_LLC_Regs_t &regs) const;
   bool can_accept_invalidate_all_now(const AXI_LLC_Regs_t &regs) const;
-  bool direct_mapped_coords(uint32_t addr, uint32_t *set, uint8_t *way) const;
   bool line_has_valid_meta(const AXI_LLC_Bytes_t &valid_payload, const AXI_LLC_Bytes_t &meta_payload, uint32_t tag,
                            int *hit_way, int *first_invalid_way, AXI_LLCMetaEntry_t *hit_meta) const;
 
@@ -467,12 +453,11 @@ private:
 
   // --- lookup pipeline ---
   void start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t id, bool prefetch, bool invalidate, bool write,
-                    bool bypass, bool direct_mapped, bool mode2_ddr_aligned);
+                    bool bypass);
   void end_lookup(AXI_LLCState next);
   void retry_lookup(AXI_LLCState next);
   void drop_prefetch_slot(uint8_t slot);
   bool try_launch_pending_write_lookup();
-  bool complete_direct_lookup(bool table_busy);
   bool complete_hit_lookup(bool table_busy, uint32_t set, uint32_t tag, uint32_t line, int hit_way,
                            const AXI_LLCMetaEntry_t &hit_meta);
   bool complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, uint32_t line, int first_invalid_way);

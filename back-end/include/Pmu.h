@@ -83,7 +83,4 @@ public:
   void report(uint64_t instructions);  // print the counters and the top-down tree, write the CSV files
   void close();
 
-  static const char *name(int e);
-  static const char *group(int e);
-  static const char *desc(int e);
 };

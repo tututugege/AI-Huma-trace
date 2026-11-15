@@ -31,7 +31,7 @@ inline int cfg_l1_entries() { static const int v = env_int("BPO_L1_ENTRIES", 512
 inline int cfg_l1_ways() { static const int v = env_int("BPO_L1_WAYS", 2); return v; }
 inline int cfg_ub_tag() { static const int v = env_int("BPO_UB_TAG", 10); return v; }
 inline int cfg_loop() { static const int v = env_int("BPO_LOOP", 0); return v; }       // S0 single-block loop exit prediction (needs BPO_HIST=1)
-// FE_RFAST (FRONTEND_NOTES.md): bit0 = S0 issues the first block of a redirect in the refetch cycle itself (instead of one cycle later)
+// FE_RFAST (docs/history/FRONTEND_NOTES.md): bit0 = S0 issues the first block of a redirect in the refetch cycle itself (instead of one cycle later)
 inline int cfg_rfast() { static const int v = env_int("FE_RFAST", CFG_FE_RFAST); return v; }
 // FE_BFAST: bit0 = an S1-level (L1) override issues the corrected block in the same cycle (no bubble), bit1 = an S_D override issues the corrected block in the same cycle (1 bubble cycle less)
 inline int cfg_bfast() { static const int v = env_int("FE_BFAST", CFG_FE_BFAST); return v; }
@@ -517,12 +517,11 @@ class BpuPipe {
     for (int w = 0; w < W_; w++) nw[w] = tb.e[set * W_ + w];
     const int limit = ev.kind == UE_TAKEN ? ev.slot : ev.kind == UE_FALL ? FW : ev.kind == UE_TRIP ? 0 : ev.slot + 1;
     int same = -1, fall = -1;
-    bool any = false;
     uint8_t nd_nt = ev.nd;
     for (int w = 0; w < W_; w++) {
       UbEnt &e = nw[w];
       if (!(e.v && e.tag == tag)) continue;
-      any = true; nd_nt = e.nd_nt;
+      nd_nt = e.nd_nt;
       if (!e.taken) fall = w;
       if (e.taken && e.type == BR_DIRECT && e.slot < limit && !(ev.kind == UE_TAKEN && e.slot == ev.slot)) e.ctr = e.ctr > 0 ? e.ctr - 1 : 0;
       if (ev.kind == UE_FALL) e.nd_nt = ev.nd;

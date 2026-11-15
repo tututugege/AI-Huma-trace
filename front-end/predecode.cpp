@@ -57,5 +57,3 @@ void predecode_comb(const predecode_read_data &input, PredecodeResult &output) {
     break;
   }
 }
-
-void predecode_seq_write() {}

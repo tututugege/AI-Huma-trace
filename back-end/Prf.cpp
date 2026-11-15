@@ -1,5 +1,4 @@
 #include "Wires.h"
-#include "BeginCheck.h"
 #include "Prf.h"
 #include "IO.h"
 #include "config.h"
@@ -38,14 +37,6 @@ void Prf::init() {
   }
 }
 
-// 功能：复制 PRF 当前状态到本拍工作副本（*_1）。
-// 输入依赖：reg_file[]、inst_r[]。
-// 输出更新：reg_file_1[]、inst_r_1[]。
-// 约束：仅状态镜像，不进行读/写/旁路决策。
-void Prf::comb_begin() {
-  BEGIN_EQ(inst_r_1, inst_r);
-}
-
 // 功能：根据当前发出的指令，向 FTQ 提取 PC 读请求。
 void Prf::comb_req_ftq() {
   for (int i = 0; i < FTQ_PRF_PC_PORT_NUM; i++) {
@@ -66,10 +57,8 @@ void Prf::comb_req_ftq() {
   }
 }
 
-// 功能：为本拍发射条目读取源操作数，并应用写回级与 EXU 广播旁路。
-// 输入依赖：wires->iss2prf.iss_entry[]、reg_file[]、inst_r[]、wires->exe2prf.bypass[]。
-// 输出更新：wires->prf2exe.iss_entry[]（含 src1_rdata/src2_rdata）。
-// 约束：src_en=0 或源为 P0 时读值强制为 0；其他源的旁路优先于寄存器堆。
+// Register-read stage: there is no register file (operand values are facts of the trace), so the issued uops pass through
+// to the EXU and the ALU/BRU ports that need the instruction PC take it from the FTQ response.
 void Prf::comb_read() {
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     wires->prf2exe.iss_entry[i].valid = wires->iss2prf.iss_entry[i].valid;
@@ -113,7 +102,7 @@ void Prf::comb_awake() {
       if (is_squashed) {
         continue;
       }
-      if (inst_r[i].uop.early_woken) continue;  // the LSU already woke the consumers (LSU_PIPE_L2)
+      if (inst_r[i].uop.early_woken) continue;  // the LSU already woke the consumers from its L3 register
 
       if (awake_idx < LSU_LOAD_WB_WIDTH) {
         wires->prf_awake.wake[awake_idx].valid = true;
@@ -122,23 +111,6 @@ void Prf::comb_awake() {
       }
     }
   }
-}
-
-// 功能：保留接口（当前 PRF 无额外 complete 组合逻辑）。
-// 输入依赖：无。
-// 输出更新：无。
-// 约束：函数存在用于保持模块阶段结构一致性。
-void Prf::comb_complete() {
-  // 保留接口：当前 PRF 不承载额外 complete 组合逻辑。
-}
-
-// 功能：将写回级结果写入物理寄存器堆下一拍副本。
-// 输入依赖：inst_r[]（valid/dest_en/dest_preg/result）。
-// 输出更新：reg_file_1[]。
-// 约束：x0 不可写，reg_file_1[0] 始终保持 0。
-void Prf::comb_write() {
-  // No register file (P3): values are facts of the trace. The write-back stage inst_r below still
-  // carries the tags that drive load wake-up and bypass timing.
 }
 
 // 功能：推进 PRF 写回流水寄存器，并处理 flush/mispred/clear_mask。

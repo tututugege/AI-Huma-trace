@@ -37,9 +37,6 @@ constexpr uint8_t kDownstreamBeatWords =
     kDownstreamBeatBytes / static_cast<uint8_t>(sizeof(uint32_t));
 constexpr uint8_t kDownstreamAxiSize = sim_ddr::AXI_SIZE_CODE;
 constexpr uint8_t kMmioAxiSize = AXI_DUAL_PORT_AXI_SIZE_32B;
-constexpr uint8_t kMmioTransactionSize = AXI_DUAL_PORT_MMIO_TOTAL_SIZE;
-constexpr uint8_t kUpstreamStrbBytes =
-    (MAX_WRITE_TRANSACTION_BYTES + 7u) / 8u;
 #ifndef AXI_KIT_DDR_BASE
 #ifdef CONFIG_AXI_KIT_DDR_BASE
 #define AXI_KIT_DDR_BASE CONFIG_AXI_KIT_DDR_BASE
@@ -48,7 +45,6 @@ constexpr uint8_t kUpstreamStrbBytes =
 #endif
 #endif
 constexpr uint32_t kDdrAddressBase = AXI_KIT_DDR_BASE;
-constexpr uint32_t kDefaultMappedLlcOffset = 0x30000000u;
 
 bool mmio_request_supported(uint8_t total_size) {
   return axi_dual_port_mmio_request_supported(total_size);
@@ -295,15 +291,13 @@ struct DownstreamWriteIssue {
 DownstreamReadIssue make_downstream_read_issue(DownstreamPort port,
                                                uint32_t addr,
                                                uint8_t total_size,
-                                               uint32_t line_bytes,
-                                               bool force_line_aligned) {
+                                               uint32_t line_bytes) {
   DownstreamReadIssue out{};
   out.port = port;
   const AxiBridgeDownstreamIssueShape shape =
       axi_bridge_downstream_read_issue_shape(
           port == DownstreamPort::MMIO, addr, total_size,
-          static_cast<uint8_t>(line_bytes), kDownstreamBeatBytes,
-          force_line_aligned);
+          static_cast<uint8_t>(line_bytes), kDownstreamBeatBytes);
   out.addr = shape.issue_addr;
   out.total_size = shape.issue_size;
   out.extract_from_aligned_beat = shape.extract_from_aligned_beat;
@@ -315,22 +309,20 @@ DownstreamWriteIssue make_downstream_write_issue(DownstreamPort port,
                                                  uint8_t total_size,
                                                  const WideWriteData_t &wdata,
                                                  const WideWriteStrb_t &wstrb,
-                                                 uint32_t line_bytes,
-                                                 bool force_line_aligned) {
+                                                 uint32_t line_bytes) {
   DownstreamWriteIssue out{};
   out.port = port;
   const AxiBridgeDownstreamIssueShape shape =
       axi_bridge_downstream_write_issue_shape(
           port == DownstreamPort::MMIO, addr, total_size,
-          static_cast<uint8_t>(line_bytes), kDownstreamBeatBytes,
-          force_line_aligned);
+          static_cast<uint8_t>(line_bytes), kDownstreamBeatBytes);
   out.addr = shape.issue_addr;
   out.total_size = shape.issue_size;
   out.wdata = wdata;
   out.wstrb = wstrb;
   const uint16_t bytes = static_cast<uint16_t>(total_size) + 1u;
   if (port != DownstreamPort::MMIO &&
-      (force_line_aligned || bytes <= kDownstreamBeatBytes)) {
+      bytes <= kDownstreamBeatBytes) {
     out.wdata = align_mode2_downstream_write_data(wdata, addr, out.addr);
     out.wstrb = align_mode2_downstream_write_strobe(wstrb, addr, out.addr);
   }
@@ -344,8 +336,6 @@ AXI_LLC_ReadReqIn_t to_llc_read_req(const LlcUpstreamReqLatch &r) {
   o.total_size = r.total_size;
   o.id = r.id;
   o.bypass = r.bypass;
-  o.direct_mapped = r.direct_mapped;
-  o.mode2_ddr_aligned = r.mode2_ddr_aligned;
   return o;
 }
 
@@ -358,8 +348,6 @@ AXI_LLC_WriteReqIn_t to_llc_write_req(const LlcUpstreamWriteReqLatch &w) {
   o.wdata = w.wdata;
   o.wstrb = w.wstrb;
   o.bypass = w.bypass;
-  o.direct_mapped = w.direct_mapped;
-  o.mode2_ddr_aligned = w.mode2_ddr_aligned;
   return o;
 }
 
@@ -368,29 +356,13 @@ inline bool write_size_supported(uint8_t total_size) {
 }
 constexpr uint8_t kInvalidAxiWriteId = 0xFF;
 
-bool read_env_u64(const char *name, uint64_t &value_out) {
-  const char *raw = std::getenv(name);
-  if (raw == nullptr || *raw == '\0') {
-    return false;
-  }
-  errno = 0;
-  char *end = nullptr;
-  const unsigned long long parsed = std::strtoull(raw, &end, 0);
-  if (errno != 0 || end == raw || (end != nullptr && *end != '\0')) {
-
-    return false;
-  }
-  value_out = static_cast<uint64_t>(parsed);
-  return true;
-}
 } // namespace
 
 // ============================================================================
 // Initialization
 // ============================================================================
 bool AXI_Interconnect::llc_enabled() const {
-  const bool mode_uses_llc = runtime_mode_ != 0u;
-  return mode_uses_llc && llc_config.enable && llc_config.valid();
+  return llc_config.enable && llc_config.valid();
 }
 
 // Per-port state: DDR is index 0, MMIO index 1.
@@ -489,70 +461,10 @@ void AXI_Interconnect::promote_write_resp_queue() {
   }
 }
 
-void AXI_Interconnect::sample_runtime_controls() {
-  uint64_t env_value = 0;
-  if (read_env_u64("AXI_SUBMODULE_MODE", env_value)) {
-    mode = static_cast<uint8_t>(env_value & 0x3u);
-  }
-  llc_mapped_offset_override_ = false;
-  if (read_env_u64("AXI_SUBMODULE_OFFSET", env_value)) {
-    llc_mapped_offset = static_cast<uint32_t>(env_value);
-    llc_mapped_offset_override_ = true;
-  }
-
-  runtime_mode_ = requested_mode();
-  llc_mapped_offset_ = requested_llc_mapped_offset();
-  reconfig_pending_ = false;
-  reconfig_target_mode_ = runtime_mode_;
-  reconfig_target_offset_ = llc_mapped_offset_;
-}
-
-uint8_t AXI_Interconnect::requested_mode() const {
-  const uint8_t encoded = static_cast<uint8_t>(mode) & 0x3u;
-  return encoded == 3u ? 0u : encoded;
-}
-
-uint32_t AXI_Interconnect::requested_llc_mapped_offset() const {
-  const uint32_t requested = static_cast<uint32_t>(llc_mapped_offset);
-  return (!llc_mapped_offset_override_ && requested == 0) ? kDefaultMappedLlcOffset
-                                                         : requested;
-}
-
-bool AXI_Interconnect::requested_config_differs_from_active() const {
-  const uint8_t req_mode = requested_mode();
-  const uint32_t req_offset = requested_llc_mapped_offset();
-  return req_mode != runtime_mode_ ||
-         (req_mode == 2u && req_offset != llc_mapped_offset_);
-}
-
-bool AXI_Interconnect::mode_transition_needs_flush() const {
-  return reconfig_pending_ || requested_config_differs_from_active();
-}
-
-bool AXI_Interconnect::mode_transition_invalidate_requested() const {
-  return reconfig_pending_ && requested_config_differs_from_active() &&
-         reconfig_path_quiescent();
-}
-
+// (the former runtime modes 0 / 2 and their reconfiguration were deleted 2026-11-15: the LLC always runs in mode 1,
+// cacheable with a per-request bypass)
 bool AXI_Interconnect::invalidate_all_requested() const {
-  return llc_invalidate_all_req_ || mode_transition_invalidate_requested();
-}
-
-bool AXI_Interconnect::request_in_mapped_window(uint32_t addr,
-                                                uint8_t total_size) const {
-  if (runtime_mode_ != 2u) {
-    return false;
-  }
-  const uint64_t start = static_cast<uint64_t>(addr);
-  const uint64_t end = start + static_cast<uint64_t>(total_size) + 1u;
-  const uint64_t base = static_cast<uint64_t>(llc_mapped_offset_);
-  const uint64_t limit = base + static_cast<uint64_t>(kMappedLlcWindowBytes);
-  return start >= base && end <= limit;
-}
-
-bool AXI_Interconnect::request_uses_direct_mapped_llc(uint32_t addr,
-                                                      uint8_t total_size) const {
-  return runtime_mode_ == 2u && request_in_mapped_window(addr, total_size);
+  return llc_invalidate_all_req_;
 }
 
 DownstreamPort AXI_Interconnect::classify_downstream_port(
@@ -567,53 +479,20 @@ DownstreamPort AXI_Interconnect::classify_downstream_port(
 
 bool AXI_Interconnect::request_uses_ddr_port(uint32_t addr,
                                              uint8_t total_size) const {
-  if (request_uses_direct_mapped_llc(addr, total_size)) {
-    return false;
-  }
   return classify_downstream_port(addr, total_size) == DownstreamPort::DDR;
 }
 
 bool AXI_Interconnect::request_uses_mmio_port(uint32_t addr,
                                               uint8_t total_size) const {
-  if (request_uses_direct_mapped_llc(addr, total_size)) {
-    return false;
-  }
   return classify_downstream_port(addr, total_size) == DownstreamPort::MMIO;
-}
-
-uint32_t AXI_Interconnect::translate_llc_addr(uint32_t addr,
-                                              uint8_t total_size) const {
-  if (!request_uses_direct_mapped_llc(addr, total_size)) {
-    return addr;
-  }
-  return static_cast<uint32_t>(
-      static_cast<uint64_t>(addr) - static_cast<uint64_t>(llc_mapped_offset_));
 }
 
 bool AXI_Interconnect::effective_llc_bypass(uint32_t addr, uint8_t total_size,
                                             bool upstream_bypass) const {
-  if (request_uses_mmio_port(addr, total_size)) {
-    return true;
-  }
-  if (runtime_mode_ == 2u) {
-    return !request_in_mapped_window(addr, total_size);
-  }
-  if (runtime_mode_ == 0u) {
-    return true;
-  }
-  if (runtime_mode_ == 1u) {
-    return upstream_bypass;
-  }
-  return true;
-}
-
-// Mapped mode: DDR requests outside the mapped window are tagged so the LLC issues them line-aligned.
-bool AXI_Interconnect::mode2_ddr_aligned(uint32_t addr, uint8_t total_size) const {
-  return runtime_mode_ == 2u && request_uses_ddr_port(addr, total_size);  // (the mapped window is never a DDR request)
+  return request_uses_mmio_port(addr, total_size) || upstream_bypass;
 }
 
 void AXI_Interconnect::init() {
-  sample_runtime_controls();
   llc.set_config(llc_config);
   llc.reset();
   r_arb_rr_idx = 0;
@@ -796,53 +675,6 @@ uint32_t AXI_Interconnect::count_llc_write_pending() const {
   return count;
 }
 
-bool AXI_Interconnect::non_llc_path_quiescent() const {
-  if (any_ar_latched() || !r_pending.empty() || any_aw_latched() || any_w_active() || !w_pending.empty()) return false;
-  for (int i = 0; i < NUM_READ_MASTERS; ++i)
-    if (req_ready_r[i] || read_req_hold[i].valid) return false;
-  for (int i = 0; i < NUM_WRITE_MASTERS; ++i)
-    if (w_req_ready_r[i] || write_ports[i].req.ready) return false;
-  return true;
-}
-
-bool AXI_Interconnect::llc_path_quiescent() const {
-  if (!llc_enabled()) return true;
-  if (any_ar_latched() || !r_pending.empty() || any_w_active() || any_aw_latched() || llc_mem_write_resp_valid_ ||
-      llc_mem_ignored_b_count_ != 0 || !w_pending.empty() || llc_core_req_stage_.valid)
-    return false;
-  const auto &regs = llc.io.regs;
-  for (int m = 0; m < NUM_READ_MASTERS; ++m)
-    if (req_ready_r[m] || read_req_hold[m].valid || llc_read_resp_valid_[m] || llc_upstream_req[m].valid ||
-        regs.read_resp_valid_r[m] || regs.read_resp_q_count_r[m] != 0)
-      return false;
-  for (int m = 0; m < NUM_WRITE_MASTERS; ++m)
-    if (w_req_ready_r[m] || write_ports[m].req.ready || w_resp_valid[m] || !w_resp_queue[m].empty() ||
-        llc_upstream_write_req[m].valid || !llc_upstream_write_q[m].empty() || regs.write_ctx[m].valid ||
-        regs.write_q_count_r[m] != 0 || regs.write_resp_valid_r[m])
-      return false;
-  if (regs.lookup_valid_r || regs.victim_wb_valid_r || regs.read_victim_wb_q_count_r != 0 ||
-      llc.io.ext_out.mem.read_req_valid || llc.io.ext_out.mem.write_req_valid)
-    return false;
-  if (llc.regs_quiet()) return true;  // no live MSHR either
-  for (uint32_t slot = 0; slot < llc_config.mshr_num && slot < MAX_OUTSTANDING; ++slot)
-    if (regs.mshr[slot].valid) return false;
-  return true;
-}
-
-bool AXI_Interconnect::idle_quiescent() const {
-  if (!reconfig_path_quiescent() || reconfig_pending_) return false;
-  for (int i = 0; i < NUM_READ_MASTERS; ++i)
-    if (read_ports[i].req.valid || read_ports[i].resp.valid) return false;
-  for (int i = 0; i < NUM_WRITE_MASTERS; ++i)
-    if (write_ports[i].req.valid || write_ports[i].resp.valid || !llc_write_resp_delay[i].empty() ||
-        !w_resp_queue[i].empty())
-      return false;
-  return true;
-}
-
-bool AXI_Interconnect::reconfig_path_quiescent() const {
-  return llc_enabled() ? llc_path_quiescent() : non_llc_path_quiescent();
-}
 
 bool AXI_Interconnect::has_same_line_write_hazard(uint32_t line_addr) const {
   if (!llc_enabled()) return false;
@@ -876,7 +708,7 @@ bool AXI_Interconnect::has_same_line_write_hazard(uint32_t line_addr) const {
 bool AXI_Interconnect::has_same_line_read_hazard(uint32_t line_addr) const {
   if (!llc_enabled()) return false;
   const auto request_hits_line = [&](uint32_t addr, uint8_t total_size) {
-    return AXI_LLC::line_addr(llc_config, translate_llc_addr(addr, total_size)) == line_addr;
+    return AXI_LLC::line_addr(llc_config, addr) == line_addr;
   };
   const auto hits = [&](uint32_t a) { return AXI_LLC::line_addr(llc_config, a) == line_addr; };
   for (int m = 0; m < NUM_READ_MASTERS; ++m) {
@@ -969,21 +801,9 @@ int AXI_Interconnect::find_write_pending_by_axi_id(DownstreamPort port, uint8_t 
   return -1;
 }
 
-int AXI_Interconnect::find_next_aw_pending() const {
-  for (size_t i = 0; i < w_pending.size(); ++i)
-    if (!w_pending[i].aw_done) return static_cast<int>(i);
-  return -1;
-}
-
 int AXI_Interconnect::find_next_aw_pending(DownstreamPort port) const {
   for (size_t i = 0; i < w_pending.size(); ++i)
     if (!w_pending[i].aw_done && w_pending[i].port == port) return static_cast<int>(i);
-  return -1;
-}
-
-int AXI_Interconnect::find_next_w_pending() const {
-  for (size_t i = 0; i < w_pending.size(); ++i)
-    if (w_pending[i].aw_done && !w_pending[i].w_done) return static_cast<int>(i);
   return -1;
 }
 
@@ -1054,10 +874,35 @@ bool AXI_Interconnect::can_issue_llc_read_req() const {
          alloc_read_axi_id() != kInvalidAxiReadId;
 }
 
+// Nothing of the LLC path is in flight (a line invalidate waits for it).
+bool AXI_Interconnect::llc_path_quiescent() const {
+  if (!llc_enabled()) return true;
+  if (any_ar_latched() || !r_pending.empty() || any_w_active() || any_aw_latched() || llc_mem_write_resp_valid_ ||
+      llc_mem_ignored_b_count_ != 0 || !w_pending.empty() || llc_core_req_stage_.valid)
+    return false;
+  const auto &regs = llc.io.regs;
+  for (int m = 0; m < NUM_READ_MASTERS; ++m)
+    if (req_ready_r[m] || read_req_hold[m].valid || llc_read_resp_valid_[m] || llc_upstream_req[m].valid ||
+        regs.read_resp_valid_r[m] || regs.read_resp_q_count_r[m] != 0)
+      return false;
+  for (int m = 0; m < NUM_WRITE_MASTERS; ++m)
+    if (w_req_ready_r[m] || write_ports[m].req.ready || w_resp_valid[m] || !w_resp_queue[m].empty() ||
+        llc_upstream_write_req[m].valid || !llc_upstream_write_q[m].empty() || regs.write_ctx[m].valid ||
+        regs.write_q_count_r[m] != 0 || regs.write_resp_valid_r[m])
+      return false;
+  if (regs.lookup_valid_r || regs.victim_wb_valid_r || regs.read_victim_wb_q_count_r != 0 ||
+      llc.io.ext_out.mem.read_req_valid || llc.io.ext_out.mem.write_req_valid)
+    return false;
+  if (llc.regs_quiet()) return true;  // no live MSHR either
+  for (uint32_t slot = 0; slot < llc_config.mshr_num && slot < MAX_OUTSTANDING; ++slot)
+    if (regs.mshr[slot].valid) return false;
+  return true;
+}
+
 void AXI_Interconnect::prepare_llc_inputs(bool sample_upstream_ready) {
   llc.io.ext_in = {};
 
-  if (!llc_enabled() && !mode_transition_needs_flush()) {
+  if (!llc_enabled()) {
     return;
   }
 
@@ -1086,25 +931,16 @@ void AXI_Interconnect::prepare_llc_inputs(bool sample_upstream_ready) {
   const bool llc_external_write_busy =
       external_write_busy() || llc_mem_write_resp_valid_ ||
       llc_mem_ignored_b_count_ != 0;
-  // Mode-transition flushes must wait for the full shared path to quiesce before
-  // changing address interpretation. A normal invalidate_all can enter the LLC
-  // while clean read misses are still pending; the LLC epoch prevents stale
-  // refills from being installed.
-  const bool llc_maintenance_quiescent =
-      reconfig_path_quiescent() && !llc_external_write_busy;
-  const bool transition_invalidate_all =
-      mode_transition_invalidate_requested() && llc_maintenance_quiescent;
-  const bool explicit_invalidate_all =
-      llc_invalidate_all_req_ && !llc_external_write_busy;
-  llc.io.ext_in.mem.invalidate_all =
-      explicit_invalidate_all || transition_invalidate_all;
+  // invalidate_all can enter the LLC while clean read misses are still pending; the LLC epoch prevents stale refills
+  // from being installed.
+  llc.io.ext_in.mem.invalidate_all = llc_invalidate_all_req_ && !llc_external_write_busy;
   const bool line_hazard =
       llc_invalidate_line_valid_ &&
       (has_same_line_write_hazard(invalidate_line_addr) ||
        llc_external_read_line_pending(invalidate_line_addr) ||
        llc_external_write_busy);
   llc.io.ext_in.mem.invalidate_line_valid =
-      llc_invalidate_line_valid_ && llc_maintenance_quiescent &&
+      llc_invalidate_line_valid_ && llc_path_quiescent() && !llc_external_write_busy &&
       !line_hazard;
   llc.io.ext_in.mem.invalidate_line_addr = llc_invalidate_line_addr_;
   bool any_upstream_capture_pending = false;
@@ -1226,8 +1062,7 @@ void AXI_Interconnect::comb_outputs() {
         !any_ar_latched();
     read_ports[i].req.ready =
         req_ready_r[i] && !llc_slot_busy &&
-        !(llc_enabled() && invalidate_all_requested()) &&
-        !mode_transition_needs_flush();
+        !(llc_enabled() && invalidate_all_requested());
     read_ports[i].req.accepted = read_req_accepted[i];
     read_ports[i].req.accepted_id = read_req_accepted_id[i];
   }
@@ -1249,7 +1084,7 @@ void AXI_Interconnect::comb_outputs() {
       const uint8_t req_total_size =
           static_cast<uint8_t>(write_ports[i].req.total_size);
       const uint32_t req_line = AXI_LLC::line_addr(
-          llc_config, translate_llc_addr(req_addr, req_total_size));
+          llc_config, req_addr);
       const bool blocked_by_line_invalidate =
           llc_invalidate_line_valid_ && write_ports[i].req.valid &&
           req_line ==
@@ -1267,7 +1102,7 @@ void AXI_Interconnect::comb_outputs() {
           !blocked_by_pending_read &&
           w_req_ready_r[i];
     } else {
-      write_ports[i].req.ready = w_req_ready_r[i] && !mode_transition_needs_flush();
+      write_ports[i].req.ready = w_req_ready_r[i];
     }
   }
   if (llc_enabled()) {
@@ -1297,7 +1132,7 @@ void AXI_Interconnect::comb_outputs() {
 void AXI_Interconnect::comb_inputs() {
   comb_read_arbiter();
   comb_write_request();
-  if (llc_enabled() || mode_transition_needs_flush()) {
+  if (llc_enabled()) {
     prepare_llc_inputs(true);
     llc.comb();
   }
@@ -1334,9 +1169,9 @@ bool AXI_Interconnect::can_accept_read_master_comb(uint8_t master_id) const {
 }
 
 // Drive a downstream AR; the response is matched back through `meta`.
-void AXI_Interconnect::drive_read_ar(DownstreamPort port, uint32_t addr, uint8_t total_size, bool mode2_ddr_aligned,
+void AXI_Interconnect::drive_read_ar(DownstreamPort port, uint32_t addr, uint8_t total_size,
                                      uint8_t axi_id, ARIssueMeta_t meta) {
-  const auto issue = make_downstream_read_issue(port, addr, total_size, llc_config.line_bytes, mode2_ddr_aligned);
+  const auto issue = make_downstream_read_issue(port, addr, total_size, llc_config.line_bytes);
   meta.resp_extract_from_aligned_beat = issue.extract_from_aligned_beat;
   const int pidx = port_index(issue.port);
   auto &ar_io = downstream_io(issue.port);
@@ -1359,7 +1194,7 @@ void AXI_Interconnect::issue_master_read(int master, DownstreamPort port, uint32
   meta.upstream_total_size = total_size;
   meta.master_id = master;
   meta.orig_id = id;
-  drive_read_ar(port, addr, total_size, false, axi_id, meta);
+  drive_read_ar(port, addr, total_size, axi_id, meta);
 }
 
 ReadReqHoldLatch AXI_Interconnect::read_req_snapshot(int master) const {
@@ -1433,7 +1268,7 @@ void AXI_Interconnect::read_issue_llc_mem_read() {
   meta.upstream_total_size = mem.read_req_size;
   meta.master_id = 0;
   meta.orig_id = req_id;
-  drive_read_ar(port, req_addr, req_size, mem.read_req_mode2_ddr_aligned, axi_id, meta);
+  drive_read_ar(port, req_addr, req_size, axi_id, meta);
   llc_mem_read_issue_seen_valid_ = true;
   llc_mem_read_issue_seen_id_ = req_id;
   llc_mem_read_issue_seen_addr_ = req_addr;
@@ -1447,7 +1282,7 @@ void AXI_Interconnect::read_route_masters_llc() {
     const bool stage_busy_for_master =
         llc_core_req_stage_.valid && !llc_core_req_stage_.is_write && llc_core_req_stage_.master == master;
     if (llc_upstream_req[master].valid || stage_busy_for_master || !read_ports[master].req.valid ||
-        invalidate_all_requested() || mode_transition_needs_flush()) {
+        invalidate_all_requested()) {
       continue;
     }
     if (has_read_id_conflict(static_cast<uint8_t>(master), static_cast<uint8_t>(read_ports[master].req.id))) continue;
@@ -1456,7 +1291,7 @@ void AXI_Interconnect::read_route_masters_llc() {
     const uint8_t req_total_size = static_cast<uint8_t>(read_ports[master].req.total_size);
     const DownstreamPort req_port = classify_downstream_port(req_addr, req_total_size);
     const bool req_supported = downstream_request_supported(req_port, req_total_size);
-    if (!request_uses_direct_mapped_llc(req_addr, req_total_size) && !req_supported) continue;
+    if (!req_supported) continue;
 
     const bool direct_mmio_read = request_uses_mmio_port(req_addr, req_total_size) && req_supported;
     const bool same_cycle_accept = (master == MASTER_DCACHE_R);
@@ -1487,9 +1322,8 @@ void AXI_Interconnect::read_route_masters_llc() {
       read_ports[master].req.ready = true;
       llc_upstream_accept_c[master] = true;
       llc_upstream_capture_c[master] = LlcUpstreamReqLatch{
-          true, translate_llc_addr(req_addr, req_total_size), req_total_size, uint8_t(read_ports[master].req.id),
-          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(read_ports[master].req.bypass)),
-          request_uses_direct_mapped_llc(req_addr, req_total_size), mode2_ddr_aligned(req_addr, req_total_size)};
+          true, req_addr, req_total_size, uint8_t(read_ports[master].req.id),
+          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(read_ports[master].req.bypass))};
       continue;
     }
     req_ready_r[master] = true;
@@ -1563,7 +1397,6 @@ void AXI_Interconnect::comb_read_arbiter() {
     read_route_masters_llc();
     return;
   }
-  if (mode_transition_needs_flush()) return;
   read_complete_ready_handshakes();
   read_arbitrate_new();
 }
@@ -1656,8 +1489,7 @@ void AXI_Interconnect::write_issue_llc_mem_write() {
     return;
   }
   const auto issue = make_downstream_write_issue(issue_port, mem.write_req_addr, issue_size, mem.write_req_data,
-                                                 mem.write_req_strobe, llc_config.line_bytes,
-                                                 mem.write_req_mode2_ddr_aligned);
+                                                 mem.write_req_strobe, llc_config.line_bytes);
   drive_aw(issue.port, issue.addr, calc_burst_len(issue.total_size),
            issue.port == DownstreamPort::MMIO ? kMmioAxiSize : kDownstreamAxiSize, sim_ddr::AXI_BURST_INCR,
            mem.write_req_id & kAxiIdMask);
@@ -1692,25 +1524,23 @@ void AXI_Interconnect::write_route_llc() {
     if (!write_ports[idx].req.valid) continue;
     const uint32_t req_addr = static_cast<uint32_t>(write_ports[idx].req.addr);
     const uint8_t req_total_size = static_cast<uint8_t>(write_ports[idx].req.total_size);
-    const uint32_t req_line = AXI_LLC::line_addr(llc_config, translate_llc_addr(req_addr, req_total_size));
+    const uint32_t req_line = AXI_LLC::line_addr(llc_config, req_addr);
     const bool blocked_by_line_invalidate =
         llc_invalidate_line_valid_ && req_line == AXI_LLC::line_addr(llc_config, llc_invalidate_line_addr_);
     const bool blocked_by_pending_read =
         !request_uses_mmio_port(req_addr, req_total_size) && has_same_line_read_hazard(req_line);
     if (blocked_by_line_invalidate || blocked_by_pending_read) continue;
     const DownstreamPort req_port = classify_downstream_port(req_addr, req_total_size);
-    if (!request_uses_direct_mapped_llc(req_addr, req_total_size) &&
-        !downstream_request_supported(req_port, req_total_size)) {
+    if (!downstream_request_supported(req_port, req_total_size)) {
       continue;
     }
     write_ports[idx].req.ready = true;
     if (write_comb_ready_curr_[idx]) {
       llc_upstream_write_accept_c[idx] = true;
       llc_upstream_write_capture_c[idx] = LlcUpstreamWriteReqLatch{
-          true, translate_llc_addr(req_addr, req_total_size), req_total_size, uint8_t(write_ports[idx].req.id),
+          true, req_addr, req_total_size, uint8_t(write_ports[idx].req.id),
           write_ports[idx].req.wdata, write_ports[idx].req.wstrb,
-          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(write_ports[idx].req.bypass)),
-          request_uses_direct_mapped_llc(req_addr, req_total_size), mode2_ddr_aligned(req_addr, req_total_size)};
+          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(write_ports[idx].req.bypass))};
     } else {
       w_req_ready_r[idx] = true;
     }
@@ -1769,17 +1599,15 @@ void AXI_Interconnect::comb_write_request() {
     drive_aw_latch(DownstreamPort::MMIO);
     write_issue_llc_mem_write();
     bool direct_write_selected = false;
-    if (!any_w_resp_valid && !llc_mem_write_resp_valid_ && !invalidate_all_requested() &&
-        !mode_transition_needs_flush()) {
+    if (!any_w_resp_valid && !llc_mem_write_resp_valid_ && !invalidate_all_requested()) {
       direct_write_selected = write_route_direct_mmio();
     }
-    if (!direct_write_selected && count_llc_write_pending() < MAX_WRITE_OUTSTANDING && !invalidate_all_requested() &&
-        !mode_transition_needs_flush()) {
+    if (!direct_write_selected && count_llc_write_pending() < MAX_WRITE_OUTSTANDING && !invalidate_all_requested()) {
       write_route_llc();
     }
   } else {
     write_issue_pending_aw(any_w_resp_valid);
-    if (!mode_transition_needs_flush() && can_accept_write_now() && !any_w_resp_valid) write_accept_direct();
+    if (can_accept_write_now() && !any_w_resp_valid) write_accept_direct();
   }
   drive_w_current(DownstreamPort::DDR);
   drive_w_current(DownstreamPort::MMIO);
@@ -2195,7 +2023,7 @@ void AXI_Interconnect::seq_read_data(const SeqPrev &prev) {
       llc.io.ext_in.mem.read_resp_valid && llc.io.ext_out.mem.read_resp_ready) {
     const uint8_t mem_id = llc.io.ext_in.mem.read_resp_id;
     auto it = std::find_if(r_pending.begin(), r_pending.end(),
-                           [mem_id](const ReadPendingTxn &t) {
+                           [](const ReadPendingTxn &t) {
                              return t.to_llc && t.beats_done == t.total_beats;
                            });
     auto exact_it = std::find_if(r_pending.begin(), r_pending.end(),
@@ -2301,7 +2129,7 @@ void AXI_Interconnect::seq_llc_write(const SeqPrev &prev) {
     }
     const auto issue = make_downstream_write_issue(
         req_port, req_addr, req_total_size, write_ports[idx].req.wdata,
-        write_ports[idx].req.wstrb, llc_config.line_bytes, false);
+        write_ports[idx].req.wstrb, llc_config.line_bytes);
     start_downstream_write(issue.port, issue.addr, issue.total_size, issue.wdata, issue.wstrb, axi_id,
                            static_cast<uint8_t>(idx), write_ports[idx].req.id, false, false, idx);
     write_req_accepted[idx] = true;
@@ -2321,8 +2149,7 @@ void AXI_Interconnect::seq_llc_write(const SeqPrev &prev) {
       const auto issue = make_downstream_write_issue(
           issue_port, llc.io.ext_out.mem.write_req_addr, issue_size,
           llc.io.ext_out.mem.write_req_data,
-          llc.io.ext_out.mem.write_req_strobe, llc_config.line_bytes,
-          llc.io.ext_out.mem.write_req_mode2_ddr_aligned);
+          llc.io.ext_out.mem.write_req_strobe, llc_config.line_bytes);
       start_downstream_write(issue.port, issue.addr, issue.total_size, issue.wdata, issue.wstrb,
                              llc.io.ext_out.mem.write_req_id & kAxiIdMask, 0, llc.io.ext_out.mem.write_req_id, true,
                              llc.io.regs.victim_wb_valid_r || llc.io.reg_write.victim_wb_valid_r, -1);
@@ -2476,7 +2303,7 @@ void AXI_Interconnect::seq_direct_write() {
     const auto issue = make_downstream_write_issue(
         req_port, req_addr, req_total_size, write_ports[idx].req.wdata,
         write_ports[idx].req.wstrb,
-        llc_config.line_bytes, false);
+        llc_config.line_bytes);
     txn.port = issue.port;
     txn.addr = issue.addr;
     txn.wdata = issue.wdata;
@@ -2581,7 +2408,7 @@ void AXI_Interconnect::seq_direct_write() {
   refresh_non_llc_w_active(DownstreamPort::MMIO);
 }
 
-// Clock the LLC and advance the mode/offset reconfiguration handshake.
+// Clock the LLC.
 void AXI_Interconnect::seq_finish(const SeqPrev &prev) {
   llc.seq();
   if (!llc.io.ext_out.mem.read_req_valid) {
@@ -2589,22 +2416,6 @@ void AXI_Interconnect::seq_finish(const SeqPrev &prev) {
     llc_mem_read_issue_seen_id_ = 0;
     llc_mem_read_issue_seen_addr_ = 0;
     llc_mem_read_issue_seen_size_ = 0;
-  }
-  if (requested_config_differs_from_active()) {
-    reconfig_pending_ = true;
-    reconfig_target_mode_ = requested_mode();
-    reconfig_target_offset_ = requested_llc_mapped_offset();
-  } else if (reconfig_pending_) {
-    reconfig_pending_ = false;
-    reconfig_target_mode_ = runtime_mode_;
-    reconfig_target_offset_ = llc_mapped_offset_;
-  }
-  if (reconfig_pending_ && llc.io.ext_out.mem.invalidate_all_accepted) {
-    runtime_mode_ = reconfig_target_mode_;
-    llc_mapped_offset_ = reconfig_target_offset_;
-    reconfig_pending_ = false;
-    reconfig_target_mode_ = runtime_mode_;
-    reconfig_target_offset_ = llc_mapped_offset_;
   }
   check_llc_consumed_reads(prev);
 }

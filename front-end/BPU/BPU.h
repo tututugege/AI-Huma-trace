@@ -1,5 +1,5 @@
 // Compact cycle-exact BPU: TAGE + BTB/indirect target cache + type predictor + history/RAS + update queue.
-// Replaces the RTL-style BPU_TOP (kept as tests/bpu_ref in the trace repo, checked by tests/bpu_diff.cpp).
+// Replaces the RTL-style BPU_TOP (its frozen copy tests/bpu_ref and tests/bpu_diff.cpp are in the history).
 // comb() is pure; commit() applies the transaction it returned.
 #pragma once
 #include "../frontend.h"

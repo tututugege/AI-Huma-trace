@@ -33,22 +33,6 @@ void UART16550_Device::flush_tx_buffer(bool append_newline) {
   tx_buffer_.clear();
 }
 
-void UART16550_Device::sync_from_backing(const uint32_t *memory) {
-  if (memory == nullptr) {
-    return;
-  }
-  const uint32_t word0 = memory[base >> 2];
-  const uint32_t word1 = memory[(base >> 2) + 1u];
-  regs[0] = static_cast<uint8_t>(word0 & 0xFFu);
-  regs[1] = static_cast<uint8_t>((word0 >> 8) & 0xFFu);
-  regs[2] = static_cast<uint8_t>((word0 >> 16) & 0xFFu);
-  regs[3] = static_cast<uint8_t>((word0 >> 24) & 0xFFu);
-  regs[4] = static_cast<uint8_t>(word1 & 0xFFu);
-  regs[5] = static_cast<uint8_t>((word1 >> 8) & 0xFFu);
-  regs[6] = static_cast<uint8_t>((word1 >> 16) & 0xFFu);
-  regs[7] = static_cast<uint8_t>((word1 >> 24) & 0xFFu);
-}
-
 void UART16550_Device::read(uint32_t addr, uint8_t *data, uint32_t len) {
   if (!data || len == 0) {
     return;

@@ -5,7 +5,7 @@
 # - one hard deadline per test as a last resort (default 20 s)
 # - prints PASS/FAIL per test, a summary, and exits non-zero on any failure
 SIM=$1; OUT=$2; JOBS=${3:-8}
-T=$(cd "$(dirname "$0")/.." && pwd); BASE=${BASELINE:-$T/results/baseline/baseline.csv}  # BASELINE=results/baseline/legacy_lsu_baseline.csv with LSU_PIPE=0 for the legacy-LSU regression
+T=$(cd "$(dirname "$0")/.." && pwd); BASE=${BASELINE:-$T/results/baseline/baseline.csv}
 rm -rf "$OUT"; mkdir -p "$OUT/logs"
 one() {
   b=$1; t=$(basename "$b"); base=$(grep "^$t," "$BASE" | cut -d, -f4)

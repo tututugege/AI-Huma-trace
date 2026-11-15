@@ -30,7 +30,6 @@ namespace {
 using LookupTimingPolicy =
     RegfileTablePolicy;
 
-constexpr int kSetAddrBits = ICACHE_INDEX_BITS;
 constexpr int kRows = ICACHE_SET_NUM;
 constexpr int kTagChunks = ICACHE_WAY_NUM;
 constexpr int kTagChunkBits = ICACHE_TAG_BITS;
@@ -308,33 +307,6 @@ void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], con
   }
 }
 
-void icache_top(struct icache_in *in, struct icache_out *out) {
-  icache_seq_read(in, out);
-  icache_comb_calc(in, out);
-  icache_seq_write();
-}
-
 void icache_set_context(SimContext *ctx) {
   icache_ctx = ctx;
-}
-
-void icache_set_ptw_mem_port(PtwMemPort *port) {
-  ICacheTop *instance = get_icache_instance();
-  instance->set_ptw_mem_port(port);
-}
-
-void icache_set_ptw_walk_port(PtwWalkPort *port) {
-  ICacheTop *instance = get_icache_instance();
-  instance->set_ptw_walk_port(port);
-}
-
-void icache_set_mem_read_port(axi_interconnect::ReadMasterPort_t *port) {
-  ICacheTop *instance = get_icache_instance();
-  instance->set_mem_read_port(port);
-}
-
-void icache_set_mem_probe_ports(ICacheMemPortReq *req_port,
-                                ICacheMemPortResp *resp_port) {
-  ICacheTop *instance = get_icache_instance();
-  instance->set_mem_probe_ports(req_port, resp_port);
 }

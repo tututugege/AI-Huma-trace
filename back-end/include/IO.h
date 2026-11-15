@@ -181,14 +181,14 @@ struct PrfAwakeIO {
   WakeInfo wake[LSU_LOAD_WB_WIDTH] = {};
 };
 
-// wake-up channels of the issue-queue bus: the ones of config.h (MAX_WAKEUP_PORTS) + the LSU_PIPE_L2 channels (2 per load port: [p] L2, [LD+p] L3)
+// wake-up channels of the issue-queue bus: the ones of config.h (MAX_WAKEUP_PORTS) + the LSU channels (2 per load port: [p] unused, [LD+p] L3)
 constexpr int LSU_EARLY_WAKE_PORTS = 2 * LSU_LOAD_WB_WIDTH;
 constexpr int WAKE_CH_ALL = MAX_WAKEUP_PORTS + LSU_EARLY_WAKE_PORTS;
 
-// LSU_PIPE_L2: wake-ups driven by the LSU itself (speculative at L2, or from the L3 register) and their cancel
+// Wake-ups driven by the LSU itself: [LD + p] from the L3 register (the [p] channels belonged to the removed speculative L2 wake-up
+// and stay empty; the wake-up bus keeps its channel layout)
 struct LsuAwakeIO {
-  WakeInfo wake[2 * LSU_LOAD_WB_WIDTH] = {};    // [p] L2 (speculative / oracle), [LD + p] L3 register
-  WakeInfo cancel[LSU_LOAD_WB_WIDTH] = {};      // speculative wake-up of the previous cycle was wrong: consumers busy again
+  WakeInfo wake[2 * LSU_LOAD_WB_WIDTH] = {};
 };
 
 struct DisIssIO {

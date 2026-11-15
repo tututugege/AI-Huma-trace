@@ -25,24 +25,6 @@ enum class L1DReplayReason {
 static bool l1d_perf_is_lsu_req(uint32_t req_id) {
     return dcache_req_id_is_lsu(req_id);
 }
-
-
-
-
-
-
-
-static void count_l1d_fillout_bank_grant(SimContext *ctx) {
-    if (ctx != nullptr) {
-
-    }
-}
-
-static void count_l1d_fillout_bank_conflict(SimContext *ctx, uint64_t count) {
-    if (ctx != nullptr) {
-
-    }
-}
 } // namespace
 
 void RealDcache::init() {
@@ -155,20 +137,14 @@ void RealDcache::stage1_comb() {
     }
 
 
-    // Bank arbitration order. Default: port 0 first (fixed priority). With LSU_PIPE (RPRIO): a port that issues a hidden retry
-    // this cycle is granted first, so a retry cannot be starved by an endless stream on a lower-numbered port.
-    static const bool rprio = [] {
-        const char *b = std::getenv("LSU_PIPE_RPRIO");
-        return lsu_pipe_enabled() && !(b && std::atoi(b) == 0);
-    }();
+    // Bank arbitration order: a port that issues a hidden retry this cycle is granted first, so a retry cannot be starved by an
+    // endless stream on a lower-numbered port.
     int ld_order[LSU_LDU_COUNT];
     {
         int n = 0;
-        if (rprio) {
-            for (int i = 0; i < LSU_LDU_COUNT; i++) {
-                const bool lv = in.lsu2dcache->req_ports.load_ports[i].valid;
-                if (!lv && !bank_retry_load_blocked[i] && (bank_retry_cur.loads[i].valid || bank_retry_issue_wires.loads[i].valid)) ld_order[n++] = i;
-            }
+        for (int i = 0; i < LSU_LDU_COUNT; i++) {
+            const bool lv = in.lsu2dcache->req_ports.load_ports[i].valid;
+            if (!lv && !bank_retry_load_blocked[i] && (bank_retry_cur.loads[i].valid || bank_retry_issue_wires.loads[i].valid)) ld_order[n++] = i;
         }
         for (int i = 0; i < LSU_LDU_COUNT; i++) {
             bool in_first = false;
@@ -258,11 +234,9 @@ void RealDcache::stage1_comb() {
     int st_order[LSU_STA_COUNT];
     {
         int n = 0;
-        if (rprio) {
-            for (int i = 0; i < LSU_STA_COUNT; i++) {
-                if (!in.lsu2dcache->req_ports.store_ports[i].valid && !bank_retry_store_blocked[i] &&
-                    (bank_retry_cur.stores[i].valid || bank_retry_issue_wires.stores[i].valid)) st_order[n++] = i;
-            }
+        for (int i = 0; i < LSU_STA_COUNT; i++) {
+            if (!in.lsu2dcache->req_ports.store_ports[i].valid && !bank_retry_store_blocked[i] &&
+                (bank_retry_cur.stores[i].valid || bank_retry_issue_wires.stores[i].valid)) st_order[n++] = i;
         }
         for (int i = 0; i < LSU_STA_COUNT; i++) {
             bool in_first = false;
@@ -704,13 +678,6 @@ void RealDcache::stage2_comb() {
         out.fill_write->valid
             ? get_addr(out.fill_write->set_idx, out.fill_write->tag, 0)
             : 0;
-}
-
-void RealDcache::comb() {
-
-    stage2_comb();
-
-    stage1_comb();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -26,35 +26,6 @@ enum class DownstreamPort : uint8_t {
   MMIO = 1,
 };
 
-struct DownstreamReadIssueProbe {
-  DownstreamPort port = DownstreamPort::DDR;
-  uint32_t addr = 0;
-  uint8_t total_size = 0;
-  bool extract_from_aligned_beat = false;
-};
-
-struct DownstreamWriteIssueProbe {
-  DownstreamPort port = DownstreamPort::DDR;
-  uint32_t addr = 0;
-  uint8_t total_size = 0;
-  WideWriteData_t wdata{};
-  WideWriteStrb_t wstrb{};
-};
-
-// Verification/test hook for the same production issue-shaping logic used by
-// AXI_Interconnect comb paths. Keep these as thin wrappers; they are not a
-// separate reference model.
-DownstreamReadIssueProbe probe_downstream_read_issue(DownstreamPort port,
-                                                     uint32_t addr,
-                                                     uint8_t total_size,
-                                                     uint32_t line_bytes,
-                                                     bool force_line_aligned);
-DownstreamWriteIssueProbe
-probe_downstream_write_issue(DownstreamPort port, uint32_t addr,
-                             uint8_t total_size, const WideWriteData_t &wdata,
-                             const WideWriteStrb_t &wstrb,
-                             uint32_t line_bytes, bool force_line_aligned);
-
 // ============================================================================
 // Latched AR/AW Requests (for AXI compliance)
 // ============================================================================
@@ -129,8 +100,6 @@ struct LlcUpstreamReqLatch {
   uint8_t total_size = 0;
   uint8_t id = 0;
   bool bypass = false;
-  bool direct_mapped = false;
-  bool mode2_ddr_aligned = false;
 };
 
 struct ReadReqHoldLatch {
@@ -149,8 +118,6 @@ struct LlcUpstreamWriteReqLatch {
   WideWriteData_t wdata{};
   WideWriteStrb_t wstrb{};
   bool bypass = false;
-  bool direct_mapped = false;
-  bool mode2_ddr_aligned = false;
 };
 
 struct LlcCoreReqStage {
@@ -195,19 +162,8 @@ struct DelayedWriteRespEntry {
 
 class AXI_Interconnect {
 public:
-  // True when no transaction is in flight anywhere in the interconnect/LLC and
-  // no master drives a request: further idle ticks do not change state.
-  bool idle_quiescent() const;
   AXI_Interconnect()
       : write_port(write_ports[MASTER_DCACHE_W]), axi_io(axi_ddr_io) {}
-
-  // Runtime control inputs for the shared AXI submodule.
-  // For simulator-only bring-up, init() may seed these inputs from env vars,
-  // but the active mode/offset seen by the datapath remains hardware-like:
-  // the module observes these inputs at runtime and performs a flush when a
-  // mode transition involving mode=2 is requested.
-  wire<2> mode = 1;
-  wire<32> llc_mapped_offset = 0;
 
   void init();
   void set_llc_config(const AXI_LLCConfig &config) {
@@ -224,8 +180,6 @@ public:
     llc_invalidate_line_valid_ = valid;
     llc_invalidate_line_addr_ = addr;
   }
-  uint8_t active_mode() const { return runtime_mode_; }
-  uint32_t active_llc_mapped_offset() const { return llc_mapped_offset_; }
   bool llc_invalidate_all_accepted() const {
     return llc.io.ext_out.mem.invalidate_all_accepted;
   }
@@ -280,8 +234,6 @@ private:
   bool can_issue_external_write(uint32_t addr) const;
   uint32_t count_llc_write_pending() const;
   int find_write_pending_by_axi_id(DownstreamPort port, uint8_t axi_id) const;
-  int find_next_aw_pending() const;
-  int find_next_w_pending() const;
   int find_next_aw_pending(DownstreamPort port) const;
   int find_next_w_pending(DownstreamPort port) const;
   void refresh_non_llc_w_active(DownstreamPort port);
@@ -366,7 +318,7 @@ private:
   void read_arbitrate_new();
   uint8_t alloc_comb_read_axi_id(DownstreamPort port);
   bool can_accept_read_master_comb(uint8_t master_id) const;
-  void drive_read_ar(DownstreamPort port, uint32_t addr, uint8_t total_size, bool mode2_ddr_aligned, uint8_t axi_id,
+  void drive_read_ar(DownstreamPort port, uint32_t addr, uint8_t total_size, uint8_t axi_id,
                      ARIssueMeta_t meta);
   void issue_master_read(int master, DownstreamPort port, uint32_t addr, uint8_t total_size, uint8_t id,
                          uint8_t axi_id);
@@ -400,22 +352,10 @@ private:
 
   uint8_t calc_burst_len(uint8_t total_size);
   uint8_t alloc_read_axi_id() const;
-  void sample_runtime_controls();
-  uint8_t requested_mode() const;
-  uint32_t requested_llc_mapped_offset() const;
-  bool requested_config_differs_from_active() const;
-  bool mode_transition_needs_flush() const;
-  bool mode_transition_invalidate_requested() const;
   bool invalidate_all_requested() const;
-  bool request_in_mapped_window(uint32_t addr, uint8_t total_size) const;
-  bool request_uses_direct_mapped_llc(uint32_t addr, uint8_t total_size) const;
-  uint32_t translate_llc_addr(uint32_t addr, uint8_t total_size) const;
-  bool mode2_ddr_aligned(uint32_t addr, uint8_t total_size) const;
+  bool llc_path_quiescent() const;
   bool effective_llc_bypass(uint32_t addr, uint8_t total_size,
                             bool upstream_bypass) const;
-  bool non_llc_path_quiescent() const;
-  bool llc_path_quiescent() const;
-  bool reconfig_path_quiescent() const;
 
   AXI_LLCConfig llc_config{};
   AXI_LLC llc{};
@@ -454,12 +394,6 @@ private:
   uint32_t llc_mem_read_issue_seen_addr_ = 0;
   uint8_t llc_mem_read_issue_seen_size_ = 0;
   ARIssueMeta_t ar_issue_c[2] = {};
-  uint8_t runtime_mode_ = 1;
-  uint32_t llc_mapped_offset_ = 0;
-  bool llc_mapped_offset_override_ = false;
-  bool reconfig_pending_ = false;
-  uint8_t reconfig_target_mode_ = 1;
-  uint32_t reconfig_target_offset_ = 0;
   static constexpr uint32_t kMappedLlcWindowBytes = 4u << 20;
 };
 

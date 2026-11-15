@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate of the RVC=1 build on the C-compiled programs (scripts/build_rvc_tests.sh): every program must finish (exit 0 / 1) with exactly the
-# cycle count of results/baseline/baseline_c.csv; difftest mismatches show up as a failure.
+# cycle count of results/baseline/baseline_c.csv; a run that does not reach the program's end shows up as a failure.
 #   usage: [BASELINE=<csv>] [FULL=1] [WRITE=<csv>] run_gate_c.sh <simulator> <outdir> [jobs]
 #   FULL=1 also runs the long generated tests (rvc-alu / rvc-mem / fd-rvc-mem, a few million cycles each); WRITE=<csv> records the cycles
 #   instead of comparing (new baseline).

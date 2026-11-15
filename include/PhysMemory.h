@@ -34,7 +34,6 @@ void pmem_write(uint32_t paddr, uint32_t data);
 
 // 批量 RAM 拷贝接口，paddr 必须落在 RAM 窗口内。
 void pmem_memcpy_to_ram(uint32_t ram_paddr, const void *src, size_t len);
-void pmem_memcpy_from_ram(void *dst, uint32_t ram_paddr, size_t len);
 
 // 返回 RAM 基址指针（对应物理地址 PMEM_RAM_BASE）。
 uint32_t *pmem_ram_ptr();

@@ -49,32 +49,6 @@ public:
     xps_intc_reset();
   }
 
-  void load_sdcard_image(const std::string &path) {
-    std::ifstream image(path, std::ios::binary);
-    if (!image.is_open()) {
-      throw std::runtime_error("failed to open sdcard image: " + path);
-    }
-    image.seekg(0, std::ios::end);
-    const std::streamsize size = image.tellg();
-    image.seekg(0, std::ios::beg);
-    if (size < 0) {
-      throw std::runtime_error("invalid sdcard image size");
-    }
-    sdcard_image_.resize(static_cast<size_t>(size));
-    if (size > 0 &&
-        !image.read(reinterpret_cast<char *>(sdcard_image_.data()), size)) {
-      throw std::runtime_error("failed to read sdcard image");
-    }
-    const uint64_t rounded_capacity =
-        ((static_cast<uint64_t>(sdcard_image_.size()) + 524287u) / 524288u) *
-        524288u;
-    if (rounded_capacity > sdcard_image_.size()) {
-      sdcard_image_.resize(static_cast<size_t>(rounded_capacity), 0);
-    }
-    xps_intc_reset();
-    ocsdc_reset();
-  }
-
   void sync_from_backing() {
     const uint64_t timer_value =
         static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_LOW_ADDR)) |

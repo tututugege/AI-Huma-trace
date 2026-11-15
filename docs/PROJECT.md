@@ -14,12 +14,12 @@ Two phases. (1) Base, done 2026-11-04: a trace-driven timing model distilled fro
 execution-driven, cycle-accurate OoO RISC-V), cycle-identical to the original, about half the code and faster (plan and
 step records: `docs/history/`). (2) Our own optimization, since then: architecture changes are explored here (exploration
 records EXP-xxx in the AI-Huma repository, `docs/EXPLORATION.md`) and, when merged, carried to the RTL.
-Correctness: difftest against the function model (facts, commit checks). Gate: cycle counts equal to `results/baseline/baseline.csv`,
+Correctness: the function model is the trace bridge's core and supplies every value (facts); a run must reach the program's end ("Success"), `TB_CHECK=1` compares what the model still decides (addresses, branches, faults). There is no commit-time difftest and only one function-model core. Gate: cycle counts equal to `results/baseline/baseline.csv`,
 which is only changed by an intentional configuration change merged to main (every other change must keep identical cycle counts).
 
 ## Architecture in one paragraph
 The model no longer computes values (ALU/MUL/DIV/FP, PRF, L1D data, LLC data table are gone). Branch direction/target,
-addresses, store data and CSR write data come from facts supplied by the trace bridge (`diff/TraceBridge.*`), a
+addresses, store data and CSR write data come from facts supplied by the trace bridge (`bridge/TraceBridge.*`), a
 functional core (librefcpu, function-model) that follows the model's dispatch stream including wrong paths. Functional
 memory is written at ROB commit from facts; instruction/PTE/LLC read data come from pmem.
 
@@ -31,8 +31,7 @@ Current microarchitecture (defaults of `include/config.h`; the RTL package takes
   (`CFG_ROB_COMPACT` 1, EXP-028), `CFG_MAX_BR_NUM` 32, issue queues INT 64 / LD 64 / STA 64 / STD 16 / BR 32 with enqueue widths 7/6/4/4/5 (EXP-017).
 - Issue ports: 6 integer ALU ports (4 of them with MUL/DIV/FP/CSR capabilities, `CFG_PLAIN_ALU_PORTS` 2 plain), `CFG_BR_PORTS` 2, `CFG_LD_PORTS` 4, `CFG_STA_PORTS` 3, `CFG_STD_PORTS` 3.
   Multiplier 2 cycles (3 for XLEN=64), divider 16 (32).
-- LSU (`back-end/Lsu/RealLsuPipe.cpp`, [LSU_PIPE.md](LSU_PIPE.md)): staged load/store pipeline (`CFG_LSU_PIPE` 1; `LSU_PIPE=0` selects the legacy LSU `RealLsu.cpp`, kept only
-  for the regression baselines), LDQ/STQ 64 entries, memory-dependence speculation (`CFG_LSU_MEMSPEC` 1) with the value path `CFG_LSU_MS_DATA` 1 (wait-table predictor
+- LSU (`back-end/Lsu/RealLsuPipe.cpp`, [LSU_PIPE.md](LSU_PIPE.md)): staged load/store pipeline (the only LSU; `RealLsu.cpp` holds its setup), LDQ/STQ 64 entries, memory-dependence speculation (`CFG_LSU_MEMSPEC` 1) with the value path `CFG_LSU_MS_DATA` 1 (wait-table predictor
   `CFG_LSU_MDP_BITS` 6), 4 replay registers, committed-store drain through a 4-entry write buffer (`CFG_LSU_PIPE_WBUF` 4, EXP-024).
 - Memory system (`MemSubSystem/`, `axi-interconnect-kit/`): 64 KiB 4-way L1D (64 B lines, 8 MSHRs) with the L1D prefetcher h1 (`PF_ENABLE` 1), shared LLC
   `CONFIG_AXI_LLC_SIZE_BYTES` 4 MiB 16-way, 8 MSHRs, lookup latency 3, DRAMsim3 DDR4-3200 (EXP-006) behind SimDDR plus 60 ns of fixed non-core latency, 1 GHz core,
@@ -81,8 +80,7 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
 3. `scripts/run_gate.sh build/simulator results/gate`: 62 tests (the cpu-tests and the extras of `tests/extra`; `memory-stress`, `load-store` and `smc-*` are excluded by the script, see its `grep -v`; `baseline.csv` also lists them), pass = cycles equal to `results/baseline/baseline.csv`
    (regenerated 2026-11-11 with the compact ROB (EXP-028) as the default, before that 2026-11-09 with the write buffer (EXP-024); `baseline_nopf.csv` is the prefetcher-off variant of the same baseline: `PF_ENABLE=0` reproduces it, it may be behind main).
    All end with difftest Success, 0 TB_CHECK mismatches. `LSU_PIPE_NOWD=1` is not needed for the gate (the baseline is the model's own cycle count); it is needed for any cycle comparison with the RTL.
-   **Old-design regression** (old LSU + old BPU, the main of 2026-11-06): `LSU_PIPE=0 BPU_PIPE=0 BPO_HIST=0 BPO_HSYM=2 BPA_REPAIR=0 BPA_ITTH= BPO_PDCKPT=0 BPO_L1_ENTRIES=0 BPO_BANKBLK=0 BPU_ICALL=0 BASELINE=results/baseline/legacy_lsu_baseline.csv scripts/run_gate.sh ...`
-   reproduced `legacy_lsu_baseline.csv` (prefetcher off: `legacy_lsu_baseline_nopf.csv`) in the 2026-11-07 main; since EXP-028 (target cache, statistical corrector and TAGE parameter sweeps removed) and EXP-027 (uncached windows removed) this string no longer reproduces those baselines exactly. Use it for difftest only (`scripts/run_gate_on.sh <sim> <out> . [jobs]` checks Success only).
+   **Old-design regression** (old LSU + old BPU): both were deleted (BPU_PIPE 0..2 on exp/rvc-carry, the legacy LSU / `LSU_PIPE=0` and `legacy_lsu_baseline*.csv` on 2026-11-15); use the history for them.
 4. Big programs (sources and binaries in `AI-Huma/rtl/programs/big`; clang + stub libc headers; shortened builds fixed as the standard from 2026-11-04). **Current defaults (2026-11-12, compact ROB EXP-028 on; `docs/MAIN_RECORDS.md`):**
    dhrystone 64 runs 116,774; coremark 2 iterations 284,902; memory-stress 2,308,184; smc-div 10,687; smc-addi 10,176; memory-stress-small 325,458; pf-stress 621,069; itt-dispatch 222,439.
    Line ROB (`-DCFG_ROB_COMPACT=0`): dhrystone 114,685; coremark 283,240; memory-stress 2,358,268; smc-div 10,875; smc-addi 10,315; memory-stress-small 329,424; pf-stress 630,916; itt-dispatch 222,445
@@ -94,11 +92,10 @@ All scripts take the repo root as `<simulator-repo>`, e.g. `scripts/run_gate.sh 
    `load-store` shows "base= FAIL" because the original aborts with "Misaligned Load" (pre-existing); `load-store-aligned` (tests/extra, aligned byte loads instead of the unaligned `lw`) replaces it in the gate.
 
 ## Verification harnesses
-Frozen copies of the original modules live in `tests/*_ref`; the live modules were rewritten and proven against them.
-- Lockstep shadows (build with `<MOD>_SHADOW=1`, `BUILD_DIR=build_<x>`): Lsu, Rob, Dispatch, Exu, Isu, Idu, Ren, Csr,
-  PreIduQueue; `scripts/lsu_shadow.sh` is the template. A mismatch exits with code 2. These compare against the original (legacy) modules; the staged LSU and the compact ROB have no frozen reference.
-- Random differentials vs the frozen original: `bpu_diff`, `csr_diff`, `idu_diff`, `pre_diff`, `ddr_diff`;
-  closed-loop `llc_diff` (`scripts/llc_diff.sh`) and `ic_diff` (`scripts/ic_diff.sh`) for the LLC and interconnect.
+- The cycle gates (`scripts/run_gate.sh` with `baseline.csv`, `scripts/run_gate_c.sh` with `baseline_c.csv`) are the regression check: a change that
+  is meant to keep timing must give identical cycles on every program. The per-module lockstep shadows and random differentials against frozen
+  copies of the original modules (`tests/*_ref`, `<MOD>_SHADOW` builds, `*_diff`) proved the rewrite of each module and were deleted on
+  2026-11-15 (exp/tm-cleanup); they are in the history before that commit.
 - Against the function model and the RTL: `TB_CHECK=1` (value comparison, `scripts/check_run.sh`), `TB_TRACE_COMMIT=1` with the RTL's `SOC_TB_COMMIT`, `LSU_PIPE_EVT=1` with `SOC_TB_LSUEVT` (see [ENV_VARS.md](ENV_VARS.md)).
 - Lesson: tests miss many trap/S-mode/FTQ-full paths, so pair a lockstep with a random-stimulus harness.
 - Coverage-only pruning was rejected (it deleted the DDR write path once); prefer rewrite plus differential test.
@@ -150,7 +147,7 @@ rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers r
   (a committed instruction whose fact says it turned FS to Dirty sets it at the end of the cycle). `csrr`/`csrw` of fflags / frm / fcsr are still NOPs with no
   serialization (the model computes no values, so a dynamic rounding mode has no effect; fcsr writes dirty FS through the same fact).
 - **Interface.** `Fact` has `rd_is_fp`, `fs_dirty`, `trap_cause`; the bridge decodes opcodes 0x07 / 0x27 (address, size, store data from `fpr`), undoes FP register and fcsr writes,
-  `FastWarm` replays FP loads/stores, checkpoint format 5 (`CPU_state.fpr`, fcsr after it) is read by `BackTopLoad.cpp`.
+  `FastWarm` replays FP loads/stores, checkpoint format 5 (`CPU_state.fpr`, fcsr after it) is read by `driver/BackTopLoad.cpp`.
 - **Checks.** `scripts/fp_check.sh <sim> <workdir>`: the function model's directed FP tests, trap/status test, compiler-generated kernels and the 23 official riscv-tests
   `rv64uf`/`rv64ud` all run to the end (difftest Success, every instruction committed); `tests/fp/fpmicro.c` micro-benchmarks show the configured latencies (4 dependent fadd.d: 16 cycles,
   8 independent: 4 cycles = both FMA pipes, dependent fdiv.d 20, fcvt.l.d + addi + fcvt.d.l 7). Small `CFG_FPRF_NUM=36`, `CFG_FP_IQ_SIZE=8`, `CFG_FP_FMA_LAT=8` runs without deadlock

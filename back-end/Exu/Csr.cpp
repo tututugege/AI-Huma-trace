@@ -1,5 +1,4 @@
 #include "Wires.h"
-#include "BeginCheck.h"
 #include "Csr.h"
 #include "DebugPtwTrace.h"
 #include "config.h"
@@ -73,16 +72,6 @@ void Csr::init() {
 #endif
   CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
   CSR_RegFile[csr_sstatus] = CSR_RegFile_1[csr_sstatus] = kMstatusReset & kSstatusMask;
-}
-
-// The working copies already equal the registered state (seq() copies them back).
-void Csr::comb_begin() {
-  BEGIN_EQ(CSR_RegFile_1, CSR_RegFile);
-  BEGIN_EQ(privilege_1, privilege);
-  BEGIN_EQ(csr_idx_1, csr_idx);
-  BEGIN_EQ(csr_wdata_1, csr_wdata);
-  BEGIN_EQ(csr_wcmd_1, csr_wcmd);
-  BEGIN_EQ(csr_we_1, csr_we);
 }
 
 void Csr::comb_csr_status() {

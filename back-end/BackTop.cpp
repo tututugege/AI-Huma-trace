@@ -6,11 +6,9 @@
 #include "IO.h"
 #include "PhysMemory.h"
 #include "RealLsu.h"
-#include "ShadowHooks.h"
 #include "config.h"
-#include "diff.h"
+#include "RefCore.h"
 #include "mmio_address_map.h"
-#include "oracle.h"
 #include "ref.h"
 #include "util.h"
 
@@ -92,7 +90,7 @@ void BackTop::comb_lsu_mmu() {
 }
 
 void BackTop::comb_csr_status() {
-  CSR(comb_csr_status);
+  csr->comb_csr_status();
   out.sstatus = csr_status.sstatus;
   out.mstatus = csr_status.mstatus;
   out.satp = csr_status.satp;
@@ -108,117 +106,107 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 
 // Working copies and default outputs of every module.
 void BackTop::comb_begin_all() {
-  PRE(comb_begin);
-  IDU(comb_begin);
-  REN(comb_begin);
-  DIS(comb_begin);
-  ISU(comb_begin);
-  prf->comb_begin();
-  EXU(comb_begin);
-  ROB(comb_begin);
-  CSR(comb_begin);
+  pre->comb_begin();
+  isu->comb_begin();
+  exu->comb_begin();
+  rob->comb_begin();
 }
 
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_stage_decode_and_resources() {
-  LSU(comb_spec_cancel);  // LSU_PIPE_L2: a speculative load wake-up of the previous cycle was wrong
-  ISU(comb_cancel);
-  DIS(comb_cancel);
-  IDU(comb_branch);
-  PRE(comb_accept_front);
-  IDU(comb_decode);
-  CSR(comb_interrupt);
-  REN(comb_alloc);
-  prf->comb_complete();
+  idu->comb_branch();
+  pre->comb_accept_front();
+  idu->comb_decode();
+  csr->comb_interrupt();
+  rename->comb_alloc();
   prf->comb_awake();
-  prf->comb_write();
-  ISU(comb_ready);
-  LSU(comb_cal);
-  LSU(comb_lsu2dis);
-  LSU(comb_lsu2rob);
+  isu->comb_ready();
+  lsu->comb_cal();
+  lsu->comb_lsu2dis();
+  lsu->comb_lsu2rob();
 }
 
 // ROB head -> commit group; committed stores release their STQ entries in the LSU.
 void BackTop::comb_stage_commit() {
-  ROB(comb_ready);
-  ROB(comb_ftq_pc_req);
-  PRE(comb_ftq_lookup_rob);
-  ROB(comb_commit);
-  PRE(comb_commit_info);
-  LSU(comb_stq_commit);
+  rob->comb_ready();
+  rob->comb_ftq_pc_req();
+  pre->comb_ftq_lookup_rob();
+  rob->comb_commit();
+  pre->comb_commit_info();
+  lsu->comb_stq_commit();
 }
 
 // MMIO/DCache responses finish loads and stores and produce write-backs; CSR read data.
 void BackTop::comb_stage_memory_responses() {
-  DIS(comb_alloc);
-  LSU(comb_mmio_in);
-  LSU(comb_dcache2lsu_ldq);
-  LSU(comb_dcache2lsu_stq);
-  LSU(comb_lsu2exe);
-  EXU(comb_to_csr);
-  CSR(comb_csr_read);
+  dis->comb_alloc();
+  lsu->comb_mmio_in();
+  lsu->comb_dcache2lsu_ldq();
+  lsu->comb_dcache2lsu_stq();
+  lsu->comb_lsu2exe();
+  exu->comb_to_csr();
+  csr->comb_csr_read();
 }
 
 // Functional units execute; their results complete ROB entries.
 void BackTop::comb_stage_execute() {
-  EXU(comb_exec);
-  ROB(comb_complete);
+  exu->comb_exec();
+  rob->comb_complete();
 }
 
 // Issue selection, then LSU address translation (the MMU sits between the LSU's request and response phases).
 void BackTop::comb_stage_issue_and_translate() {
-  EXU(comb_ready);
-  ISU(comb_issue);
-  LSU(comb_exe2lsu);
-  LSU(comb_tlb_out);
+  exu->comb_ready();
+  isu->comb_issue();
+  lsu->comb_exe2lsu();
+  lsu->comb_tlb_out();
   comb_lsu_mmu();
-  LSU(comb_tlb_in_ldq);
-  LSU(comb_tlb_in_stq);
-  LSU(comb_stlf);
+  lsu->comb_tlb_in_ldq();
+  lsu->comb_tlb_in_stq();
+  lsu->comb_stlf();
 }
 
 // Register reads, next-cycle wakeups, exceptions, rename and dispatch of the instructions leaving decode.
 void BackTop::comb_stage_operands_and_dispatch() {
   prf->comb_req_ftq();
-  PRE(comb_ftq_lookup_prf);
+  pre->comb_ftq_lookup_prf();
   prf->comb_read();
 
-  ISU(comb_awake);
-  ISU(comb_calc_latency_next);
-  CSR(comb_exception);
-  CSR(comb_csr_write);
-  DIS(comb_wake);
-  REN(comb_rename);
+  isu->comb_awake();
+  isu->comb_calc_latency_next();
+  csr->comb_exception();
+  csr->comb_csr_write();
+  dis->comb_wake();
+  rename->comb_rename();
 
-  DIS(comb_dispatch);
+  dis->comb_dispatch();
 }
 
 // Handshakes that move instructions (fire), the LSU's DCache/MMIO requests, queue enqueue, and recovery of ROB/IQs from a mispredict or global flush (flush wins).
 void BackTop::comb_stage_fire_and_recover() {
-  DIS(comb_fire);
-  LSU(comb_dis2lsu);
-  REN(comb_fire);
-  IDU(comb_fire);
+  dis->comb_fire();
+  lsu->comb_dis2lsu();
+  rename->comb_fire();
+  idu->comb_fire();
   // Kill flushed LSU work before driving new DCache/MMIO requests.
-  LSU(comb_flush);
-  LSU(comb_lsu2dcache_ldq);
-  LSU(comb_lsu2dcache_stq);
-  LSU(comb_mmio_out);
-  LSU(comb_check);
-  ISU(comb_enq);
+  lsu->comb_flush();
+  lsu->comb_lsu2dcache_ldq();
+  lsu->comb_lsu2dcache_stq();
+  lsu->comb_mmio_out();
+  lsu->comb_check();
+  isu->comb_enq();
   // Rob recovery was split out of comb_fire(); keep the original priority:
   // branch rollback happens before enqueue, and global flush overrides both.
-  ROB(comb_branch);
-  ROB(comb_fire);
-  ROB(comb_flush);
-  ISU(comb_flush);
+  rob->comb_branch();
+  rob->comb_fire();
+  rob->comb_flush();
+  isu->comb_flush();
 
-  PRE(comb_fire);
+  pre->comb_fire();
   prf->comb_pipeline();
-  EXU(comb_pipeline);
-  DIS(comb_pipeline);
-  REN(comb_pipeline);
-  CSR(comb_interrupt_inject);
+  exu->comb_pipeline();
+  dis->comb_pipeline();
+  rename->comb_pipeline();
+  csr->comb_interrupt_inject();
 }
 
 // Diagnostic mode (CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN): clear the stage IOs to expose hidden dependence on
@@ -287,7 +275,7 @@ void BackTop::comb_outputs() {
   // 用于调试
   // 修正pc_next 以及difftest对应的pc_next
   out.flush = rob_bcast.flush;
-  if (out.flush && tbhook::enabled) {
+  if (out.flush) {
     int64_t committing = -1;
     for (int i = 0; i < COMMIT_WIDTH; i++) {
       if (rob_commit.commit_entry[i].valid) {
@@ -330,7 +318,7 @@ void BackTop::comb_outputs() {
     out.commit_entry[i] =
         rob_commit.commit_entry[i].uop.to_inst_entry(
             rob_commit.commit_entry[i].valid);
-    if (tbhook::enabled && rob_commit.commit_entry[i].valid &&
+    if (rob_commit.commit_entry[i].valid &&
         !rob_bcast.interrupt) {
 #if FP
       if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) csr->fs_dirty_req = true;
@@ -339,9 +327,7 @@ void BackTop::comb_outputs() {
           (uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }
     if (out.commit_entry[i].valid && out.flush) {
-      // Flush: override extra_data.pc_next with redirect_pc for ALL
-      // instructions so Difftest can read the correct next-PC (trap vector,
-      // epc, etc.)
+      // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)
       out.commit_entry[i].uop.diag_val = out.redirect_pc;
       rob_commit.commit_entry[i].uop.diag_val = out.redirect_pc;
     }
@@ -368,18 +354,18 @@ void BackTop::comb() {
 void BackTop::seq() {
   // rename -> isu/stq/rob
   // exu -> prf
-  PRE(seq);
-  REN(seq);
-  DIS(seq);
-  IDU(seq);
-  ISU(seq);
-  EXU(seq);
+  pre->seq();
+  rename->seq();
+  dis->seq();
+  idu->seq();
+  isu->seq();
+  exu->seq();
   prf->seq();
-  ROB(seq);
-  CSR(seq);
+  rob->seq();
+  csr->seq();
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->seq();
   }
-  LSU(seq);
+  lsu->seq();
 }
 

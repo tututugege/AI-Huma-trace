@@ -596,10 +596,6 @@ bool MemSubsystem::consume_dma_write(uint32_t &paddr, size_t &size) {
   return peripheral_model_.consume_dma_write(paddr, size);
 }
 
-void MemSubsystem::load_sdcard_image(const std::string &path) {
-  peripheral_model_.load_sdcard_image(path);
-}
-
 void MemSubsystem::sync_mmio_devices_from_backing() {
   peripheral_model_.sync_from_backing();
 }
@@ -775,25 +771,6 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
   wb_.seq();
 }
 
-void MemSubsystem::dcache_fast_comb(bool inject_slow_request) {
-  LsuDcacheIO *saved_req = dcache_.in.lsu2dcache;
-  if (!inject_slow_request) {
-    dcache_empty_req_ = LsuDcacheIO{};
-    dcache_.in.lsu2dcache = &dcache_empty_req_;
-  }
-
-  dcache_domain_comb_outputs();
-  capture_dcache_raw_response();
-  forward_pending_response_from_fill();
-  dcache_domain_comb_inputs();
-
-  dcache_.in.lsu2dcache = saved_req;
-}
-
-void MemSubsystem::dcache_fast_seq(bool sample_mshr_perf) {
-  dcache_domain_seq(sample_mshr_perf);
-}
-
 void MemSubsystem::comb_outputs() {
 #if AXI_KIT_RUNTIME_ENABLED
 #endif
@@ -940,11 +917,6 @@ void MemSubsystem::comb_inputs() {
   itlb_ptw_port_inst->reset_cycle_input();
   dtlb_walk_port_inst->reset_cycle_input();
   itlb_walk_port_inst->reset_cycle_input();
-}
-
-void MemSubsystem::comb() {
-  comb_outputs();
-  comb_inputs();
 }
 
 void MemSubsystem::seq() {

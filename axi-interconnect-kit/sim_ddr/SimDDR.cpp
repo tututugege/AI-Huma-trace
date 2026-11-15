@@ -4,15 +4,6 @@
 #endif
 #include <algorithm>
 
-#ifdef DDR_SHADOW
-#include "DdrShadow.h"
-#define SHADOW_BEGIN() ddr_shadow_begin(this, &io)
-#define SHADOW_END(phase) ddr_shadow_end(this, &io, phase)
-#else
-#define SHADOW_BEGIN() ((void)0)
-#define SHADOW_END(phase) ((void)0)
-#endif
-
 #ifdef SIM_DDR_DS3
 #include "SimDDR_DS3.h"
 #endif
@@ -106,7 +97,6 @@ void SimDDR::arbitrate() {
 }
 
 void SimDDR::comb_outputs() {
-  SHADOW_BEGIN();
   // burst-drain read service: finish the active burst, else round-robin among transactions past their latency
   sel_ = -1;
   if (active_ >= 0 && active_ < int(rd_.size()) && rd_[active_].in_data && !rd_[active_].complete) sel_ = active_;
@@ -140,7 +130,6 @@ void SimDDR::comb_outputs() {
     io.b.bvalid = true;
     io.b.bid = resp_.front().id;
   }
-  SHADOW_END(0);
 }
 
 void SimDDR::retire_writes() {
@@ -168,7 +157,6 @@ void SimDDR::ds3_advance(uint32_t n) {
 #endif
 
 void SimDDR::seq() {
-  SHADOW_BEGIN();
 #ifdef SIM_DDR_DS3
   ds3_advance(1);
 #endif
@@ -267,7 +255,6 @@ void SimDDR::seq() {
   } else if (write_grant_) {
     last_ = Write;
   }
-  SHADOW_END(1);
 }
 
 } // namespace sim_ddr

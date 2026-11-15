@@ -28,9 +28,6 @@ std::string getenv_str(const char *n, const char *dflt) {
 }
 }  // namespace
 
-const char *Pmu::name(int e) { return kName[e]; }
-const char *Pmu::group(int e) { return kGroup[e]; }
-const char *Pmu::desc(int e) { return kDesc[e]; }
 
 void Pmu::init_from_env() {
   const char *on = std::getenv("PMU");

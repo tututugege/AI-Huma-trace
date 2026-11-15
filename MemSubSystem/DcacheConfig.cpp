@@ -14,9 +14,6 @@ bool pf_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
 bool plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS] = {};
 
 namespace {
-inline bool invalid_set_or_way(uint32_t set_idx, uint32_t way) {
-    return set_idx >= DCACHE_SETS_NUM || way >= DCACHE_WAYS_NUM;
-}
 
 struct DataBankAccessRecord {
     bool valid = false;

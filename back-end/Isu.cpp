@@ -1,4 +1,3 @@
-#include "BeginCheck.h"
 #include "Isu.h"
 #include "FpStats.h"
 #include "Wires.h"
@@ -9,11 +8,10 @@
 
 // Completion-cycle table of the issue ports (EXP-034): a port completes one uop per cycle (one ROB / write-back entry), so the
 // issue stage reserves the cycle in which a granted uop completes and a uop that would collide with an earlier one on the same
-// port stays in the queue (like XiangShan's WbFuBusyTable). WB_RESERVE=0 switches it off (the old behaviour: the loser waits in its unit).
+// port stays in the queue (like XiangShan's WbFuBusyTable).
 namespace {
 struct WbBusy {
   static constexpr int kRing = 64;
-  bool on = [] { const char *e = std::getenv("WB_RESERVE"); return !e || std::atoi(e) != 0; }();
   uint8_t busy[ISSUE_WIDTH][kRing] = {};
   uint64_t gated = 0;
   long long last_cycle = -1;
@@ -24,12 +22,11 @@ struct WbBusy {
     if (flush) std::memset(busy, 0, sizeof busy);
   }
   bool free(int port, int off) {
-    if (!on) return true;
     Assert(off >= 1 && off < kRing);
     if (busy[port][(sim_time + off) & (kRing - 1)]) { gated++; return false; }
     return true;
   }
-  void reserve(int port, int off) { if (on) busy[port][(sim_time + off) & (kRing - 1)] = 1; }
+  void reserve(int port, int off) { busy[port][(sim_time + off) & (kRing - 1)] = 1; }
   ~WbBusy() { if (gated) std::fprintf(stderr, "[WB_RESERVE] issue-gated=%llu\n", (unsigned long long)gated); }
 };
 WbBusy g_wb;
@@ -84,9 +81,6 @@ void Isu::init() {
 // Working copies already equal the registered state (seq() copies them back); each IQ resets its default IO.
 void Isu::comb_begin() {
   for (auto &q : iqs) q.comb_begin();
-  BEGIN_EQ(mul_wake_pipe_1, mul_wake_pipe);
-  BEGIN_EQ(div_wake_slots_1, div_wake_slots);
-  BEGIN_EQ(fp_wake_slots_1, fp_wake_slots);
 }
 
 // Cycles until the result of a uop is available; 1 means fast wakeup (the consumer can issue next cycle).
@@ -287,7 +281,7 @@ void Isu::comb_awake() {
       drive(fast_ch[i], e.uop.dest_preg, "Fast writeback collision");
   }
 
-  {  // LSU_PIPE_L2 channels: after the fast ones (L2 speculative, then L3 register)
+  {  // LSU channels after the fast ones ([p] unused since the speculative L2 wake-up was removed, [LD + p] L3 register)
     const int early_base = MAX_WAKEUP_PORTS;  // config.h channels first
     for (int i = 0; i < LSU_EARLY_WAKE_PORTS; i++)
       if (wires->lsu_awake.wake[i].valid) {
@@ -301,14 +295,6 @@ void Isu::comb_awake() {
     if (bus[i].valid) woken[n_woken++] = bus[i].preg;
   if (n_woken)
     for (auto &q : iqs) q.wakeup(woken, n_woken);
-}
-
-// Speculative load wake-up of the previous cycle was wrong (before the select of this cycle): woken entries wait again.
-extern uint64_t g_lp_cancel_entries;
-void Isu::comb_cancel() {
-  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
-    if (wires->lsu_awake.cancel[k].valid)
-      for (auto &q : iqs) g_lp_cancel_entries += q.cancel_wake(wires->lsu_awake.cancel[k].preg);
 }
 
 // Flush / mispredict / branch-resolve handling for the queues and the delayed wakeups. A flush empties everything,

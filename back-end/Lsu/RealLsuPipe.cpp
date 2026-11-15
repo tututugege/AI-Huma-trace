@@ -1,4 +1,4 @@
-// RealLsuPipe.cpp -- staged LSU (switch LSU_PIPE / CFG_LSU_PIPE). Design and rules: docs/LSU_PIPE.md.
+// RealLsuPipe.cpp -- the staged LSU (the only LSU since the legacy one was deleted). Design and rules: docs/LSU_PIPE.md.
 //
 // Hardware reading of this file: pcur = registers, pnxt = next register values (pnxt == pcur at the start of a cycle,
 // seq() copies pnxt to pcur). Each comb phase reads registers (pcur) and writes next values (pnxt) or per-cycle wires (pw).
@@ -60,7 +60,6 @@ struct MsPenalty {
 void g_msp_flush_commit(unsigned rob_idx, long long younger) { g_msp.on_flush_commit(rob_idx, younger); }
 void g_msp_tick(bool committed) { g_msp.tick(committed); }
 
-uint64_t g_lp_cancel_entries = 0;  // entries put back to waiting by a cancelled speculative wake-up (LSU_PIPE_L2 bit 8)
 
 #define LP_PORT_CHECK(used, max, what)                                                                  \
   do {                                                                                                  \
@@ -82,9 +81,9 @@ struct LpStats {
   uint64_t unk_wait_overlap = 0, unk_wait_disjoint = 0;
   uint64_t order_violation = 0, spec_loads = 0, spec_released = 0, vio_multi = 0;
   uint64_t st_drain = 0, st_conflict = 0, st_replay = 0, st_merge_pair = 0;
-  uint64_t sta_replay = 0, bounce = 0, wd_ld = 0, wd_st = 0, rblk = 0;
+  uint64_t sta_replay = 0, wd_ld = 0, wd_st = 0, rblk = 0;
   uint64_t mmio_ld = 0;
-  uint64_t spec_pred = 0, spec_ok = 0, spec_fail = 0, oracle_wake = 0, l3_wake = 0, l3_wb = 0, spec_sw_wbp = 0;
+  uint64_t l3_wake = 0, l3_wb = 0;
   ~LpStats() {
     const char *e = std::getenv("LSU_PIPE_STATS");
     if (!e || e[0] == '0' || l1_new == 0) return;
@@ -111,12 +110,10 @@ struct LpStats {
                    (double)g_msp.flushed_sum / g_msp.n, g_msp.resume_n ? (double)g_msp.idle_sum / g_msp.resume_n : 0.0);
     std::fprintf(stderr,
                  "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
-    std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu spec_pred=%llu spec_ok=%llu spec_fail=%llu oracle_wake=%llu cancel_entries=%llu\n",
-                 (unsigned long long)l3_wb, (unsigned long long)l3_wake, (unsigned long long)spec_pred, (unsigned long long)spec_ok,
-                 (unsigned long long)spec_fail, (unsigned long long)oracle_wake, (unsigned long long)g_lp_cancel_entries);
-    std::fprintf(stderr, "[LSU_PIPE_STATS] store: drain=%llu conflict_block=%llu replay=%llu merge_pair=%llu sta_replay=%llu mmio_ld=%llu bounce=%llu\n",
+    std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu\n", (unsigned long long)l3_wb, (unsigned long long)l3_wake);
+    std::fprintf(stderr, "[LSU_PIPE_STATS] store: drain=%llu conflict_block=%llu replay=%llu merge_pair=%llu sta_replay=%llu mmio_ld=%llu\n",
                  (unsigned long long)st_drain, (unsigned long long)st_conflict, (unsigned long long)st_replay,
-                 (unsigned long long)st_merge_pair, (unsigned long long)sta_replay, (unsigned long long)mmio_ld, (unsigned long long)bounce);
+                 (unsigned long long)st_merge_pair, (unsigned long long)sta_replay, (unsigned long long)mmio_ld);
   }
 } g_st;
 
@@ -134,81 +131,32 @@ inline Rel range_rel(uint32_t lo, uint32_t lw, uint32_t so, uint32_t sw, int bit
   return PARTIAL;
 }
 
-inline bool lp_line_eq(uint32_t a, uint32_t b) { return (a >> DCACHE_OFFSET_BITS) == (b >> DCACHE_OFFSET_BITS); }
-
 inline uint32_t replay_wait(ReplayType r) {
   return r == ReplayType::MSHR_HIT || r == ReplayType::MSHR_FULL ? LSU_PEPLAY_WAIT_CYCLES : 0;
 }
 
 static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
-// Wait table (Alpha 21264 style): 2^LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC violated, cleared every
-// LSU_MDP_CLR cycles (0 = never). A load whose bit is set does not pass unknown-address stores. LSU_MDP_BITS=0 disables the predictor.
-static const unsigned lp_mdp_bits = lsu_pipe_env_mask("LSU_MDP_BITS", CFG_LSU_MDP_BITS);
-static const unsigned lp_mdp_clr = lsu_pipe_env_mask("LSU_MDP_CLR", CFG_LSU_MDP_CLR);
-// Mode 1 = store sets (Chrysos/Emer): a violating (load, store) pair gets the same set id in a PC-indexed table (merging keeps the smaller id);
-// a load waits only for unknown-address older stores of its own set. Mode 0 = the wait table above.
-static const unsigned lp_mdp_mode = lsu_pipe_env_mask("LSU_MDP_MODE", CFG_LSU_MDP_MODE);
-// LSU_MDP_HW (default 1, mode 0 only): the implementable training of the RTL (EXP-019). The violating loads of a cycle are all marked, but only
-// the lowest LDQ index trains the wait table (one write port), and the table bit is written at the clock edge, i.e. the lookups of the next
-// cycle see it (the lookups of the cycle of the violation do not). LSU_MDP_HW=0: every violating load trains at once (EXP-018 behaviour).
-static const unsigned lp_mdp_hwm = lp_mdp_mode == 0 ? lsu_pipe_env_mask("LSU_MDP_HW", CFG_LSU_MDP_HW) : 0;
-static const bool lp_mdp_hw = lp_mdp_hwm != 0;
-// LSU_MDP_HW=2: the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
-// trains the table in the following cycle, so the table is written two cycles after the violation, from registers (no STA-arrival-to-table-write path)
-static const bool lp_mdp_hw2 = lp_mdp_hwm == 2;
-static uint64_t g_trn = 0;
-// LSU_MS_SLOTS=N (default 0 = unlimited): at most N loads (entries with `spec` set that are not yet second-pass) may be speculative at a time, a
-// cheaper variant for the RTL (the violation CAM / SPD release scan only needs N tracking entries instead of every LDQ entry).
-static const unsigned lp_ms_slots = lsu_pipe_env_mask("LSU_MS_SLOTS", CFG_LSU_MS_SLOTS);
+// Wait table (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC
+// violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is set does not pass unknown-address stores. Training as in the RTL:
+// the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
+// trains the table in the following cycle, and the bit is written at the start of the cycle after that.
+constexpr unsigned lp_mdp_bits = CFG_LSU_MDP_BITS;
+constexpr unsigned lp_mdp_clr = CFG_LSU_MDP_CLR;
+static uint64_t g_trn = 0;  // flagged violators (LDQ bit mask)
 static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
-static const unsigned lp_mdp_ntr = lsu_pipe_env_mask("LSU_MDP_NTR", 2);  // table write ports (trains per cycle, lowest LDQ indices first)
 static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
 static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> SLOT_SHIFT) ^ (pc >> (SLOT_SHIFT + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }   // (RVC=1: instructions are 2-byte aligned)
-static std::vector<uint16_t> g_ssit;
-static unsigned g_ssit_next = 1;
-static inline uint16_t ss_get(uint32_t pc) {
-  if (g_ssit.empty()) g_ssit.assign(1u << lp_mdp_bits, 0);
-  return g_ssit[mdp_idx(pc)];
-}
-static inline void ss_train(uint32_t lpc, uint32_t spc) {
-  if (g_ssit.empty()) g_ssit.assign(1u << lp_mdp_bits, 0);
-  uint16_t &a = g_ssit[mdp_idx(lpc)], &b = g_ssit[mdp_idx(spc)];
-  if (!a && !b) { a = b = (uint16_t)g_ssit_next; g_ssit_next = g_ssit_next >= 65535 ? 1 : g_ssit_next + 1; }
-  else if (a && !b) b = a;
-  else if (!a && b) a = b;
-  else a = b = std::min(a, b);
-}
-// Confidence counters (modes 0 and 1): a violation adds 1 (saturating at 3), a load that passed unknown-address stores without a violation
-// subtracts LSU_MDP_DEC; a load/set waits only while the counter is >= LSU_MDP_THR (THR=1, DEC=0: the original sticky 1-bit behaviour).
-static const unsigned lp_mdp_thr = lsu_pipe_env_mask("LSU_MDP_THR", 1);
-static const unsigned lp_mdp_dec = lsu_pipe_env_mask("LSU_MDP_DEC", 0);
-static std::vector<uint8_t> g_mdp;
+static std::vector<bool> g_mdp;
 static long long g_mdp_next_clear = 0;
 static inline bool mdp_wait(uint32_t pc) {
-  if (!lp_mdp_bits) return false;
-  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
-  return g_mdp[mdp_idx(pc)] >= lp_mdp_thr;
-}
-static inline void mdp_write_pending();
-static inline void mdp_train(uint32_t pc) {
-  if (!lp_mdp_bits) return;
-  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
-  uint8_t &c = g_mdp[mdp_idx(pc)];
-  if (c < 3) c++;
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, false);
+  return g_mdp[mdp_idx(pc)];
 }
 static inline void mdp_write_pending() {
   if (g_mdp_pend.empty()) return;
-  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, 0);
-  for (int ix : g_mdp_pend) {
-    uint8_t &c = g_mdp[ix];
-    if (c < 3) c++;
-  }
+  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, false);
+  for (int ix : g_mdp_pend) g_mdp[ix] = true;
   g_mdp_pend.clear();
-}
-static inline void mdp_clean(uint32_t pc) {
-  if (!lp_mdp_bits || !lp_mdp_dec || g_mdp.empty()) return;
-  uint8_t &c = g_mdp[mdp_idx(pc)];
-  c = c > lp_mdp_dec ? c - lp_mdp_dec : 0;
 }
 
 // youngest older store that may conflict (partial CAM on page offset + size; unknown address always conflicts).
@@ -241,7 +189,7 @@ CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, stq_mask_t ov, cons
     const PStq &sv = (ov >> j & 1) ? n.stq[j] : st;  // address view with the STA bypass
     bool c;
     if (!sv.va_v) {
-      if (spec_ok && !(lp_mdp_mode == 1 && l.sset && st.sset == l.sset)) {  // pass the unknown-address store (checked when its address arrives)
+      if (spec_ok) {  // pass the unknown-address store (checked when its address arrives)
         unk_rank = std::max(unk_rank, (int)rank);
         r.skip |= (stq_mask_t)1 << j;
         continue;
@@ -326,59 +274,35 @@ bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t
 
 }  // namespace
 
+// ---- EXP-024 write buffer helpers ----
 // ---------------------------------------------------------------------------------------------------------------
 // cycle start
 // ---------------------------------------------------------------------------------------------------------------
-// Critical-path experiments (docs/LSU_PIPE.md section 6): LSU_PIPE_CUT is a bit mask, default CFG_LSU_PIPE_CUT (= the model of section 5 when 0).
-//   1 = B: wake-up confirm uses the registered STQ window minus ev_ret (no same-cycle count chain)
-//   2 = R: STQ retire reads registered state only (ccount / done of the cycle start)
-//   4 = D: replay registers pick only from RDY bits that were registered at the cycle start
-//   32 = H: the store drain only sees stores that were already committed at the cycle start
-//   16 = G: a store woken by an MSHR-full fill can be drained from the next cycle on (the wake is not seen by this cycle's drain)
-//   8 = F: write-back of waiting loads (WBP) picks only from WBP bits registered at the cycle start
-//   64 = FM: (with F) the load whose MMIO response arrives in this cycle may still be picked in this cycle (MMIO loads run one at a time and
-//       the next one waits for this one to finish, so the extra cycle of F lands on every MMIO load: h264ref sp9 has 2.8M of them, -16%)
-static const unsigned lp_cut = lsu_pipe_env_mask("LSU_PIPE_CUT", CFG_LSU_PIPE_CUT);
-// L2 cuts (docs/LSU_PIPE.md section 7), bit mask in LSU_PIPE_L2, default CFG_LSU_PIPE_L2:
-//   1 = a: L3 register: the direct completion decided at L2 is written back one cycle later (LDQ state L_WB3, load-to-use +1)
-//   2 = a2: (needs 1) the consumers are woken from the L3 register in the cycle of the write-back request, not one cycle later from the
-//       PRF write-back register (no speculation: the decision is registered)
-//   4 = oracle: speculative wake-up at L2 for loads that really hit (upper bound of 8: no cancel, no wrong wake-ups)
-//   128 = Y: (with 8) no speculative wake-up for a load that comes from a replay register (only first-pass loads)
-//   64 = S: at most one SC completion per cycle
-//   32 = M: an MMIO load that becomes MMW at L2 in this cycle is issued to the bus one cycle later (the issue looks at registered MMW only)
-//   16 = F: a load that gets MSHR_FULL in this very cycle is not woken by this cycle's MSHR fill (it waits for its counter); only
-//       loads parked at the start of the cycle compete for the (first LD) MSHR-FULL wake-ups
-//   8 = d: speculative wake-up at L2 from the hit prediction made at L1 (TLB hit, no MMIO, no CAM candidate, no hidden-retry block);
-//       a wrong prediction is cancelled at the start of the next cycle (woken entries wait again) before the select
-static const unsigned lp_l2 = lsu_pipe_env_mask("LSU_PIPE_L2", CFG_LSU_PIPE_L2);
-static const int lp_drain = std::max(1, std::min<int>(DRAIN_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_DRAIN", CFG_LSU_PIPE_DRAIN)));
-static const int lp_dcand = (int)lsu_pipe_env_mask("LSU_PIPE_DCAND", CFG_LSU_PIPE_DCAND);
-// EXP-024: LSU_PIPE_MERGE=N (default 1 = off): up to N committed stores of the same cache line, not overlapping an older not-done store,
-// share ONE store port in a cycle (write-combining upper bound: the combined request carries the leader's address/strobe only, no extra port, no extra DCache work)
-static const int lp_merge = (int)lsu_pipe_env_mask("LSU_PIPE_MERGE", 1);
-// LSU_PIPE_MGRAN: merge granule in bytes (power of two, 4..64, default 64 = a cache line): stores in the same granule may share a port (= width of the DCache store write)
-// LSU_PIPE_MADJ=N (default 0 = any earlier leader): a follower may only join a leader at most N scan positions before it
-static const int lp_madj = (int)lsu_pipe_env_mask("LSU_PIPE_MADJ", 0);
-// LSU_PIPE_MSPEC=1: with merging, the pairing is decided before the overlap CAM (blocked candidates still count for ranks, leaders and
-// followers); a blocked leader leaves its port idle and drops its follower, a blocked follower is dropped (RTL: the CAM only masks the result)
-static const bool lp_mspec = lsu_pipe_env_mask("LSU_PIPE_MSPEC", 0) != 0;
-// EXP-024 write buffer (LSU_PIPE_WBUF = entries, 0 = off; needs LSU_PIPE_MGRAN = granule, 64 = one cache line): committed stores of one granule merge in
-// commit order into the tail entry (if it has not been sent yet), the oldest entries are sent as ONE DCache request each (their stores complete
-// together with the response).  LSU_PIPE_WBINS = stores inserted per cycle, LSU_PIPE_WBSCAN = entries looked at per cycle, LSU_PIPE_WBMAX = stores per entry.
-static const int lp_wbuf = std::min<int>(WB_MAX, (int)lsu_pipe_env_mask("LSU_PIPE_WBUF", CFG_LSU_PIPE_WBUF));
-static const int lp_wbins = (int)lsu_pipe_env_mask("LSU_PIPE_WBINS", CFG_LSU_PIPE_WBINS);
-static const int lp_wbscan = (int)lsu_pipe_env_mask("LSU_PIPE_WBSCAN", CFG_LSU_PIPE_WBSCAN);
-static const int lp_wmax = std::min<int>(WB_MEM, (int)lsu_pipe_env_mask("LSU_PIPE_WBMAX", CFG_LSU_PIPE_WBMAX));
-static const int lp_mgran_sh = [] { unsigned g = lsu_pipe_env_mask("LSU_PIPE_MGRAN", 64); int sh = 2; while ((1u << sh) < g && sh < 6) sh++; return sh; }();
+// Critical-path cuts (docs/LSU_PIPE.md sections 6 and 7; they were the bit masks LSU_PIPE_CUT = 127 and LSU_PIPE_L2 = 115, the
+// variants were deleted 2026-11-15). The letters mark the places in the code.
+//   B: wake-up confirm uses the registered STQ window minus ev_ret (no same-cycle count chain)
+//   R: STQ retire reads registered state only (ccount / done of the cycle start)
+//   D: replay registers pick only from RDY bits that were registered at the cycle start
+//   F: write-back of waiting loads (WBP) picks only from WBP bits registered at the cycle start; FM: the load whose MMIO response
+//      arrives in this cycle may still be picked in this cycle
+//   G: a store woken by an MSHR-full fill can be drained from the next cycle on
+//   H: the store drain only sees stores that were already committed at the cycle start
+//   a: L3 register: the direct completion decided at L2 is written back one cycle later (LDQ state L_WB3); a2: the consumers are woken
+//      from the L3 register in the cycle of the write-back request
+//   S: at most one SC completion per cycle
+//   M: an MMIO load that becomes MMW at L2 in this cycle is issued to the bus one cycle later
+//   (L2) F: a load that gets MSHR_FULL in this very cycle is not woken by this cycle's MSHR fill
+constexpr int lp_rp_ports = CFG_LSU_PIPE_RP;  // replay registers
+constexpr int lp_drain = std::max(1, std::min<int>(DRAIN_MAX, CFG_LSU_PIPE_DRAIN));
+// EXP-024 write buffer: committed stores of one cache line merge in commit order into the tail entry (if it has not been sent yet), the
+// oldest entries are sent as ONE DCache request each (their stores complete together with the response). lp_wbuf entries, lp_wbins stores
+// inserted per cycle, lp_wbscan entries looked at per cycle, lp_wmax stores per entry.
+constexpr int lp_wbuf = std::min<int>(WB_MAX, CFG_LSU_PIPE_WBUF);
+constexpr int lp_wbins = CFG_LSU_PIPE_WBINS;
+constexpr int lp_wbscan = CFG_LSU_PIPE_WBSCAN;
+constexpr int lp_wmax = std::min<int>(WB_MEM, CFG_LSU_PIPE_WBMAX);
+constexpr int lp_mgran_sh = 6;  // merge granule 64 B = one cache line
 
-// ---- EXP-024 write buffer helpers ----
-static int wb_tail(const LsuPipeState &S) {
-  int t = -1;
-  for (int e = 0; e < WB_MAX; e++)
-    if (S.wb[e].v && (t < 0 || S.wb[e].seq > S.wb[t].seq)) t = e;
-  return t;
-}
 // Insertion after the drain decision of the same cycle (the decision only reads the registered buffer C = state at the cycle start):
 // up to lp_wbins uncommitted-to-buffer stores (committed at the cycle start, oldest first; MMIO / suppressed ones are consumed too) are
 // merged into the youngest entry when it is still waiting (not sent in this cycle), else they start a new entry (free slot, registered occupancy).
@@ -483,10 +407,10 @@ void RealLsu::seq_pipe() {
   std::memcpy(dp + off, sp + off, sizeof(LsuPipeState) - off);
 }
 
-void RealLsu::comb_cal_p() {
+void RealLsu::comb_cal() {
   pw = {};
-  if (lp_mdp_hw && lp_mdp_bits) mdp_write_pending();
-  if (lp_mdp_hw2 && lp_mdp_bits) {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
+  mdp_write_pending();
+  {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
     for (int i = 0; i < LDQ_SIZE && g_trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
       if ((g_trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) g_trn &= ~(1ULL << i);
     for (int i = 0; i < LDQ_SIZE && g_trn; i++)
@@ -494,7 +418,6 @@ void RealLsu::comb_cal_p() {
   }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
-  for (int k = 0; k < LD; k++) pnxt.sf[k] = {};
   for (auto &w : wires->lsu_awake.wake) w = {};
   if (msd::on) {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
     for (uint32_t k = 0; k < pnxt.stq_count; k++) {
@@ -515,24 +438,16 @@ void RealLsu::comb_cal_p() {
   }
 }
 
-// start of the cycle: the cancel registers of the previous cycle go to the issue queues / busy table (before the select)
-void RealLsu::comb_spec_cancel_p() {
-  for (int k = 0; k < LD; k++) {
-    wires->lsu_awake.cancel[k].valid = pcur.sf[k].v;
-    wires->lsu_awake.cancel[k].preg = pcur.sf[k].preg;
-  }
-}
-
-void RealLsu::comb_lsu2rob_p() {
+void RealLsu::comb_lsu2rob() {
   wires->lsu2rob = {};
   wires->lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
-  std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 (same fix as RealLsu::load_miss_mask)
+  std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 
   for (const PLdq &l : pcur.ldq)
     if (l.miss && l.st != L_EMPTY) m.set(l.rob_idx);
   wires->lsu2rob.tma.miss_mask = m;
 }
 
-void RealLsu::comb_lsu2dis_p() {
+void RealLsu::comb_lsu2dis() {
   wires->lsu2dis = {};
   const uint32_t head = pcur.stq_head, count = pcur.stq_count;
   wires->lsu2dis.stq_tail = (head + count) % STQ_SIZE;
@@ -552,7 +467,7 @@ void RealLsu::comb_lsu2dis_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // ROB commit: STQ entries become committed in order
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_stq_commit_p() {
+void RealLsu::comb_stq_commit() {
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     if (!wires->rob_commit.commit_entry[i].valid) continue;
     const auto &u = wires->rob_commit.commit_entry[i].uop;
@@ -573,7 +488,7 @@ void RealLsu::comb_stq_commit_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // MMIO
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_mmio_in_p() {
+void RealLsu::comb_mmio_in() {
   if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
@@ -590,7 +505,7 @@ void RealLsu::comb_mmio_in_p() {
   nxt.uncached_unit.valid = false;
 }
 
-void RealLsu::comb_mmio_out_p() {
+void RealLsu::comb_mmio_out() {
   wires->out.peripheral_req = {};
   if (!wires->in.peripheral_resp.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
@@ -607,7 +522,7 @@ void RealLsu::comb_mmio_out_p() {
 // L2: DCache response + STLF confirm + hit/forward select. Reads the L1/L2 registers and the registered STQ state.
 // A load that cannot complete is parked in the LDQ entry (cause + wake condition), nothing is queued anywhere.
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_dcache2lsu_ldq_p() {
+void RealLsu::comb_dcache2lsu_ldq() {
   const DcacheLsuIO &dc = wires->in.dcache2lsu;
   pw.fill = dc.mshr_fill && LSU_WAIT_MSHR_FILL;
   pw.fill_addr = dc.mshr_fill_addr;
@@ -626,9 +541,6 @@ void RealLsu::comb_dcache2lsu_ldq_p() {
     }
   };
 
-  bool predhit[LD] = {}, spec[LD] = {};
-  const bool dead_now = wires->rob_bcast.flush;
-  auto killed_now = [&](const PLdq &e) { return dead_now || (wires->dec_bcast.mispred && (e.br_mask & wires->dec_bcast.br_mask) != 0); };
   for (int i = 0; i < LD; i++) {
     const PL12 &sl = pcur.l12[i];
     if (!sl.v) continue;
@@ -654,13 +566,6 @@ void RealLsu::comb_dcache2lsu_ldq_p() {
     }
     if (!sl.cand_v) {  // no conflicting older store: the DCache read of L1 decides
       e.st = L_DCW;
-      predhit[i] = true;  // hit predicted at the end of L1 (the DCache read was launched)
-      if ((lp_l2 & 8) && !((lp_l2 & 128) && sl.rpl) && e.dest_preg != 0 && !killed_now(e)) {  // d: speculative wake-up from the L1/L2 register
-        wires->lsu_awake.wake[i].valid = true;
-        wires->lsu_awake.wake[i].preg = e.dest_preg;
-        spec[i] = true;
-        g_st.spec_pred++;
-      }
       continue;
     }
     // STLF confirm against the registered STQ entry (full physical address check)
@@ -708,41 +613,17 @@ void RealLsu::comb_dcache2lsu_ldq_p() {
     }
   }
 
-  // speculative / oracle wake-up bookkeeping: did the predicted-hit load of port i complete directly (DCache HIT this cycle)?
+  // a: the direct completions go through the L3 register (written back in the next cycle)
   for (int i = 0; i < LD; i++) {
-    if (!predhit[i]) continue;
-    const PL12 &sl = pcur.l12[i];
-    PLdq &e = pnxt.ldq[sl.ldq];
-    const bool ok = pw.wbd_v[i] && pw.wbd_ldq[i] == sl.ldq;
-    if (spec[i]) {
-      if (ok) {
-        e.sw = 1;
-        g_st.spec_ok++;
-      } else {
-        pnxt.sf[i].v = 1;
-        pnxt.sf[i].preg = e.dest_preg;
-        g_st.spec_fail++;
-      }
-    } else if ((lp_l2 & 4) && ok && e.dest_preg != 0 && !killed_now(e)) {  // oracle: wake only the loads that hit
-      wires->lsu_awake.wake[i].valid = true;
-      wires->lsu_awake.wake[i].preg = e.dest_preg;
-      e.sw = 1;
-      g_st.oracle_wake++;
-    }
-  }
-
-  if (lp_l2 & 1) {  // a: the direct completions go through the L3 register
-    for (int i = 0; i < LD; i++) {
-      if (!pw.wbd_v[i]) continue;
-      pnxt.l3[i].v = 1;
-      pnxt.l3[i].ldq = pw.wbd_ldq[i];
-      pnxt.ldq[pw.wbd_ldq[i]].st = L_WB3;
-      pw.wbd_v[i] = false;
-    }
+    if (!pw.wbd_v[i]) continue;
+    pnxt.l3[i].v = 1;
+    pnxt.l3[i].ldq = pw.wbd_ldq[i];
+    pnxt.ldq[pw.wbd_ldq[i]].st = L_WB3;
+    pw.wbd_v[i] = false;
   }
 }
 
-void RealLsu::comb_dcache2lsu_stq_p() {
+void RealLsu::comb_dcache2lsu_stq() {
   const DcacheLsuIO &dc = wires->in.dcache2lsu;
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     const auto &r = dc.resp_ports.store_resps[i];
@@ -759,9 +640,9 @@ void RealLsu::comb_dcache2lsu_stq_p() {
       g_st.st_replay++;
     }
     { static const char *tr = std::getenv("LSU_PIPE_WBTRACE"); if (tr && (long long)sim_time >= std::atoll(tr)) std::fprintf(stderr, "WB t=%lld resp id=%d replay=%d\n", (long long)sim_time, (int)r.req_id, (int)r.replay); }
-    if (lp_wbuf > 0) wb_response(pnxt, r.req_id, r.replay == ReplayType::HIT);
+    wb_response(pnxt, r.req_id, r.replay == ReplayType::HIT);
   }
-  if (lp_merge > 1 || lp_wbuf > 0) {  // merged followers complete with their leader's response
+  {  // stores merged into a write-buffer entry complete with their leader's response
     for (int i = 0; i < LSU_STA_COUNT; i++) {
       const auto &r = dc.resp_ports.store_resps[i];
       if (!r.valid || r.req_id >= STQ_SIZE) continue;
@@ -811,7 +692,6 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.br_mask = l.br_mask;
   wb.diag_val = l.vaddr;
   wb.result = l.pf ? l.vaddr : l.result;
-  if (tbhook::poison && !l.pf && !l.mmio) wb.result ^= 0xA5C3A5C3u;
   wb.dest_preg = l.pf ? 0 : l.dest_preg;   // a faulting load does not write its destination (RTL: lp_wb)
   wb.page_fault_load = l.pf;
   wb.illegal_inst = l.illegal;
@@ -819,10 +699,10 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.is_mmio = l.mmio;
   const bool second = l.second;
   const bool defer = lp_memspec && !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
-  bool early = l.sw || second;
+  bool early = second;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
-  if (!early && from_l3 && (lp_l2 & 2) && !l.pf && l.dest_preg != 0 && !wires->rob_bcast.flush &&
+  if (!early && from_l3 && !l.pf && l.dest_preg != 0 && !wires->rob_bcast.flush &&
       !(wires->dec_bcast.mispred && (l.br_mask & wires->dec_bcast.br_mask) != 0)) {  // a2: wake from the L3 register
     wires->lsu_awake.wake[LD + port].valid = true;
     wires->lsu_awake.wake[LD + port].preg = l.dest_preg;
@@ -831,7 +711,6 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   }
   if (from_l3) g_st.l3_wb++;
   wb.early_woken = early;
-  l.sw = 0;
   wires->lsu2exe.wb_req[port].valid = true;
   wires->lsu2exe.wb_req[port].uop = wb;
   if (l.lrsc && !l.pf) {
@@ -907,14 +786,11 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   }
 }
 
-void RealLsu::comb_lsu2exe_p() {
+void RealLsu::comb_lsu2exe() {
   wires->lsu2exe = {};
   bool busy[LD] = {};
-  for (int p = 0; p < LD; p++) {  // 1. L2 completions own their load port (a: the ones registered in L3)
-    if (pw.wbd_v[p]) {
-      busy[p] = true;
-      lp_emit_load_wb(p, pw.wbd_ldq[p]);
-    } else if ((lp_l2 & 1) && pcur.l3[p].v && pnxt.ldq[pcur.l3[p].ldq].st == L_WB3) {
+  for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
+    if (pcur.l3[p].v && pnxt.ldq[pcur.l3[p].ldq].st == L_WB3) {
       busy[p] = true;
       lp_emit_load_wb(p, pcur.l3[p].ldq, true);
     }
@@ -935,7 +811,7 @@ void RealLsu::comb_lsu2exe_p() {
     wb.dest_en = false;
     wb.is_mmio = s.mmio;
     if (s.lrsc) {  // SC reports pass/fail through a load write-back port
-      if ((lp_l2 & 64) && sc_n >= 1) continue;  // S: one SC completion per cycle
+      if (sc_n >= 1) continue;  // S: one SC completion per cycle
       int p = -1;
       for (int q = 0; q < LD && p < 0; q++)
         if (!busy[q]) p = q;
@@ -983,7 +859,6 @@ void RealLsu::comb_lsu2exe_p() {
         unknown = !s.va_v && !s.suppress;
       }
       if (!unknown) {
-        if (lp_mdp_mode == 0 && !l.vio) mdp_clean(l.pc);
         l.second = 1;
         l.st = L_WBP;
         if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld rel ldq=%d rob=%d\n", (long long)sim_time, i, (int)l.rob_idx);
@@ -995,7 +870,7 @@ void RealLsu::comb_lsu2exe_p() {
   // 3. loads waiting for a port (forwarded after a data wait, MMIO data): lowest LDQ index first
   for (int i = 0; i < LDQ_SIZE; i++) {
     if (pnxt.ldq[i].st != L_WBP) continue;
-    if ((lp_cut & 8) && pcur.ldq[i].st != L_WBP && !((lp_cut & 64) && pw.mmio_ld == i)) continue;
+    if (pcur.ldq[i].st != L_WBP && pw.mmio_ld != i) continue;  // F / FM: registered WBP bits (and this cycle's MMIO answer)
     int p = -1;
     for (int q = 0; q < LD && p < 0; q++)
       if (!busy[q]) p = q;
@@ -1008,7 +883,7 @@ void RealLsu::comb_lsu2exe_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // AGU arrivals: STD write, STA (va), load (L1 input)
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_exe2lsu_p() {
+void RealLsu::comb_exe2lsu() {
   const ExeLsuIO &x = wires->exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
@@ -1064,9 +939,8 @@ void RealLsu::comb_exe2lsu_p() {
         g_st.order_violation++;
         if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld vio ldq=%d rob=%d stq=%u st=%d\n", (long long)sim_time, i, (int)l.rob_idx, j, (int)l.st);
         g_msp.on_detect(l.rob_idx);
-        if (lp_mdp_mode == 1) ss_train(l.pc, pnxt.stq[j].pc);
-        else if (lp_mdp_hw) { vio_new++; vio_set |= 1ULL << i; }
-        else mdp_train(l.pc);
+        vio_new++;
+        vio_set |= 1ULL << i;
         l.vio = 1;
         if (l.st == L_SPD) {  // already written back: re-execute with the store visible
           l.second = 1;
@@ -1077,10 +951,7 @@ void RealLsu::comb_exe2lsu_p() {
   }
   if (vio_new) {
     if (vio_new > 1) g_st.vio_multi++;
-    if (lp_mdp_hw2) g_trn |= vio_set;
-    else if (lp_mdp_hw && lp_mdp_bits)
-      for (int i = 0, n = 0; i < LDQ_SIZE && n < (int)lp_mdp_ntr; i++)
-        if (vio_set >> i & 1) { g_mdp_pend.push_back(mdp_idx(pnxt.ldq[i].pc)); n++; }
+    g_trn |= vio_set;
   }
   int nl = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
@@ -1115,32 +986,18 @@ void RealLsu::comb_exe2lsu_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1: DTLB request (new loads, replay registers fill the remaining load ports), STA translation
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_tlb_out_p() {
+void RealLsu::comb_tlb_out() {
   wires->lsu2mmu_io = {};
   wires->lsu2mmu_io.csr_status = wires->csr_status;
 
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;
   for (int r = 0; r < lp_rp_ports; r++) {
-    if (n >= LD && lp_bounce > 0 && pcur.rp[r].v && pcur.rp[r].age >= lp_bounce) {
-      // aging bounce: the last new load goes to replay (its AGU request is consumed, it re-enters through RP)
-      PL1 &b = pw.l1[LD - 1];
-      if (b.v && !b.replay) {
-        pnxt.ldq[b.ldq].st = L_RDY;
-        b = PL1{};
-        n = LD - 1;
-        g_st.bounce++;
-      }
-    }
-    if (n >= LD) {
-      if (pcur.rp[r].v && pnxt.rp[r].age < 7) pnxt.rp[r].age++;
-      continue;
-    }
+    if (n >= LD) continue;
     int src = -1;
     if (pcur.rp[r].v) {
       src = pcur.rp[r].ldq;
       pnxt.rp[r].v = 0;
-      pnxt.rp[r].age = 0;
     }
     if (src < 0) continue;
     PLdq &e = pnxt.ldq[src];
@@ -1185,7 +1042,7 @@ void RealLsu::comb_tlb_out_p() {
   }
 }
 
-void RealLsu::comb_tlb_in_ldq_p() {
+void RealLsu::comb_tlb_in_ldq() {
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v) continue;
@@ -1217,7 +1074,7 @@ void RealLsu::comb_tlb_in_ldq_p() {
   }
 }
 
-void RealLsu::comb_tlb_in_stq_p() {
+void RealLsu::comb_tlb_in_stq() {
   for (int k = 0; k < STA; k++) {
     PSta &s1 = pw.s1[k];
     if (!s1.v) continue;
@@ -1260,10 +1117,7 @@ void RealLsu::comb_tlb_in_stq_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_stlf_p() {
-  int live = 0;
-  if (lp_memspec && lp_ms_slots)
-    for (const PLdq &x : pnxt.ldq) live += x.st != L_EMPTY && x.spec && !x.second;
+void RealLsu::comb_stlf() {
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v || !l.hit || l.mmio) continue;
@@ -1273,9 +1127,7 @@ void RealLsu::comb_stlf_p() {
     stq_mask_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= (stq_mask_t)1 << pw.s1[q].stq;
-    const bool slot_ok = !lp_ms_slots || e.spec || live < (int)lp_ms_slots;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && slot_ok && !e.second && !e.lrsc && !(lp_mdp_mode == 0 && e.wait));
-    if (lp_ms_slots) live += (int)c.unk - (int)e.spec;
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc && !e.wait);
     pnxt.ldq[l.ldq].spec = c.unk;
     pnxt.ldq[l.ldq].skip = c.skip;
     l.cand_v = c.v;
@@ -1286,7 +1138,7 @@ void RealLsu::comb_stlf_p() {
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_MMW || nxt.uncached_unit.valid) continue;
-    if ((lp_l2 & 32) && pcur.ldq[i].st != L_MMW) continue;  // M: only entries that were already MMW at the start of the cycle
+    if (pcur.ldq[i].st != L_MMW) continue;  // M: only entries that were already MMW at the start of the cycle
     if (!lsu_mmio_is_oldest_unfinished(&wires->rob_bcast, e.rob_idx)) continue;
     const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
     const uint32_t b = (e.snap_flag ? STQ_SIZE : 0) + e.snap_idx;
@@ -1304,7 +1156,7 @@ void RealLsu::comb_stlf_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // Allocation
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_dis2lsu_p() {
+void RealLsu::comb_dis2lsu() {
   const DisLsuIO &d = wires->dis2lsu;
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
@@ -1318,12 +1170,10 @@ void RealLsu::comb_dis2lsu_p() {
     e.pc = d.ldq_pc[i];
     if (lp_memspec) {
       if (lp_mdp_clr && (long long)sim_time >= g_mdp_next_clear) {
-        std::fill(g_mdp.begin(), g_mdp.end(), 0);
-        std::fill(g_ssit.begin(), g_ssit.end(), 0);
+        std::fill(g_mdp.begin(), g_mdp.end(), false);
         g_mdp_next_clear = (long long)sim_time + lp_mdp_clr;
       }
-      if (lp_mdp_mode == 1) e.sset = ss_get(e.pc);
-      else e.wait = mdp_wait(e.pc);
+      e.wait = mdp_wait(e.pc);
     }
     e.st = L_ALLOC;
   }
@@ -1337,7 +1187,6 @@ void RealLsu::comb_dis2lsu_p() {
     e.rob_flag = d.rob_flag[i];
     e.br_mask = d.br_mask[i];
     e.pc = d.st_pc[i];
-    if (lp_memspec && lp_mdp_mode == 1) e.sset = ss_get(e.pc);
     e.func3 = d.func3[i];
     pnxt.stq_count++;
   }
@@ -1346,7 +1195,7 @@ void RealLsu::comb_dis2lsu_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // flush / mispredict / clear_mask
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_flush_p() {
+void RealLsu::comb_flush() {
   if (wires->rob_bcast.flush) {
     if (msd::on) msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
@@ -1403,7 +1252,7 @@ void RealLsu::comb_flush_p() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 -> DCache request and the L1/L2 pipeline register
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_lsu2dcache_ldq_p() {
+void RealLsu::comb_lsu2dcache_ldq() {
   auto &ports = wires->out.lsu2dcache.req_ports.load_ports;
   for (int i = 0; i < LSU_LDU_COUNT; i++) ports[i].valid = ports[i].replay = false;
   for (int k = 0; k < LD; k++) {
@@ -1419,13 +1268,12 @@ void RealLsu::comb_lsu2dcache_ldq_p() {
     sl.cand_v = l.cand_v;
     sl.cand = l.cand;
     sl.dcblk = 0;
-    sl.rpl = l.replay;
     // the DCache is read in parallel with the partial CAM; the read enable is qualified by "no conflicting older store"
-    // (12-bit compare, ready with the DTLB result). lp_gate=0: ungated read (wasted bank slots, measured as a variant).
-    if (l.hit && !l.mmio && !l.cand_v && lp_rblk && wires->in.dcache2lsu.load_retry_busy[k]) {
+    // (12-bit compare, ready with the DTLB result); a port with a pending DCache hidden retry does not launch.
+    if (l.hit && !l.mmio && !l.cand_v && wires->in.dcache2lsu.load_retry_busy[k]) {
       sl.dcblk = 1;  // the port belongs to the DCache hidden retry this cycle
       g_st.rblk++;
-    } else if (l.hit && !l.mmio && (!l.cand_v || !lp_gate)) {
+    } else if (l.hit && !l.mmio && !l.cand_v) {
       e.epoch = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
       ports[k].valid = true;
       ports[k].addr = l.paddr;
@@ -1441,16 +1289,15 @@ void RealLsu::comb_lsu2dcache_ldq_p() {
 // committed-store drain (RTL-aligned form, see rtl docs/analysis/lsu-pipe.md "model changes" M4):
 //   1. every eligible store of the committed window counts its replay countdown down (all of them, every cycle);
 //   2. the head store, when MMIO, takes the uncached unit;
-//   3. the first lp_dcand (4) oldest ready non-MMIO stores are the candidates; a candidate is dropped for this cycle when an older
-//      committed, not done store overlaps its bytes (a dropped candidate does not take a port); the m-th remaining candidate
-//      (m < lp_drain = 3) uses the m-th store port without a pending DCache hidden retry. lp_dcand = 0 is the first-version
-//      drain: the first lp_drain ready candidates, candidate m on port m, a dropped candidate keeps its port idle.
+//   3. the other committed stores go through the write buffer (EXP-024): the oldest registered entries whose stores are all ready and
+//      that do not overlap an older entry are sent, one DCache request each, on the store ports without a pending hidden retry
+//      (first lp_drain ports); then the stores committed at the cycle start are inserted (wb_insert).
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_lsu2dcache_stq_p() {
+void RealLsu::comb_lsu2dcache_stq() {
   auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
-  const uint32_t n = std::min<uint32_t>((lp_cut & 32) ? pcur.stq_ccount : pnxt.stq_ccount, pnxt.stq_count);
+  const uint32_t n = std::min<uint32_t>(pcur.stq_ccount, pnxt.stq_count);  // H: stores committed at the cycle start
   bool rdy[STQ_SIZE] = {};  // by rank
   for (uint32_t rank = 0; rank < n; rank++) {
     const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
@@ -1458,7 +1305,7 @@ void RealLsu::comb_lsu2dcache_stq_p() {
     if (!(s.cmt && !s.done && !s.mmw)) continue;
     if (pcur.stq[j].iss) continue;  // in flight, or answered this cycle: re-send earliest next cycle
     if (s.suppress) { std::fprintf(stderr, "[LSU_PIPE] committed suppress store not done (unreachable)\n"); std::abort(); }
-    const uint32_t rw_seen = ((lp_cut & 16) && (pw.st_fullwake >> j & 1)) ? pw.st_rwpre[j] : s.rwait;
+    const uint32_t rw_seen = (pw.st_fullwake >> j & 1) ? pw.st_rwpre[j] : s.rwait;  // G
     if (s.rwait > 0) s.rwait--;
     rdy[rank] = rw_seen <= 1;
   }
@@ -1476,8 +1323,8 @@ void RealLsu::comb_lsu2dcache_stq_p() {
   // free ports among the first lp_drain (no hidden retry pending)
   int free_port[DRAIN_MAX], nfree = 0;
   for (int t = 0; t < lp_drain; t++)
-    if (!(lp_rblk && wires->in.dcache2lsu.store_retry_busy[t])) free_port[nfree++] = t;
-  if (lp_wbuf > 0) {  // EXP-024: the committed stores go through the write buffer
+    if (!wires->in.dcache2lsu.store_retry_busy[t]) free_port[nfree++] = t;
+  {  // EXP-024: the committed stores go through the write buffer
     bool issued_now[WB_MAX] = {};
     const LsuPipeState &C = pcur;  // the decision reads the registered buffer only
     int order[WB_MAX], no = 0;
@@ -1525,82 +1372,16 @@ void RealLsu::comb_lsu2dcache_stq_p() {
       g_st.st_drain++;
     }
     wb_insert(pnxt, C, n, issued_now);
-    return;
   }
-  int m = 0, seen = 0;
-  uint32_t lead_j[DRAIN_MAX] = {}, lead_cnt[DRAIN_MAX] = {};
-  int lead_pos[DRAIN_MAX] = {};
-  bool lead_dead[DRAIN_MAX] = {};
-  int nlead = 0;
-  for (uint32_t rank = 0; rank < n && (m < lp_drain || (lp_merge > 1 && nlead > 0)); rank++) {
-    const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
-    PStq &s = pnxt.stq[j];
-    if (!rdy[rank] || s.mmio) continue;
-    if (lp_dcand > 0 && seen++ >= lp_dcand) break;  // only the first lp_dcand ready candidates have a CAM
-    int cm = 0;
-    if (lp_dcand == 0) {  // first-version drain: the candidate index is the port index, a blocked candidate keeps its port idle
-      cm = m++;
-      if (cm >= nfree) continue;
-    }
-    const uint8_t strb = get_store_strb(s.paddr, s.func3);
-    bool blocked = false;
-    for (uint32_t q = 0; q < rank && !blocked; q++) {  // lp_dcand x 64 CAM in hardware
-      const PStq &o = pnxt.stq[(pnxt.stq_head + q) % STQ_SIZE];
-      if (o.done || !o.cmt) continue;
-      if (CheckAddr(o.paddr, get_store_strb(o.paddr, o.func3), s.paddr, strb)) blocked = true;
-    }
-    const bool spec = lp_mspec && lp_merge > 1 && lp_dcand > 0;
-    if (blocked && !spec) {
-      g_st.st_conflict++;
-      continue;
-    }
-    if (lp_merge > 1) {  // write combining: join a leader of this cycle on the same cache line
-      bool joined = false;
-      for (int t = 0; t < nlead && !joined; t++) {
-        if ((lp_madj > 0 && (seen - 1) - lead_pos[t] > lp_madj) || lead_cnt[t] >= (uint32_t)lp_merge || (pnxt.stq[lead_j[t]].paddr >> lp_mgran_sh) != (s.paddr >> lp_mgran_sh)) continue;
-        lead_cnt[t]++;
-        joined = true;
-        if (blocked || lead_dead[t]) {  // MSPEC: dropped, but it used the follower slot
-          if (blocked) g_st.st_conflict++;
-          break;
-        }
-        s.iss = 1;
-        s.mf = 1;
-        s.ml = lead_j[t];
-        g_st.st_merge_pair++;
-      }
-      if (joined) continue;
-      if (m >= lp_drain) continue;
-    }
-    if (lp_dcand > 0) {  // the m-th unblocked candidate uses the m-th free port
-      cm = m++;
-      if (cm >= nfree) continue;
-    }
-    if (lp_merge > 1 && nlead < DRAIN_MAX) { lead_j[nlead] = j; lead_cnt[nlead] = 1; lead_pos[nlead] = seen - 1; lead_dead[nlead] = blocked; nlead++; }
-    if (blocked) {  // MSPEC: a blocked leader keeps its port idle
-      g_st.st_conflict++;
-      continue;
-    }
-    s.mf = 0;
-    auto &p = ports[free_port[cm]];
-    p.valid = true;
-    p.addr = s.paddr;
-    p.strb = strb;
-    p.req_id = j;
-    p.replay = s.rtype != (uint8_t)ReplayType::HIT;
-    s.iss = 1;
-    g_st.st_drain++;
-  }
-  LP_PORT_CHECK(m, lp_drain + 1, "store_drain");
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // STQ retire, wake-up pass (events of this cycle -> LDQ entries), replay-register fill
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_check_p() {
+void RealLsu::comb_check() {
   int ret = 0;
   while (ret < RETIRE_PORTS && pnxt.stq_ccount > 0 && pnxt.stq_count > 0 && pnxt.stq[pnxt.stq_head].done &&
-         (!(lp_cut & 2) || ((uint32_t)ret < pcur.stq_ccount && (uint32_t)ret < pcur.stq_count && pcur.stq[pnxt.stq_head].done))) {
+         (uint32_t)ret < pcur.stq_ccount && (uint32_t)ret < pcur.stq_count && pcur.stq[pnxt.stq_head].done) {  // R: registered state only
     pw.ev_ret |= (stq_mask_t)1 << pnxt.stq_head;
     pnxt.stq_count--;
     pnxt.stq_ccount--;
@@ -1630,7 +1411,7 @@ void RealLsu::comb_check_p() {
                      (int)((pnxt.stq_head + k) % STQ_SIZE), (int)t.rob_idx, (int)t.va_v, (int)t.pa_v, (int)t.data_v, (int)t.pf, (int)t.trp, (int)t.wbp,
                      (int)t.wbd, (int)t.cmt, (int)t.iss, (int)t.mmw, (int)t.done, (int)t.suppress, (int)t.mmio, (int)t.lrsc, (unsigned)t.paddr, (int)t.rwait);
       }
-      for (int r = 0; r < RP_MAX; r++) std::fprintf(stderr, "RP[%d] v=%d ldq=%d age=%d\n", r, (int)pnxt.rp[r].v, (int)pnxt.rp[r].ldq, (int)pnxt.rp[r].age);
+      for (int r = 0; r < RP_MAX; r++) std::fprintf(stderr, "RP[%d] v=%d ldq=%d\n", r, (int)pnxt.rp[r].v, (int)pnxt.rp[r].ldq);
       std::fprintf(stderr, "srp v=%d stq=%d; rob head valid=%d idx=%d inc_valid=%d inc_idx=%d\n", (int)pnxt.srp.v, (int)pnxt.srp.ldq,
                    (int)wires->rob_bcast.head_valid, (int)wires->rob_bcast.head_rob_idx, (int)wires->rob_bcast.head_incomplete_valid,
                    (int)wires->rob_bcast.head_incomplete_rob_idx);
@@ -1734,7 +1515,7 @@ void RealLsu::comb_check_p() {
       if (pw.fill && e.rtype == (uint8_t)ReplayType::MSHR_HIT && cache_line_match(e.paddr, pw.fill_addr)) {
         e.rwait = 0;
       } else if (pw.fill && e.rtype == (uint8_t)ReplayType::MSHR_FULL && full_wakes < (uint32_t)LD &&
-                 (!(lp_l2 & 16) || pcur.ldq[i].st == L_RPW)) {
+                 pcur.ldq[i].st == L_RPW) {
         e.rwait = 0;
         full_wakes++;
       } else if (e.rwait > 0) {
@@ -1745,7 +1526,7 @@ void RealLsu::comb_check_p() {
     case RC_ADDR:
       if ((pw.ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)
         const PStq &s = pnxt.stq[e.blk_idx];
-        const Conf c = stlf_confirm(e, s, ((lp_cut & 1) ? stq_rank(e.blk_idx, pcur.stq_head) < pcur.stq_count : stq_rank(e.blk_idx, pnxt.stq_head) < pnxt.stq_count) && !(pw.ev_ret & b));
+        const Conf c = stlf_confirm(e, s, stq_rank(e.blk_idx, pcur.stq_head) < pcur.stq_count && !(pw.ev_ret & b));  // B
         if (s.va_v && range_rel(e.vaddr, ld_width(e.func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT)
           g_st.unk_wait_disjoint++;  // a load that had passed the unknown address would have been right
         else
@@ -1775,7 +1556,7 @@ void RealLsu::comb_check_p() {
     for (int k = 0; k < LDQ_SIZE; k++) {  // find-first over the 64-bit RDY vector rotated by rp_ptr
       const int i = (pnxt.rp_ptr + k) % LDQ_SIZE;
       if (pnxt.ldq[i].st != L_RDY) continue;
-      if ((lp_cut & 4) && pcur.ldq[i].st != L_RDY) continue;
+      if (pcur.ldq[i].st != L_RDY) continue;  // D: registered RDY bits
       pnxt.ldq[i].st = L_PIPE;
       pnxt.rp[r].v = 1;
       pnxt.rp[r].ldq = i;

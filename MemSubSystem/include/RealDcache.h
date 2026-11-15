@@ -44,7 +44,6 @@ struct S1S2Reg {
 class RealDcache {
 public:
     void init();
-    void comb();
     void seq();
     void bind_context(SimContext *c) { ctx = c; }
 
@@ -68,14 +67,6 @@ public:
     bool load_retry_pending(int i) const { return bank_retry_cur.loads[i].valid; }
     bool store_retry_pending(int i) const { return bank_retry_cur.stores[i].valid; }
 
-    bool idle_quiescent() const {
-        if (s1s2_cur.fill_write.valid) return false;
-        for (const auto &l : s1s2_cur.loads) if (l.valid) return false;
-        for (const auto &s : s1s2_cur.stores) if (s.valid) return false;
-        for (const auto &l : bank_retry_cur.loads) if (l.valid) return false;
-        for (const auto &s : bank_retry_cur.stores) if (s.valid) return false;
-        return true;
-    }
 private:
     struct FillReqMerge {
         wire<1> valid = false;

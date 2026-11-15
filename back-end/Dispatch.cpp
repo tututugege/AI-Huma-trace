@@ -1,4 +1,3 @@
-#include "BeginCheck.h"
 #include "Dispatch.h"
 #include "Rob.h"
 #include "Wires.h"
@@ -30,13 +29,6 @@ void Dispatch::init() {
   for (int &o : ldq_port_owner) o = -1;
   std::memset(busy_table, 0, sizeof(busy_table));
   std::memset(busy_table_1, 0, sizeof(busy_table_1));
-}
-
-// The working copies already equal the registered state (seq() copies them back).
-void Dispatch::comb_begin() {
-  BEGIN_EQ(inst_r_1, inst_r);
-  BEGIN_EQ(inst_valid_1, inst_valid);
-  BEGIN_EQ(busy_table_1, busy_table);
 }
 
 // Allocate ROB ids and LDQ/STQ entries for the instructions waiting in the stage. A load records the STQ tail it must
@@ -122,12 +114,6 @@ void Dispatch::comb_wake() {
       if (u->src3_en && u->src3_preg == inst_alloc[j].dest_preg) u.src3_busy = true;
     }
   }
-}
-
-// A speculative load wake-up of the previous cycle was wrong: the destination register is busy again.
-void Dispatch::comb_cancel() {
-  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
-    if (wires->lsu_awake.cancel[k].valid) busy_table[wires->lsu_awake.cancel[k].preg] = true;
 }
 
 // Split each instruction into uops and place them in the issue-queue request ports, in slot order; the first

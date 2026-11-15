@@ -21,19 +21,13 @@
 #include "RealLsu.h"
 #include "SimCpu.h"
 #include "config.h"
-#include "diff.h"
+#include "RefCore.h"
 #include "front_IO.h"
 #include "front_module.h"
 #include "BPU/BPU.h"
 #include "util.h"
 
-#ifndef CONFIG_DCACHE_FAST_DOMAIN
-#define CONFIG_DCACHE_FAST_DOMAIN 16
-#endif
-
 namespace {
-constexpr bool kDcacheFastDomainEnabled = CONFIG_DCACHE_FAST_DOMAIN != 0;
-
 void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
   // The AXI UART model is TX-only: register 0 is a consumed THR and must stay
   // empty after restore. Restore the remaining software-visible registers
@@ -45,16 +39,6 @@ void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
         static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
     uart.write(UART_ADDR_BASE + reg_off, &value, 1u, 1u);
   }
-}
-
-bool is_dcache_read_master(int master) {
-  return kDcacheFastDomainEnabled &&
-         master == axi_interconnect::MASTER_DCACHE_R;
-}
-
-bool is_dcache_write_master(int master) {
-  return kDcacheFastDomainEnabled &&
-         master == axi_interconnect::MASTER_DCACHE_W;
 }
 
 template <typename InterconnectT>
@@ -79,43 +63,6 @@ void clear_axi_master_inputs(InterconnectT &interconnect) {
     port.req.total_size = 0;
     port.req.id = 0;
     port.req.bypass = false;
-  }
-}
-
-struct AxiInternalTickBoundaryState {
-  bool read_req_ready_r[axi_interconnect::NUM_READ_MASTERS] = {};
-  axi_interconnect::ReadReqHoldLatch
-      read_req_hold[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool write_req_ready_r[axi_interconnect::NUM_WRITE_MASTERS] = {};
-};
-
-template <typename InterconnectT>
-void capture_axi_internal_tick_boundary_state(
-    InterconnectT &interconnect, AxiInternalTickBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    state.read_req_ready_r[i] = interconnect.req_ready_r[i];
-    state.read_req_hold[i] = interconnect.read_req_hold[i];
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    state.write_req_ready_r[i] = interconnect.w_req_ready_r[i];
-  }
-}
-
-template <typename InterconnectT>
-void restore_axi_internal_tick_boundary_state_except_dcache(
-    InterconnectT &interconnect, const AxiInternalTickBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    if (is_dcache_read_master(i)) {
-      continue;
-    }
-    interconnect.req_ready_r[i] = state.read_req_ready_r[i];
-    interconnect.read_req_hold[i] = state.read_req_hold[i];
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    if (is_dcache_write_master(i)) {
-      continue;
-    }
-    interconnect.w_req_ready_r[i] = state.write_req_ready_r[i];
   }
 }
 
@@ -245,160 +192,6 @@ void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
   peri_wport.resp.ready = cpu.mem_subsystem.peripheral_axi_write_out.resp_ready;
 }
 
-struct AxiCpuBoundaryState {
-  bool read_req_ready[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool read_req_accepted[axi_interconnect::NUM_READ_MASTERS] = {};
-  uint8_t read_req_accepted_id[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool write_req_ready[axi_interconnect::NUM_WRITE_MASTERS] = {};
-  bool write_req_accepted[axi_interconnect::NUM_WRITE_MASTERS] = {};
-  uint8_t write_req_accepted_id[axi_interconnect::NUM_WRITE_MASTERS] = {};
-  bool read_resp_valid[axi_interconnect::NUM_READ_MASTERS] = {};
-  uint8_t read_resp_id[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool read_resp_ready[axi_interconnect::NUM_READ_MASTERS] = {};
-  bool write_resp_valid[axi_interconnect::NUM_WRITE_MASTERS] = {};
-  uint8_t write_resp_id[axi_interconnect::NUM_WRITE_MASTERS] = {};
-  bool write_resp_ready[axi_interconnect::NUM_WRITE_MASTERS] = {};
-};
-
-void capture_axi_cpu_boundary_state(SimCpu &cpu, AxiCpuBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    state.read_req_ready[i] = cpu.axi_interconnect.read_ports[i].req.ready;
-    state.read_req_accepted[i] = cpu.axi_interconnect.read_req_accepted[i];
-    state.read_req_accepted_id[i] =
-        cpu.axi_interconnect.read_req_accepted_id[i];
-    state.read_resp_valid[i] = cpu.axi_interconnect.read_ports[i].resp.valid;
-    state.read_resp_id[i] =
-        static_cast<uint8_t>(cpu.axi_interconnect.read_ports[i].resp.id);
-    state.read_resp_ready[i] = cpu.axi_interconnect.read_ports[i].resp.ready;
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    state.write_req_ready[i] = cpu.axi_interconnect.write_ports[i].req.ready;
-    state.write_req_accepted[i] = cpu.axi_interconnect.write_req_accepted[i];
-    state.write_req_accepted_id[i] =
-        static_cast<uint8_t>(cpu.axi_interconnect.write_ports[i].req.id);
-    state.write_resp_valid[i] = cpu.axi_interconnect.write_ports[i].resp.valid;
-    state.write_resp_id[i] =
-        static_cast<uint8_t>(cpu.axi_interconnect.write_ports[i].resp.id);
-    state.write_resp_ready[i] = cpu.axi_interconnect.write_ports[i].resp.ready;
-  }
-}
-
-void accumulate_axi_cpu_boundary_state(SimCpu &cpu,
-                                       AxiCpuBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    if (is_dcache_read_master(i)) {
-      continue;
-    }
-    state.read_req_ready[i] =
-        state.read_req_ready[i] || cpu.axi_interconnect.read_ports[i].req.ready;
-    if (cpu.axi_interconnect.read_req_accepted[i]) {
-      state.read_req_accepted[i] = true;
-      state.read_req_accepted_id[i] =
-          cpu.axi_interconnect.read_req_accepted_id[i];
-    }
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    if (is_dcache_write_master(i)) {
-      continue;
-    }
-    state.write_req_ready[i] = state.write_req_ready[i] ||
-                               cpu.axi_interconnect.write_ports[i].req.ready;
-    if (cpu.axi_interconnect.write_req_accepted[i]) {
-      state.write_req_accepted[i] = true;
-      state.write_req_accepted_id[i] =
-          static_cast<uint8_t>(cpu.axi_interconnect.write_ports[i].req.id);
-    }
-  }
-}
-
-void restore_axi_cpu_boundary_state(SimCpu &cpu,
-                                    const AxiCpuBoundaryState &state) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    if (is_dcache_read_master(i)) {
-      continue;
-    }
-    cpu.axi_interconnect.read_req_accepted[i] = state.read_req_accepted[i];
-    cpu.axi_interconnect.read_req_accepted_id[i] =
-        state.read_req_accepted_id[i];
-    cpu.axi_interconnect.read_ports[i].req.ready = state.read_req_ready[i];
-    cpu.axi_interconnect.read_ports[i].req.accepted =
-        state.read_req_accepted[i];
-    cpu.axi_interconnect.read_ports[i].req.accepted_id =
-        state.read_req_accepted_id[i];
-    cpu.axi_interconnect.read_ports[i].resp.ready = state.read_resp_ready[i];
-    const bool read_resp_valid = cpu.axi_interconnect.read_ports[i].resp.valid;
-    const uint8_t read_resp_id =
-        static_cast<uint8_t>(cpu.axi_interconnect.read_ports[i].resp.id);
-    const bool read_resp_from_extra_tick =
-        read_resp_valid &&
-        !(state.read_resp_valid[i] && state.read_resp_id[i] == read_resp_id);
-    const bool read_resp_matches_new_accept =
-        state.read_req_accepted[i] && read_resp_valid &&
-        read_resp_id == state.read_req_accepted_id[i];
-    if (read_resp_matches_new_accept) {
-      cpu.axi_interconnect.read_ports[i].resp.valid = false;
-    }
-    if (read_resp_from_extra_tick || read_resp_matches_new_accept) {
-      cpu.axi_interconnect.read_ports[i].resp.ready = false;
-    }
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    if (is_dcache_write_master(i)) {
-      continue;
-    }
-    cpu.axi_interconnect.write_req_accepted[i] = state.write_req_accepted[i];
-    cpu.axi_interconnect.write_ports[i].req.ready = state.write_req_ready[i];
-    cpu.axi_interconnect.write_ports[i].req.accepted =
-        state.write_req_accepted[i];
-    cpu.axi_interconnect.write_ports[i].resp.ready = state.write_resp_ready[i];
-    const bool write_resp_valid =
-        cpu.axi_interconnect.write_ports[i].resp.valid;
-    const uint8_t write_resp_id =
-        static_cast<uint8_t>(cpu.axi_interconnect.write_ports[i].resp.id);
-    const bool write_resp_from_extra_tick =
-        write_resp_valid &&
-        !(state.write_resp_valid[i] && state.write_resp_id[i] == write_resp_id);
-    const bool write_resp_matches_new_accept =
-        state.write_req_accepted[i] && write_resp_valid &&
-        write_resp_id == state.write_req_accepted_id[i];
-    if (write_resp_matches_new_accept) {
-      cpu.axi_interconnect.write_ports[i].resp.valid = false;
-    }
-    if (write_resp_from_extra_tick || write_resp_matches_new_accept) {
-      cpu.axi_interconnect.write_ports[i].resp.ready = false;
-    }
-  }
-}
-
-void mask_axi_cpu_boundary_for_internal_tick(SimCpu &cpu) {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; ++i) {
-    if (is_dcache_read_master(i)) {
-      continue;
-    }
-    auto &port = cpu.axi_interconnect.read_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.req.bypass = false;
-    port.resp.ready = false;
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; ++i) {
-    if (is_dcache_write_master(i)) {
-      continue;
-    }
-    auto &port = cpu.axi_interconnect.write_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.wdata.clear();
-    port.req.wstrb = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.req.bypass = false;
-    port.resp.ready = false;
-  }
-}
-
 void axi_subsystem_comb_outputs(SimCpu &cpu) {
   cpu.mem_subsystem.llc_comb_outputs();
   cpu.axi_interconnect.set_llc_lookup_in(cpu.mem_subsystem.llc_lookup_in());
@@ -417,19 +210,6 @@ void axi_subsystem_comb_inputs(SimCpu &cpu) {
   cpu.axi_mmio.comb_inputs();
 }
 
-void axi_subsystem_comb_inputs_dcache_fast_tick(SimCpu &cpu) {
-  AxiInternalTickBoundaryState boundary_state{};
-  capture_axi_internal_tick_boundary_state(cpu.axi_interconnect,
-                                           boundary_state);
-  cpu.axi_interconnect.comb_inputs();
-  restore_axi_internal_tick_boundary_state_except_dcache(cpu.axi_interconnect,
-                                                        boundary_state);
-  connect_axi_master_outputs(cpu.axi_interconnect.axi_ddr_io, cpu.axi_ddr.io);
-  connect_axi_master_outputs(cpu.axi_interconnect.axi_mmio_io, cpu.axi_mmio.io);
-  cpu.axi_ddr.comb_inputs();
-  cpu.axi_mmio.comb_inputs();
-}
-
 void axi_subsystem_seq(SimCpu &cpu) {
   cpu.mem_subsystem.llc_seq(cpu.axi_interconnect.get_llc_table_out(),
                             cpu.axi_interconnect.get_llc_perf_counters());
@@ -438,44 +218,6 @@ void axi_subsystem_seq(SimCpu &cpu) {
   cpu.axi_mmio.seq();
 }
 
-bool axi_subsystem_quiescent(SimCpu &cpu) {
-  return cpu.axi_interconnect.idle_quiescent() &&
-         cpu.axi_ddr.idle_quiescent() && cpu.axi_mmio.idle_quiescent() &&
-         (!kDcacheFastDomainEnabled ||
-          cpu.mem_subsystem.dcache_domain_quiescent());
-}
-
-void run_extra_axi_subsystem_ticks(SimCpu &cpu) {
-  if (CONFIG_AXI_SUBSYSTEM_FREQ_DIV <= 1u) {
-    return;
-  }
-
-  AxiCpuBoundaryState cpu_boundary_state{};
-  capture_axi_cpu_boundary_state(cpu, cpu_boundary_state);
-  for (uint32_t tick = 1; tick < CONFIG_AXI_SUBSYSTEM_FREQ_DIV; ++tick) {
-    // Once a tick has left the whole AXI/LLC/DDR/MMIO subsystem and the L1D
-    // fast domain quiescent, the remaining ticks are fixed points: their
-    // boundary contribution is already accumulated.
-    if (tick >= 2 && axi_subsystem_quiescent(cpu)) {
-#ifdef SIM_DDR_DS3
-      cpu.axi_ddr.ds3_advance(CONFIG_AXI_SUBSYSTEM_FREQ_DIV - tick);  // keep DRAM time (refresh) running
-#endif
-      break;
-    }
-    mask_axi_cpu_boundary_for_internal_tick(cpu);
-    axi_subsystem_comb_outputs(cpu);
-    if (kDcacheFastDomainEnabled) {
-      bridge_dcache_axi_to_mem_subsystem(cpu);
-      cpu.mem_subsystem.dcache_fast_comb(false);
-      bridge_dcache_mem_subsystem_to_axi(cpu);
-    }
-    axi_subsystem_comb_inputs_dcache_fast_tick(cpu);
-    if (kDcacheFastDomainEnabled) cpu.mem_subsystem.dcache_fast_seq(false);
-    axi_subsystem_seq(cpu);
-    accumulate_axi_cpu_boundary_state(cpu, cpu_boundary_state);
-  }
-  restore_axi_cpu_boundary_state(cpu, cpu_boundary_state);
-}
 } // namespace
 
 void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
@@ -508,12 +250,10 @@ void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
 
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
-  if (tbhook::enabled) {
-    const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
-    const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
-                                          : cpu->back.csr->CSR_RegFile_1[csr_scause];
-    tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
-  }
+  const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
+  const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
+                                        : cpu->back.csr->CSR_RegFile_1[csr_scause];
+  tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
 }
 
 // 复位逻辑
@@ -576,19 +316,6 @@ void SimCpu::init() {
   front2back_hold_live = front2back_hold_1_live = false;
   peripheral_resp_hold = {};
   peripheral_resp_hold_1 = {};
-}
-
-void SimCpu::reinit_frontend_after_restore() {
-  // FAST/CKPT switch starts O3 from a mid-execution architectural snapshot.
-  // Reinitialize frontend-local state so BPU/icache/predecode static latches do
-  // not carry stale reset-era contents into the restored control flow.
-  clear_axi_master_inputs(axi_interconnect);
-  front.init();
-  oracle_pending_valid = false;
-  oracle_pending_out = {};
-  front2back_hold = {};
-  front2back_hold_1 = {};
-  front2back_hold_live = front2back_hold_1_live = false;
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -660,7 +387,6 @@ void SimCpu::cycle() {
   back.seq();
   mem_subsystem.seq();
   axi_subsystem_seq(*this);
-  run_extra_axi_subsystem_ticks(*this);
   ctx.perf.perf_maybe_capture_simtime_snapshot();
 
   if (ctx.exit_reason != ExitReason::NONE) {
@@ -749,20 +475,6 @@ void SimCpu::front_comb_before_back() {
   }
 }
 
-bool SimCpu::ready_to_exit() const {
-  Assert(false && "SimCpu::ready_to_exit: not implemented");
-  return false;
-  // if (back.lsu->has_committed_store_pending()) {
-  //   return false;
-  // }
-
-  // const auto &peri = mem_subsystem.get_peripheral_axi().cur;
-  // if (peri.busy || peri.req_accepted || peri.resp_valid) {
-  //   return false;
-  // }
-
-  // return true;
-}
 void SimCpu::back2front_comb() {
   front.back2front_1 = front.back2front;
   front.back2front_stall_1 = back.out.stall;

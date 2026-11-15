@@ -446,7 +446,7 @@ void Rob::comb_branch() {
   const Wires &w = *wires;
   if (!w.dec_bcast.mispred || w.rob_bcast.flush) return;
   const int bank = get_rob_bank(w.dec_bcast.redirect_rob_idx), line = get_rob_line(w.dec_bcast.redirect_rob_idx);
-  if (tbhook::enabled) tbhook::on_mispredict((uint64_t)entry[bank][line].uop->dbg.inst_idx);
+  tbhook::on_mispredict((uint64_t)entry[bank][line].uop->dbg.inst_idx);
   if (rob_compact()) {  // the tail moves to the entry right after the branch; everything younger is invalidated
     const int bidx = static_cast<int>(w.dec_bcast.redirect_rob_idx);
     const int keep = (bidx - c_head + ROB_NUM) % ROB_NUM + 1;  // entries up to and including the branch
@@ -495,10 +495,7 @@ void Rob::comb_fire() {
       e.uop = w.dis2rob.uop[i];
       e.uop.cplt_mask = 0;
       ctouch(idx);
-      if (tbhook::enabled) {
-        const auto &d = e.uop->dbg;
-        tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, idx, ilen_of(e.uop->is_rvc));
-      }
+      tbhook::on_dispatch((uint64_t)e.uop->dbg.inst_idx, e.uop->dbg.pc, e.uop->dbg.instruction, idx, ilen_of(e.uop->is_rvc));
       m++;
     }
     c_count_1 += m;
@@ -513,10 +510,7 @@ void Rob::comb_fire() {
     touch(i, enq_ptr);
     e.uop = w.dis2rob.uop[i];
     e.uop.cplt_mask = 0;
-    if (tbhook::enabled) {
-      const auto &d = e.uop->dbg;
-      tbhook::on_dispatch((uint64_t)d.inst_idx, d.pc, d.instruction, make_rob_idx(enq_ptr, i), ilen_of(e.uop->is_rvc));
-    }
+    tbhook::on_dispatch((uint64_t)e.uop->dbg.inst_idx, e.uop->dbg.pc, e.uop->dbg.instruction, make_rob_idx(enq_ptr, i), ilen_of(e.uop->is_rvc));
     enq = true;
   }
   if (enq) {

@@ -74,9 +74,6 @@ inline void compute(FuKind kind, ExuInst &inst) {
     msd::self_check(inst);
     msd::exec(0, inst);
   }
-  if (tbhook::poison && (inst.op == UOP_ADD || inst.op == UOP_MUL ||
-                         inst.op == UOP_DIV || inst.op == UOP_FMA || inst.op == UOP_FMISC || inst.op == UOP_FDIV || inst.op == UOP_I2F))
-    inst.result ^= 0xA5C3A5C3u;
 }
 
 // F/D: the function model decides what traps (mstatus.FS = Off, reserved rounding mode, ...): an FP-class uop whose fact says

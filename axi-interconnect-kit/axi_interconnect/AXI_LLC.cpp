@@ -344,18 +344,6 @@ bool AXI_LLC::has_dirty_or_write_hazard(const AXI_LLC_Regs_t &regs) const {
 
 bool AXI_LLC::can_accept_invalidate_all_now(const AXI_LLC_Regs_t &regs) const { return !has_dirty_or_write_hazard(regs); }
 
-// Direct-mapped access: the way is part of the address (line index / sets).
-bool AXI_LLC::direct_mapped_coords(uint32_t addr, uint32_t *set, uint8_t *way) const {
-  if (!config_.valid() || config_.line_bytes == 0 || config_.set_count() == 0 || set == nullptr || way == nullptr)
-    return false;
-  const uint32_t line_idx = addr / config_.line_bytes;
-  const uint32_t mapped_way = line_idx / config_.set_count();
-  if (mapped_way >= config_.ways) return false;
-  *set = line_idx % config_.set_count();
-  *way = uint8_t(mapped_way);
-  return true;
-}
-
 uint32_t AXI_LLC::line_addr(const AXI_LLCConfig &config, uint32_t addr) {
   return config.line_bytes == 0 ? addr : (addr / config.line_bytes) * config.line_bytes;
 }
@@ -617,7 +605,7 @@ void AXI_LLC::try_launch_prefetch_lookup() {
   const int slot = pick_prefetch_queue_slot(regs);
   if (slot < 0) return;
   start_lookup(regs.prefetch_q[slot].line_addr, uint8_t(config_.line_bytes - 1), kInvalidReadMaster, uint8_t(slot),
-               true, false, false, false, false, false);
+               true, false, false, false);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -626,7 +614,7 @@ void AXI_LLC::try_launch_prefetch_lookup() {
 // ---------------------------------------------------------------------------------------------
 
 void AXI_LLC::start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t id, bool prefetch, bool invalidate,
-                           bool write, bool bypass, bool direct_mapped, bool mode2_ddr_aligned) {
+                           bool write, bool bypass) {
   auto &w = io.reg_write;
   w.lookup_valid_r = true;
   w.lookup_issued_r = false;
@@ -638,8 +626,6 @@ void AXI_LLC::start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t 
   w.lookup_is_invalidate_r = invalidate;
   w.lookup_is_write_r = write;
   w.lookup_is_bypass_r = bypass;
-  w.lookup_is_direct_mapped_r = direct_mapped;
-  w.lookup_is_mode2_ddr_aligned_r = mode2_ddr_aligned;
   w.state = AXI_LLCState::kLookup;
 }
 
@@ -648,8 +634,7 @@ void AXI_LLC::end_lookup(AXI_LLCState next) {
   auto &w = io.reg_write;
   w.lookup_valid_r = false;
   w.lookup_issued_r = false;
-  w.lookup_is_prefetch_r = w.lookup_is_invalidate_r = w.lookup_is_write_r = w.lookup_is_bypass_r =
-      w.lookup_is_direct_mapped_r = w.lookup_is_mode2_ddr_aligned_r = false;
+  w.lookup_is_prefetch_r = w.lookup_is_invalidate_r = w.lookup_is_write_r = w.lookup_is_bypass_r = false;
   w.state = next;
 }
 
@@ -668,8 +653,7 @@ bool AXI_LLC::try_launch_pending_write_lookup() {
   const int m = pick_write_lookup_master(io.reg_write);
   if (m < 0) return false;
   auto &ctx = io.reg_write.write_ctx[m];
-  start_lookup(ctx.addr, ctx.total_size, uint8_t(m), ctx.id, false, false, true, ctx.bypass, ctx.direct_mapped,
-               ctx.mode2_ddr_aligned);
+  start_lookup(ctx.addr, ctx.total_size, uint8_t(m), ctx.id, false, false, true, ctx.bypass);
   ctx.lookup_pending = false;
   io.reg_write.rr_write_master_r = uint8_t((m + 1) % NUM_WRITE_MASTERS);
   return true;
@@ -680,7 +664,7 @@ void AXI_LLC::accept_maintenance_request() {
   if (!io.ext_in.mem.invalidate_line_valid || io.ext_in.mem.invalidate_all) return;
   if (!can_accept_invalidate_line_now(line_addr(config_, io.ext_in.mem.invalidate_line_addr))) return;
   if (io.reg_write.lookup_valid_r) return;
-  start_lookup(io.ext_in.mem.invalidate_line_addr, 0, 0, 0, false, true, false, false, false, false);
+  start_lookup(io.ext_in.mem.invalidate_line_addr, 0, 0, 0, false, true, false, false);
   io.ext_out.mem.invalidate_line_accepted = true;
 }
 
@@ -688,7 +672,7 @@ void AXI_LLC::drive_lookup_request() {
   if (!io.regs.lookup_valid_r || !io.reg_write.lookup_valid_r || io.regs.lookup_issued_r) return;
   const uint32_t line = line_addr(config_, io.reg_write.lookup_addr_r);
   if (victim_line_pending(io.reg_write, line) || llc_table_write_busy(io.table_out)) return;
-  if (!io.reg_write.lookup_is_prefetch_r && !io.reg_write.lookup_is_direct_mapped_r &&
+  if (!io.reg_write.lookup_is_prefetch_r &&
       find_mshr_by_line_addr(io.reg_write, line) >= 0)
     return;
   const uint32_t index = set_index(config_, io.reg_write.lookup_addr_r);
@@ -708,7 +692,6 @@ bool AXI_LLC::try_complete_lookup() {
     return false;
 
   const bool table_busy = llc_table_write_busy(io.table_out);
-  if (r.lookup_is_direct_mapped_r) return complete_direct_lookup(table_busy);
 
   const uint32_t set = set_index(config_, r.lookup_addr_r), tag = tag_of(config_, r.lookup_addr_r),
                  line = line_addr(config_, r.lookup_addr_r);
@@ -723,33 +706,6 @@ bool AXI_LLC::try_complete_lookup() {
     return true;
   }
   return complete_read_miss(set, tag, line, first_invalid_way);
-}
-
-// Direct-mapped access (way fixed by the address): no tag compare, reads return no values.
-bool AXI_LLC::complete_direct_lookup(bool table_busy) {
-  const auto &r = io.regs;
-  uint32_t set = 0;
-  uint8_t way = 0;
-  const bool mapped = direct_mapped_coords(r.lookup_addr_r, &set, &way);
-  if (r.lookup_is_write_r) {
-    if (table_busy) {
-      retry_lookup(AXI_LLCState::kLookup);
-      return true;
-    }
-    if (mapped) {
-      begin_write(io.table_out.data, set, way);
-      write_valid_table(set, way, true);
-    }
-    end_lookup(AXI_LLCState::kIdle);
-    io.reg_write.write_ctx[r.lookup_master_r].cache_done = true;
-    return true;
-  }
-  if (!enqueue_read_response(r.lookup_master_r, r.lookup_id_r, WideReadData_t{})) {
-    retry_lookup(AXI_LLCState::kLookup);
-    return true;
-  }
-  end_lookup(AXI_LLCState::kIdle);
-  return true;
 }
 
 bool AXI_LLC::complete_hit_lookup(bool table_busy, uint32_t set, uint32_t tag, uint32_t line, int hit_way,
@@ -947,7 +903,6 @@ bool AXI_LLC::complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int 
   e.bypass = r.lookup_is_bypass_r;
   e.is_prefetch = prefetch;
   e.prefetch_train = !prefetch;
-  e.mode2_ddr_aligned = r.lookup_is_mode2_ddr_aligned_r;
   e.addr = r.lookup_addr_r;
   e.line_addr = r.lookup_is_bypass_r ? r.lookup_addr_r : line;
   e.set = set;
@@ -1117,7 +1072,6 @@ void AXI_LLC::drive_write_path() {
       out.mem.write_req_addr = w.victim_wb_addr_r;
       out.mem.write_req_strobe = w.victim_wb_strobe_r;
       out.mem.write_req_size = uint8_t(config_.line_bytes - 1);
-      out.mem.write_req_mode2_ddr_aligned = false;
       out.mem.write_req_id = 0;
       if (io.ext_in.mem.write_req_ready) {
         w.victim_wb_issued_r = true;
@@ -1135,7 +1089,6 @@ void AXI_LLC::drive_write_path() {
     out.mem.write_req_data = ctx.data;
     out.mem.write_req_strobe = ctx.strobe;
     out.mem.write_req_size = ctx.total_size;
-    out.mem.write_req_mode2_ddr_aligned = ctx.mode2_ddr_aligned;
     out.mem.write_req_id = ctx.id;
     if (io.ext_in.mem.write_req_ready) {
       w.write_ctx[bypass_master].mem_issued = true;
@@ -1153,8 +1106,6 @@ void AXI_LLC::drive_write_path() {
     e = {};
     e.valid = true;
     e.bypass = req.bypass;
-    e.direct_mapped = req.direct_mapped;
-    e.mode2_ddr_aligned = req.mode2_ddr_aligned;
     e.master = uint8_t(wm);
     e.id = req.id;
     e.total_size = req.total_size;
@@ -1176,8 +1127,6 @@ void AXI_LLC::drive_write_path() {
     ctx = {};
     ctx.valid = true;
     ctx.bypass = e->bypass;
-    ctx.direct_mapped = e->direct_mapped;
-    ctx.mode2_ddr_aligned = e->mode2_ddr_aligned;
     ctx.lookup_pending = true;
     ctx.id = e->id;
     ctx.total_size = e->total_size;
@@ -1262,7 +1211,6 @@ void AXI_LLC::drive_mem_read_path() {
     io.ext_out.mem.read_req_valid = true;
     io.ext_out.mem.read_req_addr = e.line_addr;
     io.ext_out.mem.read_req_size = e.bypass ? e.total_size : uint8_t(config_.line_bytes - 1);
-    io.ext_out.mem.read_req_mode2_ddr_aligned = e.bypass && e.mode2_ddr_aligned;
     io.ext_out.mem.read_req_id = uint8_t(slot);
     if (io.ext_in.mem.read_req_ready) {
       w.mshr[slot].mem_req_issued = true;
@@ -1334,8 +1282,7 @@ void AXI_LLC::accept_new_requests() {
   io.ext_out.upstream.read_req[master].ready = true;
   io.reg_write.rr_read_master_r = uint8_t((master + 1) % NUM_READ_MASTERS);
   for (auto &p : io.reg_write.prefetch_q) p = {};  // a demand request invalidates the pending stream
-  start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass, req.direct_mapped,
-               req.mode2_ddr_aligned);
+  start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass);
 }
 
 void AXI_LLC::comb_disabled() {

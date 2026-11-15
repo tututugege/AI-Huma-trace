@@ -9,11 +9,6 @@
 // Canonical training IO declarations for top-level pure combinational functions.
 // All fields must ultimately resolve to wireX_t aliases via the included headers.
 
-struct FetchAddrCombIn {
-  fetch_address_FIFO_in inp;
-  fetch_address_FIFO_read_data rd;
-};
-
 struct FetchAddrCombOut {
   fetch_address_FIFO_out out_regs;
   wire1_t clear_fifo;
@@ -24,11 +19,6 @@ struct FetchAddrCombOut {
   uint8_t drop_tail_n;
 };
 
-struct InstructionCombIn {
-  instruction_FIFO_in inp;
-  instruction_FIFO_read_data rd;
-};
-
 struct InstructionCombOut {
   instruction_FIFO_out out_regs;
   wire1_t clear_fifo;
@@ -37,22 +27,12 @@ struct InstructionCombOut {
   wire1_t pop_en;
 };
 
-struct PtabCombIn {
-  PTAB_in inp;
-  PTAB_read_data rd;
-};
-
 struct PtabCombOut {
   PTAB_out out_regs;
   wire1_t clear_ptab;
   wire1_t push_write_en;
   PTAB_entry push_write_entry;
   wire1_t pop_en;
-};
-
-struct Front2BackCombIn {
-  front2back_FIFO_in inp;
-  front2back_FIFO_read_data rd;
 };
 
 struct Front2BackCombOut {

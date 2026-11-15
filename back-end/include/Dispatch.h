@@ -46,11 +46,9 @@ public:
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
-  void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
   void comb_alloc();
   void comb_dispatch();
   void comb_wake();
-  void comb_cancel();  // LSU_PIPE_L2: speculative load wake-up of the previous cycle was wrong
   void comb_fire();
   void comb_pipeline();
   void seq();

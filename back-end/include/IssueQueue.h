@@ -247,30 +247,6 @@ public:
     }
   }
 
-  // Speculative wake-up undone: entries waiting on `preg` that were woken (busy cleared) are busy again. Called at the start of
-  // the cycle, before the select: both the committed and the working copy change. Returns the number of entries.
-  int cancel_wake(uint32_t preg) {
-    int n = 0;
-    for (int i = 0; i < size; i++) {
-      if (!entry_1[i].valid) continue;
-      bool hit = false;
-      auto fix = [&](IqStoredEntry &e) {
-        if (e.uop->src1_en && !e.uop.src1_busy && e.uop->src1_preg == preg) { e.uop.src1_busy = true; hit = true; }
-        if (e.uop->src2_en && !e.uop.src2_busy && e.uop->src2_preg == preg) { e.uop.src2_busy = true; hit = true; }
-        if (e.uop->src3_en && !e.uop.src3_busy && e.uop->src3_preg == preg) { e.uop.src3_busy = true; hit = true; }
-      };
-      fix(entry_1[i]);
-      if (!hit) continue;
-      hit = false;
-      fix(entry[i]);
-      set_dep_bits_for_slot(entry_1[i], i);
-      mark_slot(i);
-      refresh_ready(i);
-      n++;
-    }
-    return n;
-  }
-
   void comb_issue() {
     // Grants are all-zero unless the previous call filled one, and most cycles have nothing ready.
     if (grants_live) {

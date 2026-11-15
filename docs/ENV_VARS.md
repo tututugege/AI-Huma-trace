@@ -1,6 +1,6 @@
 # trace-model 环境变量
 
-`build/simulator`（和 `build_shadow/simulator`）运行时读取的全部环境变量，共 103 个（模型本体 99 个 + 影子构建 4 个），按用途分组。默认值取自源码，括号里是源文件。带「编译期默认」的变量，默认值来自 `include/config.h` 里同名的 `CFG_*` 宏。
+`build/simulator` 运行时读取的全部环境变量，共 77 个，按用途分组。默认值取自源码，括号里是源文件。带「编译期默认」的变量，默认值来自 `include/config.h` 里同名的 `CFG_*` 宏。
 
 > **和 RTL 比周期必须设 `LSU_PIPE_NOWD=1`。** RTL 的参考周期是关掉 63 周期看门狗标定的；不设时模型会在 load / store 停住 63 周期后重发，`crc32` 这类程序会差几十周期。
 
@@ -10,8 +10,8 @@
 
 | 变量 | 默认 | 作用 | 位置 |
 |---|---|---|---|
-| `SIM_MAX_CYCLES` | 内部上限 | 周期数到了就停（退出码 3），防止不终止的程序卡住 | `main.cpp` |
-| `FAST_WARMUP` | 关 | 设 `1`：检查点运行时把（检查点间隔 − 预热）条指令用函数模型快速回放进 cache / TLB / BPU，预热目标改为至多 100 万条提交（EXP-011）；SPEC 全量跑法用它 | `main.cpp` |
+| `SIM_MAX_CYCLES` | 内部上限 | 周期数到了就停（退出码 3），防止不终止的程序卡住 | `driver/main.cpp` |
+| `FAST_WARMUP` | 关 | 设 `1`：检查点运行时把（检查点间隔 − 预热）条指令用函数模型快速回放进 cache / TLB / BPU，预热目标改为至多 100 万条提交（EXP-011）；SPEC 全量跑法用它 | `driver/main.cpp` |
 
 ## 2. 性能计数（PMU）
 
@@ -23,23 +23,20 @@
 | `PMU_PCPROF` | 开 | 设 `0` 关掉按 PC 的统计 | 同上 |
 | `FE_COMMIT_TRACE` | 关 | （需 `PMU=1`）每条提交打印 `[CT] pc result diag_val c=<周期>`；误预测 / flush 时打印 `[CT] EV ...`。和 RTL 的 `SOC_TB_COMMIT` 逐提交对周期时只取 `pc` 和 `c=` | `back-end/PmuSample.cpp` |
 
-## 3. 与函数模型对拍、调试（`diff/`）
+## 3. 与函数模型对拍、调试（`bridge/`）
 
 | 变量 | 默认 | 作用 | 位置 |
 |---|---|---|---|
-| `TB_CHECK` | 关 | 打开逐条值比较（rd / 分支 / 地址 / 目标），结束时打印 `[TB_CHECK]` 统计（不一致数应为 0） | `diff/trace_hook.cpp` |
-| `TB_NO_INJECT` | 关 | 关闭事实注入（P3 之后事实是必须的，只用来调试老版本） | 同上 |
-| `TB_POISON` | 关 | 把时序模型不该读的、模型自己算出的值破坏掉，用来证明时序没有偷读这些值 | 同上 |
-| `TB_RESYNC_REF` | 关 | 用 P1b 的重同步行为（对照用） | 同上 |
+| `TB_CHECK` | 关 | 打开逐条值比较（rd / 分支 / 地址 / 目标），结束时打印 `[TB_CHECK]` 统计（不一致数应为 0） | `bridge/trace_hook.cpp` |
 | `TB_TRACE_COMMIT` | 关 | 每条提交打印 `[COMMIT] cyc pc inst rd v`；`rtl/scripts/first_diff.sh` 用它和 RTL 的 `SOC_TB_COMMIT` 找第一处分歧 | 同上 |
 | `TB_TRACE_PATCH` | 关 | `FP=1` 调试：每次模型把自己的 CSR 读值补丁进 function-model 时打印 `[PATCH] csr read pc inst model function-model`（F/D 测试应为 0 次） | 同上 |
-| `TB_TRACE_TRAP` | 关 | 打印每个 trap（`[TRAP] M/S cause epc tval target priv`）和注入给函数模型的中断（`[IRQ]`） | `back-end/Exu/Csr.cpp`、`diff/trace_hook.cpp` |
-| `TB_SAMPLE_PC` | 关 | 设 N：每 N 条提交打印一次 `[SAMPLE] cyc commits pc inst`，看长程序的时间花在哪里 | `diff/trace_hook.cpp` |
+| `TB_TRACE_TRAP` | 关 | 打印每个 trap（`[TRAP] M/S cause epc tval target priv`）和注入给函数模型的中断（`[IRQ]`） | `back-end/Exu/Csr.cpp`、`bridge/trace_hook.cpp` |
+| `TB_SAMPLE_PC` | 关 | 设 N：每 N 条提交打印一次 `[SAMPLE] cyc commits pc inst`，看长程序的时间花在哪里 | `bridge/trace_hook.cpp` |
 | `TB_PERTURB_BR` | 关 | 阳性对照：每 N 个分支翻转一次分支事实，之后的运行必须和基线不同（验证检查本身有效） | 同上 |
 | `TB_PERTURB_ADDR` | 关 | 同上，对象是访存地址 | 同上 |
 | `TB_NEG_NO_REWIND` | 关 | 阴性对照：误预测后不回滚事实链，检查必须失败 | 同上 |
 | `TB_NEG_NO_MEMWRITE` | 关 | 阴性对照：提交的 store 不写内存，检查必须失败 | 同上 |
-| `TB_NEG_NO_TRAP_STATE` | 关 | 阴性对照：trap 后不恢复函数模型状态，检查必须失败 | `diff/TraceBridge.cpp` |
+| `TB_NEG_NO_TRAP_STATE` | 关 | 阴性对照：trap 后不恢复函数模型状态，检查必须失败 | `bridge/TraceBridge.cpp` |
 | `ME_CHECK` | 关 | 每周期检查 move elimination 的引用计数（`arch_cnt` 与 arch RAT 一致；空闲 + 在途 + 不同的架构寄存器 = `PRF_NUM`，无泄漏） | `back-end/Ren.cpp` |
 
 ## 4. 前端、分支预测
@@ -80,33 +77,16 @@ BPU 的变量都是模型实验用的运行期参数，默认值就是 RTL 对�
 
 ## 5. 访存（LSU 分级流水、dcache、预取）
 
-LSU 的位掩码开关含义详见 `docs/LSU_PIPE.md` 和 `RealLsuPipe.cpp` 里各变量上方的注释。除 `LSU_PIPE`、`LSU_MEMSPEC`、`LSU_MS_DATA` 外都只对分级 LSU 生效。
+LSU 的位掩码开关含义详见 `docs/LSU_PIPE.md` 和 `RealLsuPipe.cpp` 里各变量上方的注释。（旧的非分级 LSU 和 `LSU_PIPE` 开关已删除，LSU 只有分级一种。）
 
 | 变量 | 默认 | 作用 | 位置 |
 |---|---|---|---|
-| `LSU_PIPE` | 编译期默认（1） | 非 `0` 用分级 LSU，`0` 用旧的非分级 LSU | `include/config.h` |
 | `LSU_PIPE_NOWD` | 关（**对周期必须设**） | 设了就关掉 63 周期看门狗（只打印 `[WD]`，不重发） | `RealLsuPipe.cpp` |
-| `LSU_PIPE_CUT` | 编译期默认（127） | 关键路径实验位掩码：B/R/D/F/FM/G/H（见源码注释，RTL 已按默认实现） | 同上 |
-| `LSU_PIPE_L2` | 编译期默认（115） | L2 阶段位掩码：L3 寄存器、唤醒时机、MSHR-full、推测唤醒等 | 同上 |
-| `LSU_PIPE_RP` | 编译期默认（4） | 重放寄存器个数 | `RealLsu.cpp` |
-| `LSU_PIPE_BOUNCE` | 0 | 老的重放寄存器在 N 周期后顶掉最后一个新 load（0 = 关，最大 7） | 同上 |
-| `LSU_PIPE_GATE` | 1 | DCache 读使能由部分 CAM 限定 | 同上 |
-| `LSU_PIPE_RBLK` | 1 | 端口上有待处理的 DCache 隐藏重试时不发射 | 同上 |
-| `LSU_PIPE_RPRIO` | 开 | 设 `0` 关掉 DCache 对重放 load 的优先级 | `MemSubSystem/RealDcache.cpp` |
 | `LSU_PIPE_DRAIN` / `LSU_PIPE_DCAND` | 编译期默认（2 / 4） | store 每周期排出的口数 / 候选扫描数 | `RealLsuPipe.cpp` |
-| `LSU_PIPE_WBUF` | 编译期默认（4） | store write buffer 项数（0 = 关；EXP-024；需 `LSU_PIPE_MGRAN=64`） | 同上 |
 | `LSU_PIPE_WBINS` / `LSU_PIPE_WBSCAN` / `LSU_PIPE_WBMAX` | 编译期默认（4 / 4 / 2） | 每周期插入的 store 数 / 扫描的项数 / 每项最多合并的 store 数 | 同上 |
-| `LSU_PIPE_MERGE` | 1（关） | N：同一 cache 行的最多 N 个已提交 store 共用一个 store 口（写合并上界） | 同上 |
-| `LSU_PIPE_MGRAN` | 64 | 合并粒度（字节，2 的幂，4..64） | 同上 |
-| `LSU_PIPE_MADJ` | 0 | 跟随者只能加入至多 N 个扫描位置之前的领队（0 = 任意更早的领队） | 同上 |
-| `LSU_PIPE_MSPEC` | 0 | 合并配对在重叠 CAM 之前决定（RTL 的做法） | 同上 |
 | `LSU_MEMSPEC` | 编译期默认（1） | 访存推测：load 越过地址未知的老 store（EXP-018/019） | `RealLsuPipe.cpp`、`MsData.h` |
 | `LSU_MS_DATA` | 编译期默认（1） | 访存推测的值路径位掩码：1 分支按旧值解析、2 污染地址（未建模，只计数）、4 污染的 store 数据进 STQ、8 评估器自检（EXP-020） | `MsData.h` |
-| `LSU_MS_SLOTS` | 编译期默认（0） | 同时处于推测状态的 load 上限（0 = 不限） | `RealLsuPipe.cpp` |
-| `LSU_MDP_MODE` | 编译期默认（0） | 访存依赖预测器：0 = 等待表，1 = store sets | 同上 |
 | `LSU_MDP_BITS` / `LSU_MDP_CLR` | 编译期默认（6 / 2000） | 等待表 2^N 项（0 = 关预测器）/ 每多少周期清一次（0 = 不清） | 同上 |
-| `LSU_MDP_HW` | 编译期默认（2） | 等待表训练的可实现程度：0 = 立即、1 = 最低 LDQ 索引、2 = 违例先标记、下一拍从寄存器训练（RTL 的做法） | 同上 |
-| `LSU_MDP_NTR` | 2 | 等待表写口数（每周期训练个数） | 同上 |
 | `LSU_MDP_THR` / `LSU_MDP_DEC` | 1 / 0 | 置信度阈值 / 无违例时的递减（1/0 = 原始粘性 1 位） | 同上 |
 | `LSU_PIPE_STATS` | 关 | 非 `0`：结束时打印 `[LSU_PIPE_STATS]`（和 `[MS_DATA]`）统计 | `RealLsuPipe.cpp`、`MsData.h` |
 | `LSU_PIPE_EVT` | 关 | 每周期打印 LSU 边界事件（`E t=...`），格式和 RTL 测试平台的 `SOC_TB_LSUEVT` 相同，用来逐周期对 RTL | `RealLsuPipe.cpp` |
@@ -127,12 +107,10 @@ LSU 的位掩码开关含义详见 `docs/LSU_PIPE.md` 和 `RealLsuPipe.cpp` 里�
 | `DS3_EXTRA_NS` | 构造参数 | 在 DRAMsim3 之外额外加的固定延迟（ns） | 同上 |
 | `CPU_FREQ_MHZ` | 1000（`CONFIG_CPU_FREQ_MHZ`） | 运行时覆盖 CPU 频率（影响 ns → 周期换算） | 同上 |
 | `DS3_STATS` | 关 | 结束时打印 `[DS3]` 读写延迟和停顿统计 | 同上 |
-| `AXI_SUBMODULE_MODE` | 内置 | AXI 互连的子模块模式，只取低 2 位 | `axi_interconnect/AXI_Interconnect.cpp` |
-| `AXI_SUBMODULE_OFFSET` | 内置 | 覆盖 LLC 映射偏移 | 同上 |
 
-## 7. 影子（参考实现）测试
+## 已删除（2026-11-15）
 
-只在 `tests/*_ref/` 的影子构建（`build_shadow/simulator`，见 `scripts/lsu_shadow.sh`）里读取：`ISU_SHADOW_DIRECTED`、`DIS_SHADOW_DIRECTED`、`ROB_SHADOW_DIRECTED`、`LSU_SHADOW_DIRECTED`，设任意值就在运行时额外跑一组定向的状态注入场景（模型和参考实现各跑一遍，状态摘要必须一致）。
+`TB_POISON`（P2 时用来证明时序不读模型自算的值，值通路早已删除）；`TB_NO_INJECT`（关掉事实注入，P3 之后无法运行）；命令行 `--no-diff`（提交时 difftest 已不存在）；`LSU_PIPE`（旧 LSU 删除，只剩分级 LSU）；`TB_RESYNC_REF`（从第二个参考核重同步，第二个核已删除）；LSU 的消融开关 `LSU_PIPE_RPRIO` / `WB_RESERVE` / `LSU_PIPE_RP` / `LSU_PIPE_BOUNCE` / `LSU_PIPE_GATE` / `LSU_PIPE_RBLK` / `LSU_MDP_BITS` / `LSU_MDP_CLR` / `LSU_MDP_MODE` / `LSU_MDP_HW` / `LSU_MS_SLOTS` / `LSU_MDP_NTR` / `LSU_MDP_THR` / `LSU_MDP_DEC` / `LSU_PIPE_CUT` / `LSU_PIPE_L2` / `LSU_PIPE_DRAIN` / `LSU_PIPE_DCAND` / `LSU_PIPE_MERGE` / `LSU_PIPE_MADJ` / `LSU_PIPE_MSPEC` / `LSU_PIPE_WBUF` / `LSU_PIPE_WBINS` / `LSU_PIPE_WBSCAN` / `LSU_PIPE_WBMAX` / `LSU_PIPE_MGRAN`（冻结为默认值，非默认分支删除）；AXI 互连的 `AXI_SUBMODULE_MODE` / `AXI_SUBMODULE_OFFSET`（LLC 运行时模式 0 / 2 和映射窗口删除，固定为模式 1）；命令行 `--mode fast` / `--mode ref` / `-f` / `--flash-image` / `--sdcard-image` / `--direct-opensbi`（没有脚本使用）；影子构建的 `ISU_SHADOW_DIRECTED`、`DIS_SHADOW_DIRECTED`、`ROB_SHADOW_DIRECTED`、`LSU_SHADOW_DIRECTED`（`tests/*_ref` 和 `<MOD>_SHADOW` 构建一起删除）。
 
 ## 已删除（2026-11-12）
 

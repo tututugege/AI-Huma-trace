@@ -1,5 +1,7 @@
 # AXI Interconnect Kit（中文说明）
 
+> **trace-model 副本（2026-11-15）：** 运行时 submodule 控制（`mode` 0 / 2、LLC 映射窗口、切换模式时的 flush 重配置、`AXI_SUBMODULE_MODE` / `AXI_SUBMODULE_OFFSET`）和多拍分频已从本副本删除，LLC 固定为模式 1；下文相关描述仅作历史。
+
 这是从原模拟器中抽离出的独立 AXI4 内存子系统。
 
 ## 当前主线

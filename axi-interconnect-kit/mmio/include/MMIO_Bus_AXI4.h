@@ -13,9 +13,6 @@ namespace mmio {
 
 class MMIO_Bus_AXI4 {
 public:
-  bool idle_quiescent() const {
-    return !r_pending.active && !w_pending.active && !w_resp.active;
-  }
   void init();
   void add_device(uint32_t base, uint32_t size, MMIO_Device *dev);
 

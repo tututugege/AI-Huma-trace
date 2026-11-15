@@ -39,8 +39,6 @@ constexpr bool is_power_of_two_u64(uint64_t n) {
 // Global Limits
 // ============================================================
 
-constexpr uint64_t VIRTUAL_MEMORY_LENGTH =
-    256ULL * 1024 * 1024; // 256M words = 1GB bytes
 constexpr uint64_t PHYSICAL_MEMORY_LENGTH =
     512ULL * 1024 * 1024;                     // 512M words = 2GB bytes
 constexpr uint64_t RAM_SIZE = PHYSICAL_MEMORY_LENGTH * sizeof(uint32_t); // bytes
@@ -215,9 +213,6 @@ static_assert(CONFIG_AXI_SUBSYSTEM_FREQ_DIV >= 1,
 #define CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC 0
 #endif
 
-#ifndef CONFIG_AXI_LLC_DEBUG_LOG
-#define CONFIG_AXI_LLC_DEBUG_LOG 0
-#endif
 
 constexpr int ICACHE_WAY_NUM = 8;
 constexpr int ICACHE_OFFSET_BITS = clog2(ICACHE_LINE_SIZE);
@@ -254,7 +249,6 @@ constexpr int DCACHE_SET_BITS = clog2(DCACHE_SETS_NUM);
 
 constexpr int DCACHE_BANK_NUM = 16;
 constexpr int DCACHE_BANK_BITS = clog2(DCACHE_BANK_NUM);
-constexpr int DCACHE_WORDS_PER_BANK = DCACHE_WORD_NUM / DCACHE_BANK_NUM;
 
 
 // ============================================================
@@ -294,27 +288,18 @@ constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
 #define CFG_MOVE_ELIM_REFS 7
 #endif
 constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
-// Staged LSU (LSU_PIPE, docs/LSU_PIPE.md), default on with CUT 127 (B R D F G H + FM, bit 64) and L2 115 (RTL: LP_CUT 262143 / LP_L2 1907): 0 = legacy LSU (back-end/Lsu/RealLsu.cpp), 1 = staged pipeline (RealLsuPipe.cpp).
-// CFG_LSU_PIPE_CUT / CFG_LSU_PIPE_L2 are the critical-path cut masks (L1/L3 cuts and L2 cuts, see RealLsuPipe.cpp).
-// The environment overrides them at run time: LSU_PIPE=0|1, LSU_PIPE_CUT=<mask>, LSU_PIPE_L2=<mask> (LSU_PIPE=0 = legacy LSU for regression).
-#ifndef CFG_LSU_PIPE
-#define CFG_LSU_PIPE 1
-#endif
-#ifndef CFG_LSU_PIPE_CUT
-#define CFG_LSU_PIPE_CUT 127
-#endif
-#ifndef CFG_LSU_PIPE_L2
-#define CFG_LSU_PIPE_L2 115
-#endif
+// Staged LSU (RealLsuPipe.cpp, docs/LSU_PIPE.md). Its critical-path cuts are fixed (the former masks CUT 127 / L2 115; RTL: LP_CUT 262143 /
+// LP_L2 1907); the variants, the legacy LSU and the run-time LSU knobs were deleted 2026-11-15 (exp/tm-cleanup).
 // Memory-dependence speculation (EXP-018): 0 = a load never passes an older store whose address is unknown (default model);
 // 1 = loads pass unknown-address stores. A load that passed one writes its result back at once (consumers wake) but its ROB completion is
 // deferred until all older store addresses are known; a store address that overlaps such a load is a violation: the load is replayed with the
-// store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides.
+// store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides (the RTL kill-switch table
+// rtl/scripts/ref_cycles_nomemspec.txt is made with LSU_MEMSPEC=0).
 #ifndef CFG_LSU_MEMSPEC
 #define CFG_LSU_MEMSPEC 1
 #endif
-// Wait table of the memory-dependence predictor (LSU_MDP_MODE 0): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the
-// first load dispatch CFG_LSU_MDP_CLR cycles after the previous clear (0 = never). Env LSU_MDP_BITS / LSU_MDP_CLR override. Exported to the RTL.
+// Wait table of the memory-dependence predictor: 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the first load
+// dispatch CFG_LSU_MDP_CLR cycles after the previous clear; flag-register training (one entry per cycle, two cycles after the violation). Exported to the RTL.
 #ifndef CFG_LSU_MDP_BITS
 #define CFG_LSU_MDP_BITS 6
 #endif
@@ -329,21 +314,10 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_MS_DATA
 #define CFG_LSU_MS_DATA 7
 #endif
-// Defaults of the integrated model (exp/integ): LSU_MEMSPEC 1 with the LSU_MS_DATA value path, wait table 64 x 1 bit (MDP_MODE 0), cleared every 2000 cycles,
-// flag-register training (LSU_MDP_HW 2), unlimited speculative loads (LSU_MS_SLOTS 0). MODE / HW / SLOTS are model-only (envs LSU_MDP_MODE, LSU_MDP_HW, LSU_MS_SLOTS), not exported to the RTL.
-#ifndef CFG_LSU_MDP_MODE
-#define CFG_LSU_MDP_MODE 0
-#endif
-#ifndef CFG_LSU_MDP_HW
-#define CFG_LSU_MDP_HW 2
-#endif
-#ifndef CFG_LSU_MS_SLOTS
-#define CFG_LSU_MS_SLOTS 0
-#endif
 constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
 constexpr int LSU_MDP_BITS = CFG_LSU_MDP_BITS;
 constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
-// Front-end fast paths (EXP-019, FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Integrated defaults: RFAST 15 (all four bits), BFAST 0; envs FE_RFAST / FE_BFAST override. FE_PAIR / FE_IPF are model-only, env only, default 0.
+// Front-end fast paths (EXP-019, docs/history/FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Integrated defaults: RFAST 15 (all four bits), BFAST 0; envs FE_RFAST / FE_BFAST override. FE_PAIR / FE_IPF are model-only, env only, default 0.
 //   FE_RFAST bit0 BPU issues the first block in the redirect cycle, bit1 PTAB write-to-read bypass, bit2 I-cache ready right after a
 //   redirect, bit3 pre-IDU buffer bypass.  FE_BFAST bit0 / bit1: the corrected block issues in the same cycle after an S1 (L1) / S_D override.
 #ifndef CFG_FE_RFAST
@@ -355,14 +329,11 @@ constexpr int LSU_MDP_CLR = CFG_LSU_MDP_CLR;
 constexpr int FE_RFAST = CFG_FE_RFAST;
 constexpr int FE_BFAST = CFG_FE_BFAST;
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
-//   CFG_LSU_PIPE_DRAIN  committed stores sent to the DCache per cycle (<= STA ports); env LSU_PIPE_DRAIN
-//   CFG_LSU_PIPE_DCAND  drain candidates looked at per cycle = the first N ready non-MMIO committed stores; a candidate blocked by an older
-//                       overlapping store does NOT take a port (env LSU_PIPE_DCAND; 0 = the first-version drain: N = DRAIN, a blocked
-//                       candidate keeps its port idle)
-//   CFG_LSU_PIPE_RP     load replay registers (1..4); env LSU_PIPE_RP
-// EXP-024 write buffer of the committed-store drain (default on): CFG_LSU_PIPE_WBUF entries (0 = off: the drain looks at CFG_LSU_PIPE_DCAND candidates as before,
-// then CFG_LSU_PIPE_DRAIN should be 3), CFG_LSU_PIPE_WBMAX stores per entry, CFG_LSU_PIPE_WBINS stores inserted per cycle, CFG_LSU_PIPE_WBSCAN entries looked at
-// per cycle; env LSU_PIPE_WBUF / WBMAX / WBINS / WBSCAN; the entry granule is LSU_PIPE_MGRAN bytes (64 = one cache line).  RTL: lp_wbuf (NWB = 4, two stores).
+//   CFG_LSU_PIPE_DRAIN  store ports the write buffer sends on per cycle (<= STA ports)
+//   CFG_LSU_PIPE_DCAND  drain candidates of the pre-write-buffer drain (the model no longer has that drain; kept for the RTL lp_pkg)
+//   CFG_LSU_PIPE_RP     load replay registers (1..4)
+// EXP-024 write buffer of the committed-store drain: CFG_LSU_PIPE_WBUF entries of one cache line, CFG_LSU_PIPE_WBMAX stores per entry,
+// CFG_LSU_PIPE_WBINS stores inserted per cycle, CFG_LSU_PIPE_WBSCAN entries looked at per cycle.  RTL: lp_wbuf (NWB = 4, two stores).
 #ifndef CFG_LSU_PIPE_WBUF
 #define CFG_LSU_PIPE_WBUF 4
 #endif
@@ -384,10 +355,6 @@ constexpr int FE_BFAST = CFG_FE_BFAST;
 #ifndef CFG_LSU_PIPE_RP
 #define CFG_LSU_PIPE_RP 4
 #endif
-inline bool lsu_pipe_enabled() {
-  static const bool v = [] { const char *e = std::getenv("LSU_PIPE"); return e && e[0] ? e[0] != '0' : CFG_LSU_PIPE != 0; }();
-  return v;
-}
 inline unsigned lsu_pipe_env_mask(const char *name, unsigned dflt) {
   const char *e = std::getenv(name);
   return e && e[0] ? (unsigned)std::atoi(e) : dflt;
@@ -790,16 +757,12 @@ constexpr int MAX_IQ_SIZE = calculate_max_iq_size();
 constexpr int IQ_READY_NUM_WIDTH = bit_width_for_count(MAX_IQ_SIZE + 1);
 
 
-constexpr int DCACHE_MISS_NUM = LSU_LDU_COUNT+LSU_STA_COUNT;
 constexpr int LSU_LOAD_WINDOW_WIDTH = LSU_LDU_COUNT * 5;
 constexpr int LSU_STORE_WINDOW_WIDTH = LSU_STA_COUNT * 5;
 constexpr int LSU_PEPLAY_WAIT_CYCLES = 4;
 constexpr int LSU_REPLAY_WAIT_CYCLES_WIDTH = clog2(LSU_PEPLAY_WAIT_CYCLES+1);
 constexpr int LSU_WAIT_MSHR_FILL = 1;
 
-constexpr int LDQ_WAIT_MMU_UPPER_BOUND = LDQ_SIZE-LSU_LDU_COUNT;
-constexpr int STQ_WIAT_MMU_UPPER_BOUND = STQ_SIZE-LSU_STA_COUNT;
-constexpr int STQ_MMU_DONE_UPPER_BOUND = STQ_SIZE-LSU_STA_COUNT*2;
 
 // ============================================================
 // Global Sanity Checks
@@ -901,7 +864,6 @@ constexpr int FTQ_OFFSET_WIDTH = clog2(BACKEND_FETCH_WIDTH);
 
 constexpr uint32_t UART_ADDR_BASE = 0x10000000;
 constexpr uint32_t UART_MMIO_SIZE = 0x00000100;
-constexpr uint32_t UART_ADDR_MASK = 0xFFFFFFF0;
 constexpr uint32_t XPS_INTC_ADDR_BASE = 0x1fb00000;
 constexpr uint32_t XPS_INTC_MMIO_SIZE = 0x00001000;
 constexpr uint32_t BOOT_IO_BASE = 0x00000000;

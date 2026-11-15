@@ -88,8 +88,6 @@ static void instruction_FIFO_comb_impl(const instruction_FIFO_in &inp, const ins
   out.out_regs.full = (next_size == INSTRUCTION_FIFO_SIZE);
 }
 
-void instruction_FIFO_comb(const InstructionCombIn &in, InstructionCombOut &out) { instruction_FIFO_comb_impl(in.inp, in.rd, out); }
-
 namespace {
 
 class InstructionFifoModel {

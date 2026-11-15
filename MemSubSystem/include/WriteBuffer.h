@@ -96,10 +96,6 @@ public:
     WBState cur, nxt;
 
 
-    bool idle_quiescent() const {
-        return cur.count == 0 && !cur.send && !cur.axi_write_active && nxt.count == 0;
-    }
-
     void bind_context(SimContext *c) { ctx = c; }
     SimContext *ctx = nullptr;
 };

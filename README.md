@@ -6,8 +6,12 @@ pipelined BPU, L1I/L1D, shared LLC, DRAMsim3 DDR). Ideas are measured here first
 and then carried to the RTL; on a merge to `main` the RTL must reproduce this model's cycle counts program by program.
 
 The model does not compute values. Branch direction/target, addresses, store data and CSR write data come from facts supplied by the
-trace bridge (`diff/TraceBridge.*`), a functional core (the sibling `function-model` repository, built as `librefcpu`;
+trace bridge (`bridge/TraceBridge.*`), a functional core (the sibling `function-model` repository, built as `librefcpu`;
 `function-model/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths.
+Layout: the timing model is `front-end/`, `back-end/`, `MemSubSystem/`, `axi-interconnect-kit/` and `rv_simu_mmu_v2.cpp` (the
+core top, `SimCpu::cycle`); `bridge/` is its input (the trace bridge and the model's taps into it); `driver/` runs it (command
+line and run modes in `main.cpp`, image / checkpoint loading in `BackTopLoad.cpp`, the reference core setup and prewarm in
+`RefCore.cpp`, the functional warm-up of caches / TLBs / BPU in `FastWarm.cpp`).
 Every change must keep the gate's cycle counts (`results/baseline/baseline.csv`) unless it is an intentional configuration change
 merged to main. Project-wide rules (branches, merge procedure, `MAIN_RECORDS.md`, `EXPLORATION.md`, TODO) live in the AI-Huma
 repository that contains the three parts (`docs/WORKFLOW.md`, `docs/GUIDE.md`).
@@ -22,8 +26,7 @@ Sv39 in the FastWarm replay.
 | [docs/PROJECT.md](docs/PROJECT.md) | architecture, configuration knobs (`include/config.h`), the gate, verification harnesses, pitfalls |
 | [docs/ENV_VARS.md](docs/ENV_VARS.md) | all run-time environment variables with defaults (**use `LSU_PIPE_NOWD=1` when comparing cycles with the RTL**) |
 | [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | staged LSU: specification, approximations, results, IPC study |
-| [FRONTEND_NOTES.md](FRONTEND_NOTES.md), [INTEG_NOTES.md](INTEG_NOTES.md), [MS_DATA_NOTES.md](MS_DATA_NOTES.md) | records of the front-end fast paths, the memspec + front-end integration and the memspec value path (historical, defaults since merged) |
-| [docs/history/](docs/history/) | the 2026-11-04 distillation (P0-P3); historical, may be outdated |
+| [docs/history/](docs/history/) | historical records: the 2026-11-04 distillation (P0-P3), FRONTEND_NOTES / INTEG_NOTES / MS_DATA_NOTES (front-end fast paths, memspec integration, memspec value path); may be outdated |
 | [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/) | front-end coding standards, the vendored AXI/LLC/DDR kit |
 
 ## Build
@@ -52,7 +55,7 @@ After changing compile flags use a clean `BUILD_DIR`. Configuration macros (`CFG
 PMU=1 ./build/simulator prog.bin                       # TMA / event statistics, writes pmu_*.csv in the current directory
 LSU_PIPE_NOWD=1 ./build/simulator prog.bin             # cycles comparable with the RTL
 SIM_MAX_CYCLES=1000000 ./build/simulator prog.bin      # stop (exit code 3) after N cycles; use it for anything that may hang
-./build/simulator --mode ckpt checkpoint/mcf/ckpt_sp1.gz   # SimPoint checkpoint (also --mode fast / ref; ./build/simulator -h)
+./build/simulator --mode ckpt checkpoint/mcf/ckpt_sp1.gz   # SimPoint checkpoint (./build/simulator -h)
 ```
 
 All variables: [docs/ENV_VARS.md](docs/ENV_VARS.md).

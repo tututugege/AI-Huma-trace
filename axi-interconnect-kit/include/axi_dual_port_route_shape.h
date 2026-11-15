@@ -83,21 +83,6 @@ typedef struct AxiBridgePendingScanResult {
   uint8_t complete_slot;
 } AxiBridgePendingScanResult;
 
-typedef struct AxiBridgeIssueSelectControl {
-  bool issue_valid;
-  bool issue_mode2_ddr_aligned;
-  uint32_t issue_addr;
-  uint8_t issue_size;
-  uint8_t issue_axi_id;
-  uint8_t issue_beat_idx;
-  uint8_t issue_total_beats;
-} AxiBridgeIssueSelectControl;
-
-typedef struct AxiBridgeMode2Shape {
-  bool single_axi_beat;
-  uint32_t issue_addr;
-  uint8_t issue_size;
-} AxiBridgeMode2Shape;
 
 typedef struct AxiBridgeDownstreamIssueShape {
   uint32_t issue_addr;
@@ -273,40 +258,11 @@ static inline uint32_t axi_bridge_align_down_addr(uint32_t addr,
   return (addr / (uint32_t)align_bytes) * (uint32_t)align_bytes;
 }
 
-static inline bool axi_bridge_mode2_single_axi_beat(uint32_t addr,
-                                                    uint8_t total_size,
-                                                    uint8_t axi_data_bytes) {
-  const uint16_t req_bytes = (uint16_t)total_size + 1u;
-  const uint32_t beat_addr =
-      axi_bridge_align_down_addr(addr, axi_data_bytes);
-  const uint32_t end_byte = (addr - beat_addr) + (uint32_t)req_bytes;
-  return (req_bytes <= (uint16_t)axi_data_bytes) &&
-         (end_byte <= (uint32_t)axi_data_bytes);
-}
-
-
-
-static inline AxiBridgeMode2Shape axi_bridge_mode2_shape(
-    uint32_t addr, uint8_t total_size, uint8_t line_bytes,
-    uint8_t axi_data_bytes) {
-  AxiBridgeMode2Shape out;
-  out.single_axi_beat =
-      axi_bridge_mode2_single_axi_beat(addr, total_size, axi_data_bytes);
-  out.issue_addr = out.single_axi_beat
-                       ? axi_bridge_align_down_addr(addr, axi_data_bytes)
-                       : axi_bridge_align_down_addr(addr, line_bytes);
-  out.issue_size =
-      out.single_axi_beat ? (uint8_t)(axi_data_bytes - 1u)
-                          : (uint8_t)(line_bytes - 1u);
-  return out;
-}
-
 static inline AxiBridgeDownstreamIssueShape
 axi_bridge_downstream_read_issue_shape(bool mmio_port, uint32_t addr,
                                        uint8_t total_size,
                                        uint8_t line_bytes,
-                                       uint8_t axi_data_bytes,
-                                       bool force_ddr_aligned) {
+                                       uint8_t axi_data_bytes) {
   AxiBridgeDownstreamIssueShape out;
   out.issue_addr = addr;
   out.issue_size = total_size;
@@ -314,13 +270,6 @@ axi_bridge_downstream_read_issue_shape(bool mmio_port, uint32_t addr,
 
   if (mmio_port) {
     out.issue_size = AXI_DUAL_PORT_MMIO_TOTAL_SIZE;
-  } else if (force_ddr_aligned) {
-    const AxiBridgeMode2Shape mode2 =
-        axi_bridge_mode2_shape(addr, total_size, line_bytes, axi_data_bytes);
-    out.issue_addr = mode2.issue_addr;
-    out.issue_size = mode2.issue_size;
-    out.extract_from_aligned_beat =
-        mode2.single_axi_beat || (out.issue_addr != addr);
   } else if (((uint16_t)total_size + 1u) <= (uint16_t)axi_data_bytes) {
     out.issue_addr = axi_bridge_align_down_addr(addr, axi_data_bytes);
     out.issue_size = (uint8_t)(axi_data_bytes - 1u);
@@ -340,12 +289,10 @@ static inline AxiBridgeDownstreamIssueShape
 axi_bridge_downstream_write_issue_shape(bool mmio_port, uint32_t addr,
                                         uint8_t total_size,
                                         uint8_t line_bytes,
-                                        uint8_t axi_data_bytes,
-                                        bool force_ddr_aligned) {
+                                        uint8_t axi_data_bytes) {
   AxiBridgeDownstreamIssueShape out =
       axi_bridge_downstream_read_issue_shape(mmio_port, addr, total_size,
-                                             line_bytes, axi_data_bytes,
-                                             force_ddr_aligned);
+                                             line_bytes, axi_data_bytes);
   out.extract_from_aligned_beat = false;
   return out;
 }

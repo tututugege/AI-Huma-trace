@@ -155,10 +155,6 @@ void ICache::reset() {
 
 }
 
-void ICache::comb() {
-  comb_via_compact_io_generator(/*allow_lookup_data_phase=*/true);
-}
-
 void ICache::comb_lookup_meta() {
   comb_via_compact_io_generator(/*allow_lookup_data_phase=*/false);
 }
@@ -974,76 +970,4 @@ void ICache::eval_state_machine() {
     io.reg_write.replace_idx = replace_idx_next;
   }
 
-}
-
-void ICache::log_state() {
-  ICacheState state = static_cast<ICacheState>(io.regs.state);
-  AXIState mem_axi_state = static_cast<AXIState>(io.regs.mem_axi_state);
-
-  std::cout << "ICache State: ";
-  switch (state) {
-  case IDLE:
-    std::cout << "IDLE";
-    break;
-  case SWAP_IN:
-    std::cout << "SWAP_IN";
-    break;
-  case WAIT_DCACHE_AFTER_MEM:
-    std::cout << "WAIT_DCACHE_AFTER_MEM";
-    break;
-  case CANCEL_WAIT_ACCEPT:
-    std::cout << "CANCEL_WAIT_ACCEPT";
-    break;
-  case DRAIN:
-    std::cout << "DRAIN";
-    break;
-  default:
-    std::cout << "UNKNOWN";
-    break;
-  }
-  std::cout << " -> ";
-  switch (state_next) {
-  case IDLE:
-    std::cout << "IDLE";
-    break;
-  case SWAP_IN:
-    std::cout << "SWAP_IN";
-    break;
-  case WAIT_DCACHE_AFTER_MEM:
-    std::cout << "WAIT_DCACHE_AFTER_MEM";
-    break;
-  case CANCEL_WAIT_ACCEPT:
-    std::cout << "CANCEL_WAIT_ACCEPT";
-    break;
-  case DRAIN:
-    std::cout << "DRAIN";
-    break;
-  default:
-    std::cout << "UNKNOWN";
-    break;
-  }
-  std::cout << std::endl;
-  std::cout << "  mem_axi_state: " << (mem_axi_state == AXI_IDLE ? "IDLE"
-                                                               : "BUSY")
-            << " mem_req_v=" << io.out.mem_req_valid
-            << " mem_req_rdy=" << io.in.mem_req_ready
-            << " mem_resp_v=" << io.in.mem_resp_valid
-            << " mem_resp_rdy=" << io.out.mem_resp_ready << std::endl;
-}
-void ICache::log_tag(uint32_t index) {
-  (void)index;
-  std::cout << "Cache contents are owned by the external lookup tables."
-            << std::endl;
-}
-void ICache::log_valid(uint32_t index) {
-  (void)index;
-  std::cout << "Valid bits are owned by the external lookup tables."
-            << std::endl;
-}
-void ICache::log_pipeline() {
-  std::cout << "Request Context:" << std::endl;
-  std::cout << "  req_valid_r: " << io.regs.req_valid_r << std::endl;
-  std::cout << "  req_index_r: " << io.regs.req_index_r << std::endl;
-  std::cout << "  ppn_r: 0x" << std::hex << io.regs.ppn_r << std::dec << std::endl;
-  std::cout << "  ifu_req_ready_r: " << io.regs.ifu_req_ready_r << std::endl;
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Difftest gate for configurations that change timing: every test must print "Success" (cycles are not compared).
+# Completion gate for configurations that change timing: every test must print "Success" (cycles are not compared).
 # Usage: run_gate_on.sh <simulator-binary> <outdir> <test-root> [jobs]    (env of the caller selects the BPU switches)
 # <test-root> holds build/tests/*/*.bin and build/vm/*/*.bin (same set as run_gate.sh).
 SIM=$1; OUT=$2; ROOT=$3; JOBS=${4:-4}

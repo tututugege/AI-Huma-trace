@@ -47,7 +47,6 @@ public:
   void seq_back2front();
   void force_back2front_refetch(pc_t pc);
   void step_bpu();
-  void step_oracle();
 
 private:
   std::unique_ptr<FrontReadData> read_data_;

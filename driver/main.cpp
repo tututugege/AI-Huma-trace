@@ -1,0 +1,511 @@
+#include "FastWarm.h"
+#include "SimDDR.h"
+#include "trace_hook.h"
+#include "SimCpu.h"
+#include "PhysMemory.h"
+#include "RISCV.h"
+#include "config.h"
+#include "RefCore.h"
+#include <csignal>
+#include <cstdint>
+#include <cstdlib>
+#include <stdexcept>
+#include <getopt.h>
+#include <unistd.h>
+#include "RISCV.h"
+
+#ifndef MAX_COMMIT_INST
+#define MAX_COMMIT_INST 15000000000ULL
+#endif
+
+using namespace std;
+
+// 1. 定义配置结构
+struct SimConfig {
+  enum Mode {
+    RUN,  // run an image from reset
+    CKPT  // restore a checkpoint (warmup, then measure)
+  } mode = RUN;
+
+  // 目标文件路径
+  std::string target_file;
+  bool fast_warmup = false;  // CKPT: functional replay of (interval - warmup) instructions into the caches/TLBs/BPU (EXP-011)
+  std::string restore_stub_file;  // CKPT: front-door restore program (tools/ckpt2stub.py of the function model)
+  // CKPT 模式下，O3 目标 warmup 步数（0~checkpoint interval）
+  uint64_t ckpt_warmup_target = 0;
+  bool ckpt_warmup_target_set = false;
+  uint64_t max_commit_inst = static_cast<uint64_t>(MAX_COMMIT_INST);
+  bool max_commit_inst_set = false;
+  uint64_t irq_seed = 1;
+  uint32_t irq_delay_min = 8;
+  uint32_t irq_delay_max = 64;
+};
+
+// 2. 帮助信息更新
+void print_help(char *argv[]) {
+  std::cout << "Usage: " << argv[0] << " [options] <target_file>" << std::endl;
+  std::cout << "\nOptions:" << std::endl;
+  std::cout
+      << "  -m, --mode <run|ckpt>      Set execution mode (default: run)"
+      << std::endl;
+  std::cout << "      --restore-stub <file>     CKPT: front-door restore (load only the memory; the CPU runs this restore program)"
+            << std::endl;
+  std::cout << "      --fast-warmup             CKPT: replay the interval before the warmup functionally into the caches / TLBs / BPU"
+            << std::endl;
+  std::cout << "  -w, --warmup <num>  In CKPT mode, target O3 "
+               "warmup steps in [0, checkpoint_interval] "
+               "(default: checkpoint_interval)"
+            << std::endl;
+  std::cout
+      << "  -c, --max-commit <num>  Stop after <num> committed instructions "
+         "(default: checkpoint_interval in CKPT mode, compile-time "
+         "MAX_COMMIT_INST otherwise)"
+      << std::endl;
+  std::cout << "      --irq-seed <num>        Seed for deterministic IRQ latency"
+            << std::endl;
+  std::cout << "      --irq-delay-min <cycles> Minimum IRQ assertion delay (>= 1)"
+            << std::endl;
+  std::cout << "      --irq-delay-max <cycles> Maximum IRQ assertion delay"
+            << std::endl;
+  std::cout << "  -h, --help                  Show this message" << std::endl;
+  std::cout << "\nExamples:" << std::endl;
+  std::cout << "  Run Binary: " << argv[0] << " spec_mem/mcf.bin" << std::endl;
+  std::cout << "  Run Ckpt:   " << argv[0]
+            << " --mode ckpt checkpoint/mcf/ckpt_sp1.gz" << std::endl;
+}
+
+long long sim_time = 0;
+SimCpu cpu;
+
+namespace {
+volatile std::sig_atomic_t g_sigint_requested = 0;
+
+void handle_sigint(int signo) {
+  if (signo != SIGINT) {
+    return;
+  }
+
+  if (g_sigint_requested != 0) {
+    const char msg[] = "\n[sim] SIGINT received again, waiting for pending "
+                       "dump to finish...\n";
+    const ssize_t rc = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    (void)rc;
+    return;
+  }
+
+  g_sigint_requested = 1;
+  const char msg[] = "\n[sim] SIGINT received, dumping LSU/MemSubsystem state "
+                     "before exit...\n";
+  const ssize_t rc = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+  (void)rc;
+}
+
+void install_signal_handlers() {
+  struct sigaction sa{};
+  sa.sa_handler = handle_sigint;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGINT, &sa, nullptr);
+}
+
+bool handle_pending_sigint() {
+  if (g_sigint_requested == 0) {
+    return false;
+  }
+
+  cpu.ctx.perf.perf_print();
+  return true;
+}
+} // namespace
+
+void exit_handler() {
+  if (cpu.ctx.exit_reason == ExitReason::NONE) {
+    return;
+  }
+  std::cout << "\033[38;5;34m-----------------------------\033[0m" << std::endl;
+  std::cout << "Simulation Exited. Printing Perf Stats..." << std::endl;
+  cpu.ctx.perf.perf_print();
+  std::cout << "\033[38;5;34m-----------------------------\033[0m" << std::endl;
+}
+
+int main(int argc, char *argv[]) {
+  atexit(exit_handler);
+  install_signal_handlers();
+
+  SimConfig config;
+
+  // 长参数定义
+  static struct option long_options[] = {
+      {"mode", required_argument, 0, 'm'},
+      {"restore-stub", required_argument, 0, 1008},
+      {"fast-warmup", no_argument, 0, 1009},
+      {"irq-seed", required_argument, 0, 1005},
+      {"irq-delay-min", required_argument, 0, 1006},
+      {"irq-delay-max", required_argument, 0, 1007},
+      {"warmup", required_argument, 0, 'w'},
+      {"max-commit", required_argument, 0, 'c'},
+      {"help", no_argument, 0, 'h'},
+      {0, 0, 0, 0}};
+
+  int opt;
+  int option_index = 0;
+
+  // --- A. 解析命令行参数 ---
+  while ((opt = getopt_long(argc, argv, "m:w:c:h", long_options,
+                            &option_index)) != -1) {
+    switch (opt) {
+    case 'm': {
+      std::string m(optarg);
+      if (m == "ckpt") {
+        config.mode = SimConfig::CKPT;
+      } else if (m == "run") {
+        config.mode = SimConfig::RUN;
+      } else {
+        std::cerr << "Error: Unknown mode '" << m
+                  << "'. Use 'run' or 'ckpt'." << std::endl;
+        return 1;
+      }
+      break;
+    }
+    case 'w': {
+      std::string warmup_arg(optarg);
+      if (!warmup_arg.empty() && warmup_arg[0] == '-') {
+        std::cerr << "Error: --warmup must be >= 0, got: " << optarg
+                  << std::endl;
+        return 1;
+      }
+      try {
+        config.ckpt_warmup_target = std::stoull(optarg);
+        config.ckpt_warmup_target_set = true;
+      } catch (const std::exception &e) {
+        std::cerr << "Error: Invalid number for --warmup: " << optarg
+                  << std::endl;
+        return 1;
+      }
+      break;
+    }
+    case 'c': {
+      std::string limit_arg(optarg);
+      if (!limit_arg.empty() && limit_arg[0] == '-') {
+        std::cerr << "Error: --max-commit must be a positive integer, got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      try {
+        config.max_commit_inst = std::stoull(optarg);
+        config.max_commit_inst_set = true;
+        if (config.max_commit_inst == 0) {
+          std::cerr << "Error: --max-commit must be > 0, got: 0" << std::endl;
+          return 1;
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "Error: Invalid number for --max-commit: " << optarg
+                  << std::endl;
+        return 1;
+      }
+      break;
+    }
+    case 1008:
+      config.restore_stub_file = optarg;
+      break;
+    case 1009:
+      config.fast_warmup = true;
+      break;
+    case 1005:
+      try {
+        config.irq_seed = std::stoull(optarg);
+        if (config.irq_seed == 0) {
+          throw std::out_of_range("irq-seed");
+        }
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-seed must be a positive integer, got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
+    case 1006:
+      try {
+        const uint64_t value = std::stoull(optarg);
+        if (value == 0 || value > UINT32_MAX) {
+          throw std::out_of_range("irq-delay-min");
+        }
+        config.irq_delay_min = static_cast<uint32_t>(value);
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-delay-min must be in [1, 2^32-1], got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
+    case 1007:
+      try {
+        const uint64_t value = std::stoull(optarg);
+        if (value == 0 || value > UINT32_MAX) {
+          throw std::out_of_range("irq-delay-max");
+        }
+        config.irq_delay_max = static_cast<uint32_t>(value);
+      } catch (const std::exception &) {
+        std::cerr << "Error: --irq-delay-max must be in [1, 2^32-1], got: "
+                  << optarg << std::endl;
+        return 1;
+      }
+      break;
+    case 'h':
+      print_help(argv);
+      return 0;
+    default:
+      print_help(argv);
+      return 1;
+    }
+  }
+
+  // --- B. 解析位置参数 (Target File) ---
+  if (optind < argc) {
+    config.target_file = argv[optind];
+    if (optind + 1 < argc) {
+      std::cerr
+          << "Warning: Multiple files provided. Only using the first one: "
+          << config.target_file << std::endl;
+    }
+  } else {
+    std::cerr << "Error: Missing target file argument." << std::endl;
+    print_help(argv);
+    return 1;
+  }
+
+  if (config.mode != SimConfig::CKPT && config.ckpt_warmup_target_set) {
+    std::cerr << "Warning: --warmup (-w) is ignored unless in CKPT "
+                 "mode."
+              << std::endl;
+  }
+  if (config.irq_delay_max < config.irq_delay_min) {
+    std::cerr << "Error: --irq-delay-max must be >= --irq-delay-min."
+              << std::endl;
+    return 1;
+  }
+
+  if (!pmem_init()) {
+    std::cerr << "Error: Failed to allocate memory!" << std::endl;
+    exit(1);
+  }
+  cpu.mem_subsystem.configure_interrupt_latency(
+      config.irq_seed, config.irq_delay_min, config.irq_delay_max);
+  std::cout << "[CONFIG][IRQ] seed=" << config.irq_seed
+            << " assertion_delay=" << config.irq_delay_min << ".."
+            << config.irq_delay_max << " cycles" << std::endl;
+  cpu.init();
+
+  // --- D. 模拟器启动逻辑 ---
+  if (config.mode == SimConfig::RUN) {
+    std::cout << "[Mode] RUN: Loading Execution Image..." << std::endl;
+    std::cout << "[File] " << config.target_file << std::endl;
+    cpu.back.load_image(config.target_file);
+  } else if (config.mode == SimConfig::CKPT) {
+    std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
+    std::cout << "[File] " << config.target_file << std::endl;
+    const bool front_door = !config.restore_stub_file.empty();
+    if (front_door) {
+      std::cout << "[CKPT] front-door restore, restore program: " << config.restore_stub_file << std::endl;
+      cpu.back.restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
+    } else {
+      cpu.back.restore_checkpoint(config.target_file);
+      cpu.sync_mmio_devices_from_backing();
+    }
+
+    const uint64_t ckpt_interval = cpu.back.ckpt_interval_inst_count;
+    if (ckpt_interval == 0) {
+      if (!config.ckpt_warmup_target_set) {
+        config.ckpt_warmup_target = 0;
+      }
+      if (config.ckpt_warmup_target != 0) {
+        std::cerr << "Error: zero-interval checkpoint requires --warmup 0, got: "
+                  << config.ckpt_warmup_target << std::endl;
+        return 1;
+      }
+      if (!config.max_commit_inst_set || config.max_commit_inst == 0) {
+        std::cerr << "Error: zero-interval checkpoint requires explicit "
+                     "--max-commit > 0."
+                  << std::endl;
+        return 1;
+      }
+    }
+
+    if (!config.max_commit_inst_set) {
+      config.max_commit_inst = ckpt_interval;
+    }
+    if (const char *e = std::getenv("FAST_WARMUP"); e != nullptr && e[0] == '1') config.fast_warmup = true;
+    if (!config.ckpt_warmup_target_set) {
+      // --fast-warmup: the detailed warm-up is short (1M); the rest of the interval is replayed functionally
+      config.ckpt_warmup_target = config.fast_warmup ? std::min<uint64_t>(1000000, ckpt_interval) : ckpt_interval;
+    }
+    if (config.ckpt_warmup_target > ckpt_interval) {
+      std::cerr << "Error: --warmup must be in [0," << ckpt_interval
+                << "], got: " << config.ckpt_warmup_target << std::endl;
+      return 1;
+    }
+
+    std::cout << "[CONFIG] checkpoint_interval = " << std::dec
+              << ckpt_interval << std::endl;
+    std::cout << "[CONFIG] warmup_target = " << config.ckpt_warmup_target
+              << (config.ckpt_warmup_target_set ? " (runtime override)"
+                                                : " (checkpoint default)")
+              << std::endl;
+    std::cout << "[CONFIG] max_commit_inst = " << config.max_commit_inst
+              << (config.max_commit_inst_set ? " (runtime override)"
+                                             : " (checkpoint default)")
+              << std::endl;
+
+    uint64_t warmup_target = config.ckpt_warmup_target;
+    uint64_t ref_prewarm_target = ckpt_interval - warmup_target;
+    if (front_door && ref_prewarm_target > 0 && !config.fast_warmup) {
+      std::cerr << "Error: --restore-stub needs --warmup equal to the checkpoint interval (" << ckpt_interval
+                << "): the reference prewarm hands its state to the DUT, which is exactly what the front-door "
+                   "restore avoids."
+                << std::endl;
+      return 1;
+    }
+
+    uint64_t ref_prewarm_done = 0;
+    FastWarmStats fw_stats;
+    const bool fast_warm_active = config.fast_warmup && ref_prewarm_target > 0;
+    if (fast_warm_active) {
+      std::cout << "[Run] Fast warm-up: functional replay of " << ref_prewarm_target << " steps into L1I/L1D/LLC/TLB/BPU"
+                << (front_door ? " (after the restore program)" : "") << "..." << std::endl;
+      const bool ok = fast_warm_replay(cpu, front_door, ref_prewarm_target, fw_stats);
+      ref_prewarm_done = fw_stats.steps;
+      if (!ok) cpu.ctx.exit_reason = ExitReason::EBREAK;
+      std::cout << "[FastWarm] stub_steps=" << fw_stats.stub_steps << " steps=" << fw_stats.steps
+                << " branches=" << fw_stats.branches << " ifetch_lines=" << fw_stats.ifetch_lines
+                << " l1i_miss=" << fw_stats.ifetch_miss << " loads=" << fw_stats.loads << " stores=" << fw_stats.stores
+                << " l1d_miss=" << fw_stats.l1d_miss << " llc_acc=" << fw_stats.llc_acc << " llc_miss=" << fw_stats.llc_miss
+                << " itlb_miss=" << fw_stats.itlb_miss << " dtlb_miss=" << fw_stats.dtlb_miss
+                << " skipped_exc=" << fw_stats.skipped_exc << (ok ? "" : " ENDED_EARLY") << std::endl;
+    }
+    if (ref_prewarm_target > 0 && !fast_warm_active) {
+      std::cout << "[Run] Ref prewarm for " << ref_prewarm_target
+                << " steps..." << std::endl;
+      for (; ref_prewarm_done < ref_prewarm_target; ref_prewarm_done++) {
+        refcore_step();
+        if (refcore_sim_end()) {
+          cpu.ctx.exit_reason =
+              refcore_last_inst_is_wfi() ? ExitReason::WFI
+                                              : ExitReason::EBREAK;
+          break;
+        }
+      }
+      std::cout << "[Run] Ref prewarm done: " << ref_prewarm_done
+                << " steps." << std::endl;
+    }
+
+    if (ref_prewarm_target > 0) refcore_end_warmup();
+    if (!front_door || fast_warm_active) {
+      std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
+      cpu.back.restore_from_ref();
+      cpu.sync_mmio_devices_from_backing();
+      cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
+      if (fast_warm_active) fast_warm_install(cpu);
+    }
+
+    cpu.ctx.is_ckpt = true;
+    cpu.ctx.front_door_pending = front_door && !fast_warm_active;  // the measurement starts at the restore program's mret
+    cpu.ctx.ckpt_warmup_commit_target = warmup_target;
+    cpu.ctx.ckpt_measure_commit_target = config.max_commit_inst;
+    if (front_door && !fast_warm_active) {
+      std::cout << "[Plan] front-door restore: the restore program runs first; warmup (" << warmup_target
+                << ") and measure (" << config.max_commit_inst << ") count from its mret." << std::endl;
+    } else if (cpu.ctx.ckpt_warmup_commit_target == 0) {
+      cpu.ctx.perf.perf_reset();
+      cpu.ctx.perf.perf_start = true;
+      std::cout << "[Plan] O3 warmup skipped: target = 0. Measure phase "
+                   "starts immediately."
+                << std::endl;
+      std::cout << "[Run] O3 measure running: target = "
+                << cpu.ctx.ckpt_measure_commit_target << " committed instructions."
+                << std::endl;
+    } else {
+      std::cout << "[Plan] O3 warmup scheduled: target = "
+                << cpu.ctx.ckpt_warmup_commit_target
+                << " committed instructions." << std::endl;
+      std::cout << "[Plan] O3 measure scheduled: target = "
+                << cpu.ctx.ckpt_measure_commit_target
+                << " committed instructions after warmup." << std::endl;
+      std::cout << "[Run] Entering O3 run loop. Warmup/measure transition will "
+                   "be printed when warmup actually finishes."
+                << std::endl;
+    }
+  }
+
+  // 主循环
+  if (cpu.ctx.exit_reason == ExitReason::NONE) {
+    // Regression guard: SIM_MAX_CYCLES stops a run that does not terminate (exit code 3) instead of
+    // waiting for an external timeout.
+    const long long cycle_limit = std::getenv("SIM_MAX_CYCLES")
+                                      ? std::atoll(std::getenv("SIM_MAX_CYCLES"))
+                                      : (long long)MAX_SIM_TIME;
+    for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
+      if (sim_time >= cycle_limit) {
+        std::cout << "[sim] SIM_MAX_CYCLES=" << cycle_limit << " reached without termination" << std::endl;
+        pmem_release();
+        return 3;
+      }
+      if (sim_time % 10000000 == 0) {
+        cout << dec << sim_time << endl;
+      }
+      BE_LOG("************************************************************** "
+             "cycle: %lld "
+             "*************************************************************",
+             (long long)sim_time);
+
+      cpu.cycle();
+
+    if (handle_pending_sigint()) {
+        pmem_release();
+        return 130;
+      }
+
+    // CKPT mode owns a two-phase commit budget: warmup first, then a fresh
+    // measurement counter. Ren.cpp performs both transitions. Applying the
+    // generic limit here would incorrectly stop during warmup whenever
+    // --max-commit is smaller than the warmup target.
+    if (config.mode != SimConfig::CKPT &&
+        cpu.ctx.perf.commit_num >= config.max_commit_inst) {
+        cpu.ctx.exit_reason = ExitReason::SIMPOINT;
+        std::cout << "[sim] Reached MAX_COMMIT_INST=" << std::dec
+                  << config.max_commit_inst << std::endl;
+      }
+
+    if (cpu.ctx.exit_reason != ExitReason::NONE) {
+        break;
+      }
+    }
+  }
+
+  pmem_release();
+
+  if (sim_time != MAX_SIM_TIME) {
+    cout << "\033[38;5;34m-----------------------------\033[0m" << endl;
+    cout << "\033[38;5;34mSuccess!!!!\033[0m" << endl;
+    cout << "\033[38;5;34m-----------------------------\033[0m" << endl;
+
+    if (cpu.ctx.exit_reason == ExitReason::EBREAK) {
+      uint32_t a0 = cpu.get_reg(10);
+      if (a0 != 0) {
+        std::cerr << "\033[1;31m[sim] Program exited with non-zero code: " << a0
+                  << "\033[0m" << std::endl;
+      }
+      return a0;
+    }
+    if (cpu.ctx.exit_reason == ExitReason::WFI) {
+      std::cout << "[sim] Program exited by WFI." << std::endl;
+      return 0;
+    }
+
+  } else {
+    cout << "\033[1;31m------------------------------\033[0m" << endl;
+    cout << "\033[1;31mTIME OUT!!!!QAQ\033[0m" << endl;
+    cout << "\033[1;31m------------------------------\033[0m" << endl;
+    cout << "\033[1;31m------------------------------\033[0m" << endl;
+    exit(1);
+  }
+
+  return 0;
+}

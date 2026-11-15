@@ -1,5 +1,4 @@
 #include "Wires.h"
-#include "BeginCheck.h"
 #include "PreIduQueue.h"
 #include "types.h"
 
@@ -77,9 +76,6 @@ void PreIduQueue::init() {
 
 // Publish the oldest DECODE_WIDTH buffered instructions to decode.
 void PreIduQueue::comb_begin() {
-  BEGIN_EQ(ftq_lookup_entries_1, ftq_lookup_entries);
-  BEGIN_EQ(ftq_train_meta_fifo_1, ftq_train_meta_fifo);
-  BEGIN_EQ(ftq_valid_1, ftq_valid);
   ftq_head_1 = ftq_head;
   ftq_tail_1 = ftq_tail;
   ftq_count_1 = ftq_count;

@@ -89,7 +89,4 @@ public:
     bool nofill_released = false;
     SimContext *ctx = nullptr;
 
-    bool idle_quiescent() const {
-        return cur.mshr_count == 0 && !cur.axi_resp_hold_valid && nxt.mshr_count == 0;
-    }
 };

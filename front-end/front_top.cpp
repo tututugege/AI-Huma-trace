@@ -1033,14 +1033,3 @@ void front_top_seq_write(const struct front_top_in &inp,
                          const FrontUpdateRequest &req, bool reset) {
   front_seq_write(inp, req, reset);
 }
-
-void front_top(struct front_top_in *in, struct front_top_out *out) {
-  assert(in);
-  assert(out);
-
-  FrontReadData rd;
-  FrontUpdateRequest req;
-  front_seq_read(*in, rd);
-  front_comb_calc(*in, rd, *out, req);
-  front_seq_write(*in, req, in->reset);
-}
