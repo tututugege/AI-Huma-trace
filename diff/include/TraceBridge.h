@@ -44,9 +44,10 @@ struct Fact {
   xlen_t store_data = 0;       // size-masked
   xlen_t rs2_value = 0;        // full rs2 (what the model carries as store data)
   xlen_t rs1_value = 0;        // full rs1 before the instruction (EXP-020: stale-value evaluation of the speculative window)
-  uint32_t mem_old = 0;        // the word at mem_waddr before the store (valid with has_mem_write)
-  bool has_mem_write = false;  // an executed store/AMO that changes RAM: word address and the word after it
-  uint32_t mem_waddr = 0, mem_wdata = 0;
+  xlen_t mem_old = 0;          // the XLEN-wide unit at mem_waddr before the store (valid with has_mem_write)
+  bool has_mem_write = false;  // an executed store/AMO that changes RAM: unit address and the unit after it
+  uint32_t mem_waddr = 0;      // the store's XLEN/8-byte aligned unit (a store that crosses the unit: its first unit)
+  xlen_t mem_wdata = 0;
   xlen_t csr_wdata = 0;        // SYSTEM csrr*: rs1 value or zimm
 };
 

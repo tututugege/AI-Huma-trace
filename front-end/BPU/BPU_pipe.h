@@ -579,7 +579,9 @@ class BpuPipe {
     return e;
   }
   void apply_table_update(const UpdEnt &e, Txn &t) const {
-    fpr::up(static_cast<uint32_t>(e.pc), e.dir, e.type, static_cast<uint32_t>(e.target), e.pred, e.pcpn, e.rvc);
+    uint64_t idxp = 0; uint32_t tagp = 0;   // the TAGE indices (10 bit) and tags (8 bit) of the entry, table 0 in the low bits (the RTL packs the same way)
+    for (int i = 0; i < TN; i++) { idxp |= static_cast<uint64_t>(e.idx[i] & 0x3ffu) << (10 * i); tagp |= static_cast<uint32_t>(e.tag[i] & 0xffu) << (8 * i); }
+    fpr::up(static_cast<uint32_t>(e.pc), e.dir, e.type, static_cast<uint32_t>(e.target), e.pred, e.pcpn, e.rvc, idxp, tagp);
     const uint32_t b = bank_of(e.pc);
     const pc_t bpc = bank_pc_of(e.pc);
     if (e.type == BR_DIRECT) {

@@ -111,8 +111,9 @@ struct PStq {
   wire<6> wd = 0;             // DCache response watchdog (cycles in iss)
   // LSU_MS_DATA: what the trace says this store writes (captured the cycle after dispatch, the fact leaves the bridge at commit)
   bool m_init = false, m_v = false, m_amo = false, m_atnt = false;
-  uint32_t m_w = 0, m_old = 0, m_new = 0, m_rs2 = 0;  // physical word, word before / after, true rs2
-  uint8_t m_off = 0, m_sz = 0;                         // byte lane inside the word
+  uint32_t m_w = 0;                                    // physical unit address (XLEN/8 bytes aligned)
+  uint64_t m_old = 0, m_new = 0, m_rs2 = 0;            // the unit before / after, true rs2
+  uint8_t m_off = 0, m_sz = 0;                         // byte lane inside the unit
 };
 
 // L1 -> L2 pipeline register (one per load port)

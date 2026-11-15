@@ -242,7 +242,14 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   else if (e->f.is_load || e->f.is_store) {
     const xlen_t a = e->f.vaddr;
     const uint32_t sz = e->f.size;
-    if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3)) || (sz == 8 && (a & 7))) blk = Blocked::MemMisalign;
+    // An FP load / store with mstatus.FS = Off is an illegal instruction before its address is looked at (the RTL flags it at completion, which stalls the
+    // dispatch while it sits in the ROB window): it must reach the function model to trap, not be "blocked" for a misaligned / out-of-RAM address.
+    bool fp_mem_fs_off = false;
+#if FP
+    { const uint32_t opc = inst & 0x7f; fp_mem_fs_off = (opc == 0x07 || opc == 0x27) && ((st.csr[7] >> 13) & 3) == 0; }   // (csr index 7 = mstatus)
+#endif
+    if (fp_mem_fs_off) { /* executed: traps */ }
+    else if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3)) || (sz == 8 && (a & 7))) blk = Blocked::MemMisalign;
     else if (data_xlate_ok && !in_ram(data_pa, sz)) blk = Blocked::MemOutOfRam;
   }
   e->f.blocked = blk;
@@ -323,9 +330,20 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   if (e->f.is_br) e->f.br_taken = info.br_taken;
   if (after.store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
     e->f.has_mem_write = true;
-    e->f.mem_waddr = after.store_addr & ~3u;   // (debug only: the first word of an 8-byte store)
-    e->f.mem_wdata = refcpu_load_word(ctx_, e->f.mem_waddr);
-    e->f.mem_old = e->has_undo && e->undo_addr == e->f.mem_waddr ? e->undo_old : e->f.mem_wdata;
+    constexpr uint32_t XB = XLEN / 8;   // the unit of the stale-value model (EXP-020): one word on rv32, one aligned dword on rv64
+    e->f.mem_waddr = after.store_addr & ~(XB - 1);
+    auto unit = [&](uint32_t a) { xlen_t v = refcpu_load_word(ctx_, a); if (XLEN == 64) v |= xlen_t(refcpu_load_word(ctx_, a + 4)) << 32; return v; };
+    e->f.mem_wdata = unit(e->f.mem_waddr);
+    e->f.mem_old = e->f.mem_wdata;   // the words the store undid hold the value before it
+    if (e->has_undo) {
+      for (uint32_t k = 0; k < XB; k += 4) {
+        const uint32_t wa = e->f.mem_waddr + k;
+        uint32_t old = 0; bool hit = false;
+        if (e->undo_addr == wa) { old = e->undo_old; hit = true; }
+        else if (e->undo_words == 2 && e->undo_addr + 4 == wa) { old = e->undo_old_hi; hit = true; }
+        if (hit) e->f.mem_old = (e->f.mem_old & ~(xlen_t(0xffffffffu) << (8 * k))) | (xlen_t(old) << (8 * k));
+      }
+    }
   }
   chain_.push_back(e);
   return e->f;

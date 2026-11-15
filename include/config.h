@@ -324,8 +324,10 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 // Value path of the speculative window (EXP-020, back-end/include/MsData.h): the model follows the stale value a speculative load reads, taints its
 // consumers and lets a branch resolved on a stale value mispredict like the RTL does. Needs LSU_MEMSPEC. Env LSU_MS_DATA overrides; 1 = branches +
 // store data, otherwise a bit mask: 1 branches, 2 stale addresses of loads/stores, 4 stale store data, 8 self checks (debug).
+// Default 7: branches + stale addresses + stale store data.  The stale-address bit is needed to match the RTL: a store whose base register came from a stale load writes
+// to the stale address, a later load at the true address then reads the old memory (rv64 Linux checkpoint windows, scripts/linux_segments_cmp.sh).
 #ifndef CFG_LSU_MS_DATA
-#define CFG_LSU_MS_DATA 1
+#define CFG_LSU_MS_DATA 7
 #endif
 // Defaults of the integrated model (exp/integ): LSU_MEMSPEC 1 with the LSU_MS_DATA value path, wait table 64 x 1 bit (MDP_MODE 0), cleared every 2000 cycles,
 // flag-register training (LSU_MDP_HW 2), unlimited speculative loads (LSU_MS_SLOTS 0). MODE / HW / SLOTS are model-only (envs LSU_MDP_MODE, LSU_MDP_HW, LSU_MS_SLOTS), not exported to the RTL.

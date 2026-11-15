@@ -282,9 +282,11 @@ Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 // LSU_MS_DATA: the value a load returns when the stores in `l.skip` are not visible (apply_skip) or when everything older is visible.
 // Memory image = the word before the oldest STQ store that writes it (the cache content), or the core RAM when no STQ store writes it, with the
 // visible older STQ stores applied in age order (the youngest wins, as STLF does).  Returns false when it cannot say (MMIO, no trace info).
-bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, uint32_t &val) {
-  if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~3u, 4u)) return false;
-  const uint32_t W = l.paddr & ~3u, off = l.paddr & 3, lw = ld_width(l.func3);
+bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t &val) {
+  constexpr uint32_t XB = XLEN / 8;   // the unit of the model: one word (rv32) / one aligned dword (rv64)
+  if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
+  const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.func3);
+  if (XLEN == 64 && off + lw > XB) return false;   // crosses the unit: not modelled
   const uint32_t head = S.stq_head;
   uint32_t older;
   {
@@ -292,28 +294,32 @@ bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, uint32
     const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
     older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), S.stq_count);
   }
-  uint32_t word = 0;
+  xlen_t word = 0;
   bool have = false;
   for (uint32_t rank = 0; rank < S.stq_count && !have; rank++) {
     const PStq &t = S.stq[(head + rank) % STQ_SIZE];
     if (!t.m_v || t.m_w != W || t.done || t.suppress) continue;
-    word = t.m_old;
+    word = (xlen_t)t.m_old;
     have = true;
   }
-  if (!have) word = tbhook::mem_read(W);
+  if (!have) {
+    word = tbhook::mem_read(W);
+    if (XLEN == 64) word |= xlen_t(tbhook::mem_read(W + 4)) << 32;
+  }
   for (uint32_t rank = 0; rank < older; rank++) {
     const uint32_t j = (head + rank) % STQ_SIZE;
     const PStq &t = S.stq[j];
     if (!t.m_v || t.m_w != W || t.done || t.suppress || t.m_atnt) continue;
     if (apply_skip && (l.skip >> j & 1)) continue;
     if (t.m_amo) {
-      word = t.m_new;
+      word = (xlen_t)t.m_new;
     } else {
-      const uint32_t data = t.data_v ? (uint32_t)t.data : t.m_rs2;
-      for (uint32_t k = t.m_off; k < t.m_off + t.m_sz && k < 4; k++) word = (word & ~(0xffu << (8 * k))) | (((data >> (8 * (k - t.m_off))) & 0xffu) << (8 * k));
+      const xlen_t data = t.data_v ? (xlen_t)t.data : (xlen_t)t.m_rs2;
+      for (uint32_t k = t.m_off; k < t.m_off + t.m_sz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - t.m_off))) & 0xff) << (8 * k));
     }
   }
-  const uint32_t raw = lw >= 4 ? word : (word >> (8 * off)) & mem_mask_for_width(lw);
+  const xlen_t mask = lw >= 8 ? ~(xlen_t)0 : (xlen_t)((1ull << (8 * lw)) - 1);
+  const xlen_t raw = lw >= XB ? word : (word >> (8 * off)) & mask;
   val = msd::load_extend(raw, l.func3);
   return true;
 }
@@ -503,7 +509,7 @@ void RealLsu::comb_cal_p() {
       t.m_old = f->mem_old;
       t.m_new = f->mem_wdata;
       t.m_rs2 = f->rs2_value;
-      t.m_off = f->vaddr & 3;
+      t.m_off = f->vaddr & (XLEN / 8 - 1);
       t.m_sz = f->size;
     }
   }
@@ -806,17 +812,17 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.diag_val = l.vaddr;
   wb.result = l.pf ? l.vaddr : l.result;
   if (tbhook::poison && !l.pf && !l.mmio) wb.result ^= 0xA5C3A5C3u;
-  wb.dest_preg = l.dest_preg;
+  wb.dest_preg = l.pf ? 0 : l.dest_preg;   // a faulting load does not write its destination (RTL: lp_wb)
   wb.page_fault_load = l.pf;
   wb.illegal_inst = l.illegal;
-  wb.dest_en = l.dest_preg != 0;  // loads to x0 still complete without a destination
+  wb.dest_en = !l.pf && l.dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
   const bool second = l.second;
   const bool defer = lp_memspec && !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
   bool early = l.sw || second;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
-  if (!early && from_l3 && (lp_l2 & 2) && l.dest_preg != 0 && !wires->rob_bcast.flush &&
+  if (!early && from_l3 && (lp_l2 & 2) && !l.pf && l.dest_preg != 0 && !wires->rob_bcast.flush &&
       !(wires->dec_bcast.mispred && (l.br_mask & wires->dec_bcast.br_mask) != 0)) {  // a2: wake from the L3 register
     wires->lsu_awake.wake[LD + port].valid = true;
     wires->lsu_awake.wake[LD + port].preg = l.dest_preg;
@@ -836,10 +842,12 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
+  // every load write-back leaves its register without a stale value unless the paths below set one (MMIO / LR-SC loads and the faulting ones do not go there)
+  if (msd::on && (l.pf || l.mmio || l.lrsc) && l.dest_preg != 0) msd::taint[l.dest_preg] = msd::TV{};
   if (msd::on && !l.pf && !l.mmio && !l.lrsc) {
     const tb::Fact *f = tbhook::fact_by_rob(l.rob_idx);
     const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
-    uint32_t v = 0;
+    xlen_t v = 0;
     if (l.atnt) {  // stale base register: the load reads the stale address, its value stays stale (the load is never re-executed with a good address)
       msd::taint[l.dest_preg] = msd::TV{};
       if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) {
@@ -868,8 +876,15 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
         else if (l.stale) msd::st.stale_no_vio++;
         l.stale = false;
       }
-      msd::taint[l.dest_preg] = msd::TV{};  // the register holds the true value from here on
-      if ((msd::mode & 8) && plain && ms_load_value(pnxt, l, false, v)) {  // self check of the value logic
+      msd::release(l.dest_preg);  // the register holds the true value from here on (for consumers issuing from the next cycle) ...
+      if ((msd::mode & 4) && plain && ms_load_value(pnxt, l, false, v)) {
+        // ... unless it was forwarded from a store whose DATA is stale (mode 4: the STQ holds the stale data): the load returns that
+        if (v != f->rd_value) {
+          msd::set_taint(l.dest_preg, true, v, 1);
+          msd::st.ld_fwd_stale++;
+          if (msd::trace) std::fprintf(stderr, "MSD t=%lld load forwarded stale store data preg=%d rob=%d pc=%llx va=%llx value=%llx true=%llx\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned long long)l.pc, (unsigned long long)l.vaddr, (unsigned long long)v, (unsigned long long)f->rd_value);
+        }
+      } else if ((msd::mode & 8) && plain && ms_load_value(pnxt, l, false, v)) {  // self check of the value logic
         msd::st.loads_checked++;
         if (v != f->rd_value) {
           if (msd::st.loads_check_bad++ < 8)

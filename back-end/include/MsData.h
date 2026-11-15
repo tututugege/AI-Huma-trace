@@ -3,7 +3,7 @@
 // The model is oracle driven: every value is a fact of the trace.  The RTL executes real data, so a load that passed an older store
 // whose address was still unknown returns the STALE byte, its consumers compute with it, a dependent branch can resolve the wrong way, a
 // dependent load/store can get a wrong address.  All of that dies at the commit-time flush of the violating load, but it changes timing
-// before.  This header keeps (a) a taint table over physical registers (stale value + chain depth), (b) an RV32IMAB evaluator for the
+// before.  This header keeps (a) a taint table over physical registers (stale value + chain depth), (b) an RV32IMAB / RV64IM evaluator (xlen_t wide) for the
 // consumers of a tainted register, (c) the statistics.  The stale value of a load is computed in RealLsuPipe.cpp (it needs the STQ).
 // Taint exists from the first (deferred) write-back of a stale load to its second write-back, and is dropped at every ROB flush.
 #pragma once
@@ -11,13 +11,15 @@
 #include "trace_hook.h"
 #include "types.h"
 #include <algorithm>
+#include <limits>
+#include <type_traits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
 namespace msd {
 
-inline const bool on = XLEN == 32 &&   // the stale-value evaluation below works on 32-bit values: not valid for rv64
+inline const bool on =   // XLEN-wide since EXP-040 (the evaluator below is RV32IMAB + RV64IM; what it does not know stays untainted)
                        lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) != 0 && lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC) != 0;
 // LSU_MS_DATA bit mask: 1 = branches resolve on stale values (mispredict redirect), 2 = tainted loads/stores use the stale address (not
 // modelled yet: counted only), 4 = tainted store data goes into the STQ, 8 = evaluator self check against the facts (debug).
@@ -27,9 +29,17 @@ inline const bool trace = std::getenv("LSU_MS_DTRACE") != nullptr;
 struct TV {
   bool t = false;
   uint8_t depth = 0;  // 0 = the stale load itself
-  uint32_t v = 0;
+  xlen_t v = 0;
+  long long until = 0;  // the second write-back of the load put the true value on the bus: consumers that issued up to this cycle still read the stale one
 };
 inline TV taint[TAG_NUM];
+// the true value reaches the register file one cycle after the write-back bus: a consumer executing in the next cycle still has the stale operand (RTL, found at the Linux cycle 1129708)
+inline void release(uint32_t preg) {
+  if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
+  if (taint[preg].t) taint[preg].until = (long long)sim_time + 1;
+  else taint[preg] = TV{};
+}
+inline bool live(uint32_t preg) { return taint[preg].t && (taint[preg].until == 0 || (long long)sim_time <= taint[preg].until); }
 
 struct Stats {
   uint64_t loads_checked = 0, loads_check_bad = 0;                       // self check of the load value logic (non-speculative loads)
@@ -38,7 +48,7 @@ struct Stats {
   uint64_t consumers = 0, masked = 0, unmodelled = 0;                    // consumers of a tainted register
   uint64_t br = 0, br_flip = 0, br_flip_to_mispred = 0, br_flip_to_correct = 0, jalr_flip = 0;
   uint64_t ld_addr_stale = 0, ld_addr_same = 0;                          // loads at a stale address: value differs from / equals the true one
-  uint64_t ld_addr = 0, st_addr = 0, st_data = 0;                        // tainted address of a load / store, tainted store data
+  uint64_t ld_addr = 0, st_addr = 0, st_data = 0, ld_fwd_stale = 0;      // tainted address of a load / store, tainted store data, loads that forwarded it
   uint64_t dep_depth[8] = {};                                            // chain length of results that differ from the true value
   uint64_t br_depth[8] = {};
   uint64_t chk_n = 0, chk_bad = 0;                                       // evaluator self check
@@ -51,10 +61,10 @@ struct Stats {
                  (unsigned long long)silent_vio, (unsigned long long)stale_no_vio, (unsigned long long)loads_checked, (unsigned long long)loads_check_bad);
     std::fprintf(stderr,
                  "[MS_DATA] consumers=%llu masked=%llu unmodelled=%llu | branches=%llu flip=%llu (to_mispredict=%llu to_correct=%llu) jalr_flip=%llu | "
-                 "tainted ld_addr=%llu (value differs %llu, same %llu) st_addr=%llu st_data=%llu | eval self-check %llu bad %llu\n",
+                 "tainted ld_addr=%llu (value differs %llu, same %llu) st_addr=%llu st_data=%llu (forwarded to a load: %llu) | eval self-check %llu bad %llu\n",
                  (unsigned long long)consumers, (unsigned long long)masked, (unsigned long long)unmodelled, (unsigned long long)br,
                  (unsigned long long)br_flip, (unsigned long long)br_flip_to_mispred, (unsigned long long)br_flip_to_correct,
-                 (unsigned long long)jalr_flip, (unsigned long long)ld_addr, (unsigned long long)ld_addr_stale, (unsigned long long)ld_addr_same, (unsigned long long)st_addr, (unsigned long long)st_data,
+                 (unsigned long long)jalr_flip, (unsigned long long)ld_addr, (unsigned long long)ld_addr_stale, (unsigned long long)ld_addr_same, (unsigned long long)st_addr, (unsigned long long)st_data, (unsigned long long)ld_fwd_stale,
                  (unsigned long long)chk_n, (unsigned long long)chk_bad);
     std::fprintf(stderr, "[MS_DATA] chain length of differing results (1..7+):");
     for (int i = 1; i < 8; i++) std::fprintf(stderr, " %llu", (unsigned long long)dep_depth[i]);
@@ -73,73 +83,135 @@ inline void clear_all() {
 // RV32IMAB integer evaluator (stateless): result of instruction word `in` at `pc` with source values a (rs1) and b (rs2).
 // Returns false for anything it does not model (CSR, FP, AMO, system).
 // ---------------------------------------------------------------------------------------------------------------
+using X = xlen_t;
+using SX = std::make_signed_t<X>;
+constexpr int XL = XLEN;
 inline uint32_t mbits(uint32_t v, int hi, int lo) { return (v >> lo) & ((1u << (hi - lo + 1)) - 1); }
 inline int32_t msext(uint32_t v, int n) { return (int32_t)(v << (32 - n)) >> (32 - n); }
-inline uint32_t mimmI(uint32_t i) { return (uint32_t)msext(mbits(i, 31, 20), 12); }
-inline uint32_t mimmS(uint32_t i) { return (uint32_t)msext((mbits(i, 31, 25) << 5) | mbits(i, 11, 7), 12); }
-inline uint32_t mimmB(uint32_t i) {
-  return (uint32_t)msext((mbits(i, 31, 31) << 12) | (mbits(i, 7, 7) << 11) | (mbits(i, 30, 25) << 5) | (mbits(i, 11, 8) << 1), 13);
+inline X xs(int32_t v) { return (X)(SX)v; }                  // sign extension of a 32-bit value to XLEN
+inline X mimmI(uint32_t i) { return xs(msext(mbits(i, 31, 20), 12)); }
+inline X mimmS(uint32_t i) { return xs(msext((mbits(i, 31, 25) << 5) | mbits(i, 11, 7), 12)); }
+inline X mimmB(uint32_t i) {
+  return xs(msext((mbits(i, 31, 31) << 12) | (mbits(i, 7, 7) << 11) | (mbits(i, 30, 25) << 5) | (mbits(i, 11, 8) << 1), 13));
 }
-inline uint32_t rol32(uint32_t x, uint32_t s) { s &= 31; return s ? (x << s) | (x >> (32 - s)) : x; }
-inline uint32_t ror32(uint32_t x, uint32_t s) { s &= 31; return s ? (x >> s) | (x << (32 - s)) : x; }
-inline uint32_t clmul(uint32_t a, uint32_t b, int mode) {  // 0 clmul, 1 clmulr, 2 clmulh
+inline X rolx(X x, X s) { s &= XL - 1; return s ? (x << s) | (x >> (XL - s)) : x; }
+inline X rorx(X x, X s) { s &= XL - 1; return s ? (x >> s) | (x << (XL - s)) : x; }
+inline X clzx(X a) { return a == 0 ? XL : (XL == 32 ? __builtin_clz((uint32_t)a) : __builtin_clzll((uint64_t)a)); }
+inline X ctzx(X a) { return a == 0 ? XL : (XL == 32 ? __builtin_ctz((uint32_t)a) : __builtin_ctzll((uint64_t)a)); }
+inline X popx(X a) { return XL == 32 ? __builtin_popcount((uint32_t)a) : __builtin_popcountll((uint64_t)a); }
+inline X bswapx(X a) { return XL == 32 ? (X)__builtin_bswap32((uint32_t)a) : (X)__builtin_bswap64((uint64_t)a); }
+inline uint32_t clmul(uint32_t a, uint32_t b, int mode) {  // rv32 only: 0 clmul, 1 clmulr, 2 clmulh
   uint64_t r = 0;
   for (int i = 0; i < 32; i++)
     if (b >> i & 1) r ^= (uint64_t)a << i;
   return mode == 0 ? (uint32_t)r : mode == 2 ? (uint32_t)(r >> 32) : (uint32_t)(r >> 31);
 }
 
-inline bool eval_alu(uint32_t in, uint32_t pc, uint32_t a, uint32_t b, uint32_t &r) {
+// funct7 of the shift-immediate group: rv32 compares the 7 bits, rv64 the upper 6 (shamt[5] is bit 25)
+#define MS_K(c) (XL == 32 ? (uint32_t)(c) : (uint32_t)(c) >> 1)
+
+inline bool eval_alu(uint32_t in, X pc, X a, X b, X &r) {
   const uint32_t op = in & 0x7f, f3 = mbits(in, 14, 12), f7 = mbits(in, 31, 25), rs2f = mbits(in, 24, 20);
-  if (op == 0x37) { r = in & 0xfffff000u; return true; }
-  if (op == 0x17) { r = pc + (in & 0xfffff000u); return true; }
+  const uint32_t fx = XL == 32 ? f7 : f7 >> 1;   // funct7 / funct6 of the shift-immediate group
+  if (op == 0x37) { r = xs((int32_t)(in & 0xfffff000u)); return true; }
+  if (op == 0x17) { r = pc + xs((int32_t)(in & 0xfffff000u)); return true; }
   if (op == 0x13) {  // OP-IMM
-    const uint32_t imm = mimmI(in), sh = rs2f;
+    const X imm = mimmI(in);
+    const uint32_t sh = XL == 32 ? rs2f : mbits(in, 25, 20);
     switch (f3) {
     case 0: r = a + imm; return true;
-    case 2: r = (int32_t)a < (int32_t)imm; return true;
+    case 2: r = (SX)a < (SX)imm; return true;
     case 3: r = a < imm; return true;
     case 4: r = a ^ imm; return true;
     case 6: r = a | imm; return true;
     case 7: r = a & imm; return true;
     case 1:
-      if (f7 == 0x00) { r = a << sh; return true; }
-      if (f7 == 0x14) { r = a | (1u << sh); return true; }   // bseti
-      if (f7 == 0x24) { r = a & ~(1u << sh); return true; }  // bclri
-      if (f7 == 0x34) { r = a ^ (1u << sh); return true; }   // binvi
-      if (f7 == 0x30) {
-        if (sh == 0) { r = a == 0 ? 32 : __builtin_clz(a); return true; }
-        if (sh == 1) { r = a == 0 ? 32 : __builtin_ctz(a); return true; }
-        if (sh == 2) { r = __builtin_popcount(a); return true; }
-        if (sh == 4) { r = (uint32_t)msext(a & 0xff, 8); return true; }
-        if (sh == 5) { r = (uint32_t)msext(a & 0xffff, 16); return true; }
+      if (fx == 0x00) { r = a << sh; return true; }
+      if (fx == MS_K(0x14)) { r = a | ((X)1 << sh); return true; }   // bseti
+      if (fx == MS_K(0x24)) { r = a & ~((X)1 << sh); return true; }  // bclri
+      if (fx == MS_K(0x34)) { r = a ^ ((X)1 << sh); return true; }   // binvi
+      if (fx == MS_K(0x30)) {
+        if (sh == 0) { r = clzx(a); return true; }
+        if (sh == 1) { r = ctzx(a); return true; }
+        if (sh == 2) { r = popx(a); return true; }
+        if (sh == 4) { r = (X)(SX)(int8_t)(a & 0xff); return true; }
+        if (sh == 5) { r = (X)(SX)(int16_t)(a & 0xffff); return true; }
       }
       return false;
     case 5:
-      if (f7 == 0x00) { r = a >> sh; return true; }
-      if (f7 == 0x20) { r = (uint32_t)((int32_t)a >> sh); return true; }
-      if (f7 == 0x30) { r = ror32(a, sh); return true; }
-      if (f7 == 0x24) { r = (a >> sh) & 1; return true; }  // bexti
-      if (in >> 20 == 0x287) {                               // orc.b
+      if (fx == 0x00) { r = a >> sh; return true; }
+      if (fx == MS_K(0x20)) { r = (X)((SX)a >> sh); return true; }
+      if (fx == MS_K(0x30)) { r = rorx(a, sh); return true; }
+      if (fx == MS_K(0x24)) { r = (a >> sh) & 1; return true; }  // bexti
+      if (in >> 20 == 0x287) {                                    // orc.b
         r = 0;
-        for (int i = 0; i < 4; i++) if ((a >> (8 * i)) & 0xff) r |= 0xffu << (8 * i);
+        for (int i = 0; i < XL / 8; i++) if ((a >> (8 * i)) & 0xff) r |= (X)0xff << (8 * i);
         return true;
       }
-      if (in >> 20 == 0x698) { r = __builtin_bswap32(a); return true; }  // rev8
+      if (in >> 20 == (XL == 32 ? 0x698u : 0x6b8u)) { r = bswapx(a); return true; }  // rev8
+      return false;
+    }
+    return false;
+  }
+  if (XL == 64 && op == 0x1b) {  // OP-IMM-32
+    const uint32_t sh = rs2f, a32 = (uint32_t)a;
+    switch (f3) {
+    case 0: r = xs((int32_t)(a32 + (uint32_t)mimmI(in))); return true;
+    case 1: if (f7 == 0x00) { r = xs((int32_t)(a32 << sh)); return true; } return false;
+    case 5:
+      if (f7 == 0x00) { r = xs((int32_t)(a32 >> sh)); return true; }
+      if (f7 == 0x20) { r = xs((int32_t)a32 >> sh); return true; }
+      return false;
+    }
+    return false;
+  }
+  if (XL == 64 && op == 0x3b) {  // OP-32
+    const uint32_t a32 = (uint32_t)a, b32 = (uint32_t)b;
+    switch (f7) {
+    case 0x00:
+      switch (f3) {
+      case 0: r = xs((int32_t)(a32 + b32)); return true;
+      case 1: r = xs((int32_t)(a32 << (b32 & 31))); return true;
+      case 5: r = xs((int32_t)(a32 >> (b32 & 31))); return true;
+      }
+      return false;
+    case 0x20:
+      switch (f3) {
+      case 0: r = xs((int32_t)(a32 - b32)); return true;
+      case 5: r = xs((int32_t)a32 >> (b32 & 31)); return true;
+      }
+      return false;
+    case 0x01:
+      switch (f3) {
+      case 0: r = xs((int32_t)(a32 * b32)); return true;
+      case 4:
+        if (b32 == 0) r = ~(X)0;
+        else if ((int32_t)a32 == INT32_MIN && (int32_t)b32 == -1) r = xs((int32_t)a32);
+        else r = xs((int32_t)a32 / (int32_t)b32);
+        return true;
+      case 5: r = b32 == 0 ? ~(X)0 : xs((int32_t)(a32 / b32)); return true;
+      case 6:
+        if (b32 == 0) r = xs((int32_t)a32);
+        else if ((int32_t)a32 == INT32_MIN && (int32_t)b32 == -1) r = 0;
+        else r = xs((int32_t)a32 % (int32_t)b32);
+        return true;
+      case 7: r = b32 == 0 ? xs((int32_t)a32) : xs((int32_t)(a32 % b32)); return true;
+      }
       return false;
     }
     return false;
   }
   if (op == 0x33) {  // OP
+    const X sm = XL - 1;
     switch (f7) {
     case 0x00:
       switch (f3) {
       case 0: r = a + b; return true;
-      case 1: r = a << (b & 31); return true;
-      case 2: r = (int32_t)a < (int32_t)b; return true;
+      case 1: r = a << (b & sm); return true;
+      case 2: r = (SX)a < (SX)b; return true;
       case 3: r = a < b; return true;
       case 4: r = a ^ b; return true;
-      case 5: r = a >> (b & 31); return true;
+      case 5: r = a >> (b & sm); return true;
       case 6: r = a | b; return true;
       case 7: r = a & b; return true;
       }
@@ -148,7 +220,7 @@ inline bool eval_alu(uint32_t in, uint32_t pc, uint32_t a, uint32_t b, uint32_t 
       switch (f3) {
       case 0: r = a - b; return true;
       case 4: r = ~(a ^ b); return true;
-      case 5: r = (uint32_t)((int32_t)a >> (b & 31)); return true;
+      case 5: r = (X)((SX)a >> (b & sm)); return true;
       case 6: r = a | ~b; return true;
       case 7: r = a & ~b; return true;
       }
@@ -156,19 +228,28 @@ inline bool eval_alu(uint32_t in, uint32_t pc, uint32_t a, uint32_t b, uint32_t 
     case 0x01:
       switch (f3) {
       case 0: r = a * b; return true;
-      case 1: r = (uint32_t)(((int64_t)(int32_t)a * (int64_t)(int32_t)b) >> 32); return true;
-      case 2: r = (uint32_t)(((int64_t)(int32_t)a * (int64_t)b) >> 32); return true;
-      case 3: r = (uint32_t)(((uint64_t)a * (uint64_t)b) >> 32); return true;
-      case 4:
-        if (b == 0) r = 0xffffffffu;
-        else if ((int32_t)a == INT32_MIN && (int32_t)b == -1) r = a;
-        else r = (uint32_t)((int32_t)a / (int32_t)b);
+      case 1:
+        if (XL == 32) r = (X)(((int64_t)(int32_t)a * (int64_t)(int32_t)b) >> 32);
+        else r = (X)(((__int128)(int64_t)a * (__int128)(int64_t)b) >> 64);
         return true;
-      case 5: r = b == 0 ? 0xffffffffu : a / b; return true;
+      case 2:
+        if (XL == 32) r = (X)(((int64_t)(int32_t)a * (int64_t)b) >> 32);   // (b as a 32-bit unsigned value, as before)
+        else r = (X)(((__int128)(int64_t)a * (__int128)(uint64_t)b) >> 64);
+        return true;
+      case 3:
+        if (XL == 32) r = (X)(((uint64_t)a * (uint64_t)b) >> 32);
+        else r = (X)(((unsigned __int128)(uint64_t)a * (unsigned __int128)(uint64_t)b) >> 64);
+        return true;
+      case 4:
+        if (b == 0) r = ~(X)0;
+        else if ((SX)a == std::numeric_limits<SX>::min() && (SX)b == -1) r = a;
+        else r = (X)((SX)a / (SX)b);
+        return true;
+      case 5: r = b == 0 ? ~(X)0 : a / b; return true;
       case 6:
         if (b == 0) r = a;
-        else if ((int32_t)a == INT32_MIN && (int32_t)b == -1) r = 0;
-        else r = (uint32_t)((int32_t)a % (int32_t)b);
+        else if ((SX)a == std::numeric_limits<SX>::min() && (SX)b == -1) r = 0;
+        else r = (X)((SX)a % (SX)b);
         return true;
       case 7: r = b == 0 ? a : a % b; return true;
       }
@@ -180,50 +261,52 @@ inline bool eval_alu(uint32_t in, uint32_t pc, uint32_t a, uint32_t b, uint32_t 
       return false;
     case 0x05:
       switch (f3) {
-      case 1: r = clmul(a, b, 0); return true;
-      case 2: r = clmul(a, b, 1); return true;
-      case 3: r = clmul(a, b, 2); return true;
-      case 4: r = (int32_t)a < (int32_t)b ? a : b; return true;
+      case 1: if (XL != 32) return false; r = clmul((uint32_t)a, (uint32_t)b, 0); return true;
+      case 2: if (XL != 32) return false; r = clmul((uint32_t)a, (uint32_t)b, 1); return true;
+      case 3: if (XL != 32) return false; r = clmul((uint32_t)a, (uint32_t)b, 2); return true;
+      case 4: r = (SX)a < (SX)b ? a : b; return true;
       case 5: r = a < b ? a : b; return true;
-      case 6: r = (int32_t)a > (int32_t)b ? a : b; return true;
+      case 6: r = (SX)a > (SX)b ? a : b; return true;
       case 7: r = a > b ? a : b; return true;
       }
       return false;
     case 0x30:
-      if (f3 == 1) { r = rol32(a, b); return true; }
-      if (f3 == 5) { r = ror32(a, b); return true; }
+      if (f3 == 1) { r = rolx(a, b); return true; }
+      if (f3 == 5) { r = rorx(a, b); return true; }
       return false;
-    case 0x14: if (f3 == 1) { r = a | (1u << (b & 31)); return true; } return false;
+    case 0x14: if (f3 == 1) { r = a | ((X)1 << (b & sm)); return true; } return false;
     case 0x24:
-      if (f3 == 1) { r = a & ~(1u << (b & 31)); return true; }
-      if (f3 == 5) { r = (a >> (b & 31)) & 1; return true; }
+      if (f3 == 1) { r = a & ~((X)1 << (b & sm)); return true; }
+      if (f3 == 5) { r = (a >> (b & sm)) & 1; return true; }
       return false;
-    case 0x34: if (f3 == 1) { r = a ^ (1u << (b & 31)); return true; } return false;
-    case 0x04: if (f3 == 4 && rs2f == 0) { r = a & 0xffff; return true; } return false;
+    case 0x34: if (f3 == 1) { r = a ^ ((X)1 << (b & sm)); return true; } return false;
+    case 0x04: if (XL == 32 && f3 == 4 && rs2f == 0) { r = a & 0xffff; return true; } return false;   // zext.h (rv32; on rv64 it is op 0x3b)
     }
     return false;
   }
   return false;
 }
 
-inline bool eval_branch(uint32_t f3, uint32_t a, uint32_t b, bool &taken) {
+inline bool eval_branch(uint32_t f3, X a, X b, bool &taken) {
   switch (f3) {
   case 0: taken = a == b; return true;
   case 1: taken = a != b; return true;
-  case 4: taken = (int32_t)a < (int32_t)b; return true;
-  case 5: taken = (int32_t)a >= (int32_t)b; return true;
+  case 4: taken = (SX)a < (SX)b; return true;
+  case 5: taken = (SX)a >= (SX)b; return true;
   case 6: taken = a < b; return true;
   case 7: taken = a >= b; return true;
   }
   return false;
 }
 
-inline uint32_t load_extend(uint32_t raw, uint32_t f3) {
+inline X load_extend(X raw, uint32_t f3) {
   switch (f3 & 7) {
-  case 0: return (uint32_t)msext(raw & 0xff, 8);
-  case 1: return (uint32_t)msext(raw & 0xffff, 16);
+  case 0: return xs(msext((uint32_t)raw & 0xff, 8));
+  case 1: return xs(msext((uint32_t)raw & 0xffff, 16));
+  case 2: return XL == 64 ? xs((int32_t)(uint32_t)raw) : raw;   // lw: sign-extended on rv64
   case 4: return raw & 0xff;
   case 5: return raw & 0xffff;
+  case 6: return XL == 64 ? (raw & 0xffffffffu) : raw;           // lwu
   default: return raw;
   }
 }
@@ -231,11 +314,12 @@ inline uint32_t load_extend(uint32_t raw, uint32_t f3) {
 // ---------------------------------------------------------------------------------------------------------------
 // Consumers.  Called by the functional unit when it takes an instruction (Fu::compute), after the facts were applied.
 // ---------------------------------------------------------------------------------------------------------------
-inline void set_taint(uint32_t preg, bool t, uint32_t v, uint8_t depth) {
+inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   taint[preg].t = t;
   taint[preg].v = v;
   taint[preg].depth = depth;
+  taint[preg].until = 0;
 }
 
 // `kind`: 0 ALU/MUL/DIV/CSR/FPU (any uop with a destination), 1 AGU, 2 SDU, 3 BRU.  Returns nothing; the effects are written into `inst`
@@ -244,8 +328,8 @@ template <class Inst>
 inline void exec(int kind, Inst &inst) {
   const bool d_en = inst.dest_en && inst.dest_preg != 0;
   const auto &u = *inst.operator->();
-  const bool s1 = u.src1_en && u.src1_preg != 0 && taint[u.src1_preg].t;
-  const bool s2 = u.src2_en && u.src2_preg != 0 && taint[u.src2_preg].t;
+  const bool s1 = u.src1_en && u.src1_preg != 0 && live(u.src1_preg);
+  const bool s2 = u.src2_en && u.src2_preg != 0 && live(u.src2_preg);
   if (!s1 && !s2) {
     if (d_en && inst.op != UOP_LOAD) {
       if (trace && taint[inst.dest_preg].t) std::fprintf(stderr, "MSD t=%lld clean producer rob=%u op=%d clears p%u\n", (long long)sim_time, (unsigned)inst.rob_idx, (int)inst.op, (unsigned)inst.dest_preg);
@@ -259,8 +343,8 @@ inline void exec(int kind, Inst &inst) {
     return;
   }
   st.consumers++;
-  const uint32_t a = s1 ? taint[u.src1_preg].v : f->rs1_value;
-  const uint32_t b = s2 ? taint[u.src2_preg].v : f->rs2_value;
+  const X a = s1 ? taint[u.src1_preg].v : f->rs1_value;
+  const X b = s2 ? taint[u.src2_preg].v : f->rs2_value;
   const uint8_t depth = (uint8_t)(std::max(s1 ? (int)taint[u.src1_preg].depth : 0, s2 ? (int)taint[u.src2_preg].depth : 0) + 1);
   const uint8_t dd = depth > 7 ? 7 : depth;
   const uint32_t w = f->inst, opc = w & 0x7f, f3 = mbits(w, 14, 12);
@@ -268,7 +352,7 @@ inline void exec(int kind, Inst &inst) {
   case UOP_ADD:
   case UOP_MUL:
   case UOP_DIV: {
-    uint32_t r;
+    X r;
     if (!eval_alu(w, f->pc, a, b, r)) { st.unmodelled++; if (d_en) taint[inst.dest_preg] = TV{}; return; }
     if (d_en) {
       if (f->rd_valid && r != f->rd_value) { set_taint(inst.dest_preg, true, r, depth); st.dep_depth[dd]++; }
@@ -285,15 +369,15 @@ inline void exec(int kind, Inst &inst) {
       st.br_depth[dd]++;
       if (mode & 1) {
         const bool pred_taken = u.ftq_pred_taken;
-        const uint32_t pc = u.pc, pc_br = pc + u.imm;
-        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
+        const X pc = u.pc, pc_br = pc + xs((int32_t)(uint32_t)u.imm);
+        const X pred_target = pred_taken ? (X)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
         const bool mis = !((taken && pred_taken && pred_target == pc_br) || (!taken && !pred_taken));
         if (mis && !inst.mispred) st.br_flip_to_mispred++;
         if (!mis && inst.mispred) st.br_flip_to_correct++;
         inst.mispred = mis;
         inst.br_taken = taken;
         inst.diag_val = taken ? pc_br : pc + ilen_of(u.is_rvc);
-        if (trace) std::fprintf(stderr, "MSD t=%lld branch rob=%u pc=%x flip true=%d stale=%d mispred=%d | s1=%d(p%u v=%x) s2=%d(p%u v=%x) rs1=%x rs2=%x\n", (long long)sim_time, (unsigned)inst.rob_idx, pc, (int)f->br_taken, (int)taken, (int)mis, (int)s1, (unsigned)u.src1_preg, a, (int)s2, (unsigned)u.src2_preg, b, f->rs1_value, f->rs2_value);
+        if (trace) std::fprintf(stderr, "MSD t=%lld branch rob=%u pc=%llx flip true=%d stale=%d mispred=%d | s1=%d(p%u v=%llx) s2=%d(p%u v=%llx) rs1=%llx rs2=%llx\n", (long long)sim_time, (unsigned)inst.rob_idx, (unsigned long long)pc, (int)f->br_taken, (int)taken, (int)mis, (int)s1, (unsigned)u.src1_preg, (unsigned long long)a, (int)s2, (unsigned)u.src2_preg, (unsigned long long)b, (unsigned long long)f->rs1_value, (unsigned long long)f->rs2_value);
       }
     } else {
       st.masked++;
@@ -302,14 +386,14 @@ inline void exec(int kind, Inst &inst) {
   }
   case UOP_JUMP: {
     if (opc != 0x67) return;  // jal has no source
-    const uint32_t tgt = (a + mimmI(w)) & ~1u;
+    const X tgt = (a + mimmI(w)) & ~(X)1;
     st.br++;
     if (tgt != f->next_pc) {
       st.jalr_flip++;
       st.br_depth[dd]++;
       if (mode & 1) {
         const bool pred_taken = u.ftq_pred_taken;
-        const uint32_t pred_target = pred_taken ? (uint32_t)u.ftq_next_pc : (uint32_t)u.pc + ilen_of(u.is_rvc);
+        const X pred_target = pred_taken ? (X)u.ftq_next_pc : (X)u.pc + ilen_of(u.is_rvc);
         const bool mis = !(pred_taken && pred_target == tgt);
         inst.mispred = mis;
         inst.br_taken = true;
@@ -320,8 +404,9 @@ inline void exec(int kind, Inst &inst) {
   }
   case UOP_LOAD:
   case UOP_STA: {
-    const uint32_t imm = inst.op == UOP_LOAD ? (opc == 0x03 ? mimmI(w) : 0) : (opc == 0x23 ? mimmS(w) : 0);
-    const uint32_t va = a + imm;
+    // loads: I-type immediate (int 0x03, FP 0x07); stores: S-type (int 0x23, FP 0x27); AMO / LR / SC (0x2f) have none
+    const X imm = inst.op == UOP_LOAD ? ((opc == 0x03 || opc == 0x07) ? mimmI(w) : 0) : ((opc == 0x23 || opc == 0x27) ? mimmS(w) : 0);
+    const X va = a + imm;
     if (va != f->vaddr) {
       (inst.op == UOP_LOAD ? st.ld_addr : st.st_addr)++;
       if (mode & 2) inst.result = va;
@@ -359,11 +444,11 @@ inline void self_check(Inst &inst) {
     const uint32_t opc = w & 0x7f;
     if (opc != 0x33 && opc != 0x13 && opc != 0x37 && opc != 0x17) return;
     if (!u.src1_en && !u.src2_en && opc != 0x37 && opc != 0x17) return;  // link ADD of jal/jalr
-    uint32_t r;
+    X r;
     if (!f->rd_valid || !eval_alu(w, f->pc, f->rs1_value, f->rs2_value, r)) return;
     st.chk_n++;
     if (r != f->rd_value) {
-      if (st.chk_bad++ < 5) std::fprintf(stderr, "[MS_DATA] eval mismatch inst=%08x pc=%x a=%x b=%x got=%x want=%x\n", w, f->pc, f->rs1_value, f->rs2_value, r, f->rd_value);
+      if (st.chk_bad++ < 5) std::fprintf(stderr, "[MS_DATA] eval mismatch inst=%08x pc=%llx a=%llx b=%llx got=%llx want=%llx\n", w, (unsigned long long)f->pc, (unsigned long long)f->rs1_value, (unsigned long long)f->rs2_value, (unsigned long long)r, (unsigned long long)f->rd_value);
     }
   } else if (inst.op == UOP_BR) {
     bool t;
