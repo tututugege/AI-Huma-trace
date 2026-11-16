@@ -130,16 +130,6 @@ struct WideWriteStrb_t {
     }
   }
 
-  uint32_t slice_u32(uint32_t first_byte) const {
-    uint32_t out = 0;
-    for (uint32_t i = 0; i < 32; ++i) {
-      if (test(first_byte + i)) {
-        out |= (1u << i);
-      }
-    }
-    return out;
-  }
-
   template <typename T,
             typename = std::enable_if_t<std::is_integral_v<T>>>
   WideWriteStrb_t &operator=(T mask) {

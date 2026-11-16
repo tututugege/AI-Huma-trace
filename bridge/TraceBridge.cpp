@@ -389,7 +389,6 @@ bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_
   return refcpu_take_forced_interrupt(ctx_, cause, target_priv, pending_snapshot);
 }
 
-uint64_t Bridge::oldest_uid() const { return chain_.front()->f.uid; }
 size_t Bridge::kill_older_than(uint64_t uid) {
   size_t killed = 0;
   while (killed < chain_.size() && chain_[killed]->f.uid != uid) killed++;  // entries before the committing one

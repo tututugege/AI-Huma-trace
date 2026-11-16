@@ -19,12 +19,6 @@
 void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege);
 
 // --- 辅助函数：简化 zlib 读写 POD 类型 ---
-template <typename T>
-void gz_write_pod(gzFile file, const T &data) {
-  if (gzwrite(file, &data, sizeof(T)) != sizeof(T)) {
-    Assert(0 && "Error writing data to gzip file.");
-  }
-}
 
 template <typename T>
 void gz_read_pod(gzFile file, T &data) {

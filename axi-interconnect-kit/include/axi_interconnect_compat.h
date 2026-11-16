@@ -159,33 +159,8 @@ inline void set_bit(T &value, uint32_t bit_idx, bool enabled) {
   set_byte(value, byte_idx, byte);
 }
 
-template <typename T>
-inline uint32_t low_u32(const T &value) {
-  return get_u32(value, 0);
-}
 
-template <typename T>
-inline uint64_t low_u64(const T &value) {
-  uint64_t out = 0;
-  for (uint32_t byte = 0; byte < 8u; ++byte) {
-    out |= static_cast<uint64_t>(get_byte(value, byte)) << (byte * 8u);
-  }
-  return out;
-}
 
-template <typename T>
-inline std::string hex_string(const T &value, uint32_t byte_count) {
-  static constexpr char kHex[] = "0123456789abcdef";
-  std::string out;
-  out.reserve(2 + byte_count * 2u);
-  out += "0x";
-  for (int idx = static_cast<int>(byte_count) - 1; idx >= 0; --idx) {
-    const uint8_t byte = get_byte(value, static_cast<uint32_t>(idx));
-    out += kHex[byte >> 4];
-    out += kHex[byte & 0x0Fu];
-  }
-  return out;
-}
 
 } // namespace axi_compat
 

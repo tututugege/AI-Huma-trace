@@ -27,10 +27,6 @@ inline bool icache_window_debug_active(long long cycle) {
   return false;
 }
 
-inline bool icache_trace_pc(uint32_t pc, long long cycle) {
-  return icache_focus_pc(pc) || icache_window_debug_active(cycle);
-}
-
 
 
 

@@ -88,7 +88,6 @@ inline InstType decode_inst_type(wire<INST_TYPE_WIDTH> bits) {
   return static_cast<InstType>((uint32_t)bits);
 }
 
-constexpr UopType encode_uop_type(UopType op) { return op; }
 inline UopType decode_uop_type(UopType op) { return op; }
 
 inline UopType decode_uop_type(wire<UOP_TYPE_WIDTH> bits) {
@@ -117,15 +116,6 @@ inline bool is_eliminated_move(const InstInfo &u) {
   return move_elim_enabled() && is_move_shape(u) && u.dest_preg == u->src1_preg;
 }
 
-inline bool is_amo_sc_inst(InstType type,uint32_t func7) {
-  return type == AMO && ((func7 >> 2) == AmoOp::SC);
-}
-inline bool is_amo_lr_inst(InstType type,uint32_t func7) {
-  return type == AMO && ((func7 >> 2) == AmoOp::LR);
-}
-static inline bool is_amo_sc_uop(const MicroOp &uop) {
-  return uop->is_atomic && ((uop->func7 >> 2) == AmoOp::SC);
-}
 static inline bool is_amo_lr_uop(const MicroOp &uop) {
   return uop->is_atomic && ((uop->func7 >> 2) == AmoOp::LR);
 }
@@ -177,18 +167,8 @@ inline bool is_load_uop(wire<UOP_TYPE_WIDTH> op) {
   return is_load_uop(decode_uop_type(op));
 }
 
-inline bool is_page_fault(InstInfo uop) {
-  return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store;
-}
-
 inline bool is_exception(InstInfo uop) {
   return uop.page_fault_inst || uop.page_fault_load || uop.page_fault_store ||
          uop.illegal_inst || uop->type == ECALL;
-}
-
-inline bool is_flush_inst(InstInfo uop) {
-  return uop->type == CSR || uop->type == ECALL || uop->type == MRET ||
-         uop->type == SRET || uop->type == SFENCE_VMA || uop->type == FENCE_I ||
-         is_exception(uop) || uop->type == EBREAK || uop.flush_pipe;
 }
 

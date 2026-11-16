@@ -175,17 +175,6 @@ public:
   void set_llc_lookup_in(const AXI_LLC_LookupIn_t &lookup_in) {
     llc.io.lookup_in = lookup_in;
   }
-  void set_llc_invalidate_all(bool invalidate) { llc_invalidate_all_req_ = invalidate; }
-  void set_llc_invalidate_line(bool valid, uint32_t addr) {
-    llc_invalidate_line_valid_ = valid;
-    llc_invalidate_line_addr_ = addr;
-  }
-  bool llc_invalidate_all_accepted() const {
-    return llc.io.ext_out.mem.invalidate_all_accepted;
-  }
-  bool llc_invalidate_line_accepted() const {
-    return llc.io.ext_out.mem.invalidate_line_accepted;
-  }
   // Fast-warmup replay (EXP-011): the number of dirty lines the LLC tables now hold.
   void warm_set_llc_dirty_lines(uint32_t n) {
     llc.io.regs.dirty_line_count_r = n;
@@ -347,7 +336,6 @@ private:
   uint32_t external_hazard_line_addr(uint32_t addr) const;
   DownstreamPort classify_downstream_port(uint32_t addr,
                                           uint8_t total_size) const;
-  bool request_uses_ddr_port(uint32_t addr, uint8_t total_size) const;
   bool request_uses_mmio_port(uint32_t addr, uint8_t total_size) const;
 
   uint8_t calc_burst_len(uint8_t total_size);

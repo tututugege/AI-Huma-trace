@@ -187,7 +187,6 @@ public:
   }
 
   void set_config(const DynamicTableConfig &config) { configure(config); }
-  void set_timing(const GenericTableTimingConfig &timing) { timing_ = timing; }
 
   void reset() {
     pending_valid_ = false;

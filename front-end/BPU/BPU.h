@@ -151,7 +151,6 @@ class Tage {
   struct Idx { uint32_t base; tage_idx_t idx[TN]; tage_tag_t tag[TN]; };
   struct Raw { uint8_t base_cnt; tage_tag_t tag[TN]; uint8_t cnt[TN], useful[TN]; };
   Tage() { std::memset(this, 0, sizeof(*this)); lsfr_ = 8; for (auto &u : use_alt_) u = kUaInit; }
-  static bool provider_weak(int pcpn, uint8_t cnt) { return pcpn >= TN || weak(cnt); }
 
   void predict(pc_t pc, const uint32_t fh[FH_N_MAX][TN], TagePred &o) const {
     const uint32_t w = static_cast<uint32_t>(pc >> SLOT_SHIFT);   // index hashes use the low 32 bits of the word address
@@ -348,15 +347,6 @@ class Btb {
 
  public:
   Btb() { std::memset(this, 0, sizeof(*this)); }
-  // ITT lookup: the longest-history hit (index and tag come from the TAGE index generation, tags/indices carried in the prediction meta)
-  const IttEnt *itt_hit(const tage_idx_t *idx, const tage_tag_t *tag, int *which = nullptr) const {
-    constexpr IttCfg c = icfg();
-    for (int k = c.n - 1; k >= 0; k--) {
-      const IttEnt &e = itt_[k][idx[c.h[k]] & (c.size - 1)];
-      if (e.valid && e.tag == tag[c.h[k]]) { if (which) *which = k; return &e; }
-    }
-    return nullptr;
-  }
 
   // Pipelined access: one read of the BTB set and the ITT entries; select is pure compare.
   struct Raw { Way btb[BTB_WAY_NUM]; IttEnt it[ITT_MAX]; };
@@ -459,11 +449,6 @@ class TypePred {
   static bool select_rvc(pc_t pc, const Raw &r) {
     uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);
     for (auto &e : r.way) if (e.valid && e.tag == tg) return e.rvc;
-    return false;
-  }
-  bool predict_rvc(pc_t pc) const {
-    uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);
-    for (auto &e : t_[b][s]) if (e.valid && e.tag == tg) return e.rvc;
     return false;
   }
 

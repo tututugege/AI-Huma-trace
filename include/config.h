@@ -340,10 +340,6 @@ constexpr int FE_BFAST = CFG_FE_BFAST;
 #ifndef CFG_LSU_PIPE_RP
 #define CFG_LSU_PIPE_RP 4
 #endif
-inline unsigned lsu_pipe_env_mask(const char *name, unsigned dflt) {
-  const char *e = std::getenv(name);
-  return e && e[0] ? (unsigned)std::atoi(e) : dflt;
-}
 constexpr int CSR_NUM = 22;   // F/D: + the fcsr register (fflags / frm / fcsr)
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;

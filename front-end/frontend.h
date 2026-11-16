@@ -1,7 +1,6 @@
 #ifndef FRONTEND_H
 #define FRONTEND_H
 #include "config.h"
-#include "config/frontend_diag_config.h"
 #include "config/frontend_feature_config.h"
 
 // 是否开启2ahead

@@ -237,8 +237,6 @@ public:
   ICache_IO_t io;
   ICache_perf_t perf;
 
-  int valid_line_num() { return -1; }
-
 private:
   /*
    * Cache parameters

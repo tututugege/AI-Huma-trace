@@ -205,27 +205,6 @@ private:
 
   static void reset_outputs(CombOut &out) { out = {}; }
 
-  static bool walk_state_waits_for_response(WalkState state) {
-    return state == WalkState::L1_WAIT_RESP ||
-           state == WalkState::L2_WAIT_RESP;
-  }
-
-  static void compact_core_comb(const State &state_q, const PortIn &port_in,
-                                const SeqIn &seq_in,
-                                const FeedbackIn &feedback, State &state_d) {
-    MemPtwBlock block(nullptr);
-    block.cur_ = state_q;
-    block.nxt_ = state_q;
-    reset_outputs(block.comb_);
-    block.apply_port_inputs(port_in);
-    block.select_walk_owner();
-    block.apply_grant(feedback);
-    block.apply_events(feedback);
-    block.apply_wakeups(feedback);
-    apply_seq_inputs(block.nxt_, seq_in);
-    state_d = block.nxt_;
-  }
-
   void apply_port_inputs(const PortIn &in) {
     for (size_t i = 0; i < kClientCount; i++) {
       const Client client = static_cast<Client>(i);

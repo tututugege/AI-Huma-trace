@@ -13,10 +13,6 @@ struct StoreTag {
 
 namespace {
 
-[[maybe_unused]] static uint32_t mem_mask_for_width(int width) {
-  return width >= 4 ? 0xFFFFFFFFu : ((1u << (width * 8)) - 1);
-}
-
 [[maybe_unused]] static int get_mem_width(int func3) {
   switch (func3 & 0b11) {
   case 0b00:
@@ -107,39 +103,4 @@ template <typename PtrT>
   return (flag ? STQ_SIZE : 0) + idx;
 }
 
-[[maybe_unused]] static bool stq_distance_from_head_to_boundary(uint32_t head,
-                                               bool head_flag,
-                                               uint32_t count,
-                                               StoreTag boundary,
-                                               uint32_t &distance) {
-  constexpr uint32_t kRing = STQ_SIZE * 2;
-  const uint32_t h = stq_tag_value(head, head_flag);
-  const uint32_t b = stq_tag_value(boundary.idx, boundary.flag);
-
-  distance = (b + kRing - h) % kRing;
-
-  // boundary 必须落在当前 active window 或 tail 上：
-  // [head, head + count]
-  return distance <= count;
-}
-
-[[maybe_unused]] static uint32_t make_lsu_load_req_id(uint32_t wait_idx, uint32_t gen) {
-  return (normalize_lsu_req_gen(gen) << LDQ_IDX_WIDTH) |
-         (wait_idx & kLsuReqIdIdxMask);
-}
-
-[[maybe_unused]] static uint32_t lsu_req_id_gen(uint32_t req_id) {
-  return (req_id >> LDQ_IDX_WIDTH) & kLsuReqIdGenMask;
-}
-
-[[maybe_unused]] static uint32_t lsu_req_id_wait_idx(uint32_t req_id) {
-  return req_id & kLsuReqIdIdxMask;
-}
-
-[[maybe_unused]] static bool lsu_is_timer_addr(uint32_t paddr) {
-  return paddr == TIMER_LOW_ADDR ||
-         paddr == TIMER_HIGH_ADDR ||
-         paddr == TIMER_CMP_LOW_ADDR ||
-         paddr == TIMER_CMP_HIGH_ADDR;
-}
 } // namespace

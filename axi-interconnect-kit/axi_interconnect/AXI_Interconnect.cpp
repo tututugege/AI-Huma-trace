@@ -477,11 +477,6 @@ DownstreamPort AXI_Interconnect::classify_downstream_port(
   return DownstreamPort::MMIO;
 }
 
-bool AXI_Interconnect::request_uses_ddr_port(uint32_t addr,
-                                             uint8_t total_size) const {
-  return classify_downstream_port(addr, total_size) == DownstreamPort::DDR;
-}
-
 bool AXI_Interconnect::request_uses_mmio_port(uint32_t addr,
                                               uint8_t total_size) const {
   return classify_downstream_port(addr, total_size) == DownstreamPort::MMIO;

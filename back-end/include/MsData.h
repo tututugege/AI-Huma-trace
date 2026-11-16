@@ -53,9 +53,6 @@ inline int32_t msext(uint32_t v, int n) { return (int32_t)(v << (32 - n)) >> (32
 inline X xs(int32_t v) { return (X)(SX)v; }                  // sign extension of a 32-bit value to XLEN
 inline X mimmI(uint32_t i) { return xs(msext(mbits(i, 31, 20), 12)); }
 inline X mimmS(uint32_t i) { return xs(msext((mbits(i, 31, 25) << 5) | mbits(i, 11, 7), 12)); }
-inline X mimmB(uint32_t i) {
-  return xs(msext((mbits(i, 31, 31) << 12) | (mbits(i, 7, 7) << 11) | (mbits(i, 30, 25) << 5) | (mbits(i, 11, 8) << 1), 13));
-}
 inline X rolx(X x, X s) { s &= XL - 1; return s ? (x << s) | (x >> (XL - s)) : x; }
 inline X rorx(X x, X s) { s &= XL - 1; return s ? (x >> s) | (x << (XL - s)) : x; }
 inline X clzx(X a) { return a == 0 ? XL : (XL == 32 ? __builtin_clz((uint32_t)a) : __builtin_clzll((uint64_t)a)); }

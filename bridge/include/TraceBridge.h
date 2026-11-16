@@ -59,7 +59,6 @@ public:
   void commit(uint64_t uid);        // must be the oldest entry
   // Instructions can also be fetched from the boot ROM region (word-backed MMIO in the core).
   void set_boot_region(uint32_t base, uint32_t bytes) { boot_base_ = base; boot_bytes_ = bytes; }
-  size_t in_flight() const { return chain_.size(); }
   // A value the core cannot know (MMIO/timer read, mip/time CSR read) arrives from the model:
   // rewind everything younger than uid, write the destination register, replay the younger
   // entries (same uid/pc/inst) so their facts follow the patched value.
@@ -71,7 +70,6 @@ public:
   // Interrupt taken at a commit boundary (before the oldest uncommitted instruction): drop every
   // in-flight entry, then the core takes the interrupt with the cause the model chose.
   bool take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot);
-  uint64_t oldest_uid() const;
   // Entries older than `uid` that are still in flight were killed without a rewind (wrong path): undo their effects
   // (registers, memory, pc) and re-execute the entries from `uid` on on top of the restored state.
   size_t kill_older_than(uint64_t uid);  // returns the number of killed entries

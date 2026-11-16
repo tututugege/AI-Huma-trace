@@ -1,6 +1,5 @@
 #include "Wires.h"
 #include "Csr.h"
-#include "DebugPtwTrace.h"
 #include "config.h"
 #include "ref.h"
 #include <cstdio>
@@ -221,8 +220,6 @@ void Csr::comb_csr_write() {
     const xlen_t old_satp = CSR_RegFile[csr_satp];
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
     if (!((csr_wdata >> 60) != 0 && (csr_wdata >> 60) != 8)) CSR_RegFile_1[csr_satp] = csr_wdata;
-    if (old_satp != csr_wdata)
-      debug_ptw_trace::record_satp_write(static_cast<uint32_t>(old_satp), static_cast<uint32_t>(csr_wdata), static_cast<uint8_t>(privilege));
   } else {
     CSR_RegFile_1[cvt_number_to_csr(csr_idx)] = csr_wdata;
   }

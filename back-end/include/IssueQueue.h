@@ -184,14 +184,6 @@ public:
     out.free_slots = size - count_1;
   }
 
-  void comb_wakeup() {
-    uint32_t pregs[WAKE_CH_ALL];
-    int n = 0;
-    for (int i = 0; i < WAKE_CH_ALL; i++)
-      if (in.wake_valid[i]) pregs[n++] = in.wake_pregs[i];
-    wakeup(pregs, n);
-  }
-
   // The registers woken this cycle (the valid channels of the wake-up bus, in channel order).
   void wakeup(const uint32_t *pregs, int n) {
     for (int i = 0; i < n; i++) {

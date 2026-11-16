@@ -37,14 +37,6 @@ struct AxiLlcTableRuntime {
     return cfg;
   }
 
-  static DynamicTableReadReq make_read_req(
-      const axi_interconnect::AXI_LLC_TableReq_t &req) {
-    DynamicTableReadReq read_req;
-    read_req.enable = req.enable && !req.write;
-    read_req.address = req.index;
-    return read_req;
-  }
-
   static DynamicTableWriteReq make_write_req(
       const axi_interconnect::AXI_LLC_TableReq_t &req, uint32_t row_bytes,
       uint32_t unit_bytes) {

@@ -19,14 +19,6 @@ inline uint32_t narrow_pc(xlen_t v, const char *what = "pc") {
   }
   return static_cast<uint32_t>(v);
 }
-// upper bits of a CSR kept when the model's 32-bit copy is written back (mstatus.UXL/SXL ...)
-inline xlen_t merge_low32(xlen_t old_value, uint32_t low) {
-  return (old_value & ~xlen_t(0xFFFFFFFFu)) | low;
-}
-// mcause / scause as the timing model holds it (32 bit, interrupt flag in bit 31) -> the function model's register format
-inline xlen_t cause_to_xlen(uint32_t cause) {
-  return (cause & 0x80000000u) ? ((xlen_t(1) << (XLEN - 1)) | (cause & 0x7FFFFFFFu)) : xlen_t(cause);
-}
 // translation enabled in satp: Sv32 (bit 31) on rv32, Sv39 (MODE = 8) on rv64
 inline bool satp_on(xlen_t satp) {
   return (satp >> 60) == 8;

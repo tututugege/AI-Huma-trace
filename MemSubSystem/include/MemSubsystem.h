@@ -86,9 +86,6 @@ public:
   void llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out,
                const axi_interconnect::AXI_LLCPerfCounters_t &perf);
 
-  RealDcache  &get_dcache()  { return dcache_; }
-  MSHR        &get_mshr()    { return mshr_; }
-  WriteBuffer &get_wb()      { return wb_; }
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }
   const PeripheralAxi &get_peripheral_axi() const { return peripheral_axi_; }
 

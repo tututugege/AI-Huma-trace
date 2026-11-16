@@ -382,11 +382,9 @@ public:
   void reset();
   void comb();
   void seq();
-  bool can_accept_read_now(uint8_t master, bool bypass, uint32_t addr) const;
   const AXI_LLCPerfCounters_t &perf_counters() const { return io.regs.perf; }
   void debug_print() const;
 
-  static uint32_t line_words(const AXI_LLCConfig &config);
   static uint32_t line_addr(const AXI_LLCConfig &config, uint32_t addr);
   static uint32_t set_index(const AXI_LLCConfig &config, uint32_t addr);
   static uint32_t tag_of(const AXI_LLCConfig &config, uint32_t addr);
@@ -462,8 +460,6 @@ private:
                            const AXI_LLCMetaEntry_t &hit_meta);
   bool complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, uint32_t line, int first_invalid_way);
   bool complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int first_invalid_way);
-  AXI_LLCMissEntry_t &alloc_read_mshr(int slot, uint8_t victim_way, uint32_t set, uint32_t tag,
-                                      const AXI_LLCMetaEntry_t &victim_meta, bool victim_valid);
 
   // --- per-cycle drivers ---
   void drive_read_responses();
