@@ -1252,6 +1252,78 @@ void RealLsu::comb_check() {
     if (!t.iss) { if (t.wd) t.wd = 0; continue; }
     if (++t.wd == 63 && !nowd) { t.wd = 0; t.iss = 0; t.rwait = 0; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } }
   }
+  if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
+    std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
+    for (int p = 0; p < LD; p++)
+      if (wires->lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)wires->lsu2exe.wb_req[p].uop.rob_idx, (int)wires->lsu2exe.wb_req[p].uop.dest_preg,
+                                                       (int)wires->lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)wires->lsu2exe.wb_req[p].uop.br_mask),
+        std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)wires->lsu2exe.wb_req[p].uop.result, (unsigned)wires->lsu2exe.wb_req[p].uop.diag_val,
+                     (int)wires->lsu2exe.wb_req[p].uop.page_fault_load, (int)wires->lsu2exe.wb_req[p].uop.page_fault_store);
+    std::fprintf(stderr, " sta:");
+    for (int p = 0; p < STA; p++)
+      if (wires->lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)wires->lsu2exe.sta_wb_req[p].uop.rob_idx, (unsigned long long)wires->lsu2exe.sta_wb_req[p].uop.br_mask),
+        std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)wires->lsu2exe.sta_wb_req[p].uop.result, (unsigned)wires->lsu2exe.sta_wb_req[p].uop.diag_val,
+                     (int)wires->lsu2exe.sta_wb_req[p].uop.page_fault_store);
+    std::fprintf(stderr, " dl:");
+    for (int p = 0; p < LD; p++) {
+      const auto &q = wires->out.lsu2dcache.req_ports.load_ports[p];
+      if (q.valid) std::fprintf(stderr, " %d=%x/%x", p, (unsigned)q.addr, (unsigned)(q.req_id & 0x7fffffffu));
+    }
+    std::fprintf(stderr, " ds:");
+    for (int p = 0; p < STA; p++) {
+      const auto &q = wires->out.lsu2dcache.req_ports.store_ports[p];
+      if (q.valid) std::fprintf(stderr, " %d=%x/%d", p, (unsigned)q.addr, (int)q.req_id);
+    }
+    std::fprintf(stderr, " mmu:");
+    for (int p = 0; p < LD; p++)
+      if (wires->lsu2mmu_io.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)wires->lsu2mmu_io.ldq_req[p].entry_idx);
+    for (int p = 0; p < STA; p++)
+      if (wires->lsu2mmu_io.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)wires->lsu2mmu_io.stq_req[p].entry_idx);
+    std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)wires->lsu2dis.stq_free, (int)wires->lsu2dis.ldq_free, (int)wires->lsu2dis.stq_tail,
+                 (int)wires->lsu2dis.stq_tail_flag, (int)wires->lsu2rob.committed_store_pending);
+    {
+      unsigned dsa = 0, dla = 0, cm = 0;
+      for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) dsa |= (unsigned)wires->dis2lsu.alloc_req[i] << i;
+      for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) dla |= (unsigned)wires->dis2lsu.ldq_alloc_req[i] << i;
+      for (int i = 0; i < COMMIT_WIDTH; i++) cm |= (unsigned)wires->rob_commit.commit_entry[i].valid << i;
+      std::fprintf(stderr, " b: mp=%d fl=%d cl=%llx dsa=%x dla=%x cm=%x", (int)wires->dec_bcast.mispred, (int)wires->rob_bcast.flush,
+                   (unsigned long long)wires->dec_bcast.clear_mask, dsa, dla, cm);
+    }
+    std::fprintf(stderr, " in:");
+    for (int p = 0; p < LD; p++)
+      if (wires->mmu2lsu_io.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)wires->mmu2lsu_io.ldq_resp[p].result, (unsigned)wires->mmu2lsu_io.ldq_resp[p].paddr);
+    for (int p = 0; p < STA; p++)
+      if (wires->mmu2lsu_io.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)wires->mmu2lsu_io.stq_resp[p].result, (unsigned)wires->mmu2lsu_io.stq_resp[p].paddr);
+    for (int p = 0; p < LD; p++) {
+      const auto &r = wires->in.dcache2lsu.resp_ports.load_resps[p];
+      if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);
+    }
+    for (int p = 0; p < STA; p++) {
+      const auto &r = wires->in.dcache2lsu.resp_ports.store_resps[p];
+      if (r.valid) std::fprintf(stderr, " sr%d=%d/%d", p, (int)r.req_id, (int)r.replay);
+    }
+    if (wires->in.dcache2lsu.mshr_fill) std::fprintf(stderr, " fill=%x", (unsigned)(wires->in.dcache2lsu.mshr_fill_addr >> 6));
+    for (int p = 0; p < LD; p++) if (wires->in.dcache2lsu.load_retry_busy[p]) std::fprintf(stderr, " rb%d", p);
+    for (int p = 0; p < STA; p++) if (wires->in.dcache2lsu.store_retry_busy[p]) std::fprintf(stderr, " sb%d", p);
+    std::fprintf(stderr, " ai:");
+    for (int p = 0; p < MAX_LDQ_DISPATCH_WIDTH; p++)
+      if (wires->lsu2dis.ldq_alloc_valid[p]) std::fprintf(stderr, " %d", (int)wires->lsu2dis.ldq_alloc_idx[p]);
+    std::fprintf(stderr, " x:");
+    for (int p = 0; p < LSU_SDU_COUNT; p++)
+      if (wires->exe2lsu.sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)wires->exe2lsu.sdu_req[p].uop.stq_idx);
+    for (int p = 0; p < LSU_AGU_COUNT; p++)
+      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_STA)
+        std::fprintf(stderr, " A%d=%d", p - LD, (int)wires->exe2lsu.agu_req[p].uop.stq_idx);
+    for (int p = 0; p < LSU_AGU_COUNT; p++)
+      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_LOAD)
+        std::fprintf(stderr, " G%d=%d", p, (int)wires->exe2lsu.agu_req[p].uop.ldq_idx);
+    if (const char *si = std::getenv("LSU_PIPE_STQ")) {
+      const PStq &q = pcur.stq[std::atoi(si)];  // registers at the start of the cycle (RTL prints the registers)
+      std::fprintf(stderr, " Q[%s]: va=%d pa=%d dv=%d pf=%d wbp=%d wbd=%d cmt=%d iss=%d done=%d", si, (int)q.va_v, (int)q.pa_v, (int)q.data_v, (int)q.pf,
+                   (int)q.wbp, (int)q.wbd, (int)q.cmt, (int)q.iss, (int)q.done);
+    }
+    std::fprintf(stderr, "\n");
+  }
   // wake-up pass
   uint32_t full_wakes = 0;
   for (int i = 0; i < LDQ_SIZE; i++) {
