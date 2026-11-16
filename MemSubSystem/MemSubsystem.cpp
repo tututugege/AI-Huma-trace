@@ -397,8 +397,9 @@ void MemSubsystem::init() {
   mshr_.init();
   wb_.init();
   dcache_.init();
-  peripheral_model_.in.commit_store = commit_store;
-  peripheral_model_.out.csr_interrupt_inject = csr_interrupt_inject;
+  peripheral_axi_.in.commit_store = commit_store;
+  peripheral_axi_.out.csr_interrupt_inject = csr_interrupt_inject;
+  peripheral_model_.csr_interrupt_inject = peripheral_axi_.out.csr_interrupt_inject;
   peripheral_model_.reset_devices();
   peripheral_axi_.in.req = peripheral_req;
   peripheral_axi_.out.resp = peripheral_resp;

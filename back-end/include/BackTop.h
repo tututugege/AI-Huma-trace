@@ -59,7 +59,6 @@ public:
   void init();
   void pmu_sample();     // PMU (EXP-013): one cycle of the event bus, after the comb phases of the cycle
   void seq();
-  void set_lsu_ptw_walk_port(PtwWalkPort *port);
 
   BackTop(SimContext *ctx) {
     this->ctx = ctx;

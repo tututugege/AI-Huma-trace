@@ -36,12 +36,12 @@ void ICacheTop::forward_pending(uint32_t index, TagP &tag, ValidP &valid) const 
   }
 }
 
-void ICacheTop::clear_outputs(ICacheOut *out) {
-  out->icache_read_complete = false;
-  out->fetch_pc = 0;
-  for (int i = 0; i < FETCH_WIDTH; ++i) { out->fetch_group[i] = INST_NOP; out->page_fault_inst[i] = false; out->inst_valid[i] = false; }
-  out->perf_req_fire = out->perf_miss_event = out->perf_miss_busy = false;
-  out->perf_itlb_hit = out->perf_itlb_miss = out->perf_itlb_fault = false;
+void ICacheTop::clear_outputs(ICacheOut *co) {
+  co->icache_read_complete = false;
+  co->fetch_pc = 0;
+  for (int i = 0; i < FETCH_WIDTH; ++i) { co->fetch_group[i] = INST_NOP; co->page_fault_inst[i] = false; co->inst_valid[i] = false; }
+  co->perf_req_fire = co->perf_miss_event = co->perf_miss_busy = false;
+  co->perf_itlb_hit = co->perf_itlb_miss = co->perf_itlb_fault = false;
 }
 
 // The front end may send a request: the module is idle and ready, no recovery (fence.i / sfence / invalidate) in progress.
@@ -54,43 +54,43 @@ bool ICacheTop::read_ready(bool hold_for_recovery, bool reset) const {
 }
 
 // Fetch-group output of the module's response: the words come from the functional memory (the I-cache keeps no data array).
-void ICacheTop::drive_fetch_group(ICacheOut *out) {
+void ICacheTop::drive_fetch_group(ICacheOut *co) {
   const auto &o = mod_.io.out;
   if (!o.ifu_resp_valid) return;
-  out->icache_read_complete = true;
-  out->fetch_pc = o.ifu_resp_pc;
-  out->fetch_paddr = o.ifu_resp_paddr;
-  out->fetch_single_word = o.ifu_resp_single_word;
+  co->icache_read_complete = true;
+  co->fetch_pc = o.ifu_resp_pc;
+  co->fetch_paddr = o.ifu_resp_paddr;
+  co->fetch_single_word = o.ifu_resp_single_word;
   const bool pf = o.ifu_page_fault;
   if (o.ifu_resp_single_word) {   // an uncached single word
-    out->fetch_group[0] = pf ? INST_NOP : tbhook::mem_read(o.ifu_resp_paddr);
-    out->page_fault_inst[0] = pf;
-    out->inst_valid[0] = true;
+    co->fetch_group[0] = pf ? INST_NOP : tbhook::mem_read(o.ifu_resp_paddr);
+    co->page_fault_inst[0] = pf;
+    co->inst_valid[0] = true;
     if (kRvc) {   // one 4-byte word = two 2-byte slots; the window of the second slot is the word's upper half plus the next word
-      out->fetch_group[1] = pf ? INST_NOP : tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES);
-      out->page_fault_inst[1] = pf;
-      out->inst_valid[1] = true;
+      co->fetch_group[1] = pf ? INST_NOP : tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES);
+      co->page_fault_inst[1] = pf;
+      co->inst_valid[1] = true;
     }
     return;
   }
   const int base = static_cast<int>((o.ifu_resp_pc & (ICACHE_LINE_SIZE - 1u)) / SLOT_BYTES);
   for (int i = 0; i < FETCH_WIDTH && base + i < kLineSlots; ++i) {
-    out->fetch_group[i] = pf ? INST_NOP : tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES * i);
-    out->page_fault_inst[i] = pf;
-    out->inst_valid[i] = true;
+    co->fetch_group[i] = pf ? INST_NOP : tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES * i);
+    co->page_fault_inst[i] = pf;
+    co->inst_valid[i] = true;
   }
 }
 
-void ICacheTop::drive_perf(ICacheOut *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret) {
+void ICacheTop::drive_perf(ICacheOut *co, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret) {
   const auto &h = mod_;
-  out->perf_req_fire = req_valid && out->icache_read_ready;
-  out->perf_miss_event = h.perf.miss_issue_valid;
+  co->perf_req_fire = req_valid && co->icache_read_ready;
+  co->perf_miss_event = h.perf.miss_issue_valid;
   const auto st = static_cast<icache_module_n::ICacheState>(h.io.regs.state);
-  out->perf_miss_busy = st == icache_module_n::SWAP_IN || st == icache_module_n::WAIT_DCACHE_AFTER_MEM || st == icache_module_n::DRAIN;
+  co->perf_miss_busy = st == icache_module_n::SWAP_IN || st == icache_module_n::WAIT_DCACHE_AFTER_MEM || st == icache_module_n::DRAIN;
   if (!itlb_invoked) return;
-  if (itlb_ret == TlbMmu::Result::OK) out->perf_itlb_hit = true;
-  else if (itlb_ret == TlbMmu::Result::FAULT) out->perf_itlb_fault = true;
-  else out->perf_itlb_miss = true;
+  if (itlb_ret == TlbMmu::Result::OK) co->perf_itlb_hit = true;
+  else if (itlb_ret == TlbMmu::Result::FAULT) co->perf_itlb_fault = true;
+  else co->perf_itlb_miss = true;
 }
 
 void ICacheTop::fill_lookup_meta() {
@@ -112,40 +112,37 @@ void ICacheTop::fill_lookup_data() {
 }
 
 // Combinational part of the cycle (module + ITLB + ports).
-void ICacheTop::comb(ICacheIn *in, ICacheOut *out) {
-  clear_outputs(out);
-  out->fetch_paddr = 0;
-  out->fetch_single_word = false;
-  auto *rp = bind_.read;
-  if (in->reset) {   // (the module itself is reset at the edge: icache_seq)
-    if (rp) { rp->req.valid = false; rp->req.addr = 0; rp->req.total_size = 0; rp->req.id = 0; rp->req.bypass = false; rp->resp.ready = false; }
-    if (bind_.probe_req) { bind_.probe_req->req_valid = false; bind_.probe_req->req_addr = 0; }
+void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
+  clear_outputs(co);
+  co->fetch_paddr = 0;
+  co->fetch_single_word = false;
+  if (ci->reset) {   // (the module itself is reset at the edge: icache_seq)
+    out.axi->req.valid = false; out.axi->req.addr = 0; out.axi->req.total_size = 0; out.axi->req.id = 0; out.axi->req.bypass = false; out.axi->resp.ready = false;
+    out.probe_req->req_valid = false; out.probe_req->req_addr = 0;
     if (TlbMmu *m = bind_.mmu()) m->flush();
-    out->icache_read_ready = true;
+    co->icache_read_ready = true;
     return;
   }
   // (a satp write does not flush the ITLB: the architectural shootdown is SFENCE.VMA -> itlb_flush)
-  const bool hold_for_recovery = in->itlb_flush || in->fence_i || in->invalidate_req;
-  const bool req_valid = in->icache_read_valid;
+  const bool hold_for_recovery = ci->itlb_flush || ci->fence_i || ci->invalidate_req;
+  const bool req_valid = ci->icache_read_valid;
 
   auto &hin = mod_.io.in;
-  hin.refetch = in->refetch || in->invalidate_req || in->fence_i;
-  hin.flush = in->fence_i;
-  hin.pc = in->fetch_address;
+  hin.refetch = ci->refetch || ci->invalidate_req || ci->fence_i;
+  hin.flush = ci->fence_i;
+  hin.pc = ci->fetch_address;
   hin.ifu_req_valid = req_valid;
   hin.ppn = 0;
   hin.ppn_valid = false;
   hin.page_fault = false;
-  const auto *rq = bind_.read_q;
-  hin.mem_req_ready = rq ? rq->req.ready : false;
-  hin.mem_req_accepted = rq ? rq->req.accepted : false;
-  hin.mem_req_accepted_id = rq ? static_cast<uint8_t>(rq->req.accepted_id & 0xF) : 0;
-  hin.mem_resp_valid = rq ? rq->resp.valid : false;
-  hin.mem_resp_id = rq ? static_cast<uint8_t>(rq->resp.id & 0xF) : 0;
-  const auto *pr = bind_.probe_resp;
-  hin.dcache_resp_valid = pr ? pr->resp_valid : false;
-  hin.dcache_resp_retry = pr ? pr->resp_retry : false;
-  hin.dcache_resp_miss = pr ? pr->resp_miss : true;
+  hin.mem_req_ready = in.axi_q->req.ready;
+  hin.mem_req_accepted = in.axi_q->req.accepted;
+  hin.mem_req_accepted_id = static_cast<uint8_t>(in.axi_q->req.accepted_id & 0xF);
+  hin.mem_resp_valid = in.axi_q->resp.valid;
+  hin.mem_resp_id = static_cast<uint8_t>(in.axi_q->resp.id & 0xF);
+  hin.dcache_resp_valid = in.probe_resp->resp_valid;
+  hin.dcache_resp_retry = in.probe_resp->resp_retry;
+  hin.dcache_resp_miss = in.probe_resp->resp_miss;
 
   fill_lookup_meta();
   mod_.comb_lookup_meta();
@@ -154,13 +151,13 @@ void ICacheTop::comb(ICacheIn *in, ICacheOut *out) {
   bool itlb_invoked = false;
   TlbMmu::Result itlb_ret = TlbMmu::Result::OK;
   if (TlbMmu *m = bind_.mmu()) {
-    if (in->itlb_flush) m->flush();
-    if (in->refetch) m->cancel_pending_walk();
-    if (!in->refetch && mod_.io.out.mmu_req_valid) {
+    if (ci->itlb_flush) m->flush();
+    if (ci->refetch) m->cancel_pending_walk();
+    if (!ci->refetch && mod_.io.out.mmu_req_valid) {
       if (edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
       itlb_invoked = true;
       uint32_t pa = 0;
-      itlb_ret = m->translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, in->csr_status);
+      itlb_ret = m->translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, ci->csr_status);
       if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = pa >> 12; }
       else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
     }
@@ -172,34 +169,33 @@ void ICacheTop::comb(ICacheIn *in, ICacheOut *out) {
   mod_.comb_lookup_data();
 
   const auto &ho = mod_.io.out;
-  if (rp) {
-    rp->req.valid = ho.mem_req_valid;
-    rp->req.addr = ho.mem_req_addr;
-    rp->req.total_size = static_cast<uint8_t>(ho.mem_req_total_size);
-    rp->req.id = static_cast<uint8_t>(ho.mem_req_id & 0xF);
-    rp->req.bypass = ho.mem_req_bypass;
-    rp->resp.ready = ho.mem_resp_ready;
-  }
-  if (bind_.probe_req) { bind_.probe_req->req_valid = ho.dcache_req_valid; bind_.probe_req->req_addr = ho.dcache_req_addr; }
+  out.axi->req.valid = ho.mem_req_valid;
+  out.axi->req.addr = ho.mem_req_addr;
+  out.axi->req.total_size = static_cast<uint8_t>(ho.mem_req_total_size);
+  out.axi->req.id = static_cast<uint8_t>(ho.mem_req_id & 0xF);
+  out.axi->req.bypass = ho.mem_req_bypass;
+  out.axi->resp.ready = ho.mem_resp_ready;
+  out.probe_req->req_valid = ho.dcache_req_valid;
+  out.probe_req->req_addr = ho.dcache_req_addr;
 
-  out->icache_read_ready = read_ready(hold_for_recovery, false);
-  drive_fetch_group(out);
-  drive_perf(out, req_valid, itlb_invoked, itlb_ret);
+  co->icache_read_ready = read_ready(hold_for_recovery, false);
+  drive_fetch_group(co);
+  drive_perf(co, req_valid, itlb_invoked, itlb_ret);
   if (ho.ifu_resp_valid && ho.miss) {
     fatal("[icache_top] ERROR: miss is true when ifu_resp is valid\n");
   }
 }
 
 // One step: the array read (the pending table writes of this cycle forwarded), the module comb, the step's table write.
-void ICacheTop::step(ICacheIn *in, ICacheOut *out) {
-  bind_.bind(ports_set_);
+void ICacheTop::step(ICacheIn *ci, ICacheOut *co) {
+  bind_.bind();
   const auto &r = mod_.io.regs;
-  const pc_t lookup_pc = r.req_valid_r ? r.req_pc_r : r.lookup_pending_r ? r.lookup_pc_r : in->fetch_address;
+  const pc_t lookup_pc = r.req_valid_r ? r.req_pc_r : r.lookup_pending_r ? r.lookup_pc_r : ci->fetch_address;
   const uint32_t index = (lookup_pc >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
   TagTable::ReadReq tag_read{};
   ValidTable::ReadReq valid_read{};
-  tag_read.enable = !in->reset && !in->refetch &&
-                    (ICACHE_LOOKUP_LATENCY == 0 ? (in->icache_read_valid || r.req_valid_r || r.lookup_pending_r) : r.lookup_pending_r);
+  tag_read.enable = !ci->reset && !ci->refetch &&
+                    (ICACHE_LOOKUP_LATENCY == 0 ? (ci->icache_read_valid || r.req_valid_r || r.lookup_pending_r) : r.lookup_pending_r);
   valid_read.enable = tag_read.enable;
   tag_read.address = valid_read.address = index;
   TagTable::ReadResp tag_resp{};
@@ -213,22 +209,22 @@ void ICacheTop::step(ICacheIn *in, ICacheOut *out) {
   lookup_.index = index;
   for (uint32_t w = 0; w < ICACHE_WAY_NUM; ++w) { lookup_.tag[w] = tag_resp.payload.chunks[w][0]; lookup_.valid[w] = valid_resp.payload.chunks[w][0]; }
 
-  comb(in, out);
+  comb(ci, co);
   edge_.tw[edge_.n++] = mod_.io.table_write;   // (a reset cycle does not run the module: its last table write again)
 }
 
 // The fetch step of the cycle (R1 = N(R0)): outputs, memory-side requests, the ITLB lookup. Nothing is latched here.
-void ICacheTop::comb_calc(ICacheIn *in, ICacheOut *out) {
+void ICacheTop::comb_calc(ICacheIn *ci, ICacheOut *co) {
   edge_ = {};
-  edge_.reset = in->reset;
-  step(in, out);
+  edge_.reset = ci->reset;
+  step(ci, co);
 }
 
 // A predecode flush invalidates the I-cache's request in flight: R2 = K(R1), the kill step evaluated on this cycle's
 // fetch-step result (the module's comb reads io.regs, so R1 is presented there for the evaluation and the registers are
 // restored after it; they change only at the edge). Its outputs replace this cycle's; its memory-side requests are the
 // cycle's last (RTL: the memory-side outputs are those of the last step).
-void ICacheTop::invalidate_step(CsrStatusIO *csr_status, ICacheOut *out) {
+void ICacheTop::invalidate_step(CsrStatusIO *csr_status, ICacheOut *co) {
   if (edge_.reset || edge_.n != 1) { fatal("[icache_top] ERROR: invalidate step without a fetch step\n"); }
   ICacheIn inv{};
   inv.invalidate_req = true;
@@ -236,7 +232,7 @@ void ICacheTop::invalidate_step(CsrStatusIO *csr_status, ICacheOut *out) {
   const icache_module_n::ICacheRegs q = mod_.io.regs;
   mod_.io.regs = mod_.io.reg_write;   // R1
   edge_.kill_step = true;
-  step(&inv, out);
+  step(&inv, co);
   edge_.kill_step = false;
   mod_.io.regs = q;
 }

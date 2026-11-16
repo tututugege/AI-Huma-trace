@@ -40,7 +40,7 @@ struct BackIn;
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs  in: -  out: out.lsu2dis out.lsu2rob out.lsu_awake
 //   CONTRACT comb_writeback  in: in.dec_bcast in.rob_bcast in.rob_commit in.top_in.dcache2lsu  out: out.lsu2exe out.lsu_awake
-//   CONTRACT comb_translate  in: in.csr_status in.dec_bcast in.exe2lsu in.rob_bcast  out: -
+//   CONTRACT comb_translate  in: in.csr_status in.dec_bcast in.exe2lsu in.rob_bcast out.dtlb_walk.comb_out  out: out.dtlb_walk.comb_input out.dtlb_walk.seq_input
 //   CONTRACT comb_requests  in: in.dec_bcast in.dis2lsu in.exe2lsu in.rob_bcast in.rob_commit in.top_in.dcache2lsu out.lsu2dcache  out: out.lsu2dcache out.peripheral_req
 //   CONTRACT comb_commit_store  in: in.rob_bcast in.rob_commit  out: out.commit_store
 class RealLsu {
@@ -67,6 +67,7 @@ public:
     LsuDcacheIO *lsu2dcache = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     CommitStoreIO *commit_store = nullptr;       // in BackTop (the back end's interface), bound by BackTop::init
+    PtwWalkPort *dtlb_walk = nullptr;   // the DTLB's page-table walk port (its TLB, dtlb, uses it)
   } out;
   PeripheralRespIO mmio_resp_d{};   // the MMIO response (the memory subsystem drives it after the LSU's phases); q: mmio_resp_q_
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.

@@ -112,14 +112,6 @@ void BackTop::init() {
   }
 }
 
-void BackTop::set_lsu_ptw_walk_port(PtwWalkPort *port) {
-  if (dtlb_mmu != nullptr) {
-    dtlb_mmu->set_ptw_walk_port(port);
-  }
-}
-
-
-
 // ---------------------------------------------------------------------------------------------
 // One back-end cycle is evaluated in dependency order: every stage reads only signals that an
 // earlier stage (or registered state) already produced. The call order in BackTop::comb() is that order.

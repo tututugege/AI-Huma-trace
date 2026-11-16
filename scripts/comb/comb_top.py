@@ -25,9 +25,7 @@ SUBOBJ = ('mem_subsystem.wb_', 'mem_subsystem.mshr_', 'mem_subsystem.mem_route_b
           'axi.interconnect', 'axi.ddr', 'axi.mmio') + tuple(m for m, _ in modules.MODULES)
 SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
-INLINE = {'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
-          'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
-          'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
+INLINE = {}   # (every SimCpu-level call is a module phase)
 BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')]}   # pointer members of an inlined class -> the object bound
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 TOP_DETAIL = []   # filled by top_domain: per row of cycle() (label, R, W, group, tag, inner); inner: for a sub-object call
@@ -126,35 +124,11 @@ def top_domain(root, ASSIGN):
 
     S = {}
     S['front.read_core_q'] = (set(), set())
-    # the I-cache ports (icache_top.cpp, ICacheTop's methods over bind_)
-    ict = src.t[os.path.join(root, 'front-end', 'icache', 'icache_top.cpp')]
-    ic = ''
-    for fn in ('comb', 'step', 'comb_calc', 'invalidate_step', 'clear_outputs', 'read_ready'):
-        mm = re.search(r'\n[\w:<>&*\s]*?\b' + fn + r'\s*\([^)]*\)\s*(?:const\s*)?\{', ict)
-        if mm: ic += Src.block(ict, mm.end() - 1)
-        else: notes.add(f'icache_top.cpp: no {fn}()')
-    fb_ = {m.group(1): norm_path(m.group(2)) for m in re.finditer(r'\bfront\.(icache_mem_\w+)\s*=\s*&\s*([\w.\[\]:>-]+)\s*;', init)}
-    fb_ = {k: re.sub(r'\[\w+::(MASTER_\w+)\]', r'[\1]', v) for k, v in fb_.items()}
-    ic = re.sub(r'(?:const\s+)?auto\s*\*\s*\w+\s*=\s*bind_\.\w+\s*;', '', ic)   # pointer aliases: no access
-    ic = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|bind_\.\w+)\s*\)', 'if (1)', ic)          # null tests of the port pointers
-    ic = re.sub(r'\b(?:rp|rq|pr|bind_\.\w+)\s*\?', '1 ?', ic)
-    ic = re.sub(r'\bbind_\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), ic)
-    ic = re.sub(r'\bbind_\.read\b|\brp\b', 'axi.interconnect.read_ports[MASTER_ICACHE]', ic)
-    ic = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), ic)
-    ic = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), ic)
-    ir, iw = scan_paths(ic, ASSIGN, src, notes, 'icache')
     # the modules' phases: their ports as SimCpu paths
     mbind = modules.bindings()
-    for name, mod, mcls, _, _ in modules.phases():
+    for name, mod, mcls, *_ in modules.phases():
         r, w = modules.scan(mod, mcls, name[len(mod) + 1:], mbind)
         S[name] = ({norm_path(modules.path_of(mod, k, mbind)) for k in r}, {norm_path(modules.path_of(mod, k, mbind)) for k in w})
-    # a TLB's walk port: its requests / flushes (comb_input / seq_input, read by the PTW), the PTW's response
-    # (comb_out_: set at the clock edge, a register)
-    S['front.core.icache.comb_fetch'][0].update(ir | {'back.csr_status'})
-    S['front.core.icache.comb_fetch'][1].update(iw | {'mem_subsystem.itlb_walk_port_inst.comb_input', 'mem_subsystem.itlb_walk_port_inst.seq_input'})
-    S['back.lsu.comb_translate'][1].update({'mem_subsystem.dtlb_walk_port_inst.comb_input', 'mem_subsystem.dtlb_walk_port_inst.seq_input'})
-    S['mem_subsystem.peripheral_model_.comb_commit_store'][1].add('mem_subsystem.peripheral_model_')   # its device state
-    S['mem_subsystem.peripheral_axi_.comb'][0].add('mem_subsystem.peripheral_model_')                  # (MMIO loads)
 
     def class_summary(obj, cls, meth, members):
         b = closure(src, cls, meth)

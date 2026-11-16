@@ -28,20 +28,20 @@ public:
   writes. A read of its own owned output field is internal and is not listed.
 * A module's phases run in the order its header lists them.
 
-## The modules (26)
+## The modules (26: back end 9, front end 8, memory 6, SimCpu 3)
 
 | top | modules |
 | --- | --- |
 | back end (BackTop::init) | pre, rename, idu, lsu, csr, rob, dis, exu, isu |
 | front end (FrontCore) | ctrl, bpu_pipe, fa_port, ptab_port, inst_port, f2b_port, icache, checker |
-| memory (MemSubsystem::init) | wb_, mshr_, dcache_, mem_route_block, ptw_block, peripheral_axi_, peripheral_model_ |
-| SimCpu::init | b2f (Back2Front: the register and the front end's inputs), f2b (Front2Back) |
+| memory (MemSubsystem::init) | wb_, mshr_, dcache_, mem_route_block, ptw_block, peripheral_axi_ |
+| SimCpu::init | b2f (Back2Front: the register and the front end's inputs), f2b (Front2Back), axi (AxiSubsystem) |
 
 What moved into modules to get there:
 * the D-cache owns its stage wires and registers (the array read / write and the routed response in comb_stage2, the
   stage-1 requests and the response metadata as its registers; the MSHR and the write buffer read `dcache_.s1_q()`);
 * MemPtwBlock::comb_request / comb_feedback (MemSubsystem's ptw_request / ptw_feedback);
-* PeripheralModel::comb_commit_store (MemSubsystem's comb_commit_store);
+* PeripheralAxi::comb_commit_store (MemSubsystem's comb_commit_store);
 * Back2Front::comb_front (FrontTop::comb_begin); the front end's register snapshot (read_data) is taken at the edge.
 MemSubsystem, BackTop, FrontTop and FrontCore have no comb code of their own: they own their modules and bind them.
 
@@ -59,13 +59,22 @@ MemSubsystem, BackTop, FrontTop and FrontCore have no comb code of their own: th
 Removed: gen_comb_order.py, gen_front_order.py, gen_mem_order.py, comb_order.py, global_graph.py, the front / memory
 domains of comb_domains.py.
 
-## Not yet in the form
+## The last pieces (u5)
 
-* The AXI subsystem (the interconnect kit, DDR, MMIO): its phases keep EXPORT lines over the PORT table of
-  include/SimCpu.h (`default:` / `pre:` ports: the masters' request valid cleared first, the slaves' outputs read before
-  the masters drive).
-* The I-cache's AXI / probe ports (ICacheTop::Ports) and the TLBs' walk ports (PtwWalkPort calls) are declared as
-  extras in gen_top_order.py (BACK_EXTRA), not as In / Out ports.
+* The AXI subsystem is a module (`axi`): its ports are the masters' ports of the interconnect (bound by SimCpu::init);
+  comb_begin is a `default:` writer of the requests' valid, comb_outputs a `pre:` reader of the memory masters'
+  requests (it reads the I-cache's of this cycle: `in: out.read_ports[MASTER_ICACHE].req`). The interconnect's code
+  (AXI_Interconnect) is scanned as its submodule.
+* The I-cache's AXI read port, its D-cache probe and the response registers are its In / Out ports (`out.axi`,
+  `out.probe_req`, `in.axi_q`, `in.probe_resp`, `in.csr_status`); ICacheTop::Ports and FrontTop's icache_* pointers are
+  gone.
+* The TLBs' walk ports are the LSU's `out.dtlb_walk` and the I-cache's `out.itlb_walk`; their TLB (TlbMmu) is a
+  submodule: the scan follows the parent's calls into it. A walk port's method names the part it touches (requests:
+  comb_input, flushes: seq_input, the walker's response: comb_out, a register).
+* The peripheral model is a submodule of PeripheralAxi, whose comb_commit_store applies the commit's device stores.
+* Contract kinds: `in:`, `out:`, `pre:` (read before the other writers), `default:` (written before every other user);
+  a port array may be named with a master index. The include/SimCpu.h PORT table, the EXPORT lines and the
+  generator's extras are gone: every comb phase of SimCpu::cycle() is a module phase.
 
 ## Verified
 

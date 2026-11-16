@@ -39,8 +39,8 @@ void AxiSubsystem::sync_uart_from_backing() {
 
 void AxiSubsystem::comb_begin() {
   // only valid: the other request fields are read under valid (a master that requests drives them all)
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) interconnect.read_ports[i].req.valid = false;
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) interconnect.write_ports[i].req.valid = false;
+  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) out.read_ports[i].req.valid = false;
+  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) out.write_ports[i].req.valid = false;
 }
 
 void AxiSubsystem::comb_outputs() {

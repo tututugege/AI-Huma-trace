@@ -308,7 +308,7 @@ void FrontControl::finish() {
 // A predecode flush: the I-cache's invalidate step K, whose outputs replace the fetch step's (ic_k).
 void ICacheTop::comb_invalidate() {
   out.ic_k = {};
-  if (*in.predecode_flush) invalidate_step(in.in->csr_status, &out.ic_k);
+  if (*in.predecode_flush) invalidate_step(in.csr_status, &out.ic_k);
 }
 
 // ---- the FIFO ports (front-end/front_fifo_ports.h) ----
@@ -576,7 +576,9 @@ void bpuf::BpuPipe::comb_front() {
 
 // The front end's fetch step (front-end/icache/icache_top.h).
 void ICacheTop::comb_fetch() {
-  out = {};
+  out.ic_in = {};   // (its ports to the AXI interconnect, the D-cache probe and the walker stay bound)
+  out.ic_out = {};
+  out.ic_k = {};
   const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
   const FetchAddrFifoOut &fetch_addr_head = *in.fetch_addr_head;
 
@@ -585,7 +587,7 @@ void ICacheTop::comb_fetch() {
   out.ic_in.itlb_flush = in.in->ctrl.itlb_flush;
   out.ic_in.fence_i = in.in->ctrl.fence_i;
   out.ic_in.invalidate_req = false;
-  out.ic_in.csr_status = in.in->csr_status;
+  out.ic_in.csr_status = in.csr_status;
   out.ic_in.icache_read_valid = fetch_addr_head.read_valid;
   out.ic_in.fetch_address = fetch_addr_head.read_valid ? fetch_addr_head.fetch_address : 0;
   comb_calc(&out.ic_in, &out.ic_out);

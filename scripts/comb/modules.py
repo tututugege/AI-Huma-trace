@@ -44,9 +44,25 @@ MODULES = [   # (path, class), in each top's tie-break order
     ('front.core.icache', 'ICacheTop'), ('front.core.checker', 'FrontChecker'),
     ('mem_subsystem.wb_', 'WriteBuffer'), ('mem_subsystem.mshr_', 'MSHR'), ('mem_subsystem.dcache_', 'RealDcache'),
     ('mem_subsystem.mem_route_block', 'MemRouteBlock'), ('mem_subsystem.ptw_block', 'MemPtwBlock'),
-    ('mem_subsystem.peripheral_axi_', 'PeripheralAxi'), ('mem_subsystem.peripheral_model_', 'PeripheralModel'),
-    ('b2f', 'Back2Front'), ('f2b', 'Front2Back'),
+    ('mem_subsystem.peripheral_axi_', 'PeripheralAxi'),
+    ('b2f', 'Back2Front'), ('f2b', 'Front2Back'), ('axi', 'AxiSubsystem'),
 ]
+ALIASES = {'mem_subsystem.dtlb_walk_port': 'mem_subsystem.dtlb_walk_port_inst',   # (set in MemSubsystem's constructor)
+           'mem_subsystem.itlb_walk_port': 'mem_subsystem.itlb_walk_port_inst'}
+# A module's submodule (not scheduled itself: its parent calls it) uses some of its parent's ports: the scan follows the
+# parent's calls into it (<call pattern>, its class, {its member: the parent's port}).
+SUBMODULES = {
+    'RealLsu': [(r'\bdtlb\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.dtlb_walk'})],
+    'ICacheTop': [(r'\bm\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.itlb_walk'})],
+    'PeripheralAxi': [(r'\bperipheral_model\s*->\s*(\w+)\s*\(', 'PeripheralModel', {'csr_interrupt_inject': 'out.csr_interrupt_inject'})],
+    'AxiSubsystem': [(r'\binterconnect\s*\.\s*(\w+)\s*\(', 'AXI_Interconnect',
+                      {'read_ports': 'out.read_ports', 'write_ports': 'out.write_ports'})],
+}
+# a call through a port to an object's method: the part of the object it reads or writes (else: a const method reads it,
+# another writes it)
+PORT_METHODS = {'comb_output': ('r', 'comb_out'), 'resp_valid': ('r', 'comb_out'), 'resp': ('r', 'comb_out'),
+                'send_walk_req': ('w', 'comb_input'), 'consume_resp': ('w', 'comb_input'),
+                'flush_client': ('w', 'seq_input')}   # PtwWalkPort: the TLB's requests in, the walker's response a register
 TOP_STRUCTS = {'back.in', 'back.out', 'front.in', 'front.out', 'front.read_data'}   # a port at one of them: per field
 FIELD_PORTS = {'mem_subsystem.dcache_mshr_io_', 'mem_subsystem.dcache_wb_io_'}   # written by two phases: per field (also
 #   an AXI master port of the interconnect: per channel field, req.<f> / resp.<f>)
@@ -55,7 +71,7 @@ _src = None
 def src():
     global _src
     if _src is None:
-        _src = Src(ROOT, ['back-end', 'front-end', 'include', 'MemSubSystem'])
+        _src = Src(ROOT, ['back-end', 'front-end', 'include', 'MemSubSystem', 'axi-interconnect-kit'])
         for f in os.listdir(ROOT):   # SimCpu.cpp, AxiSubsystem.cpp, ...
             if f.endswith('.cpp'): _src.t[os.path.join(ROOT, f)] = open(os.path.join(ROOT, f), errors='ignore').read()
     return _src
@@ -68,12 +84,19 @@ def class_text(cls):
     sys.exit(f'class {cls}: not found')
 
 
+KINDS = ('in', 'pre', 'out', 'default')
+
+
 def contracts(cls):
-    """[(phase, in-items, out-items)] in header order"""
+    """[(phase, in, out, pre, default)] in header order. in: read after their writers; pre: read before their writers
+    (the value of the cycle before, or the default); out: written; default: written before every other user"""
     head, _ = class_text(cls)
     out = []
-    for m in re.finditer(r'CONTRACT (\w+)\s+in:(.*?)\s+out:([^\n]*)', head):
-        out.append((m.group(1), set(m.group(2).split()) - {'-'}, set(m.group(3).split()) - {'-'}))
+    for m in re.finditer(r'CONTRACT (\w+)(\s+(?:in|pre|out|default):[^\n]*)', head):
+        d = {k: set() for k in KINDS}
+        for k, v in re.findall(r'\b(in|pre|out|default):((?:(?!\b(?:in|pre|out|default):)[^\n])*)', m.group(2)):
+            d[k] |= set(v.split()) - {'-'}
+        out.append((m.group(1), d['in'], d['out'], d['pre'], d['default']))
     return out
 
 
@@ -115,6 +138,7 @@ def resolve(expr, top):
     e = norm(expr)
     head = e.split('.')[0]
     al = TOPS[top]['alias']
+    if e in ALIASES: return ALIASES[e]
     if al is None:   # the top's pointer members bound by SimCpu::init
         sb = sim_bindings()
         al = {k.split('.', 1)[1]: v for k, v in sb.items() if k.startswith(TOPS[top]['prefix'])}
@@ -129,17 +153,46 @@ def bindings():
         for cls, fn in t['bind']:
             b = src().body(cls, fn)
             if not b: sys.exit(f'{cls}::{fn}: no binding code')
-            for m in re.finditer(r'\b(\w+)\s*(?:->|\.)\s*(in|out)\.(\w+)\s*=\s*([^;]+);', strip_comments(b[1])):
-                out[(TOPS[top]['prefix'] + m.group(1), m.group(2), m.group(3))] = resolve(m.group(4), top)
+            for m in re.finditer(r'(?<![\w.>])([\w.>-]+?)\s*(?:->|\.)\s*(in|out)\.(\w+)\s*=\s*([^;]+);', strip_comments(b[1])):
+                out[(TOPS[top]['prefix'] + norm(m.group(1)), m.group(2), m.group(3))] = resolve(m.group(4), top)
     return out
 
 
 def path_of(mod, item, bind):
     """a contract item (in.X[.f] / out.X[.f]) of module mod as a SimCpu path"""
     d, port, *rest = item.split('.')
+    idx = re.search(r'\[[^\]]*\]$', port)   # (a master index of a port array)
+    port = re.sub(r'\[[^\]]*\]$', '', port)
     b = bind.get((mod, d, port))
-    base = b if b else f'{mod}.{d}.{port}'
+    base = (b if b else f'{mod}.{d}.{port}') + (idx.group(0) if idx else '')
     return '.'.join([base] + rest)
+
+
+def sub_text(cls, body):
+    """the methods of cls's submodules that body calls, their ports written as the parent's"""
+    out = ''
+    for pat, scls, pmap in SUBMODULES.get(cls, []):
+        seen = set()
+        for meth in sorted(set(re.findall(pat, body))):
+            t = strip_comments(sub_closure(scls, meth, 3, seen))
+            t = re.sub(r'(?<![\w.>])(in|out)\b', r'sub_\1', t)   # (the submodule's own in / out are not the parent's)
+            for mem, port in pmap.items():
+                t = re.sub(r'(?<![\w.>])' + mem + r'\s*(?:!=|==)\s*nullptr', 'true', t)
+                t = re.sub(r'(?<![\w.>])' + mem + r'\b', port, t)
+            out += t
+    return out
+
+
+def sub_closure(cls, fn, depth, seen):
+    s = src()
+    b = s.body(cls, fn) or s.in_class(cls, fn)
+    if not b or fn in seen: return ''
+    seen.add(fn)
+    out = b[1]
+    if depth > 0:
+        for c in set(re.findall(r'(?<![\w.>])(\w+)\s*\(', strip_comments(b[1]))):
+            if c not in KEYWORDS and c != fn and (s.body(cls, c) or s.in_class(cls, c)): out += sub_closure(cls, c, depth - 1, seen)
+    return out
 
 
 def closure(cls, fn, depth=3, seen=None):
@@ -186,6 +239,7 @@ def callee_fields(fn, idx, cls):
 def scan(mod, cls, phase, bind):
     """read / write items of one phase, in port names"""
     body = strip_comments(closure(cls, phase))
+    body += sub_text(cls, body)
     s = src()
     types = member_types(cls)
     pt = ports(cls)
@@ -193,19 +247,26 @@ def scan(mod, cls, phase, bind):
     def item(d, port, tail):
         bp = bind.get((mod, d, port)) or ''
         if bp in TOP_STRUCTS or bp in FIELD_PORTS or bp.startswith('axi.interconnect.'):
-            m = re.match(r'\s*(?:->|\)\s*\.)\s*(\w+)(?:\s*(?:\[[^\]]*\])*\s*\.\s*(\w+))?', tail)
+            m = re.match(r'\s*(?:\[[^\]]*\]\s*)*(?:->|\.|\)\s*\.)\s*(\w+)(?:\s*(?:\[[^\]]*\])*\s*\.\s*(\w+))?', tail)
             if m:
                 two = bp.startswith('axi.interconnect.') and m.group(2)   # an AXI master port: req.<f> / resp.<f>
                 return f'{d}.{port}.{m.group(1)}' + (f'.{m.group(2)}' if two else '')
         return f'{d}.{port}'
     # local reference aliases of a port: auto &x = out.X...; (const: read only)
     aliases = {}
-    for am in re.finditer(r'(const\s+)?[\w:<>]+\s*&\s*(\w+)\s*[=:]\s*\*?\s*(?<![\w.>])(in|out)\.(\w+)((?:\s*->\s*\w+)?)', body):
-        k = item(am.group(3), am.group(4), am.group(5))
+    for am in re.finditer(r'(const\s+)?[\w:<>]+\s*&\s*(\w+)\s*[=:]\s*\*?\s*(?<![\w.>])(in|out)\.(\w+)((?:\s*\[[^\]]*\])*(?:\s*(?:->|\.)\s*\w+)?)', body):
+        k = item(am.group(3), am.group(4), re.sub(r'^(?:\s*\[[^\]]*\])+', '', am.group(5)))
         aliases[am.group(2)] = (k, bool(am.group(1)))
     for m in re.finditer(r'(\*\s*)?(?<![\w.>])(in|out)\s*\.\s*(\w+)\b(?!\s*\()', body):
         star, d, port = m.group(1), m.group(2), m.group(3)
         tail = body[m.end():m.end() + 200]
+        mc = re.match(r'\s*->\s*(\w+)\s*\(', tail)
+        if mc:   # a method of the object the port points at
+            pm = PORT_METHODS.get(mc.group(1))
+            if pm: (r if pm[0] == 'r' else w).add(f'{d}.{port}.{pm[1]}'); continue
+            if d == 'out' and not re.search(r'\b' + mc.group(1) + r'\s*\([^;{]*\)\s*const\b', ''.join(s.t.values())):
+                w.add(f'{d}.{port}')
+            r.add(f'{d}.{port}'); continue
         k = item(d, port, tail)
         pre = body[max(0, m.start() - 40):m.start()]
         if re.search(r'(?:const\s+)?[\w:<>]+\s*&\s*\w+\s*[=:]\s*\*?\s*$', pre): continue   # an alias declaration
@@ -214,13 +275,14 @@ def scan(mod, cls, phase, bind):
            (star and re.match(r'(?:\[[^\]]*\])*\s*=(?!=)', tail)):
             w.add(k); continue
         call = enclosing_call(body, m.start())
+        if call and d == 'in': r.add(k); continue   # (an input is read only, whatever the callee's parameter says)
         if call:
             if call[2]: pw = s.params_written(call[0], types[call[2]]) if call[2] in types else None
             else: pw = s.params_written(call[0], cls) or s.params_written(call[0])
             if pw is not None and call[1] < len(pw) and pw[call[1]] and not re.match(r'\s*->', tail):
                 fine = callee_fields(call[0], call[1], cls) if k.count('.') == 1 and (bind.get((mod, d, port)) or '').startswith('axi.interconnect.') else None
                 w |= {f'{k}.{f}' for f in fine} if fine else {k}   # (a helper that writes some fields of a master port)
-                if pw[call[1]] == 'rw': r.add(k)
+                if pw[call[1]] == 'rw' and not fine: r.add(k)
                 continue
             if call[0] in ('memset', 'memcpy', 'memmove'):   # the destination is written, the source read
                 (w if call[1] == 0 else r).add(k); continue
@@ -228,11 +290,13 @@ def scan(mod, cls, phase, bind):
         r.add(k)
     for a, (k, const) in aliases.items():
         d0, p0 = k.split('.')[:2]
-        per_field = k.count('.') == 1 and (bind.get((mod, d0, p0)) or '') in TOP_STRUCTS   # an alias of a whole top struct
+        bp0 = bind.get((mod, d0, p0)) or ''
+        depth = 4 if bp0.startswith('axi.interconnect.') else 3 if bp0 in TOP_STRUCTS else 0   # (per field below an alias)
+        per_field = k.count('.') + 1 < depth
         for um in re.finditer(r'(?<![\w.>])' + a + r'\b', body):
             tail = body[um.end():um.end() + 200]
-            fm = re.match(r'\s*\.\s*(\w+)', tail) if per_field else None
-            kk = f'{k}.{fm.group(1)}' if fm else k
+            fm = re.match(r'\s*(?:\[[^\]]*\]\s*)*\.\s*(\w+)(?:\s*(?:\[[^\]]*\]\s*)*\.\s*(\w+))?', tail) if per_field else None
+            kk = '.'.join((k.split('.') + [x for x in (fm.groups() if fm else ()) if x])[:max(depth, k.count('.') + 1)])
             if not const and (re.match(r'(?:\[[^\]]*\]|\.\w+)*' + ASSIGN, tail) or re.match(r'\s*=\s*\{\s*\}', tail)): w.add(kk)
             elif not re.match(r'\s*=[^=]', tail): r.add(kk)
     # a read of its own output field is internal (a pointer output, bound to a shared signal, is not; a class whose
@@ -254,24 +318,26 @@ def call(mod, phase):
 
 def phases():
     """every module phase: (name <path>.<phase>, path, class, in-items, out-items)"""
-    return [(f'{mod}.{ph}', mod, cls, i, o) for mod, cls in MODULES for ph, i, o in contracts(cls)]
+    return [(f'{mod}.{ph}', mod, cls, i, o, p, df) for mod, cls in MODULES for ph, i, o, p, df in contracts(cls)]
 
 
 def tb_users():
     """the module phases with side effects outside the ports: the trace bridge (tbhook::, the functional model)"""
-    return {f'{mod}.{ph}' for mod, cls in MODULES for ph, _, _ in contracts(cls) if re.search(r'tbhook::|g_bridge', strip_comments(closure(cls, ph)))}
+    return {f'{mod}.{ph}' for mod, cls in MODULES for ph, *_ in contracts(cls) if re.search(r'tbhook::|g_bridge', strip_comments(closure(cls, ph)))}
 
 
-def covers(d, k): return k == d or k.startswith(d + '.')
+def covers(d, k):
+    d = re.sub(r'\[[^\]]*\]', '', d)   # (a master index: the scan sees the port array)
+    return k == d or k.startswith(d + '.')
 
 
 def check():
     bind = bindings()
     errs = []
     for mod, cls in MODULES:
-        for ph, di, do in contracts(cls):
+        for ph, di, do, dp, dd in contracts(cls):
             r, w = scan(mod, cls, ph, bind)
-            for kind, dec, got in (('in', di, r), ('out', do, w)):
+            for kind, dec, got in (('in', di | dp, r), ('out', do | dd, w)):
                 for k in sorted(got):
                     if not any(covers(x, k) for x in dec): errs.append(f'{mod}.{ph}: {"reads" if kind == "in" else "writes"} {k}, not declared {kind}')
                 for x in sorted(dec):
@@ -284,7 +350,7 @@ def emit():
     bind = bindings()
     for mod, cls in MODULES:
         print(f'{mod} ({cls})')
-        for ph, _, _ in contracts(cls) or [(p, 0, 0) for p in phase_names(cls)]:
+        for ph, *_ in contracts(cls) or [(p, 0, 0) for p in phase_names(cls)]:
             r, w = scan(mod, cls, ph, bind)
             print(f'//   CONTRACT {ph}  in: {" ".join(sorted(r)) or "-"}  out: {" ".join(sorted(w)) or "-"}')
 

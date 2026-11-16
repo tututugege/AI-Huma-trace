@@ -188,6 +188,13 @@ void PeripheralAxi::seq() {
   q_ = d;
 }
 
+void PeripheralAxi::comb_commit_store() {
+  const CommitStoreIO &cs = *in.commit_store;
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    if (cs.slot[i].valid) peripheral_model->on_commit_store(cs.slot[i].paddr, cs.slot[i].data, cs.slot[i].func3);
+  }
+}
+
 void PeripheralAxi::comb() {
   comb_outputs();
   comb_inputs();

@@ -12,24 +12,15 @@
 FrontTop::FrontTop()
     : core(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()) {}
 
-// the I-cache's ports (SimCpu binds them on FrontTop; they take effect at the I-cache's next step)
-void FrontTop::bind_ports() {
-  ICacheTop::Ports p;
-  p.ptw_walk = icache_ptw_walk_port;
-  p.probe_req = icache_mem_req_port;
-  p.probe_resp = icache_mem_resp_port;
-  p.read = icache_mem_read_port;
-  p.read_q = icache_mem_read_q;
-  core->icache.set_ports(p);
-}
+
 
 FrontTop::~FrontTop() = default;
 
 void FrontTop::init() {
   CsrStatusIO *bound_csr = in.csr_status;
-  bind_ports();
   core->bind(&in, read_data_.get(), &out, ctx);
   core->icache.set_context(ctx);
+  core->icache.bind_walk();
   in = {};
   out = {};
   in.csr_status = bound_csr;
@@ -42,7 +33,6 @@ void FrontTop::init() {
 }
 
 void FrontTop::read_core_q() {
-  bind_ports();
   core->read_q(*read_data_);
 }
 

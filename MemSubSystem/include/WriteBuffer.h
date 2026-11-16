@@ -41,8 +41,8 @@ struct WBOut {
     }
 };
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
-//   CONTRACT comb_axi_to_dcache  in: in.axi in.s1_q  out: out.wb2dcache
-//   CONTRACT comb_dcache_to_axi  in: in.dcache2wb out.axi  out: out.axi
+//   CONTRACT comb_axi_to_dcache  in: in.axi.req.accepted in.axi.resp.valid in.s1_q  out: out.wb2dcache
+//   CONTRACT comb_dcache_to_axi  in: in.dcache2wb.dirty_info  out: out.axi.req.addr out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.req.wstrb out.axi.resp.ready
 class WriteBuffer {
 public:
     void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)

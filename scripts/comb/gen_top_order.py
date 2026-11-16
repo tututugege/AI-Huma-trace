@@ -1,165 +1,106 @@
 #!/usr/bin/env python3
-"""The comb part of SimCpu::cycle() from the modules' contracts and the tops' exported phases.
+"""The comb part of SimCpu::cycle() (and FrontCore::comb()) from the modules' contracts.
 
-Every module (modules.py: the back end's, the front end's) declares its comb phases above its class in its own port
-names; its ports resolve to SimCpu paths through its parent's bindings (@<path> ports here). Each top declares its SimCpu-level comb phases above its class (FrontTop, BackTop, MemSubsystem; the AXI and SimCpu glue
-phases in include/SimCpu.h, which also holds the port table):
-    //   PORT <name> = <SimCpu paths>                        ({a,b} lists alternatives)
-    //   EXPORT <phase>  in: <ports>  pre: <ports>  out: <ports>  default: <ports>
-The order follows from the declarations:
-  * a module's phases (a top's exported phases) run in the order its header lists them;
-  * a default driver of a port runs before every other phase that uses a field of it;
-  * a writer (out) runs before every reader (in) of the port, a pre reader before every writer;
-  * the phases that use the trace bridge keep the order of TB_ORDER (tbhook:: reads of the functional memory, which the
-    back end's commit updates: the I-cache's fetch, the memory route block's PTW / probe data, then the commit).
-Ties: the top of the previous phase if it has a ready phase (fewest runs per top), else TOP_PRIORITY. A cycle in the declarations is reported: the fix is a split of a phase (as the memory subsystem's
-comb_outputs / comb_inputs around the back end), never a hand-made order.
-
-The check compares the declarations with the scanned top domain (comb_top.TOP_PHASES): every field a phase reads or
-writes that is part of a port is declared (by a port of the right direction), every declared port is used, every field
-two tops share is part of a port, and a port has one writer (aliases name one master's part of a port array).
+Every module (modules.py) declares its comb phases above its class in its own port names; its ports resolve to SimCpu
+paths through its parent's bindings. The order:
+  * a module's phases run in the order its header lists them;
+  * a writer (out) of a path runs before every reader (in) of an overlapping path in another module;
+  * a pre reader runs before every other module's writer of the path (unless that writer is one it reads in);
+  * a default writer runs before every other module's phase that uses the path;
+  * the phases with trace-bridge side effects keep the order of TB_ORDER (the I-cache's fetch, the memory route block's
+    PTW / probe data, the back end's fact lookups of in-flight uops, its commit / flush updating the bridge).
+Paths overlap when one is a prefix of the other, component by component; a component without an index ([MASTER_X])
+covers every index. Ties: the top of the previous phase if it has a ready phase (fewest runs per top), else
+TOP_PRIORITY, then the module table's order. A cycle in the contracts is reported: the fix is a split of a phase, never a
+hand-made order.
 
 usage: gen_top_order.py          print the generated order
        gen_top_order.py --write  rewrite the generated blocks of SimCpu::cycle() (SimCpu.cpp) and FrontCore::comb()
-       gen_top_order.py --check  exit 1 if the declarations and the code or the block differ
+       gen_top_order.py --check  exit 1 if a contract and the code or a generated block differ
 """
 import os, re, sys, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from contract_lib import topo, scan
+from contract_lib import topo
 import modules
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-HEADERS = [('include/SimCpu.h', 'SimCpu', ''), ('include/FrontTop.h', 'FrontTop', 'front.'),
-           ('include/AxiSubsystem.h', 'AxiSubsystem', 'axi.'), ('include/Front2Back.h', 'Front2Back', 'f2b.'),
-           ('include/Back2Front.h', 'Back2Front', 'b2f.'),
-           ('back-end/include/BackTop.h', 'BackTop', 'back.'),
-           ('MemSubSystem/include/MemSubsystem.h', 'MemSubsystem', 'mem_subsystem.')]
-TOP_PRIORITY = ['cpu', 'back', 'axi', 'front', 'f2b', 'b2f', 'mem_subsystem']
-# the trace-bridge users, in the order their side effects must happen (the I-cache's fetch, the memory route block's PTW
-# / probe data, the back end's fact lookups of in-flight uops, its commit / flush updating the bridge); the back-end
-# ones must be exactly the module phases the scan finds (modules.tb_users)
-TB_FRONT_MEM = ['front.core.icache.comb_fetch', 'front.core.inst_port.comb_write', 'front.core.ctrl.finish',
-                'mem_subsystem.mem_route_block.comb_response']
-TB_ORDER = TB_FRONT_MEM + ['back.lsu.comb_outputs', 'back.lsu.comb_writeback', 'back.exu.comb_exec', 'back.lsu.comb_translate',
-                           'back.rob.comb_redirect', 'back.rob.comb_update']
-# what a module reaches outside its ports (to become ports): the TLBs' walk ports, the I-cache's AXI / probe ports and
-# its csr_status (through the front end's inputs), the peripheral model's state
-BACK_EXTRA = {'back.lsu.comb_translate': {'out': ['dtlb_walk']},
-              'front.core.icache.comb_fetch': {'in': ['csr_status'], 'out': ['axi_ic_req', 'axi_ic_resp_ready', 'icache_probe', 'itlb_walk']},
-              'mem_subsystem.peripheral_model_.comb_commit_store': {'out': ['periph']},
-              'mem_subsystem.peripheral_axi_.comb': {'in': ['periph']}}   # (the peripheral model's state: MMIO loads)
+TOP_PRIORITY = ['back', 'axi', 'front', 'f2b', 'b2f', 'mem_subsystem']
+ORDER = ['b2f', 'front', 'axi', 'f2b', 'back', 'mem_subsystem']   # the modules' order (rank) by top
+TB_ORDER = ['front.core.icache.comb_fetch', 'front.core.inst_port.comb_write', 'front.core.ctrl.finish',
+            'mem_subsystem.mem_route_block.comb_response', 'back.lsu.comb_outputs', 'back.lsu.comb_writeback',
+            'back.exu.comb_exec', 'back.lsu.comb_translate', 'back.rob.comb_redirect', 'back.rob.comb_update']
 FRONT_RANK = ['ctrl.control', 'bpu_pipe.comb_front', 'ctrl.enables', 'fa_port.comb_read', 'ptab_port.comb_read',
               'inst_port.comb_read', 'f2b_port.comb_read', 'fa_port.comb_write', 'icache.comb_fetch', 'inst_port.comb_write',
               'checker.comb', 'f2b_port.comb_write', 'icache.comb_invalidate', 'ctrl.finish']   # the front end's tie-break
-MOD = {}   # a module phase -> its module path
-CALLS = {}
-BEGIN = '  // BEGIN GENERATED by scripts/comb/gen_top_order.py from the EXPORT declarations: do not edit\n'
+BEGIN = '  // BEGIN GENERATED by scripts/comb/gen_top_order.py from the module contracts: do not edit\n'
 END = '  // END GENERATED\n'
 KINDS = ('in', 'pre', 'out', 'default')
+MOD = {}   # a phase -> its module path
 
 
-def owner(ph):
-    if '.' in ph: return ph.split('.')[0]
-    return 'axi' if ph.startswith('axi_') else 'cpu'
+def owner(ph): return ph.split('.')[0]
 
 
-def chain(ph):   # the object whose phases keep their header order: a module / memory block, else the top
-    q = ph.split('.')
-    if ph in MOD: return MOD[ph]
-    return owner(ph)
+def phases():
+    """[(phase, {kind: [paths]})] in rank order"""
+    bind = modules.bindings()
+    out = []
+    for top in ORDER:
+        mph = [x for x in modules.phases() if owner(x[0]) == top]
+        if top == 'front': mph.sort(key=lambda x: FRONT_RANK.index(x[0][len('front.core.'):]))
+        for name, mod, cls, i, o, p, df in mph:
+            MOD[name] = mod
+            out.append((name, {k: sorted({modules.path_of(mod, it, bind) for it in items})
+                               for k, items in zip(('in', 'out', 'pre', 'default'), (i, o, p, df))}))
+    return out
 
 
-def expand(p):
-    m = re.search(r'\{([^{}]*)\}', p)
-    if not m: return [p]
-    return [x for alt in m.group(1).split(',') for x in expand(p[:m.start()] + alt + p[m.end():])]
+def comps(p): return re.findall(r'\w+(?:\[[^\]]*\])?', p)
 
 
-def declarations():
-    ports, phases = {}, []
-    for rel, cls, prefix in HEADERS:
-        t = open(os.path.join(ROOT, rel)).read()
-        m = re.search(r'((?:^//[^\n]*\n)+)class ' + cls + r'\b', t, re.M)
-        if not m: sys.exit(f'{rel}: no comment block above class {cls}')
-        for p in re.finditer(r'^//\s+PORT (\w+)\s*=\s*([^\n(]*)', m.group(1), re.M):
-            ports[p.group(1)] = [f for x in p.group(2).split() for f in expand(x)]
-        for e in re.finditer(r'^//\s+EXPORT (\w+)([^\n]*)', m.group(1), re.M):
-            d = {k: [] for k in KINDS}
-            for k, v in re.findall(r'(\w+):\s*((?:(?!\w+:)\S+\s*)*)', e.group(2)):
-                if k not in d: sys.exit(f'{rel}: EXPORT {e.group(1)}: unknown kind {k}')
-                d[k] = v.split()
-            phases.append((prefix + e.group(1), d))
-        if cls in ('FrontTop', 'BackTop', 'MemSubsystem', 'Front2Back', 'Back2Front'):   # the top's modules
-            mph = [x for x in modules.phases() if x[0].startswith(prefix) and x[1].count('.') >= prefix.count('.') - 1]
-            if cls == 'FrontTop': mph.sort(key=lambda x: FRONT_RANK.index(x[0][len('front.core.'):]))
-            bind = modules.bindings()
-            for name, mod, mcls, i, o in mph:
-                MOD[name] = mod
-                d = {k: [] for k in KINDS}
-                for kind, items in (('in', i), ('out', o)):
-                    for it in sorted(items):
-                        pth = modules.path_of(mod, it, bind)
-                        if pth.startswith('axi.interconnect'):   # a master port of the interconnect: its named ports
-                            pn = 'axi_slave' if kind == 'in' else ('axi_mem_resp_ready' if '.resp' in pth else 'axi_mem_req')
-                            if pn not in d[kind]: d[kind].append(pn)
-                            continue
-                        pth = re.sub(r'\[[^\]]*\]', '', pth)
-                        ports.setdefault('@' + pth, [pth])
-                        d[kind].append('@' + pth)
-                for k, v in BACK_EXTRA.get(name, {}).items(): d[k] += v
-                phases.append((name, d))
-    for ph, d in phases:
-        for k in KINDS:
-            for p in d[k]:
-                if p not in ports: sys.exit(f'EXPORT {ph}: unknown port {p}')
-    return ports, phases
+def same(a, b):
+    na, ia = re.match(r'(\w+)(\[[^\]]*\])?', a).groups()
+    nb, ib = re.match(r'(\w+)(\[[^\]]*\])?', b).groups()
+    return na == nb and (not ia or not ib or ia == ib)
 
 
-def ov(a, b): return a == b or a.startswith(b + '.') or b.startswith(a + '.')
+def ov(a, b):
+    ca, cb = comps(a), comps(b)
+    return all(same(x, y) for x, y in zip(ca, cb))
+
+
 def fov(fa, fb): return any(ov(a, b) for a in fa for b in fb)
-def within(x, f): return x == f or x.startswith(f + '.')
 
 
-def generate(ports, phases):
-    names = [ph for ph, _ in phases]
-    D = dict(phases)
-    for ph in TB_ORDER:
-        if ph not in D: sys.exit(f'TB_ORDER: {ph} is not exported')
+def generate(ph):
+    names = [n for n, _ in ph]
+    D = dict(ph)
+    for n in TB_ORDER:
+        if n not in D: sys.exit(f'TB_ORDER: {n} is not a module phase')
     succ = {n: set() for n in names}
-    by_chain = collections.defaultdict(list)
-    for n in names: by_chain[chain(n)].append(n)
-    for ps in by_chain.values():
+    by_mod = collections.defaultdict(list)
+    for n in names: by_mod[MOD[n]].append(n)
+    for ps in by_mod.values():
         for a, b in zip(ps, ps[1:]): succ[a].add(b)
-    used = {n: set(p for k in KINDS for p in D[n][k]) for n in names}
-    def link(a, ka, b, kb):
-        """a's ka ports meet b's kb ports: the same named port, or (a back-end field port, @<field>) overlapping paths"""
-        if set(D[a][ka]) & set(D[b][kb]): return True
-        for p in D[a][ka]:
-            for q in D[b][kb]:
-                if (p.startswith('@') or q.startswith('@')) and fov(ports[p], ports[q]): return True
-        return False
+    used = {n: [p for k in KINDS for p in D[n][k]] for n in names}
     for a in names:
-        for p in D[a]['default']:
-            for b in names:
-                if b != a and any(fov(ports[p], ports[q]) for q in used[b]): succ[a].add(b)
         for b in names:
-            if b == a or chain(a) == chain(b): continue
-            if link(a, 'out', b, 'in'): succ[a].add(b)      # writer before reader
-            if link(a, 'pre', b, 'out'): succ[a].add(b)     # pre reader before writer
+            if MOD[a] == MOD[b]: continue
+            if fov(D[a]['default'], used[b]): succ[a].add(b)                      # default writer first
+            if fov(D[a]['out'], D[b]['in']): succ[a].add(b)                        # writer before reader
+            if fov(D[a]['pre'], D[b]['out']) and not fov(D[b]['out'], D[a]['in']): succ[a].add(b)   # pre reader first
     for a, b in zip(TB_ORDER, TB_ORDER[1:]): succ[a].add(b)
     rank = {n: (TOP_PRIORITY.index(owner(n)), i) for i, n in enumerate(names)}
-    topo(names, succ, rank, 'the exports')   # (reports a cycle)
-    # stay with the top of the previous phase while it has a ready phase (fewest runs per top, the rule of
-    # global_graph.derive_cuts); otherwise the first ready phase by TOP_PRIORITY
+    topo(names, succ, rank, 'the contracts')   # (reports a cycle)
     indeg = {n: 0 for n in names}
     for a in names:
         for b in succ[a]: indeg[b] += 1
     ready = {n for n in names if indeg[n] == 0}
     order, cur = [], None
     while ready:
-        same = [n for n in ready if owner(n) == cur]
-        n = min(same or ready, key=rank.get)
+        same_top = [n for n in ready if owner(n) == cur]
+        n = min(same_top or ready, key=rank.get)
         cur = owner(n)
         ready.discard(n); order.append(n)
         for b in succ[n]:
@@ -168,106 +109,44 @@ def generate(ports, phases):
     return order
 
 
-def pk(k):   # a scanned SimCpu path at port granularity (comb_top keys; master indices are not kept by the scan)
-    p = [x.replace('[]', '') for x in k.split('.')]
-    if p[0] in ('back', 'front') and len(p) > 2 and p[1] in ('in', 'out'): return '.'.join(p[:3])
-    if p[0] == 'axi_interconnect' and len(p) > 1 and p[1].startswith(('read_ports', 'write_ports')):
-        return '.'.join(['axi_interconnect', re.sub(r'\[.*\]', '', p[1])] + p[2:4])
-    return '.'.join(p[:2])
-
-
-def scanned():
-    comb_top, _ = scan()
-    return {ph: ({pk(x) for x in r}, {pk(x) for x in w}) for ph, r, w in comb_top.TOP_PHASES if ph != 'cycle'}
-
-
-def check(ports, phases):
-    S = scanned()
-    D = dict(phases)
-    errs = []
-    for ph in S:
-        if ph not in D: errs.append(f'{ph}: a SimCpu-level phase without an EXPORT')
-    for ph in D:
-        if ph not in S: errs.append(f'EXPORT {ph}: not a phase of SimCpu::cycle()')
-    allf = [f for fs in ports.values() for f in fs]
-    users = collections.defaultdict(set)
-    for ph, (r, w) in S.items():
-        for x in r | w: users[x].add(owner(ph))
-    for x in sorted(users):
-        us = set().union(*(o for y, o in users.items() if ov(x, y)))
-        if len(us) > 1 and not fov([x], allf): errs.append(f'{x}: shared by {" ".join(sorted(us))}, not part of a port')
-    writers = collections.defaultdict(set)
-    for ph, d in phases:
-        for p in d['out']: writers[p].add(owner(ph))
-    for p, ws in writers.items():
-        if len(ws) > 1: errs.append(f'port {p}: written by {" ".join(sorted(ws))}')
-    for ph, d in phases:
-        if ph not in S or ph in MOD: continue
-        r, w = S[ph]
-        fin = [f for k in KINDS for p in d[k] for f in ports[p]]
-        fout = [f for k in ('out', 'default') for p in d[k] for f in ports[p]]
-        for x in sorted(w):
-            if fov([x], allf) and not fov([x], fout): errs.append(f'{ph}: writes {x}, no out / default port declares it')
-        for x in sorted(r):
-            if fov([x], allf) and not fov([x], fin): errs.append(f'{ph}: reads {x}, no port of it declared')
-        # a read inside a port that another phase writes must name that port (in / pre): it orders the two phases
-        own = [f for p in d['out'] for f in ports[p]]
-        for x in sorted(r):
-            if any(within(x, f) for f in own): continue   # (reads back its own output: the scan does not tell which master)
-            for p, fs in ports.items():
-                if p.startswith('@') and fov([x], fin): continue   # a back-end field a declared (named) port covers
-                if any(within(x, f) for f in fs) and p not in d['in'] + d['pre'] and \
-                   any(q != ph and p in dq['out'] for q, dq in phases):
-                    errs.append(f'{ph}: reads {x} (port {p}, written by another phase), not declared in / pre')
-        for k in KINDS:
-            for p in d[k]:
-                if not fov(ports[p], w if k in ('out', 'default') else r):
-                    errs.append(f'{ph}: {k} {p} declared, not {"written" if k in ("out", "default") else "read"}')
-    errs += modules.check()   # the modules' contracts against their code
+def check():
+    errs = modules.check()   # the modules' contracts against their code
     tb = modules.tb_users()
     if not tb <= set(TB_ORDER): errs.append(f'trace-bridge users not in TB_ORDER: {sorted(tb - set(TB_ORDER))}')
     return errs
 
 
-def call_of(n):
-    if n in MOD: return modules.call(MOD[n], n[len(MOD[n]) + 1:])[0]
-    return CALLS.get(n, n + '()')
+def call(n): return modules.call(MOD[n], n[len(MOD[n]) + 1:])
 
 
-def block(order):
-    return BEGIN + ''.join(f'  {call_of(n)};\n' for n in order) + END
+def block(order): return BEGIN + ''.join(f'  {call(n)[0]};\n' for n in order) + END
 
 
-FBEGIN = '  // BEGIN GENERATED by scripts/comb/gen_top_order.py from the module contracts: do not edit\n'
 def front_block(order):   # FrontCore::comb() (init / step_bpu): the front end's module phases in the global order
-    return FBEGIN + ''.join(f'  {modules.call(MOD[n], n[len(MOD[n]) + 1:])[1]};\n' for n in order
-                            if n in MOD and n.startswith('front.')) + END
+    return BEGIN + ''.join(f'  {call(n)[1]};\n' for n in order if n.startswith('front.')) + END
 
 
 def main():
-    ports, phases = declarations()
-    order = generate(ports, phases)
-    path = os.path.join(ROOT, 'SimCpu.cpp')
-    src = open(path).read()
-    new = block(order)
-    fpath = os.path.join(ROOT, 'front-end', 'front_top.cpp')
-    fsrc = open(fpath).read()
-    fa = fsrc.find(FBEGIN); fb = fsrc.index(END, fa) + len(END)
-    fnew = front_block(order)
+    ph = phases()
+    order = generate(ph)
+    files = [(os.path.join(ROOT, 'SimCpu.cpp'), block(order), 'SimCpu::cycle()'),
+             (os.path.join(ROOT, 'front-end', 'front_top.cpp'), front_block(order), 'FrontCore::comb()')]
     if '--write' in sys.argv or '--check' in sys.argv:
-        a = src.find(BEGIN)
-        if a < 0: sys.exit('SimCpu.cpp: no generated block in SimCpu::cycle()')
-        b = src.index(END, a) + len(END)
+        errs = check() if '--check' in sys.argv else []
+        for path, new, what in files:
+            src = open(path).read()
+            a = src.find('  // BEGIN GENERATED by scripts/comb/gen_top_order.py')
+            if a < 0: sys.exit(f'{what}: no generated block')
+            b = src.index(END, a) + len(END)
+            if '--check' in sys.argv:
+                if src[a:b] != new: errs.append(f'{what} differs from the contracts: run scripts/comb/gen_top_order.py --write')
+            else:
+                open(path, 'w').write(src[:a] + new + src[b:])
         if '--check' in sys.argv:
-            errs = check(ports, phases)
             for e in errs: print('  ' + e)
-            if src[a:b] != new: errs.append('block'); print('SimCpu::cycle() differs from the exports: run scripts/comb/gen_top_order.py --write')
-            if fsrc[fa:fb] != fnew: errs.append('front block'); print('FrontCore::comb() differs: run scripts/comb/gen_top_order.py --write')
             if errs: sys.exit(1)
-            print(f'top order: {len(order)} phases, {len(ports)} ports, as generated from the exports')
+            print(f'top order: {len(order)} phases of {len(set(MOD.values()))} modules, as generated from the contracts')
             return
-        open(path, 'w').write(src[:a] + new + src[b:])
-        open(fpath, 'w').write(fsrc[:fa] + fnew + fsrc[fb:])
         print(f'wrote {len(order)} phases')
         return
     print('\n'.join(order))

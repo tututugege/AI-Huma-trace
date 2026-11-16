@@ -7,26 +7,9 @@
 #include "MemSubsystem.h"
 #include "front_IO.h"
 
-// SimCpu wires the tops together. Each top exports its comb phases with the ports they read and write (the lines above
-// the class: FrontTop, BackTop, MemSubsystem; the AXI and SimCpu glue phases below); scripts/comb/gen_top_order.py checks
-// them against the code and generates the comb part of SimCpu::cycle() from them (docs/MODULE_CONTRACT.md).
-//   in:      read after this cycle's writer of the port
-//   pre:     read before it (the value of the clock edge or the default driver), so it runs before that writer
-//   out:     written (one writer per port; an alias names one master's part of a field the scan sees per port array)
-//   default: driven first, every cycle, to a default the other writers override (an always_comb default assignment)
-// The ports (fields as SimCpu paths; {a,b} lists alternatives):
-//   PORT csr_status         = back.csr_status
-//   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)
-//   PORT dtlb_walk          = mem_subsystem.dtlb_walk_port_inst.comb_input mem_subsystem.dtlb_walk_port_inst.seq_input   (the TLBs' walk requests / flushes)
-//   PORT itlb_walk          = mem_subsystem.itlb_walk_port_inst.comb_input mem_subsystem.itlb_walk_port_inst.seq_input
-//   PORT icache_probe       = icache_req
-//   PORT axi_ic_req         = axi.interconnect.read_ports.req.{valid,addr,total_size,id,bypass}
-//   PORT axi_mem_req        = axi.interconnect.{read_ports,write_ports}.req.{valid,addr,total_size,id,bypass,wdata,wstrb}
-//   PORT axi_ic_resp_ready  = axi.interconnect.read_ports.resp.ready        (sampled by the interconnect at the edge)
-//   PORT axi_mem_resp_ready = axi.interconnect.{read_ports,write_ports}.resp.ready
-//   PORT axi_slave          = axi.interconnect.{read_ports,write_ports}.req.{ready,accepted,accepted_id} axi.interconnect.{read_ports,write_ports}.resp.{valid,data,id,resp}
-//   PORT axi_ready_next     = axi.interconnect.{read_ports,write_ports}.req.ready   (the I-cache's port register samples it)
-// The glue phases (axi_*: the interconnect and its slaves; the others: SimCpu's registers):
+// SimCpu holds the tops and binds the ports between them (init). Every comb phase of the CPU is a phase of a module
+// (scripts/comb/modules.py: the modules' CONTRACT lines in their own port names); scripts/comb/gen_top_order.py generates
+// the comb part of cycle() from them (docs/UNIFIED_MODULES.md).
 class SimCpu {
 public:
   ICacheMemPortReq icache_req{}; // the I-cache probe request (FrontTop drives it; the memory subsystem reads it)

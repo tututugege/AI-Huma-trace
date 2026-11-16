@@ -32,11 +32,6 @@ public:
   FrontTopIn in;
   FrontTopOut out;
   SimContext *ctx = nullptr;
-  PtwWalkPort *icache_ptw_walk_port = nullptr;
-  ICacheMemPortReq *icache_mem_req_port = nullptr;
-  ICacheMemPortResp *icache_mem_resp_port = nullptr;
-  axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;    // the I-cache drives its requests here
-  const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr; // and reads the port's outputs here (a register)
   bool can_read = false;   // the back end takes a group from out this cycle (it did not stall, or a refetch is pending)
 
   FrontTop();
@@ -58,5 +53,4 @@ public:
 
 private:
   std::unique_ptr<FrontReadData> read_data_;
-  void bind_ports();
 };

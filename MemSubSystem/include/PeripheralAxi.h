@@ -12,12 +12,14 @@ struct PeripheralAxiIn {
   const PeripheralReqIO *req = nullptr;                          // the LSU's MMIO request
   const axi_interconnect::ReadMasterPort_t *read = nullptr;    // the EXTRA_R / EXTRA_W ports, interconnect side
   const axi_interconnect::WriteMasterPort_t *write = nullptr;
+  const CommitStoreIO *commit_store = nullptr;                   // the back end's device stores of this cycle's commit
 };
 
 struct PeripheralAxiOut {
   PeripheralRespIO *resp = nullptr;                              // the MMIO response to the LSU (SimCpu's register d)
   axi_interconnect::ReadMasterPort_t *read = nullptr;          // the same ports, the request side (bypass: MMIO)
   axi_interconnect::WriteMasterPort_t *write = nullptr;
+  CsrInterruptInjectIO *csr_interrupt_inject = nullptr;         // the interrupt lines into the CSR (the devices drive them)
 };
 
 struct PeripheralAxiState {
@@ -33,12 +35,14 @@ struct PeripheralAxiState {
 };
 
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
-//   CONTRACT comb  in: in.read in.req in.write out.read out.resp out.write  out: out.read out.resp out.write
+//   CONTRACT comb_commit_store  in: in.commit_store  out: out.csr_interrupt_inject
+//   CONTRACT comb  in: in.read.req.accepted in.read.resp.data in.read.resp.valid in.req in.write.req.accepted in.write.resp.valid out.resp  out: out.read.req.addr out.read.req.bypass out.read.req.id out.read.req.total_size out.read.req.valid out.read.resp.ready out.resp out.write.req.addr out.write.req.bypass out.write.req.id out.write.req.total_size out.write.req.valid out.write.req.wdata out.write.req.wstrb out.write.resp.ready
 class PeripheralAxi {
 public:
-  PeripheralModel *peripheral_model = nullptr;
+  PeripheralModel *peripheral_model = nullptr;   // the devices (a submodule: its interrupt lines are out.csr_interrupt_inject)
 
   void init();
+  void comb_commit_store();   // the device stores of this cycle's commit (each valid slot, in slot order)
   void comb();   // request / response of the MMIO path on the EXTRA ports, then the next state
   void seq();
 
