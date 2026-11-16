@@ -15,7 +15,7 @@ STUBARG="--restore-stub $STUBS/$N.stub"
 # FASTWARM=<n>: EXP-011 --fast-warmup: functional replay of (interval - n) instructions into L1I/L1D/LLC/TLB/BPU, n instructions of detailed warm-up
 if [ -n "${FASTWARM:-}" ]; then case $N in *nowarmup*) ;; *) ARGS="--fast-warmup -w $FASTWARM -c ${MEAS:-10000000}";; esac; fi
 if [ -n "${FASTW:-}" ]; then STUBARG=""; ARGS="-w $FASTW -c ${MEAS:-10000000}"; fi
-PF_STATS=1 DS3_STATS=1 DS3_OUT=$OUT/$B/$N.ds3 "$SIM" --mode ckpt $STUBARG $ARGS "$C" > "$L" 2>&1
+DS3_OUT=$OUT/$B/$N.ds3 "$SIM" --mode ckpt $STUBARG $ARGS "$C" > "$L" 2>&1
 rc=$?
 clean() { sed 's/\x1b\[[0-9;]*m//g' "$L"; }
 cyc=$(clean | grep -a "cycle       num:" | tail -1 | awk '{print $3}')

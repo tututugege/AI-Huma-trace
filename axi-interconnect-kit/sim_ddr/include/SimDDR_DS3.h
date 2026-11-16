@@ -38,36 +38,23 @@ struct Ds3 {
   std::deque<Wr> wq;
   std::vector<uint64_t> done_addrs;
   uint32_t next_tag = 1;
-  // stats
-  uint64_t n_rd = 0, lat_sum = 0, lat_max = 0, n_wr = 0, rd_stall = 0, wr_stall = 0;
 
   // one tick() = one SimDDR::seq() call = 1/div of a core cycle (CONFIG_AXI_SUBSYSTEM_FREQ_DIV)
   explicit Ds3(uint32_t cpu_mhz, uint32_t div, uint32_t default_extra_ns) {
-    const char *cfg = std::getenv("DS3_CONFIG");
-    const char *out = std::getenv("DS3_OUT");
-    const char *ex = std::getenv("DS3_EXTRA_NS");
-    std::string cfgs = cfg ? cfg : DS3_DEFAULT_CONFIG;
+    const char *out = std::getenv("DS3_OUT");   // DRAMsim3's output directory (one per run when runs share a directory)
+    std::string cfgs = DS3_DEFAULT_CONFIG;
     std::string outs = out ? out : "ds3_out";
     std::filesystem::create_directories(outs);
     ms = dramsim3::GetMemorySystem(
         cfgs, outs, [this](uint64_t a) { done_addrs.push_back(a); }, [](uint64_t) {});
     line_bytes = uint32_t(ms->GetBurstLength() * ms->GetBusBits() / 8);
     tck_fs = uint64_t(ms->GetTCK() * 1e6 + 0.5);
-    const char *fq = std::getenv("CPU_FREQ_MHZ");  // runtime override of CONFIG_CPU_FREQ_MHZ
-    if (fq && std::strtoul(fq, nullptr, 10) > 0) cpu_mhz = uint32_t(std::strtoul(fq, nullptr, 10));
     cpu_fs = uint64_t(1e9 / cpu_mhz + 0.5);
-    const uint64_t extra_ns = ex ? std::strtoull(ex, nullptr, 10) : default_extra_ns;
+    const uint64_t extra_ns = default_extra_ns;
     sub_fs = cpu_fs / div;
     extra_cycles = (extra_ns * 1000000ull + sub_fs / 2) / sub_fs;
   }
   ~Ds3() {
-    if (std::getenv("DS3_STATS"))
-      std::fprintf(stderr,
-                   "[DS3] reads %llu avg_lat %.1f max %llu ticks (%.1f ns avg), writes %llu, rd_stall %llu wr_stall %llu, "
-                   "line %uB tCK %.3fns extra %llu ticks\n",
-                   (unsigned long long)n_rd, n_rd ? double(lat_sum) / n_rd : 0.0, (unsigned long long)lat_max, n_rd ? double(lat_sum) / n_rd * sub_fs / 1e6 : 0.0,
-                   (unsigned long long)n_wr, (unsigned long long)rd_stall, (unsigned long long)wr_stall, line_bytes,
-                   ms->GetTCK(), (unsigned long long)extra_cycles);
     delete ms;
   }
 
@@ -111,7 +98,7 @@ struct Ds3 {
       bool blocked = false;
       while (r.issued < r.lines) {
         const uint64_t a = r.first + uint64_t(r.issued) * line_bytes;
-        if (!ms->WillAcceptTransaction(a, false)) { blocked = true; rd_stall++; break; }
+        if (!ms->WillAcceptTransaction(a, false)) { blocked = true; break; }
         ms->AddTransaction(a, false);
         r.pend.push_back(a);
         r.issued++;
@@ -124,13 +111,12 @@ struct Ds3 {
       bool blocked = false;
       while (w.issued < w.lines) {
         const uint64_t a = w.first + uint64_t(w.issued) * line_bytes;
-        if (!ms->WillAcceptTransaction(a, true)) { blocked = true; wr_stall++; break; }
+        if (!ms->WillAcceptTransaction(a, true)) { blocked = true; break; }
         ms->AddTransaction(a, true);
         w.issued++;
       }
       if (blocked) break;
       wr_done_ids.push_back(w.id);
-      n_wr++;
       wq.pop_front();
     }
   }
@@ -140,11 +126,6 @@ struct Ds3 {
     Rd &r = it->second;
     if (r.done != r.lines || cpu_cycle < r.done_cycle + extra_cycles) return false;
     return true;
-  }
-  void read_finish(uint32_t tag) {
-    const Rd &r = rd[tag];
-    const uint64_t lat = cpu_cycle - r.ar_cycle;
-    n_rd++; lat_sum += lat; if (lat > lat_max) lat_max = lat;
   }
   void read_retire(uint32_t tag) {
     rd.erase(tag);

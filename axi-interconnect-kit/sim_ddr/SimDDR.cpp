@@ -222,7 +222,7 @@ void SimDDR::seq() {
   }
 #ifdef SIM_DDR_DS3
   for (RdTxn &t : rd_)
-    if (!t.in_data && !t.complete && ds3_->d.read_ready(t.tag)) { t.in_data = true; ds3_->d.read_finish(t.tag); }
+    if (!t.in_data && !t.complete && ds3_->d.read_ready(t.tag)) t.in_data = true;
 #else
   for (RdTxn &t : rd_)
     if (!t.in_data && !t.complete && ++t.lat >= SIM_DDR_LATENCY) t.in_data = true;
