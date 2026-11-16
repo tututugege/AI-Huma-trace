@@ -1,0 +1,62 @@
+// The staged LSU: outputs phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
+#include "LsuPipeInternal.h"
+
+void RealLsu::cal() {
+  const lp::LsuPipeState &pcur = pcur_;
+  pw = {};
+  mdp_.write_pending();
+  {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
+    for (int i = 0; i < LDQ_SIZE && mdp_.trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
+      if ((mdp_.trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) mdp_.trn &= ~(1ULL << i);
+    for (int i = 0; i < LDQ_SIZE && mdp_.trn; i++)
+      if (mdp_.trn >> i & 1) { mdp_.trn &= ~(1ULL << i); mdp_.pend.push_back(MemDepPred::idx(pcur.ldq[i].pc)); break; }
+  }
+  for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
+  for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
+  for (auto &w : out.lsu_awake.wake) w = {};
+  {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
+    for (uint32_t k = 0; k < pnxt.stq_count; k++) {
+      PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
+      if (t.m_init) continue;
+      t.m_init = true;
+      const tb::Fact *f = tbhook::fact_by_rob(t.rob_idx);
+      if (!f || !f->is_store || !f->has_mem_write || f->trapped || f->blocked != tb::Blocked::None) continue;
+      t.m_v = true;
+      t.m_amo = (f->inst & 0x7f) == 0x2f;
+      t.m_w = f->mem_waddr;
+      t.m_old = f->mem_old;
+      t.m_new = f->mem_wdata;
+      t.m_rs2 = f->rs2_value;
+      t.m_off = f->vaddr & (XLEN / 8 - 1);
+      t.m_sz = f->size;
+    }
+  }
+}
+
+void RealLsu::lsu2rob() {
+  const lp::LsuPipeState &pcur = pcur_;
+  out.lsu2rob = {};
+  out.lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
+  std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 
+  for (const PLdq &l : pcur.ldq)
+    if (l.miss && l.st != L_EMPTY) m.set(l.rob_idx);
+  out.lsu2rob.tma.miss_mask = m;
+}
+
+void RealLsu::lsu2dis() {
+  const lp::LsuPipeState &pcur = pcur_;
+  out.lsu2dis = {};
+  const uint32_t head = pcur.stq_head, count = pcur.stq_count;
+  out.lsu2dis.stq_tail = (head + count) % STQ_SIZE;
+  out.lsu2dis.stq_tail_flag = stq_tail_flag(head, count, pcur.stq_head_flag);
+  uint32_t empty = 0;
+  for (const PLdq &l : pcur.ldq) empty += l.st == L_EMPTY;
+  out.lsu2dis.ldq_free = empty;
+  out.lsu2dis.stq_free = STQ_SIZE - count;
+  uint32_t n = 0;
+  for (int i = 0; i < LDQ_SIZE && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
+    if (pcur.ldq[i].st == L_EMPTY) {
+      out.lsu2dis.ldq_alloc_idx[n] = i;
+      out.lsu2dis.ldq_alloc_valid[n++] = true;
+    }
+}

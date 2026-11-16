@@ -33,7 +33,13 @@ The rules the model follows (exp/style, 2026-11-16). Module structure, contracts
 * A module owns its submodules by value or `std::unique_ptr` (BackTop's modules, the ITLB, FastWarm's state); raw
   pointers are non-owning bindings (ports, `ctx`). Exception: TraceBridge's entry chain, whose entries are
   referenced by in-flight uops.
-* No file-scope mutable state in the model: state lives in the module that owns it (the front end: FrontCore).
+* No file-scope mutable state in the model: state lives in the module that owns it (the front end: FrontCore; Isu's
+  write-back busy tables; the LSU's memory-dependence predictor; the D-cache arrays: DcacheArrays in RealDcache).
+  Exceptions: the uop pool (UopPool, shared storage of the in-flight uops), the functional memory binding (PhysMemory),
+  the cycle counter `sim_time`, PMU event buses (`g_pmu_*`).
+* Environment variables are read in one place: `sim_env()` (include/env.h); docs/ENV_VARS.md lists them.
+* No `memset` on struct / class objects: `x = {}`, `{}` member initializers, or a loop over an array of structs.
+  Plain integer arrays may be cleared with memset; the LSU's 0xA5 poison fill (a debug aid) and memory pages keep it.
 * Module ports: `struct In` (const pointers to what the module reads) and `struct Out` (what it drives), bound by the
   parent's init (BackTop::init, MemSubsystem::init); no module reaches a shared struct of all signals.
 

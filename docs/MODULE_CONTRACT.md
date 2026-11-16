@@ -238,3 +238,19 @@ struct Out { RenDisIO ren2dis; RenDecIO ren2dec; } out;   // what it drives: its
 The contracts keep the signal names (a port is named after its signal); the scan rewrites the port form into the
 signal form before reading (comb_graph.py `as_wires`), so the checks are unchanged. Done in two compile-checked passes:
 inputs first (a module's reads become `in.X->`), then the outputs moved into the modules.
+
+## Front-end IO, memset, environment, file-scope state, LSU files (exp/front-io)
+
+* `FrontTopIn` is grouped: `ctrl` (reset, itlb_flush, fence_i, fifo_read_enable), `redirect` (valid, address, the
+  mispredicted branch's rf_*), `train[COMMIT_WIDTH]` (one BpuTrain per committing instruction, instead of eleven
+  parallel arrays).
+* The three entry FIFOs' inputs are `FifoIn<Entry>`: the control of the cycle and `wdata`, the entry itself (its
+  fields were repeated under other names; load() is a copy now). The fetch-address FIFO keeps its own input.
+* No memset on struct objects (docs/STYLE.md); a clear is now a pure write to the scan (the D-cache's declared reads
+  shrank, the order is unchanged).
+* All environment variables in `SimEnv` (include/env.h).
+* File-scope state moved into its modules: Isu's write-back busy tables, PreIduQueue's per-cycle accepted entries,
+  the LSU's memory-dependence predictor (`MemDepPred`), the D-cache arrays (`DcacheArrays` in RealDcache).
+* The staged LSU is one file per phase: RealLsuPipe.cpp (the clock edge and the phases' composition),
+  LsuPipeOutputs.cpp, LsuPipeWriteback.cpp, LsuPipeTranslate.cpp, LsuPipeRequests.cpp, with the shared helpers in
+  LsuPipeInternal.h. BPU_pipe.h (already in banner sections around one class) and IO.h (a list of IO structs) stay.
