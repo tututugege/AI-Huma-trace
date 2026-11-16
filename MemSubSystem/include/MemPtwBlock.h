@@ -75,14 +75,14 @@ public:
 
 
   void init() {
-    reset_state(cur_);
-    reset_state(nxt_);
+    reset_state(q_);
+    reset_state(d);
     reset_outputs(comb_);
     refresh_outputs();
   }
 
   void comb_begin(const PortIn &in) {
-    nxt_ = cur_;
+    d = q_;
     reset_outputs(comb_);
     apply_port_inputs(in);
     select_walk_owner();
@@ -96,11 +96,11 @@ public:
     refresh_outputs();
     // (after the outputs: the flush shows only from the next cycle on)
     for (size_t i = 0; i < kClientCount; i++)
-      if (in.walk_client_flush[i]) flush_walk_client_state(nxt_, static_cast<Client>(i));
+      if (in.walk_client_flush[i]) flush_walk_client_state(d, static_cast<Client>(i));
   }
 
   void seq() {
-    cur_ = nxt_;
+    q_ = d;
     refresh_outputs();
   }
 
@@ -154,7 +154,7 @@ private:
   void apply_port_inputs(const PortIn &in) {
     for (size_t i = 0; i < kClientCount; i++) {
       const Client client = static_cast<Client>(i);
-      auto &walk_state = nxt_.walk_clients[i];
+      auto &walk_state = d.walk_clients[i];
       if (in.walk_clients[i].resp_consumed) {
         walk_state.resp_valid = false;
       }
@@ -165,29 +165,29 @@ private:
   }
 
   void select_walk_owner() {
-    if (nxt_.walk_active || nxt_.walk_state != WalkState::IDLE) {
+    if (d.walk_active || d.walk_state != WalkState::IDLE) {
       return;
     }
 
     auto grant_walk_owner = [&](Client owner) {
-      auto &wc = nxt_.walk_clients[client_idx(owner)];
+      auto &wc = d.walk_clients[client_idx(owner)];
       wc.req_pending = false;
       wc.req_inflight = true;
-      nxt_.walk_owner = owner;
-      nxt_.walk_active = true;
-      nxt_.walk_state = WalkState::L1_REQ;
-      nxt_.walk_l1_pte = 0;
-      nxt_.walk_level = 2;   // Sv39: three levels
-      nxt_.walk_rr_next = (owner == Client::DTLB) ? Client::ITLB
+      d.walk_owner = owner;
+      d.walk_active = true;
+      d.walk_state = WalkState::L1_REQ;
+      d.walk_l1_pte = 0;
+      d.walk_level = 2;   // Sv39: three levels
+      d.walk_rr_next = (owner == Client::DTLB) ? Client::ITLB
                                                   : Client::DTLB;
     };
 
-    const Client first = nxt_.walk_rr_next;
+    const Client first = d.walk_rr_next;
     const Client second = (first == Client::DTLB) ? Client::ITLB
                                                   : Client::DTLB;
-    if (nxt_.walk_clients[client_idx(first)].req_pending) {
+    if (d.walk_clients[client_idx(first)].req_pending) {
       grant_walk_owner(first);
-    } else if (nxt_.walk_clients[client_idx(second)].req_pending) {
+    } else if (d.walk_clients[client_idx(second)].req_pending) {
       grant_walk_owner(second);
     }
   }
@@ -230,7 +230,7 @@ private:
     }
   }
 
-  void refresh_outputs() { project_outputs_from_state(nxt_, comb_); }
+  void refresh_outputs() { project_outputs_from_state(d, comb_); }
 
   void apply_grant(const FeedbackIn &in) {
     if (in.grant_valid) on_walk_read_granted(in.grant_req_id);
@@ -254,7 +254,7 @@ private:
   }
 
   void send_walk_req(Client client, const PtwWalkReq &req) {
-    auto &s = nxt_.walk_clients[client_idx(client)];
+    auto &s = d.walk_clients[client_idx(client)];
     s.resp_valid = false;
     if (s.req_pending || s.req_inflight) {
       return;
@@ -264,27 +264,27 @@ private:
   }
 
   void on_walk_read_granted(size_t req_id) {
-    if (nxt_.walk_state == WalkState::L1_REQ) {
-      nxt_.walk_state = WalkState::L1_WAIT_RESP;
-    } else if (nxt_.walk_state == WalkState::L2_REQ) {
-      nxt_.walk_state = WalkState::L2_WAIT_RESP;
+    if (d.walk_state == WalkState::L1_REQ) {
+      d.walk_state = WalkState::L1_WAIT_RESP;
+    } else if (d.walk_state == WalkState::L2_REQ) {
+      d.walk_state = WalkState::L2_WAIT_RESP;
     }
-    nxt_.walk_req_id_valid = true;
-    nxt_.walk_req_id = req_id;
+    d.walk_req_id_valid = true;
+    d.walk_req_id = req_id;
   }
 
   WalkRespResult on_walk_mem_resp(size_t req_id, uint64_t pte) {
     const bool is_active_req =
-        nxt_.walk_active && nxt_.walk_req_id_valid && (nxt_.walk_req_id == req_id);
-    if (nxt_.walk_drop_resp_credit > 0 && !is_active_req) {
-      nxt_.walk_drop_resp_credit--;
+        d.walk_active && d.walk_req_id_valid && (d.walk_req_id == req_id);
+    if (d.walk_drop_resp_credit > 0 && !is_active_req) {
+      d.walk_drop_resp_credit--;
       return WalkRespResult::DROPPED;
     }
-    if (!nxt_.walk_active || !nxt_.walk_req_id_valid || !is_active_req) {
+    if (!d.walk_active || !d.walk_req_id_valid || !is_active_req) {
       return WalkRespResult::IGNORED;
     }
 
-    auto &wc = nxt_.walk_clients[client_idx(nxt_.walk_owner)];
+    auto &wc = d.walk_clients[client_idx(d.walk_owner)];
     const bool v = (pte & PTE_V) != 0;
     const bool r = (pte & PTE_R) != 0;
     const bool w = (pte & PTE_W) != 0;
@@ -296,10 +296,10 @@ private:
       wc.resp = {};
       wc.resp.fault = true;
       wc.resp.vaddr = wc.req.vaddr;
-      nxt_.walk_active = false;
-      nxt_.walk_state = WalkState::IDLE;
-      nxt_.walk_req_id_valid = false;
-      nxt_.walk_req_id = 0;
+      d.walk_active = false;
+      d.walk_state = WalkState::IDLE;
+      d.walk_req_id_valid = false;
+      d.walk_req_id = 0;
     };
     auto publish_leaf = [&](uint8_t leaf_level) {
       wc.req_inflight = false;
@@ -309,14 +309,14 @@ private:
       wc.resp.vaddr = wc.req.vaddr;
       wc.resp.leaf_pte = pte;
       wc.resp.leaf_level = leaf_level;
-      nxt_.walk_active = false;
-      nxt_.walk_state = WalkState::IDLE;
-      nxt_.walk_req_id_valid = false;
-      nxt_.walk_req_id = 0;
+      d.walk_active = false;
+      d.walk_state = WalkState::IDLE;
+      d.walk_req_id_valid = false;
+      d.walk_req_id = 0;
     };
 
-    if (nxt_.walk_state == WalkState::L1_WAIT_RESP || nxt_.walk_state == WalkState::L2_WAIT_RESP) {
-      const uint8_t level = nxt_.walk_level;
+    if (d.walk_state == WalkState::L1_WAIT_RESP || d.walk_state == WalkState::L2_WAIT_RESP) {
+      const uint8_t level = d.walk_level;
       // Sv39: PTE bits 63:54 are reserved (Svnapot / Svpbmt are not implemented): a PTE with any of them set faults
       const bool reserved_bits = (pte >> 54) != 0;
       // the PPN bits below a superpage's level must be zero (Sv32: PPN[0] = pte[19:10]; Sv39: PPN[level-1:0])
@@ -334,11 +334,11 @@ private:
       } else if (level == 0) {
         publish_fault();   // a pointer where a leaf is required
       } else {
-        nxt_.walk_l1_pte = pte;
-        nxt_.walk_level = level - 1;
-        nxt_.walk_state = WalkState::L2_REQ;
-        nxt_.walk_req_id_valid = false;
-        nxt_.walk_req_id = 0;
+        d.walk_l1_pte = pte;
+        d.walk_level = level - 1;
+        d.walk_state = WalkState::L2_REQ;
+        d.walk_req_id_valid = false;
+        d.walk_req_id = 0;
       }
     } else {
       publish_fault();
@@ -349,46 +349,46 @@ private:
 
   WalkRespResult on_walk_mem_replay(size_t req_id, uint8_t replay_reason) {
     const bool is_active_req =
-        nxt_.walk_active && nxt_.walk_req_id_valid && (nxt_.walk_req_id == req_id);
-    if (nxt_.walk_drop_resp_credit > 0 && !is_active_req) {
-      nxt_.walk_drop_resp_credit--;
+        d.walk_active && d.walk_req_id_valid && (d.walk_req_id == req_id);
+    if (d.walk_drop_resp_credit > 0 && !is_active_req) {
+      d.walk_drop_resp_credit--;
       return WalkRespResult::DROPPED;
     }
-    if (!nxt_.walk_active || !is_active_req) {
+    if (!d.walk_active || !is_active_req) {
       return WalkRespResult::IGNORED;
     }
 
-    auto &wc = nxt_.walk_clients[client_idx(nxt_.walk_owner)];
+    auto &wc = d.walk_clients[client_idx(d.walk_owner)];
     wc.req_inflight = false;
 
     static constexpr uint8_t kReplayWaitFill = 2;
     if (replay_reason == kReplayWaitFill) {
-      if (nxt_.walk_state == WalkState::L1_WAIT_RESP) {
-        nxt_.walk_state = WalkState::L1_REQ;
-      } else if (nxt_.walk_state == WalkState::L2_WAIT_RESP) {
-        nxt_.walk_state = WalkState::L2_REQ;
+      if (d.walk_state == WalkState::L1_WAIT_RESP) {
+        d.walk_state = WalkState::L1_REQ;
+      } else if (d.walk_state == WalkState::L2_WAIT_RESP) {
+        d.walk_state = WalkState::L2_REQ;
       }
-      nxt_.walk_req_id_valid = false;
-      nxt_.walk_req_id = 0;
+      d.walk_req_id_valid = false;
+      d.walk_req_id = 0;
       return WalkRespResult::HANDLED;
     }
 
-    nxt_.walk_req_id_valid = false;
-    nxt_.walk_req_id = 0;
+    d.walk_req_id_valid = false;
+    d.walk_req_id = 0;
     return WalkRespResult::HANDLED;
   }
 
   void retry_active_walk() {
-    if (!nxt_.walk_active) {
+    if (!d.walk_active) {
       return;
     }
-    if (nxt_.walk_state == WalkState::L1_WAIT_RESP) {
-      nxt_.walk_state = WalkState::L1_REQ;
-    } else if (nxt_.walk_state == WalkState::L2_WAIT_RESP) {
-      nxt_.walk_state = WalkState::L2_REQ;
+    if (d.walk_state == WalkState::L1_WAIT_RESP) {
+      d.walk_state = WalkState::L1_REQ;
+    } else if (d.walk_state == WalkState::L2_WAIT_RESP) {
+      d.walk_state = WalkState::L2_REQ;
     }
-    nxt_.walk_req_id_valid = false;
-    nxt_.walk_req_id = 0;
+    d.walk_req_id_valid = false;
+    d.walk_req_id = 0;
   }
 
   static void flush_walk_client_state(State &state, Client client) {
@@ -411,7 +411,9 @@ private:
     }
   }
 
-  State cur_{};
-  State nxt_{};
+  // registers: q (read in comb only by comb_begin, written only by seq / init) and d (comb writes it; comb_begin starts it from q)
+  using Regs = State;
+  Regs q_{};
+  Regs d{};
   CombOut comb_{};
 };

@@ -41,6 +41,10 @@ struct S1S2Reg {
         reg<1>     perf_replay = false;
     } stores[LSU_STA_COUNT];
 };
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
+// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
+//   CONTRACT stage2_comb  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
+//   CONTRACT stage1_comb  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write out.fillout  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
 class RealDcache {
 public:
     void init();
@@ -51,7 +55,7 @@ public:
 
     void stage1_comb();
     void stage2_comb();
-    const S1S2Reg &stage1_next_state() const { return s1s2_nxt; }
+    const S1S2Reg &stage1_next_state() const { return d.s1s2; }
     void set_hidden_bank_retry_blocked(
         const bool load_blocked[LSU_LDU_COUNT],
         const bool store_blocked[LSU_STA_COUNT]) {
@@ -63,8 +67,8 @@ public:
         }
     }
 
-    bool load_retry_pending(int i) const { return bank_retry_cur.loads[i].valid; }
-    bool store_retry_pending(int i) const { return bank_retry_cur.stores[i].valid; }
+    bool load_retry_pending(int i) const { return q_.bank_retry.loads[i].valid; }
+    bool store_retry_pending(int i) const { return q_.bank_retry.stores[i].valid; }
 
 private:
     struct FillReqMerge {
@@ -86,12 +90,12 @@ private:
         BankRetryStore stores[LSU_STA_COUNT];
     };
 
-    S1S2Reg s1s2_cur_; // latched at start of cycle (q: written only in seq / init)
-    const S1S2Reg &s1s2_cur = s1s2_cur_;
-    S1S2Reg s1s2_nxt; // computed by comb(); committed by seq()
-    BankRetryState bank_retry_cur_; // per-port hidden retry latches for LSU bank conflicts (q)
-    const BankRetryState &bank_retry_cur = bank_retry_cur_;
-    BankRetryState bank_retry_nxt;
+    // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
+    struct Regs {
+        S1S2Reg s1s2;               // the stage-1 -> stage-2 pipeline register
+        BankRetryState bank_retry;  // per-port hidden retry latches for LSU bank conflicts
+    };
+    Regs q_, d;
     // Combinational scratch from stage2_comb() to stage1_comb(); not sequenced state.
     FillReqMerge fill_req_merge_wires[LSU_STA_COUNT] = {};
     BankRetryState bank_retry_issue_wires = {};

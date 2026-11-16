@@ -20,10 +20,10 @@ static bool l1d_perf_is_lsu_req(uint32_t req_id) {
 
 void RealDcache::init() {
     init_dcache();
-    s1s2_cur_ = {};
-    s1s2_nxt = {};
-    bank_retry_cur_ = {};
-    bank_retry_nxt = {};
+    q_.s1s2 = {};
+    d.s1s2 = {};
+    q_.bank_retry = {};
+    d.bank_retry = {};
     bank_retry_issue_wires = {};
     for (int i = 0; i < LSU_LDU_COUNT; i++) {
         bank_retry_load_blocked[i] = false;
@@ -37,7 +37,8 @@ void RealDcache::init() {
 }
 
 void RealDcache::stage1_comb() {
-    bank_retry_nxt = bank_retry_cur;
+    const Regs &q = q_;
+    d.bank_retry = q.bank_retry;
 
     auto line_id = [](uint32_t addr) -> uint32_t {
         return addr >> DCACHE_OFFSET_BITS;
@@ -50,10 +51,10 @@ void RealDcache::stage1_comb() {
     const uint32_t fill_line_id = line_id(in.mshr2dcache->fill_req.addr);
     
     bool same_fill_already_in_s2 =
-    s1s2_cur.fill_write.valid &&
+    q.s1s2.fill_write.valid &&
     in.mshr2dcache->fill_req.valid &&
-    s1s2_cur.fill_write.set_idx == fill_f.set_idx &&
-    s1s2_cur.fill_write.tag == fill_f.tag;
+    q.s1s2.fill_write.set_idx == fill_f.set_idx &&
+    q.s1s2.fill_write.tag == fill_f.tag;
 
     const bool hold_fill_in_s2 =
         same_fill_already_in_s2 && !out.fill_write->valid;
@@ -96,24 +97,24 @@ void RealDcache::stage1_comb() {
     };
 
     if (hold_fill_in_s2) {
-        s1s2_nxt.fill_write = s1s2_cur.fill_write;
+        d.s1s2.fill_write = q.s1s2.fill_write;
     } else {
-        s1s2_nxt.fill_write = {};
+        d.s1s2.fill_write = {};
         if (fillout_granted && !same_fill_already_in_s2) {
-            s1s2_nxt.fill_write.valid = true;
-            s1s2_nxt.fill_write.id = in.mshr2dcache->fill_req.id;
-            s1s2_nxt.fill_write.dirty = in.mshr2dcache->fill_req.dirty || (in.fill_store_dirty && *in.fill_store_dirty);
-            s1s2_nxt.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
-            s1s2_nxt.fill_write.is_prefetch = in.mshr2dcache->fill_req.is_prefetch;
-            s1s2_nxt.fill_write.set_idx = fill_f.set_idx;
-            s1s2_nxt.fill_write.tag = fill_f.tag;
+            d.s1s2.fill_write.valid = true;
+            d.s1s2.fill_write.id = in.mshr2dcache->fill_req.id;
+            d.s1s2.fill_write.dirty = in.mshr2dcache->fill_req.dirty || (in.fill_store_dirty && *in.fill_store_dirty);
+            d.s1s2.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
+            d.s1s2.fill_write.is_prefetch = in.mshr2dcache->fill_req.is_prefetch;
+            d.s1s2.fill_write.set_idx = fill_f.set_idx;
+            d.s1s2.fill_write.tag = fill_f.tag;
         }
     }
 
-    if (s1s2_nxt.fill_write.valid) {
+    if (d.s1s2.fill_write.valid) {
         for (int i = 0; i < LSU_STA_COUNT; i++) {
             if (!fill_req_merge_wires[i].valid) continue;
-            s1s2_nxt.fill_write.dirty = true;
+            d.s1s2.fill_write.dirty = true;
         }
     }
 
@@ -135,7 +136,7 @@ void RealDcache::stage1_comb() {
         int n = 0;
         for (int i = 0; i < LSU_LDU_COUNT; i++) {
             const bool lv = in.lsu2dcache->req_ports.load_ports[i].valid;
-            if (!lv && !bank_retry_load_blocked[i] && (bank_retry_cur.loads[i].valid || bank_retry_issue_wires.loads[i].valid)) ld_order[n++] = i;
+            if (!lv && !bank_retry_load_blocked[i] && (q.bank_retry.loads[i].valid || bank_retry_issue_wires.loads[i].valid)) ld_order[n++] = i;
         }
         for (int i = 0; i < LSU_LDU_COUNT; i++) {
             bool in_first = false;
@@ -146,7 +147,7 @@ void RealDcache::stage1_comb() {
     for (int oi = 0; oi < LSU_LDU_COUNT; oi++) {
         const int i = ld_order[oi];
         const LoadReq &lsu_req = in.lsu2dcache->req_ports.load_ports[i];
-        const BankRetryLoad &pending_retry = bank_retry_cur.loads[i];
+        const BankRetryLoad &pending_retry = q.bank_retry.loads[i];
         const BankRetryLoad &new_retry = bank_retry_issue_wires.loads[i];
         const bool retry_blocked = bank_retry_load_blocked[i];
         const bool use_pending_retry =
@@ -165,15 +166,15 @@ void RealDcache::stage1_comb() {
             lsu_req.valid ? lsu_req.req_id
                           : (use_pending_retry ? pending_retry.req_id
                                                : new_retry.req_id);
-        S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
+        S1S2Reg::LoadSlot &slot = d.s1s2.loads[i];
         slot.pf = false;
         if (use_pending_retry) {
-            bank_retry_nxt.loads[i] = {};
+            d.bank_retry.loads[i] = {};
         }
         if (new_retry.valid && !use_new_retry) {
-            Assert(!bank_retry_nxt.loads[i].valid &&
+            Assert(!d.bank_retry.loads[i].valid &&
                    "DCache load bank retry latch overflow");
-            bank_retry_nxt.loads[i] = new_retry;
+            d.bank_retry.loads[i] = new_retry;
         }
         if (!req_valid){
             slot.valid = false;
@@ -186,7 +187,7 @@ void RealDcache::stage1_comb() {
             AddrFields f  = decode(req_addr);
             const bool bank_granted = try_grant_bank(f, line_id(req_addr));
             // for(int j=0;j<LSU_STA_COUNT;j++){
-            //     if(s1s2_cur.loads[j].valid&&CheckAddr(req.addr,(uint8_t)0xffff, s1s2_cur.stores[j].addr,s1s2_cur.stores[j].strb)){
+            //     if(q.s1s2.loads[j].valid&&CheckAddr(req.addr,(uint8_t)0xffff, q.s1s2.stores[j].addr,q.s1s2.stores[j].strb)){
             //         replay = true; // 如果有older load地址重叠且还在等待dcache响应或者等待重放中（即需要重放），则这个load也需要重放，以避免饥饿。注意我们只检查older load的状态，因为如果older load是hit，说明它可以在同一周期完成并更新cache，从而这个load不需要重放。另一方面，如果我们检查这个load自己的状态，可能会导致当有多条连续miss时出现不必要的重放，因为这个load可能还没有被标记为replay，但它会在同一周期内因为MSHR miss而被重放。
             //         break;
             //     }
@@ -224,7 +225,7 @@ void RealDcache::stage1_comb() {
         int n = 0;
         for (int i = 0; i < LSU_STA_COUNT; i++) {
             if (!in.lsu2dcache->req_ports.store_ports[i].valid && !bank_retry_store_blocked[i] &&
-                (bank_retry_cur.stores[i].valid || bank_retry_issue_wires.stores[i].valid)) st_order[n++] = i;
+                (q.bank_retry.stores[i].valid || bank_retry_issue_wires.stores[i].valid)) st_order[n++] = i;
         }
         for (int i = 0; i < LSU_STA_COUNT; i++) {
             bool in_first = false;
@@ -235,7 +236,7 @@ void RealDcache::stage1_comb() {
     for (int oi = 0; oi < LSU_STA_COUNT; oi++) {
         const int i = st_order[oi];
         const StoreReq &lsu_req = in.lsu2dcache->req_ports.store_ports[i];
-        const BankRetryStore &pending_retry = bank_retry_cur.stores[i];
+        const BankRetryStore &pending_retry = q.bank_retry.stores[i];
         const BankRetryStore &new_retry = bank_retry_issue_wires.stores[i];
         const bool retry_blocked = bank_retry_store_blocked[i];
         const bool use_pending_retry =
@@ -258,15 +259,15 @@ void RealDcache::stage1_comb() {
             lsu_req.valid ? lsu_req.req_id
                           : (use_pending_retry ? pending_retry.req_id
                                                : new_retry.req_id);
-        S1S2Reg::StoreSlot &slot = s1s2_nxt.stores[i];
+        S1S2Reg::StoreSlot &slot = d.s1s2.stores[i];
         int idx       = LSU_LDU_COUNT + i;
         if (use_pending_retry) {
-            bank_retry_nxt.stores[i] = {};
+            d.bank_retry.stores[i] = {};
         }
         if (new_retry.valid && !use_new_retry) {
-            Assert(!bank_retry_nxt.stores[i].valid &&
+            Assert(!d.bank_retry.stores[i].valid &&
                    "DCache store bank retry latch overflow");
-            bank_retry_nxt.stores[i] = new_retry;
+            d.bank_retry.stores[i] = new_retry;
         }
         if(!req_valid){
             slot.valid = false;
@@ -279,7 +280,7 @@ void RealDcache::stage1_comb() {
             AddrFields f  = decode(req_addr);
             const bool bank_granted = try_grant_bank(f, line_id(req_addr));
             // for(int j=0;j<LSU_STA_COUNT;j++){
-            //     if(s1s2_cur.stores[j].valid&&CheckAddr(req.addr,req.strb, s1s2_cur.stores[j].addr,s1s2_cur.stores[j].strb)){
+            //     if(q.s1s2.stores[j].valid&&CheckAddr(req.addr,req.strb, q.s1s2.stores[j].addr,q.s1s2.stores[j].strb)){
             //         replayed = out.dcache2lsu->resp_ports.store_resps[j].replay != ReplayType::HIT; // If there is an older store with overlapping address that is waiting for MSHR allocation or has been allocated an MSHR but not yet completed (i.e., needs to be replayed), then this store should also be replayed to avoid starvation. Note that we only check the replay status of the older store, because if the older store is a hit, it means it can complete in the same cycle and update the cache before this store's hit check, so this store doesn't need to be replayed. On the other hand, if we check the replay status of this store itself, it may cause unnecessary replays when there are multiple back-to-back misses, because this store may not have been marked as replayed yet when we check, even though it will be replayed in the same cycle due to MSHR miss.
             //         break;
             //     }
@@ -310,7 +311,7 @@ void RealDcache::stage1_comb() {
     // Prefetch tag probe: lowest priority, rides an idle load port (it competes for the bank like any load).
     if (pf.enabled() && in.lsu2dcache != nullptr && pf.head_valid()) {
         for (int i = 0; i < LSU_LDU_COUNT; i++) {
-            S1S2Reg::LoadSlot &slot = s1s2_nxt.loads[i];
+            S1S2Reg::LoadSlot &slot = d.s1s2.loads[i];
             if (slot.valid) continue;                      // port busy with a demand request or a retry
             const uint32_t pf_addr = pf.head_addr();
             const AddrFields f = decode(pf_addr);
@@ -343,11 +344,12 @@ void RealDcache::stage1_comb() {
 
 
 
-    s1s2_nxt.icache_req = in.lsu2dcache->icache_req;
+    d.s1s2.icache_req = in.lsu2dcache->icache_req;
     
 }
 
 void RealDcache::stage2_comb() {
+    const Regs &q = q_;
 
     memset(out.dcache2lsu->resp_ports.load_resps, 0, sizeof(out.dcache2lsu->resp_ports.load_resps));
     memset(out.dcache2lsu->resp_ports.store_resps, 0, sizeof(out.dcache2lsu->resp_ports.store_resps));
@@ -365,24 +367,24 @@ void RealDcache::stage2_comb() {
     }
     bank_retry_issue_wires = {};
 
-    if(s1s2_cur.fill_write.valid){
+    if(q.s1s2.fill_write.valid){
         int select_way = choose_plru_tree_victim(in.fillin->plru_tree_state, in.fillin->valid_snap);
         if(in.fillin->valid_snap[select_way] && in.fillin->dirty_snap[select_way]){
             if(in.wb2dcache->free>0){
                 out.dcache2wb->dirty_info.valid = true;
                 out.dcache2wb->dirty_info.lsu_origin =
-                    s1s2_cur.fill_write.lsu_origin;
-                out.dcache2wb->dirty_info.addr = get_addr(s1s2_cur.fill_write.set_idx, in.fillin->tag_snap[select_way], 0);
+                    q.s1s2.fill_write.lsu_origin;
+                out.dcache2wb->dirty_info.addr = get_addr(q.s1s2.fill_write.set_idx, in.fillin->tag_snap[select_way], 0);
 
                 out.fill_write->valid = true;
-                out.fill_write->dirty = s1s2_cur.fill_write.dirty;
-                out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
-                out.fill_write->is_prefetch = s1s2_cur.fill_write.is_prefetch;
-                out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
-                out.fill_write->tag = s1s2_cur.fill_write.tag;
+                out.fill_write->dirty = q.s1s2.fill_write.dirty;
+                out.fill_write->lsu_origin = q.s1s2.fill_write.lsu_origin;
+                out.fill_write->is_prefetch = q.s1s2.fill_write.is_prefetch;
+                out.fill_write->set_idx = q.s1s2.fill_write.set_idx;
+                out.fill_write->tag = q.s1s2.fill_write.tag;
                 out.fill_write->way_idx = select_way;
                 out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the writeback to be issued in parallel with the fill, improving performance when the evicted line is dirty.
-                out.dcache2mshr->fill_resp.id = s1s2_cur.fill_write.id;
+                out.dcache2mshr->fill_resp.id = q.s1s2.fill_write.id;
             }
             else{
                 out.fill_write->valid = false; // Can't accept new fill, so stall the MSHR fill response and the waiting load/store. This may cause deadlock when MSHR and WB are both full, but it's a rare case and can be resolved by replaying the load/store.
@@ -391,14 +393,14 @@ void RealDcache::stage2_comb() {
         }
         else{
             out.fill_write->valid = true;
-            out.fill_write->dirty = s1s2_cur.fill_write.dirty;
-            out.fill_write->lsu_origin = s1s2_cur.fill_write.lsu_origin;
-            out.fill_write->is_prefetch = s1s2_cur.fill_write.is_prefetch;
-            out.fill_write->set_idx = s1s2_cur.fill_write.set_idx;
-            out.fill_write->tag = s1s2_cur.fill_write.tag;
+            out.fill_write->dirty = q.s1s2.fill_write.dirty;
+            out.fill_write->lsu_origin = q.s1s2.fill_write.lsu_origin;
+            out.fill_write->is_prefetch = q.s1s2.fill_write.is_prefetch;
+            out.fill_write->set_idx = q.s1s2.fill_write.set_idx;
+            out.fill_write->tag = q.s1s2.fill_write.tag;
             out.fill_write->way_idx = select_way;
             out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the fill to complete and the line to be allocated in cache without waiting for an unnecessary writeback to drain when the evicted line is clean.
-            out.dcache2mshr->fill_resp.id = s1s2_cur.fill_write.id;
+            out.dcache2mshr->fill_resp.id = q.s1s2.fill_write.id;
         }
     }
 
@@ -406,7 +408,7 @@ void RealDcache::stage2_comb() {
     int pf_slot = -1;
     // ── Load ports ────────────────────────────────────────────────────────────
     for (int i = 0; i < LSU_LDU_COUNT; i++) {
-        const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[i];
+        const S1S2Reg::LoadSlot &slot = q.s1s2.loads[i];
         LoadResp &resp = out.dcache2lsu->resp_ports.load_resps[i];
         DcacheLineReadResp &line_resp = *in.dcachelinereadresp[i];
         resp.valid = false; 
@@ -418,7 +420,7 @@ void RealDcache::stage2_comb() {
 
         if(slot.replayed){
             if (slot.bank_conflict && dcache_req_id_is_lsu(slot.req_id) &&
-                !bank_retry_cur.loads[i].valid) {
+                !q.bank_retry.loads[i].valid) {
                 bank_retry_issue_wires.loads[i].valid = true;
                 bank_retry_issue_wires.loads[i].addr = slot.addr;
                 bank_retry_issue_wires.loads[i].req_id = slot.req_id;
@@ -466,7 +468,7 @@ void RealDcache::stage2_comb() {
             out.lru_updates[i]->way = hit_way;
         }
         else {
-            if(s1s2_cur.icache_req==i){
+            if(q.s1s2.icache_req==i){
                 // ICache coherent probes are lookup-only: report miss to the
                 // front-end route block without allocating an MSHR.
                 resp.valid = true;
@@ -511,7 +513,7 @@ void RealDcache::stage2_comb() {
 
     // ── Store ports ───────────────────────────────────────────────────────────
     for (int i = 0; i < LSU_STA_COUNT; i++) {
-        const S1S2Reg::StoreSlot &slot = s1s2_cur.stores[i];
+        const S1S2Reg::StoreSlot &slot = q.s1s2.stores[i];
         StoreResp &resp = out.dcache2lsu->resp_ports.store_resps[i];
         const int iidx = LSU_LDU_COUNT + i;
 
@@ -523,7 +525,7 @@ void RealDcache::stage2_comb() {
 
         if(slot.replayed){
             if (slot.bank_conflict && dcache_req_id_is_lsu(slot.req_id) &&
-                !bank_retry_cur.stores[i].valid) {
+                !q.bank_retry.stores[i].valid) {
                 bank_retry_issue_wires.stores[i].valid = true;
                 bank_retry_issue_wires.stores[i].addr = slot.addr;
                 bank_retry_issue_wires.stores[i].strb = slot.strb;
@@ -541,9 +543,9 @@ void RealDcache::stage2_comb() {
         if(cache_line_match(slot.addr,in.mshr2dcache->fill_req.addr)&&in.mshr2dcache->fill_req.valid){ // merge the store into the incoming fill so the store can complete without replaying
             const AddrFields fill_req_f = decode(in.mshr2dcache->fill_req.addr);
             const bool fill_req_already_in_s2 =
-                s1s2_cur.fill_write.valid &&
-                s1s2_cur.fill_write.set_idx == fill_req_f.set_idx &&
-                s1s2_cur.fill_write.tag == fill_req_f.tag;
+                q.s1s2.fill_write.valid &&
+                q.s1s2.fill_write.set_idx == fill_req_f.set_idx &&
+                q.s1s2.fill_write.tag == fill_req_f.tag;
 
             if (fill_req_already_in_s2 && out.fill_write->valid) {
                 out.fill_write->dirty = true;
@@ -565,7 +567,7 @@ void RealDcache::stage2_comb() {
         }
 
         if (hit_way < DCACHE_WAYS_NUM) {
-            if(s1s2_cur.fill_write.set_idx == f.set_idx && s1s2_cur.fill_write.valid&&out.fill_write->way_idx == hit_way){ // hit the line being filled in the same cycle, treat it as a hit and update the pending fill write to avoid a deadlock when MSHR is full
+            if(q.s1s2.fill_write.set_idx == f.set_idx && q.s1s2.fill_write.valid&&out.fill_write->way_idx == hit_way){ // hit the line being filled in the same cycle, treat it as a hit and update the pending fill write to avoid a deadlock when MSHR is full
                 resp.valid  = true;
                 resp.replay = ReplayType::CONFLICT;
                 resp.req_id = slot.req_id;
@@ -632,7 +634,7 @@ void RealDcache::stage2_comb() {
 
     // ── Prefetch probe (lowest priority: after every demand request has taken its MSHR) ──────────
     if (pf_slot >= 0) {
-        const S1S2Reg::LoadSlot &slot = s1s2_cur.loads[pf_slot];
+        const S1S2Reg::LoadSlot &slot = q.s1s2.loads[pf_slot];
         const AddrFields f = decode(slot.addr);
         const bool pf_llc_only = slot.pf_llc;
         const DcacheLineReadResp &line_resp = *in.dcachelinereadresp[pf_slot];
@@ -640,7 +642,7 @@ void RealDcache::stage2_comb() {
         for (int w = 0; w < DCACHE_WAYS_NUM; w++)
             if (line_resp.valid[w] && line_resp.tag[w] == f.tag) { hit_way = w; break; }
         const bool fill_same =
-            (s1s2_cur.fill_write.valid && s1s2_cur.fill_write.set_idx == f.set_idx && s1s2_cur.fill_write.tag == f.tag) ||
+            (q.s1s2.fill_write.valid && q.s1s2.fill_write.set_idx == f.set_idx && q.s1s2.fill_write.tag == f.tag) ||
             (in.mshr2dcache->fill_req.valid && cache_line_match(slot.addr, in.mshr2dcache->fill_req.addr));
         if (in.wb2dcache->bypass_resp[pf_slot].valid || hit_way >= 0 || fill_same || in.mshr2dcache->find_resp[pf_slot].valid ||
             mshr_free_entries <= PF_MSHR_RESERVE) {
@@ -668,7 +670,6 @@ void RealDcache::stage2_comb() {
 // ─────────────────────────────────────────────────────────────────────────────
 void RealDcache::seq() {
     // 1. Advance pipeline register.
-    s1s2_cur_ = s1s2_nxt;
-    bank_retry_cur_ = bank_retry_nxt;
+    q_ = d;
     pf.seq();
 }

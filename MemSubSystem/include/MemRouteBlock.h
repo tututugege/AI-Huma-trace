@@ -79,10 +79,15 @@ struct MemRouteBlockState {
   uint32_t next_req_id;
 };
 
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
+// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
+//   CONTRACT comb_response  in: in.dcache_resp out.lsu_resp  out: out.icache_resp out.lsu_resp out.ptw_events out.wakeup
+//   CONTRACT comb_request  in: in.icache_req in.lsu_req in.ptw_walk_req out.dcache_req  out: out.dcache_req out.ptw_grant
 class MemRouteBlock {
 public:
-  MemRouteBlockState nxt;
-  const MemRouteBlockState &cur = cur_;   // q: written only in seq / init
+  using Regs = MemRouteBlockState;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
+  Regs d;
+  const Regs &q() const { return q_; }
   MemRouteIn in;
   MemRouteOut out;
 
@@ -93,5 +98,5 @@ public:
 
 
 private:
-  MemRouteBlockState cur_;
+  Regs q_;
 };

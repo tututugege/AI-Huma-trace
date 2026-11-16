@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 """MemSubsystem::comb_outputs() / comb_inputs() from the memory blocks' contracts.
 
-The memory subsystem's comb phases (a block's comb method, or a MemSubsystem function that drives a block: the D-cache
-stages, the PTW request / feedback) are declared in MemSubsystem.h, in MemSubsystem's signal names (the wires inside
-this top, which MemSubsystem::init binds to the blocks' in / out pointers):
-    //   CONTRACT <block>.<method>            in: <signals | ->  out: <signals | ->
-    //   CONTRACT <function> (<block>)        in: ...            out: ...
-comb_graph's mem-domain scan (comb_domains.MEM_GROUPS) must read / write exactly the declared signals (the block's own
-state, reached through the block object, is private and not declared). The order:
-  * one block's phases run in the order the header lists them (they share the block's private state);
-  * a phase that writes a signal runs before every phase of another block that reads it;
+Each memory block declares its comb methods above its class, in its own port names (MemSubsystem::init binds the
+block's in / out pointers to MemSubsystem's signals):
+    //   CONTRACT <method>  in: in.<port> ... | -  out: out.<port> ... | -
+MemSubsystem's own comb functions that drive a block (the D-cache stages, the PTW request / feedback) are declared above
+class MemSubsystem in its signal names, with the block they drive; the same block lists the tie-break priority:
+    //   CONTRACT <function> (<block>)  in: <signals | ->  out: <signals | ->
+    //   CONTRACT priority: <block> ...
+comb_graph's mem-domain scan must read / write exactly the declared ports / signals (a block's private state is not
+declared). The order:
+  * one block's phases run in the order its header lists them (they share the block's private state);
+  * a phase that writes a signal runs before every phase of another block that reads it (a block's ports through the
+    bindings; a whole struct overlaps its fields);
   * the split into comb_outputs (before the back end in SimCpu::cycle()) and comb_inputs (after it) is derived: a phase
     from which the back end's input dcache2lsu depends goes to comb_outputs, a phase that depends on a request of the
     back end / front end (LATE_INPUTS) to comb_inputs (both at once is a combinational loop through the back end); the
     others go to comb_inputs.
-Ties follow the header order.
+Ties follow the priority list, then the header order.
 
 usage: gen_mem_order.py          print the generated order
        gen_mem_order.py --emit   print CONTRACT lines from the scanned code (a starting point when adding a phase)
        gen_mem_order.py --write  rewrite the generated blocks of MemSubsystem.cpp
        gen_mem_order.py --check  exit 1 if the declarations and the code or the blocks differ
 """
-import os, re, sys, io, heapq, contextlib
+import os, re, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from contract_lib import topo, scan
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -49,48 +54,91 @@ def norm_set(keys, owner):
 
 
 def scanned():
-    sys.path.insert(0, HERE)
-    argv = sys.argv; sys.argv = [os.path.join(HERE, 'comb_graph.py')]
-    g = {'__file__': os.path.join(HERE, 'comb_graph.py'), '__name__': 'comb_graph_for_mem'}
-    with contextlib.redirect_stdout(io.StringIO()):
-        exec(open(os.path.join(HERE, 'comb_graph.py')).read(), g)
-    sys.argv = argv
-    import comb_domains
-    rows = []
-    for grp in GROUPS:
-        for n, r, w in comb_domains.MEM_GROUPS[grp]: rows.append((n, grp, r, w))
-    return rows
+    _, comb_domains = scan()
+    return [(n, grp, r, w) for grp in GROUPS for n, r, w in comb_domains.MEM_GROUPS[grp]]
 
 
 def owner_of(phase, block=None):
     return block or (phase.split('.')[0] if '.' in phase else OWNER_OF_GLUE.get(phase, phase))
 
 
-def declarations():
+def ov(a, b): return a == b or a.startswith(b + '.') or b.startswith(a + '.')
+def sov(x, y): return any(ov(a, b) for a in x for b in y)
+
+
+def class_headers():
+    """block object -> (class, header text)"""
     t = open(HDR).read()
-    m = re.search(r'((?:^//[^\n]*\n)+)class MemSubsystem\b', t, re.M)
-    if not m: sys.exit('MemSubsystem.h: no comment block above the class')
-    out = []
-    for c in re.finditer(r'^//\s+CONTRACT ([\w.]+)(?:\s+\((\w+)\))?\s+in:(.*?)\s+out:([^\n]*)', m.group(1), re.M):
-        ph = c.group(1)
-        out.append((ph, owner_of(ph, c.group(2)), set(c.group(3).split()) - {'-'}, set(c.group(4).split()) - {'-'}))
+    objs = {m.group(2): m.group(1) for m in re.finditer(
+        r'^\s*(RealDcache|MSHR|WriteBuffer|PeripheralAxi|PeripheralModel|MemPtwBlock|MemRouteBlock)\s+(\w+)\s*;', t, re.M)}
+    inc = os.path.join(ROOT, 'MemSubSystem', 'include')
+    out = {}
+    for obj, cls in objs.items():
+        for fn in sorted(os.listdir(inc)):
+            h = open(os.path.join(inc, fn)).read()
+            if re.search(r'^class ' + cls + r'\b', h, re.M): out[obj] = (cls, fn, h); break
     return out
 
 
-def generate(decl):
-    names = [d[0] for d in decl]
-    own = {d[0]: d[1] for d in decl}
-    ins = {d[0]: d[2] for d in decl}
-    outs = {d[0]: d[3] for d in decl}
+def parse(block_text):
+    out = []
+    for c in re.finditer(r'^//\s+CONTRACT (?!priority)([\w.]+)(?:\s+\((\w+)\))?\s+in:(.*?)\s+out:([^\n]*)', block_text, re.M):
+        out.append((c.group(1), c.group(2), set(c.group(3).split()) - {'-'}, set(c.group(4).split()) - {'-'}))
+    return out
+
+
+def comment_above(text, cls):
+    m = re.search(r'((?:^//[^\n]*\n)+)class ' + cls + r'\b', text, re.M)
+    return m.group(1) if m else ''
+
+
+def declarations():
+    """glue: [(phase, block, in, out)] in MemSubsystem's names; blocks: label -> (block, raw in, raw out, header index);
+    priority: [block]"""
+    top = comment_above(open(HDR).read(), 'MemSubsystem')
+    if not top: sys.exit('MemSubsystem.h: no comment block above the class')
+    glue = [(p, blk or OWNER_OF_GLUE.get(p, p), i, o) for p, blk, i, o in parse(top)]
+    pm = re.search(r'^//\s+CONTRACT priority:([^\n]*)', top, re.M)
+    priority = pm.group(1).split() if pm else []
+    blocks = {}
+    for obj, (cls, fn, h) in class_headers().items():
+        for k, (p, _, i, o) in enumerate(parse(comment_above(h, cls))):
+            blocks[f'{obj}.{p}'] = (obj, i, o, k)
+    return glue, blocks, priority
+
+
+def bound(obj, ports):
+    import comb_domains
+    return {comb_domains.MEM_BIND[(obj,) + tuple(p.split('.', 1))] for p in ports
+            if (obj,) + tuple(p.split('.', 1)) in comb_domains.MEM_BIND}
+
+
+def phases(glue, blocks, rows):
+    """the phases of the two bodies, in the scanned order: (name, owner, in, out, rank-in-owner) in MemSubsystem's names"""
+    G = {g[0]: g for g in glue}
+    out = []
+    for n, grp, r, w in rows:
+        if n in G: out.append((n, G[n][1], G[n][2], G[n][3], [g[0] for g in glue if g[1] == G[n][1]].index(n)))
+        elif n in blocks:
+            obj, i, o, k = blocks[n]
+            out.append((n, obj, bound(obj, i), bound(obj, o), k))
+        else: out.append((n, n.split('.')[0], set(), set(), 0))
+    return out
+
+
+def generate(ph, priority):
+    names = [p[0] for p in ph]
+    own = {p[0]: p[1] for p in ph}
+    ins = {p[0]: p[2] for p in ph}
+    outs = {p[0]: p[3] for p in ph}
     succ = {n: set() for n in names}
     by = {}
-    for n in names: by.setdefault(own[n], []).append(n)
+    for p in sorted(ph, key=lambda p: p[4]): by.setdefault(p[1], []).append(p[0])
     for ps in by.values():
         for a, b in zip(ps, ps[1:]): succ[a].add(b)
     for a in names:
         for b in names:
-            if own[a] != own[b] and outs[a] & ins[b]: succ[a].add(b)
-    # the split: ancestors of the early outputs, descendants of the late inputs
+            if own[a] != own[b] and sov(outs[a], ins[b]): succ[a].add(b)
     pred = {n: {a for a in names if n in succ[a]} for n in names}
     def closure(start, nxt):
         seen, st = set(start), list(start)
@@ -106,42 +154,39 @@ def generate(decl):
         for b in succ[a]:
             if group[a] == 'comb_inputs' and group[b] == 'comb_outputs':
                 sys.exit(f'{a} (comb_inputs) must run before {b} (comb_outputs)')
-    indeg = {n: 0 for n in names}
-    for a in names:
-        for b in succ[a]: indeg[b] += 1
-    rank = {n: (GROUPS.index(group[n]), i) for i, n in enumerate(names)}
-    ready = [(rank[n], n) for n in names if indeg[n] == 0]
-    heapq.heapify(ready)
-    order = []
-    while ready:
-        _, n = heapq.heappop(ready)
-        order.append(n)
-        for b in sorted(succ[n]):
-            indeg[b] -= 1
-            if indeg[b] == 0: heapq.heappush(ready, (rank[b], b))
-    if len(order) != len(names): sys.exit('the contracts have a cycle: ' + ' '.join(n for n in names if indeg[n] > 0))
+    pr = {o: i for i, o in enumerate(priority)}
+    rank = {p[0]: (GROUPS.index(group[p[0]]), pr.get(p[1], len(pr)), p[4], p[0]) for p in ph}
+    order = topo(names, succ, rank)
     return {g: [n for n in order if group[n] == g] for g in GROUPS}
 
 
-def check(decl, rows):
+def check(glue, blocks, priority, rows):
+    import comb_domains
     errs = []
-    S = {n: (grp, r, w) for n, grp, r, w in rows}
-    D = {d[0]: d for d in decl}
-    for n in S:
-        if n not in D: errs.append(f'{n}: a memory phase without a CONTRACT')
-    for n in D:
-        if n not in S: errs.append(f'CONTRACT {n}: not a phase of comb_outputs / comb_inputs')
-    for n, (grp, r, w) in S.items():
-        if n not in D: continue
-        _, owner, din, dout = D[n]
-        sin, sout = norm_set(r, owner), norm_set(w, owner)
-        if sin != din: errs.append(f'{n}: reads {sorted(sin)}, declared in {sorted(din)}')
-        if sout != dout: errs.append(f'{n}: writes {sorted(sout)}, declared out {sorted(dout)}')
-    writers = {}
-    for n, owner, _, dout in decl:
-        for s in dout: writers.setdefault(s, set()).add(owner)
-    for s, ws in writers.items():
-        if len(ws) > 1: errs.append(f'{s}: written by {" ".join(sorted(ws))}')
+    G = {g[0]: g for g in glue}
+    for n, grp, r, w in rows:
+        if n in G:
+            _, owner, din, dout = G[n]
+            sin, sout = norm_set(r, owner), norm_set(w, owner)
+            if sin != din: errs.append(f'{n}: reads {sorted(sin)}, declared in {sorted(din)}')
+            if sout != dout: errs.append(f'{n}: writes {sorted(sout)}, declared out {sorted(dout)}')
+        elif n not in blocks: errs.append(f'{n}: a memory phase without a CONTRACT')
+    for n in G:
+        if n not in {r[0] for r in rows}: errs.append(f'CONTRACT {n}: not a phase of comb_outputs / comb_inputs')
+    for n, (cls, rr, rw) in comb_domains.MEM_BLOCKS.items():
+        if not rr and not rw: continue
+        if n not in blocks: errs.append(f'{n} ({cls}): no CONTRACT above class {cls}'); continue
+        _, din, dout, _ = blocks[n]
+        if rr != din: errs.append(f'{n}: reads {sorted(rr)}, declared in {sorted(din)}')
+        if rw != dout: errs.append(f'{n}: writes {sorted(rw)}, declared out {sorted(dout)}')
+    for n in blocks:
+        if n not in comb_domains.MEM_BLOCKS: errs.append(f'CONTRACT {n}: not a block method the memory phases call')
+    ph = phases(glue, blocks, rows)
+    for i, a in enumerate(ph):
+        for b in ph[i + 1:]:
+            if a[1] != b[1] and sov(a[3], b[3]): errs.append(f'{sorted(a[3] & b[3]) or a[3]}: written by {a[0]} and {b[0]}')
+    for o in {p[1] for p in ph}:
+        if o not in priority: errs.append(f'block {o}: not in the priority list')
     return errs
 
 
@@ -153,33 +198,36 @@ def body(fn, src):
 
 
 def main():
+    rows = scanned()
     if '--emit' in sys.argv:
-        for n, grp, r, w in scanned():
+        import comb_domains
+        for n, (cls, rr, rw) in comb_domains.MEM_BLOCKS.items():
+            if rr or rw: print(f'{cls}:  //   CONTRACT {n.split(".", 1)[1]}  in: {" ".join(sorted(rr)) or "-"}  out: {" ".join(sorted(rw)) or "-"}')
+        for n, grp, r, w in rows:
+            if '.' in n: continue
             o = owner_of(n)
-            blk = '' if '.' in n else f' ({o})'
-            print(f'//   CONTRACT {n}{blk}  in: {" ".join(sorted(norm_set(r, o))) or "-"}  out: {" ".join(sorted(norm_set(w, o))) or "-"}')
+            print(f'MemSubsystem:  //   CONTRACT {n} ({o})  in: {" ".join(sorted(norm_set(r, o))) or "-"}  out: {" ".join(sorted(norm_set(w, o))) or "-"}')
         return
-    decl = declarations()
-    order = generate(decl)
+    glue, blocks, priority = declarations()
+    order = generate(phases(glue, blocks, rows), priority)
     src = open(CPP).read()
-    blocks = {g: BEGIN + ''.join(f'  {n}();\n' for n in order[g]) + END for g in GROUPS}
+    new = {g: BEGIN + ''.join(f'  {n}();\n' for n in order[g]) + END for g in GROUPS}
     if '--write' in sys.argv or '--check' in sys.argv:
-        for g in GROUPS:
-            if BEGIN not in src[src.index(f'void MemSubsystem::{g}() {{'):]: sys.exit(f'MemSubsystem::{g}(): no generated block')
         if '--check' in sys.argv:
-            errs = check(decl, scanned())
+            errs = check(glue, blocks, priority, rows)
             for g in GROUPS:
                 b, e = body(g, src)
-                if src[b:e] != blocks[g]: errs.append(f'MemSubsystem::{g}() differs from the contracts: run gen_mem_order.py --write')
+                if src[b:e] != new[g]: errs.append(f'MemSubsystem::{g}() differs from the contracts: run gen_mem_order.py --write')
             for x in errs: print('  ' + x)
             if errs: sys.exit(1)
-            print(f'mem order: {len(decl)} phases ({len(order["comb_outputs"])} in comb_outputs), as generated from the contracts')
+            print(f'mem order: {sum(len(v) for v in order.values())} phases ({len(order["comb_outputs"])} in comb_outputs), '
+                  f'{len(blocks)} block methods declared, as generated from the contracts')
             return
         for g in GROUPS:
             b, e = body(g, src)
-            src = src[:b] + blocks[g] + src[e:]
+            src = src[:b] + new[g] + src[e:]
         open(CPP, 'w').write(src)
-        print(f'wrote {len(decl)} phases')
+        print(f'wrote {sum(len(v) for v in order.values())} phases')
         return
     for g in GROUPS: print(g + ': ' + ' '.join(order[g]))
 

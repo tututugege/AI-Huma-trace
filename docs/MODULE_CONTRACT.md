@@ -178,3 +178,22 @@ dropped, two generated lines swapped, a phase made to read a later phase's outpu
 With this, every comb schedule of the CPU is generated from declarations: SimCpu::cycle() (the tops' EXPORTs),
 BackTop::comb(), MemSubsystem::comb_outputs / comb_inputs, front_comb_calc(). Not covered: the AXI kit's internals, the
 I-cache module's own steps (icache_top.cpp, written per the RTL), Exu's FU state (in place).
+
+## One form for every module
+
+* Registers: `Regs q_` (private, written only by seq / init), `Regs d` (comb writes it; d == q at the start of every
+  cycle), read in comb through a local `const Regs &q = q_;`, `q()` for other modules. The memory blocks had
+  `cur` / `nxt` (and the D-cache two pairs, `s1s2_*` / `bank_retry_*`): all are `Regs q_, d` now (`using Regs =
+  <state struct>`; the D-cache's Regs holds both groups). The MSHR and the write buffer still update d in place
+  (their comb reads d, which equals q until written); PeripheralAxi's seq lost a redundant `nxt = cur`. The front
+  end's own registers were already `rd.q` / `req.front_state.d`.
+* Contracts: in the header of the code they describe, in the names that code uses. A back-end module: the Wires it
+  reads / writes. A memory block: its own ports (`in.axi`, `out.mshr2dcache`); gen_mem_order.py maps them through the
+  bindings of MemSubsystem::init. MemSubsystem's own comb functions (the D-cache stages, the PTW request / feedback):
+  in MemSubsystem.h, in its signal names, with the block they drive and the tie-break priority. The front end's phases:
+  above struct FrontComb. A top's SimCpu-level phases: EXPORT lines above the top's class, ports from include/SimCpu.h.
+* Generators: gen_comb_order.py (BackTop::comb), gen_mem_order.py, gen_front_order.py, gen_top_order.py share
+  scripts/comb/contract_lib.py (the scan, the topological order with a fixed tie-break); `comb_graph.py --check` runs
+  all four checks. `--emit` (mem, front) prints the lines of the scanned code; `--write` rewrites the generated block.
+The memory order changed in one place (the write buffer's AXI requests now before the MSHR's: the priority list puts
+the write buffer first; they drive different masters and both depend on stage 2 only).

@@ -5,8 +5,8 @@
 #include "mmio_address_map.h"
 
 void PeripheralAxi::init() {   // (in / out are the port bindings, set by MemSubsystem::init)
-  cur_ = {};
-  nxt = {};
+  q_ = {};
+  d = {};
   if (out.resp != nullptr) {
     *out.resp = {};
   }
@@ -65,6 +65,7 @@ uint32_t PeripheralAxi::extract_read_data(uint32_t raw, uint8_t func3) {
 }
 
 void PeripheralAxi::comb_outputs() {
+    const Regs &q = q_;
   clear_master_fields(*out.read);
   clear_master_fields(*out.write);
   out.write->req.wdata.clear();
@@ -72,36 +73,36 @@ void PeripheralAxi::comb_outputs() {
 
   if (out.resp != nullptr) {
     *out.resp = {};
-    out.resp->ready = !cur.busy && !cur.resp_valid;
-    if (cur.resp_valid) {
+    out.resp->ready = !q.busy && !q.resp_valid;
+    if (q.resp_valid) {
       out.resp->is_mmio = 1;
-      out.resp->mmio_rdata = cur.rdata;
+      out.resp->mmio_rdata = q.rdata;
     }
   }
 
-  if (!cur.busy) {
+  if (!q.busy) {
     return;
   }
 
-  if (!cur.req_accepted) {
-    const uint8_t total_size = static_cast<uint8_t>(access_size_bytes(cur.func3) - 1u);
-    if (cur.write) {
+  if (!q.req_accepted) {
+    const uint8_t total_size = static_cast<uint8_t>(access_size_bytes(q.func3) - 1u);
+    if (q.write) {
       out.write->req.valid = true;
-      out.write->req.addr = cur.addr;
+      out.write->req.addr = q.addr;
       out.write->req.total_size = total_size;
-      out.write->req.id = cur.req_id;
-      out.write->req.wstrb = pack_write_strb(cur.func3);
-      out.write->req.wdata[0] = pack_write_data(cur.wdata, cur.func3);
+      out.write->req.id = q.req_id;
+      out.write->req.wstrb = pack_write_strb(q.func3);
+      out.write->req.wdata[0] = pack_write_data(q.wdata, q.func3);
     } else {
       out.read->req.valid = true;
-      out.read->req.addr = cur.addr;
+      out.read->req.addr = q.addr;
       out.read->req.total_size = total_size;
-      out.read->req.id = cur.req_id;
+      out.read->req.id = q.req_id;
     }
     return;
   }
 
-  if (cur.write) {
+  if (q.write) {
     out.write->resp.ready = true;
   } else {
     out.read->resp.ready = true;
@@ -109,82 +110,82 @@ void PeripheralAxi::comb_outputs() {
 }
 
 void PeripheralAxi::comb_inputs() {
-  nxt = cur;
+    const Regs &q = q_;
+  d = q;
 
-  if (cur.resp_valid) {
-    nxt.resp_valid = false;
+  if (q.resp_valid) {
+    d.resp_valid = false;
     if (out.resp != nullptr) {
       out.resp->ready = false;
     }
     return;
   }
 
-  if (!cur.busy) {
+  if (!q.busy) {
     if (in.req != nullptr && in.req->is_mmio) {
       if (peripheral_model != nullptr &&
           PeripheralModel::is_modeled_mmio(in.req->mmio_addr)) {
-        nxt.busy = false;
-        nxt.write = in.req->wen;
-        nxt.req_accepted = false;
-        nxt.resp_valid = true;
-        nxt.addr = in.req->mmio_addr;
-        nxt.wdata = in.req->mmio_wdata;
-        nxt.func3 = in.req->mmio_fun3;
-        nxt.rdata = in.req->wen
+        d.busy = false;
+        d.write = in.req->wen;
+        d.req_accepted = false;
+        d.resp_valid = true;
+        d.addr = in.req->mmio_addr;
+        d.wdata = in.req->mmio_wdata;
+        d.func3 = in.req->mmio_fun3;
+        d.rdata = in.req->wen
                         ? 0
                         : peripheral_model->read_load64(in.req->mmio_addr,
-                                                        nxt.func3);
-        nxt.req_id = 0;
+                                                        d.func3);
+        d.req_id = 0;
         return;
       }
-      nxt.busy = true;
-      nxt.write = in.req->wen;
-      nxt.req_accepted = false;
-      nxt.resp_valid = false;
-      nxt.addr = in.req->mmio_addr;
-      nxt.wdata = in.req->mmio_wdata;
-      nxt.func3 = in.req->mmio_fun3;
-      nxt.rdata = 0;
-      nxt.req_id = 0;
+      d.busy = true;
+      d.write = in.req->wen;
+      d.req_accepted = false;
+      d.resp_valid = false;
+      d.addr = in.req->mmio_addr;
+      d.wdata = in.req->mmio_wdata;
+      d.func3 = in.req->mmio_fun3;
+      d.rdata = 0;
+      d.req_id = 0;
     }
     return;
   }
 
-  if (!cur.req_accepted) {
-    if ((cur.write && in.write->req.accepted) ||
-        (!cur.write && in.read->req.accepted)) {
-      nxt.req_accepted = true;
+  if (!q.req_accepted) {
+    if ((q.write && in.write->req.accepted) ||
+        (!q.write && in.read->req.accepted)) {
+      d.req_accepted = true;
     }
     return;
   }
 
-  if (cur.write) {
+  if (q.write) {
     if (in.write->resp.valid) {
-      nxt.busy = false;
-      nxt.write = false;
-      nxt.req_accepted = false;
-      nxt.resp_valid = true;
-      nxt.rdata = 0;
+      d.busy = false;
+      d.write = false;
+      d.req_accepted = false;
+      d.resp_valid = true;
+      d.rdata = 0;
     }
     return;
   }
 
   if (in.read->resp.valid) {
-    nxt.busy = false;
-    nxt.write = false;
-    nxt.req_accepted = false;
-    nxt.resp_valid = true;
-    nxt.rdata = extract_read_data(in.read->resp.data[0], cur.func3);
+    d.busy = false;
+    d.write = false;
+    d.req_accepted = false;
+    d.resp_valid = true;
+    d.rdata = extract_read_data(in.read->resp.data[0], q.func3);
   }
 
   if (out.resp != nullptr) {
-    out.resp->ready = !nxt.busy && !nxt.resp_valid;
+    out.resp->ready = !d.busy && !d.resp_valid;
   }
 }
 
 void PeripheralAxi::seq() {
-  cur_ = nxt;
-  nxt = cur;
+  q_ = d;
 }
 
 void PeripheralAxi::comb() {

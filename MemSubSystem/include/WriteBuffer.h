@@ -40,6 +40,10 @@ struct WBOut {
         clear_master_fields(*axi);
     }
 };
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
+// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
+//   CONTRACT comb_axi_to_dcache  in: in.axi in.s1_q out.clear  out: out.wb2dcache
+//   CONTRACT comb_dcache_to_axi  in: in.dcache2wb out.axi  out: out.axi
 class WriteBuffer {
 public:
     void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)
@@ -57,12 +61,13 @@ public:
     // Input / output signal ports (public for direct access by RealDcache).
     WBIn  in;
     WBOut out;
-    WBState nxt;   // d; comb updates it in place (d == q at the start of the cycle)
-    const WBState &cur = cur_;   // q: written only in seq / init
+    using Regs = WBState;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
+    Regs d;
+    const Regs &q() const { return q_; }
 
 
 private:
-    WBState cur_;
+    Regs q_;
     void comb_inputs_axi();
     void comb_outputs_dcache();
     void comb_inputs_dcache();

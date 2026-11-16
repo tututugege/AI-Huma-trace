@@ -40,20 +40,20 @@ static bool valid_wb_entry_index(uint32_t idx) {
 // init
 // ─────────────────────────────────────────────────────────────────────────────
 void WriteBuffer::init() {
-    std::memset(&cur_, 0, sizeof(cur_));
-    std::memset(&nxt, 0, sizeof(nxt));
+    std::memset(&q_, 0, sizeof(q_));
+    std::memset(&d, 0, sizeof(d));
     out.clear();
 }
 void WriteBuffer::comb_outputs_dcache() {
     
     out.clear();
-    out.wb2dcache->free = DCACHE_WB_ENTRIES - nxt.count;
+    out.wb2dcache->free = DCACHE_WB_ENTRIES - d.count;
 
     // reg<1> bypassvalid[LSU_LDU_COUNT];
     for(int i=0;i<LSU_LDU_COUNT;i++){
         bool bypassvalid = false;
         if(in.s1_q->bypass_req[i].valid){
-            int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
+            int wb_idx = find_wb_entry(d.write_buffer, d.head, d.count,
                                        in.s1_q->bypass_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
                 bypassvalid = true;
@@ -68,10 +68,10 @@ void WriteBuffer::comb_outputs_dcache() {
         bool mergevalid = false;
         bool mergebusy = false;
         if(in.s1_q->merge_req[i].valid){
-            int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
+            int wb_idx = find_wb_entry(d.write_buffer, d.head, d.count,
                                        in.s1_q->merge_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
-                if(wb_idx == nxt.head && nxt.count > 0 && nxt.send != 0){
+                if(wb_idx == d.head && d.count > 0 && d.send != 0){
                     mergebusy = true;
                 }
                 else{
@@ -86,13 +86,13 @@ void WriteBuffer::comb_outputs_dcache() {
 void WriteBuffer::comb_outputs_axi() {
     clear_master_fields(*out.axi);
     out.axi->resp.ready = true;
-    if (nxt.send != 0) {
+    if (d.send != 0) {
         return;
     }
-    if (nxt.count == 0) {
+    if (d.count == 0) {
         return;
     }
-    const WriteBufferEntry &head_e = nxt.write_buffer[nxt.head];
+    const WriteBufferEntry &head_e = d.write_buffer[d.head];
     out.axi->req.valid = true;
     out.axi->req.addr = head_e.addr;
     out.axi->req.total_size = DCACHE_LINE_SIZE - 1;
@@ -106,25 +106,25 @@ void WriteBuffer::comb_inputs_axi(){
     const bool resp_valid = in.axi->resp.valid;
 
     if(req_accepted){
-        nxt.send = 1; // request has been accepted, wait for response before sending next
+        d.send = 1; // request has been accepted, wait for response before sending next
     }
     if (resp_valid) {
-        if (nxt.count > 0) {
-            nxt.count = nxt.count - 1;
-            nxt.head = (nxt.head + 1) % DCACHE_WB_ENTRIES;
+        if (d.count > 0) {
+            d.count = d.count - 1;
+            d.head = (d.head + 1) % DCACHE_WB_ENTRIES;
         }
         else{
             assert(false && "WriteBuffer underflow: received AXI response when buffer is empty");
         }
-        nxt.send = 0; // allow sending (or retrying) the head entry
+        d.send = 0; // allow sending (or retrying) the head entry
     }
 }
 
 void WriteBuffer::comb_inputs_dcache() {
     
     if(in.dcache2wb->dirty_info.valid){
-        if(nxt.count < DCACHE_WB_ENTRIES){
-            WriteBufferEntry &e = nxt.write_buffer[(nxt.head + nxt.count) % DCACHE_WB_ENTRIES];
+        if(d.count < DCACHE_WB_ENTRIES){
+            WriteBufferEntry &e = d.write_buffer[(d.head + d.count) % DCACHE_WB_ENTRIES];
             e.addr     = in.dcache2wb->dirty_info.addr;
             e.lsu_origin = in.dcache2wb->dirty_info.lsu_origin;
         }
@@ -132,14 +132,14 @@ void WriteBuffer::comb_inputs_dcache() {
                 assert(false && "WriteBuffer overflow: MSHR is producing evictions faster than WriteBuffer can drain them");
         }
     }
-    if(in.dcache2wb->dirty_info.valid && nxt.count < DCACHE_WB_ENTRIES){
-        nxt.count = nxt.count + 1;
+    if(in.dcache2wb->dirty_info.valid && d.count < DCACHE_WB_ENTRIES){
+        d.count = d.count + 1;
     }
 
 }
 
 void WriteBuffer::seq() {
-    cur_ = nxt;
+    q_ = d;
 }
 
 void WriteBuffer::comb_axi_to_dcache() {

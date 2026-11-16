@@ -44,6 +44,10 @@ struct MSHROUTIO{
     MSHRDcacheIO* mshr2dcache;
     axi_interconnect::ReadMasterPort_t *axi = nullptr;        // the same port: the request and resp.ready (MSHR side)
 };
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
+// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
+//   CONTRACT comb_axi_to_dcache  in: in.axi in.s1_q  out: out.mshr2dcache
+//   CONTRACT comb_dcache_to_axi  in: in.axi in.dcache2mshr out.axi  out: out.axi
 class MSHR {
 public:
     void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)
@@ -55,14 +59,14 @@ public:
 
     MSHRINIO in;
     MSHROUTIO out;
-
-    MSHR_STATE nxt;   // d; comb updates it in place (d == q at the start of the cycle)
-    const MSHR_STATE &cur = cur_;   // q: written only in seq / init
+    using Regs = MSHR_STATE;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
+    Regs d;
+    const Regs &q() const { return q_; }
     bool axi_resp_accepted_this_cycle = false;
     bool nofill_released = false;
 
 private:
-    MSHR_STATE cur_;
+    Regs q_;
     void comb_inputs_axi();
     void comb_outputs_dcache();
     void comb_inputs_dcache();

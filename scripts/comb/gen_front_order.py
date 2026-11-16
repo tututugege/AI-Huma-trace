@@ -15,7 +15,9 @@ usage: gen_front_order.py          print the generated order
        gen_front_order.py --write  rewrite the generated block of front_comb_calc()
        gen_front_order.py --check  exit 1 if the declarations and the code or the block differ
 """
-import os, re, sys, io, heapq, contextlib
+import os, re, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from contract_lib import topo, scan
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -44,13 +46,7 @@ def norm(keys, write):
 
 
 def scanned():
-    sys.path.insert(0, HERE)
-    argv = sys.argv; sys.argv = [os.path.join(HERE, 'comb_graph.py')]
-    g = {'__file__': os.path.join(HERE, 'comb_graph.py'), '__name__': 'comb_graph_for_front'}
-    with contextlib.redirect_stdout(io.StringIO()):
-        exec(open(os.path.join(HERE, 'comb_graph.py')).read(), g)
-    sys.argv = argv
-    import comb_domains
+    _, comb_domains = scan()
     return [(n, r, w) for n, r, w in comb_domains.FRONT_ROWS]
 
 
@@ -85,20 +81,7 @@ def generate(phases, fifos):
             for s in outs[a] & ins[b]:
                 if (s, a) in port_pos and (s, b) in port_pos and port_pos[(s, b)] < port_pos[(s, a)]: continue
                 succ[a].add(b)
-    indeg = {n: 0 for n in names}
-    for a in names:
-        for b in succ[a]: indeg[b] += 1
-    rank = {n: i for i, n in enumerate(names)}
-    ready = [(rank[n], n) for n in names if indeg[n] == 0]
-    heapq.heapify(ready)
-    order = []
-    while ready:
-        _, n = heapq.heappop(ready)
-        order.append(n)
-        for b in sorted(succ[n]):
-            indeg[b] -= 1
-            if indeg[b] == 0: heapq.heappush(ready, (rank[b], b))
-    if len(order) != len(names): sys.exit('the contracts have a cycle: ' + ' '.join(n for n in names if indeg[n] > 0))
+    order = topo(names, succ, {n: i for i, n in enumerate(names)})
     return order
 
 

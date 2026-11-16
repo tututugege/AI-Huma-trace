@@ -605,8 +605,8 @@ void MemSubsystem::comb_inputs() {
   ptw_request();
   mem_route_block.comb_request();
   dcache_stage1();
-  mshr_.comb_dcache_to_axi();
   wb_.comb_dcache_to_axi();
+  mshr_.comb_dcache_to_axi();
   ptw_feedback();
   peripheral_axi_.comb();
   // END GENERATED

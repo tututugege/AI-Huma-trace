@@ -15,7 +15,8 @@ usage: gen_comb_order.py          print the generated order
        gen_comb_order.py --write  rewrite the generated block of BackTop::comb() (back-end/BackTop.cpp)
        gen_comb_order.py --check  exit 1 if the block differs from the declarations
 """
-import os, re, sys, heapq
+import os, re, sys
+from contract_lib import topo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODULES = {'pre': 'PreIduQueue', 'idu': 'Idu', 'rename': 'Ren', 'dis': 'Dispatch', 'isu': 'Isu', 'exu': 'Exu',
@@ -61,20 +62,8 @@ def generate():
         for r in nodes:
             if w.split('.')[0] != r.split('.')[0] and outs[w] & ins[r]: succ[w].add(r)
     for a, b in zip(TB_ORDER, TB_ORDER[1:]): succ[a].add(b)
-    indeg = {n: 0 for n in nodes}
-    for a in nodes:
-        for b in succ[a]: indeg[b] += 1
     rank = {n: i for i, n in enumerate(nodes)}   # MODULE_PRIORITY, then header order
-    ready = [(rank[n], n) for n in nodes if indeg[n] == 0]
-    heapq.heapify(ready)
-    order = []
-    while ready:
-        _, n = heapq.heappop(ready)
-        order.append(n)
-        for b in sorted(succ[n]):
-            indeg[b] -= 1
-            if indeg[b] == 0: heapq.heappush(ready, (rank[b], b))
-    if len(order) != len(nodes): sys.exit('the contracts have a cycle: ' + ' '.join(n for n in nodes if indeg[n] > 0))
+    order = topo(nodes, succ, rank)
     return order
 
 

@@ -30,21 +30,16 @@ struct AXI_LLC_TableOut_t;
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
 //   EXPORT comb_outputs  in: axi_slave  out: dcache2lsu
 //   EXPORT comb_inputs   in: lsu2dcache mmio_req icache_probe itlb_walk dtlb_walk axi_slave  out: axi_mem_req axi_mem_resp_ready mmio_resp
-// Inside: the memory blocks' comb phases in MemSubsystem's signal names (the wires MemSubsystem::init binds to the blocks'
-// in / out); scripts/comb/gen_mem_order.py checks them against the code and generates comb_outputs / comb_inputs from them
-// (a block's phases in this order; a writer before the readers; the outputs / inputs split derived from dcache2lsu and
-// the back end's / front end's requests):
-//   CONTRACT wb_.comb_axi_to_dcache  in: dcache_axi_w.req dcache_axi_w.resp dcache_s1_q_  out: wb_dcache_io_
-//   CONTRACT mshr_.comb_axi_to_dcache  in: dcache_axi_r.req dcache_axi_r.resp dcache_s1_q_  out: mshr_dcache_io_
+// Inside: the blocks declare their comb methods in their own headers (their own ports); MemSubsystem's own comb functions
+// that drive a block are declared here, in MemSubsystem's signal names, with the block. scripts/comb/gen_mem_order.py
+// checks both against the code and generates comb_outputs / comb_inputs (a block's phases in order; a writer before
+// the readers; the outputs / inputs split derived from dcache2lsu and the back end's / front end's requests; ties by
+// the priority):
+//   CONTRACT priority: wb_ mshr_ dcache_ mem_route_block ptw_block peripheral_axi_
 //   CONTRACT dcache_stage2 (dcache_)  in: dcache_line_read_resp_ dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_meta_cur_ dcache_resp_raw_ dcache_resp_route_ dcache_s1_q_ dcache_wb_io_.dirty_info fill_in_ fill_writes_ lru_updates_ mshr_dcache_io_ pending_writes_ wb_dcache_io_  out: dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_raw_ dcache_resp_route_ dcache_wb_io_.dirty_info fill_in_ fill_store_dirty_ fill_writes_ lru_updates_ pending_writes_
-//   CONTRACT mem_route_block.comb_response  in: dcache2lsu dcache_resp_route_  out: dcache2lsu icache_resp ptw_events wakeup
 //   CONTRACT ptw_request (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst  out: ptw_walk_req
-//   CONTRACT mem_route_block.comb_request  in: dcache_req_mux_ icache_req lsu2dcache ptw_walk_req  out: dcache_req_mux_ ptw_grant
 //   CONTRACT dcache_stage1 (dcache_)  in: dcache_mshr_io_.find_req dcache_req_mux_ dcache_resp_meta_nxt_ dcache_resp_route_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_ fill_store_dirty_ fill_writes_ mshr_dcache_io_  out: dcache_line_read_req_ dcache_mshr_io_.find_req dcache_resp_meta_nxt_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_
-//   CONTRACT mshr_.comb_dcache_to_axi  in: dcache_axi_r.req dcache_axi_r.resp dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req  out: dcache_axi_r.req dcache_axi_r.resp
-//   CONTRACT wb_.comb_dcache_to_axi  in: dcache_axi_w dcache_wb_io_.dirty_info  out: dcache_axi_w.req dcache_axi_w.resp
 //   CONTRACT ptw_feedback (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst ptw_events ptw_grant wakeup  out: -
-//   CONTRACT peripheral_axi_.comb  in: extra_axi_r.req extra_axi_r.resp extra_axi_w.req extra_axi_w.resp peripheral_req peripheral_resp  out: extra_axi_r.req extra_axi_r.resp extra_axi_w.req extra_axi_w.resp peripheral_resp
 class MemSubsystem {
 public:
   enum class PtwClient : uint8_t {

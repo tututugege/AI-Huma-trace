@@ -22,7 +22,9 @@ usage: gen_top_order.py          print the generated order
        gen_top_order.py --write  rewrite the generated block of SimCpu::cycle() (rv_simu_mmu_v2.cpp)
        gen_top_order.py --check  exit 1 if the declarations and the code or the block differ
 """
-import os, re, sys, io, heapq, contextlib, collections
+import os, re, sys, collections
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from contract_lib import topo, scan
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -94,20 +96,8 @@ def generate(ports, phases):
             if set(D[a]['out']) & set(D[b]['in']): succ[a].add(b)      # writer before reader
             if set(D[a]['pre']) & set(D[b]['out']): succ[a].add(b)     # pre reader before writer
     for a, b in zip(TB_ORDER, TB_ORDER[1:]): succ[a].add(b)
-    indeg = {n: 0 for n in names}
-    for a in names:
-        for b in succ[a]: indeg[b] += 1
     rank = {n: (TOP_PRIORITY.index(owner(n)), i) for i, n in enumerate(names)}
-    ready = [(rank[n], n) for n in names if indeg[n] == 0]
-    heapq.heapify(ready)
-    order = []
-    while ready:
-        _, n = heapq.heappop(ready)
-        order.append(n)
-        for b in sorted(succ[n]):
-            indeg[b] -= 1
-            if indeg[b] == 0: heapq.heappush(ready, (rank[b], b))
-    if len(order) != len(names): sys.exit('the exports have a cycle: ' + ' '.join(n for n in names if indeg[n] > 0))
+    order = topo(names, succ, rank, 'the exports')
     return order
 
 
@@ -120,13 +110,7 @@ def pk(k):   # a scanned SimCpu path at port granularity (comb_top keys; master 
 
 
 def scanned():
-    sys.path.insert(0, HERE)
-    argv = sys.argv; sys.argv = [os.path.join(HERE, 'comb_graph.py')]
-    g = {'__file__': os.path.join(HERE, 'comb_graph.py'), '__name__': 'comb_graph_for_top'}
-    with contextlib.redirect_stdout(io.StringIO()):
-        exec(open(os.path.join(HERE, 'comb_graph.py')).read(), g)
-    sys.argv = argv
-    import comb_top
+    comb_top, _ = scan()
     return {ph: ({pk(x) for x in r}, {pk(x) for x in w}) for ph, r, w in comb_top.TOP_PHASES if ph != 'cycle'}
 
 

@@ -215,6 +215,8 @@ def front_domain(root, ASSIGN, overlap):
 # memory subsystem: the statements of MemSubsystem::comb_outputs() then comb_inputs()
 # ---------------------------------------------------------------------------------------------------------------------
 MEM_GROUPS = {}   # entry function -> its rows (used by the top domain)
+MEM_BLOCKS = {}   # block phase label -> (class, reads, writes in the block's own port names)
+MEM_BIND = {}     # (block object, 'in' | 'out', field) -> MemSubsystem signal (MemSubsystem::init)
 FRONT_ROWS = []
 MEM_EXPAND = ('dcache_stage2', 'dcache_stage1', 'ptw_request', 'ptw_feedback')   # walked statement by statement, one row each
 MEM_KNOWN = {
@@ -252,11 +254,13 @@ def mem_domain(root, ASSIGN, overlap):
     for m in re.finditer(r'\b(\w+)\.(in|out)\.(\w+)(?:\[\w+\])?\s*=\s*&?(\w+)', init):
         if m.group(1) in blocks: bind[(m.group(1), m.group(2), m.group(3))] = m.group(4)
     rows, notes = [], set()
+    MEM_BIND.clear(); MEM_BIND.update(bind); MEM_BLOCKS.clear()
 
     def block_phase(blk, meth, label):
         cls = blocks[blk]
         b = strip_comments(closure(src, cls, meth))
         r, w = set(), set()
+        rr, rw = set(), set()   # the block's own port names (in.F / out.F)
         for m in re.finditer(r'(\*\s*)?(?<![\w.>])(in|out)\s*\.\s*(\w+)', b):
             star, d, fld = m.group(1), m.group(2), m.group(3)
             sig = bind.get((blk, d, fld))
@@ -267,10 +271,11 @@ def mem_domain(root, ASSIGN, overlap):
             head = b[max(0, m.start() - 12):m.start()]
             if re.match(r'(?:\[[^\]]*\]|\.\w+|->\w+)*' + ASSIGN, tail) or re.search(r'memset\(\s*&?\s*$', head) or \
                (star and re.match(r'(?:\[[^\]]*\])*\s*=(?!=)', tail)):
-                w.add(k)
+                w.add(k); rw.add(f'{d}.{fld}')
             else:
-                r.add(k)
+                r.add(k); rr.add(f'{d}.{fld}')
         rows.append((label, r, w))
+        MEM_BLOCKS[label] = (cls, rr, rw)
 
     def walk(fn):
         glue = []

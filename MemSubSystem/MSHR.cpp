@@ -40,13 +40,13 @@ static MSHR *g_dbg_mshr = nullptr;
 void MSHR::init()
 {
     g_dbg_mshr = this;
-    std::memset(&cur_, 0, sizeof(cur_));
-    std::memset(&nxt, 0, sizeof(nxt));
+    std::memset(&q_, 0, sizeof(q_));
+    std::memset(&d, 0, sizeof(d));
     axi_resp_accepted_this_cycle = false;
 }
 void MSHR::comb_outputs_dcache()
 {   
-    out.mshr2dcache->free = DCACHE_MSHR_ENTRIES - nxt.mshr_count;
+    out.mshr2dcache->free = DCACHE_MSHR_ENTRIES - d.mshr_count;
     out.mshr2dcache->release_event = nofill_released;
 
     for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){
@@ -56,7 +56,7 @@ void MSHR::comb_outputs_dcache()
                 get_addr(in.s1_q->find_req[i].set_idx,
                          in.s1_q->find_req[i].tag, 0);
             for (int j = 0; j < DCACHE_MSHR_ENTRIES; j++) {
-                MSHREntry &e = nxt.mshr_entries[j];
+                MSHREntry &e = d.mshr_entries[j];
                 if (e.valid && e.addr == find_addr) {
                     hit = true;
                     if (e.is_prefetch && !in.s1_q->find_req[i].is_prefetch) {
@@ -74,10 +74,10 @@ void MSHR::comb_outputs_dcache()
         out.mshr2dcache->find_resp[i].hit = hit;
     }
 
-    if(nxt.axi_resp_hold_valid){
+    if(d.axi_resp_hold_valid){
         out.mshr2dcache->fill_req.valid = true;
-        const MSHREntry &e = nxt.mshr_entries[nxt.axi_resp_hold_id];
-        out.mshr2dcache->fill_req.id = nxt.axi_resp_hold_id;
+        const MSHREntry &e = d.mshr_entries[d.axi_resp_hold_id];
+        out.mshr2dcache->fill_req.id = d.axi_resp_hold_id;
         out.mshr2dcache->fill_req.addr = e.addr;
         out.mshr2dcache->fill_req.dirty = e.merged_store_dirty;
         out.mshr2dcache->fill_req.lsu_origin = e.lsu_origin;
@@ -100,7 +100,7 @@ void MSHR::comb_outputs_axi()
     // demand misses go out before prefetches (two fixed-priority passes over the entries)
     for (int pass = 0; pass < 2 && !out.axi->req.valid; pass++) {
         for(uint32_t i=0; i<DCACHE_MSHR_ENTRIES; i++){
-            const MSHREntry &ce = nxt.mshr_entries[i];
+            const MSHREntry &ce = d.mshr_entries[i];
             if (ce.valid && !ce.issued && ce.is_prefetch == (pass == 1))
             {
                 out.axi->req.valid = true;
@@ -113,7 +113,7 @@ void MSHR::comb_outputs_axi()
     }
     out.axi->resp.ready =
         in.axi->resp.valid ? axi_resp_accepted_this_cycle
-                              : !nxt.axi_resp_hold_valid;
+                              : !d.axi_resp_hold_valid;
 }
 
 void MSHR::comb_inputs_dcache()
@@ -123,25 +123,25 @@ void MSHR::comb_inputs_dcache()
             static_cast<uint8_t>(in.dcache2mshr->fill_resp.id);
         const bool valid_id = hold_id < DCACHE_MSHR_ENTRIES;
         const bool matches_hold =
-            valid_id && nxt.axi_resp_hold_valid &&
-            nxt.axi_resp_hold_id == hold_id;
+            valid_id && d.axi_resp_hold_valid &&
+            d.axi_resp_hold_id == hold_id;
         const bool matches_entry =
-            valid_id && nxt.mshr_entries[hold_id].valid &&
-            nxt.mshr_entries[hold_id].issued;
+            valid_id && d.mshr_entries[hold_id].valid &&
+            d.mshr_entries[hold_id].issued;
         if (matches_hold && matches_entry) {
-            const bool entry_was_valid = nxt.mshr_entries[hold_id].valid;
-            nxt.mshr_entries[hold_id].valid = false;
-            nxt.mshr_entries[hold_id].issued = false;
-            clear_store_merge(nxt.mshr_entries[hold_id]);
-            nxt.mshr_entries[hold_id].lsu_origin = false;
-            nxt.mshr_entries[hold_id].is_prefetch = false;
-            nxt.mshr_entries[hold_id].no_fill = false;
-            if (entry_was_valid && nxt.mshr_count > 0) {
-                nxt.mshr_count = nxt.mshr_count - 1;
+            const bool entry_was_valid = d.mshr_entries[hold_id].valid;
+            d.mshr_entries[hold_id].valid = false;
+            d.mshr_entries[hold_id].issued = false;
+            clear_store_merge(d.mshr_entries[hold_id]);
+            d.mshr_entries[hold_id].lsu_origin = false;
+            d.mshr_entries[hold_id].is_prefetch = false;
+            d.mshr_entries[hold_id].no_fill = false;
+            if (entry_was_valid && d.mshr_count > 0) {
+                d.mshr_count = d.mshr_count - 1;
             }
-            if (nxt.axi_resp_hold_valid && nxt.axi_resp_hold_id == hold_id) {
-                nxt.axi_resp_hold_valid = false;
-                nxt.axi_resp_hold_id = 0;
+            if (d.axi_resp_hold_valid && d.axi_resp_hold_id == hold_id) {
+                d.axi_resp_hold_valid = false;
+                d.axi_resp_hold_id = 0;
             }
         }
     }
@@ -151,35 +151,35 @@ void MSHR::comb_inputs_dcache()
             const AddrFields f = decode(in.dcache2mshr->mshr_req[i].addr);
             const uint32_t line_addr = get_addr(f.set_idx, f.tag, 0);
 
-            int entry_idx = find_entry_idx(nxt, line_addr);
+            int entry_idx = find_entry_idx(d, line_addr);
 
             if (entry_idx < 0) {
                 for(int j=0;j<DCACHE_MSHR_ENTRIES;j++){
-                    if(!nxt.mshr_entries[j].valid){
+                    if(!d.mshr_entries[j].valid){
                         entry_idx = j;
-                        nxt.mshr_entries[j].valid = true;
-                        nxt.mshr_entries[j].issued = false;
-                        nxt.mshr_entries[j].addr = line_addr;
-                        clear_store_merge(nxt.mshr_entries[j]);
-                        nxt.mshr_entries[j].lsu_origin =
+                        d.mshr_entries[j].valid = true;
+                        d.mshr_entries[j].issued = false;
+                        d.mshr_entries[j].addr = line_addr;
+                        clear_store_merge(d.mshr_entries[j]);
+                        d.mshr_entries[j].lsu_origin =
                             in.dcache2mshr->mshr_req[i].lsu_origin;
-                        nxt.mshr_entries[j].is_prefetch =
+                        d.mshr_entries[j].is_prefetch =
                             in.dcache2mshr->mshr_req[i].is_prefetch;
-                        nxt.mshr_entries[j].no_fill = in.dcache2mshr->mshr_req[i].no_fill;
+                        d.mshr_entries[j].no_fill = in.dcache2mshr->mshr_req[i].no_fill;
                         if (in.dcache2mshr->mshr_req[i].is_prefetch) g_pf_stats.issued++;
-                        nxt.mshr_count = nxt.mshr_count + 1;
+                        d.mshr_count = d.mshr_count + 1;
                         break;
                     }
                 }
             }
 
             if (entry_idx >= 0) {
-                if (nxt.mshr_entries[entry_idx].is_prefetch && !in.dcache2mshr->mshr_req[i].is_prefetch) {
-                    nxt.mshr_entries[entry_idx].is_prefetch = false;  // a demand request caught up with the prefetch
-                    nxt.mshr_entries[entry_idx].no_fill = false;      // ... and now it fills the L1D like a demand miss
+                if (d.mshr_entries[entry_idx].is_prefetch && !in.dcache2mshr->mshr_req[i].is_prefetch) {
+                    d.mshr_entries[entry_idx].is_prefetch = false;  // a demand request caught up with the prefetch
+                    d.mshr_entries[entry_idx].no_fill = false;      // ... and now it fills the L1D like a demand miss
                     g_pf_stats.late++;
                 }
-                merge_store_into_entry(nxt.mshr_entries[entry_idx],
+                merge_store_into_entry(d.mshr_entries[entry_idx],
                                        in.dcache2mshr->mshr_req[i]);
             }
         }
@@ -198,9 +198,9 @@ void MSHR::comb_inputs_axi()
     // state visible to response handling in this same comb pass.
     if (req_accepted) {
         if (accepted_id < DCACHE_MSHR_ENTRIES) {
-            MSHREntry &ne = nxt.mshr_entries[accepted_id];
+            MSHREntry &ne = d.mshr_entries[accepted_id];
             if (ne.valid && !ne.issued) {
-                nxt.mshr_entries[accepted_id].issued = true;
+                d.mshr_entries[accepted_id].issued = true;
             }
         }
         else
@@ -211,27 +211,27 @@ void MSHR::comb_inputs_axi()
 
     // ── Accept R channel response ─────────────────────────────────────────────
 
-    if(!nxt.axi_resp_hold_valid){
+    if(!d.axi_resp_hold_valid){
         if(in.axi->resp.valid){
             const uint8_t resp_id = in.axi->resp.id;
             bool resp_matches_entry = false;
             if (resp_id < DCACHE_MSHR_ENTRIES) {
-                const MSHREntry &e = nxt.mshr_entries[resp_id];
+                const MSHREntry &e = d.mshr_entries[resp_id];
                 resp_matches_entry = e.valid && e.issued;
             }
-            if (resp_matches_entry && nxt.mshr_entries[resp_id].no_fill) {
+            if (resp_matches_entry && d.mshr_entries[resp_id].no_fill) {
                 // LLC-only prefetch: the response is consumed and dropped, the entry is released without an L1D fill
-                MSHREntry &fe = nxt.mshr_entries[resp_id];
+                MSHREntry &fe = d.mshr_entries[resp_id];
                 fe.valid = false; fe.issued = false; clear_store_merge(fe);
                 
                 fe.lsu_origin = false; fe.is_prefetch = false; fe.no_fill = false;
-                if (nxt.mshr_count > 0) nxt.mshr_count = nxt.mshr_count - 1;
+                if (d.mshr_count > 0) d.mshr_count = d.mshr_count - 1;
                 axi_resp_accepted_this_cycle = true;
                 nofill_released = true;
             }
             else if (resp_matches_entry) {
-                nxt.axi_resp_hold_valid = true;
-                nxt.axi_resp_hold_id = resp_id;
+                d.axi_resp_hold_valid = true;
+                d.axi_resp_hold_id = resp_id;
                 axi_resp_accepted_this_cycle = true;
             }
             else {
@@ -242,7 +242,7 @@ void MSHR::comb_inputs_axi()
 }
 void MSHR::seq(bool sample_perf)
 {
-    cur_ = nxt;
+    q_ = d;
 }
 
 void MSHR::comb_axi_to_dcache() {
