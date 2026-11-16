@@ -55,11 +55,22 @@ public:
   void comb_to_csr();
   void comb_pipeline(); // issued uops enter the FU input slots
   void comb_ready();    // which operation classes each port can accept
-  void seq() {}         // all state is updated in place (each phase runs once per cycle, in order)
+  void comb_load_wake(); // late load wakeup from the write-back register (prf_awake)
+  void seq();           // the write-back register; the FU state is updated in place (each phase runs once per cycle, in order)
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
+  const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU
+
 private:
+  // The write-back register (one cycle after exe2prf.entry), kept only for what it is used for: a load completing on a
+  // port that the LSU did not wake early wakes its consumers one cycle later (comb_load_wake -> prf_awake).
+  struct LoadWake {
+    wire<1> valid = false;
+    wire<PRF_IDX_WIDTH> preg = 0;
+    wire<BR_MASK_WIDTH> br_mask = 0;
+  };
+  LoadWake lwake_r[ISSUE_WIDTH] = {}, lwake_r_1[ISSUE_WIDTH] = {};
   std::vector<FuUnit> units;
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order
   uint64_t port_fu_mask[ISSUE_WIDTH] = {};

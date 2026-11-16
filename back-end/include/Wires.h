@@ -57,7 +57,6 @@ struct Wires {
   IssAwakeIO iss_awake;
   IssPrfIO iss2prf;
   IssDisIO iss2dis;
-  PrfExeIO prf2exe;
   PrfAwakeIO prf_awake;
   LsuAwakeIO lsu_awake;
   ExuIdIO exu2id;

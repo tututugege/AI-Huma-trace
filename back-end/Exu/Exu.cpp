@@ -1,11 +1,21 @@
 #include "Exu.h"
+#include "PreIduQueue.h"
 #include "Wires.h"
+#include "util.h"
 #include "config.h"
 #include "trace_hook.h"
+#include <cstring>
 
 namespace {
 // A uop whose branch was squashed by this cycle's mispredict is dead.
 inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO &db) { return db.mispred && (uop.br_mask & db.br_mask) != 0; }
+
+// The issue ports whose uop needs the instruction PC from the FTQ: an ALU port with a pc operand (auipc, jal), a BRU port.
+inline bool needs_ftq_pc(int p, const Uop &uop) {
+  const uint64_t bit = 1ULL << uop.op;
+  if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM && (bit & OP_MASK_ALU) && uop->src1_is_pc) return true;
+  return p >= IQ_BR_PORT_BASE && p < IQ_BR_PORT_BASE + BRU_NUM && (bit & OP_MASK_BR);
+}
 }  // namespace
 
 Exu::Exu(SimContext *ctx) : ctx(ctx) {}
@@ -106,6 +116,16 @@ void Exu::comb_to_csr() {
 // Issued uops enter the FU input slots (killed ones are dropped, resolved branch bits are cleared); a flush empties them.
 void Exu::comb_pipeline() {
   Wires &w = *wires;
+  // the write-back register: loads that complete this cycle and were not woken early by the LSU
+  for (int i = 0; i < ISSUE_WIDTH; i++) {
+    const auto &e = w.exe2prf.entry[i];
+    LoadWake &l = lwake_r_1[i];
+    l.valid = !w.rob_bcast.flush && e.valid && !is_br_killed(e.uop, w.dec_bcast) && e.uop.dest_en &&
+              decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
+    if (!l.valid) continue;
+    l.preg = e.uop.dest_preg;
+    l.br_mask = e.uop.br_mask & ~w.dec_bcast.clear_mask;
+  }
   if (w.rob_bcast.flush) {
     for (auto &f : units) f.slot_valid = false;
     return;
@@ -117,8 +137,19 @@ void Exu::comb_pipeline() {
     else if (clear) f.slot.br_mask &= ~clear;
   }
   for (int p = 0; p < ISSUE_WIDTH; p++) {
-    if (!w.prf2exe.iss_entry[p].valid) continue;
-    ExuInst uop = w.prf2exe.iss_entry[p].uop;
+    if (!w.iss2prf.iss_entry[p].valid) continue;
+    Uop iu = w.iss2prf.iss_entry[p].uop;   // (there is no register file: the operand values are facts of the trace)
+    if (needs_ftq_pc(p, iu)) {
+      const FtqPc r = ftq->ftq_pc(iu->ftq_idx, iu->ftq_offset);
+      iu->pc = r.pc;
+      iu->ftq_pred_taken = r.pred_taken;
+      iu->ftq_next_pc = r.next_pc;
+    } else {
+      iu->pc = 0;
+      iu->ftq_pred_taken = false;
+      iu->ftq_next_pc = 0;
+    }
+    ExuInst uop = iu;
     if (is_br_killed(uop, w.dec_bcast)) continue;
     if (clear) uop.br_mask &= ~clear;
     const uint64_t bit = 1ULL << uop.op;
@@ -337,3 +368,20 @@ void Exu::comb_exec() {
   }
 }
 
+
+// Late load wakeup: the loads of the write-back register that survive this cycle's mispredict, in port order, at most
+// LSU_LOAD_WB_WIDTH of them.
+void Exu::comb_load_wake() {
+  Wires &w = *wires;
+  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
+  int n = 0;
+  for (int i = 0; i < ISSUE_WIDTH && n < LSU_LOAD_WB_WIDTH; i++) {
+    const LoadWake &l = lwake_r[i];
+    if (!l.valid || (w.dec_bcast.mispred && (l.br_mask & w.dec_bcast.br_mask))) continue;
+    w.prf_awake.wake[n].valid = true;
+    w.prf_awake.wake[n].preg = l.preg;
+    n++;
+  }
+}
+
+void Exu::seq() { std::memcpy(lwake_r, lwake_r_1, sizeof(lwake_r)); }

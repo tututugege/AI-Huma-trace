@@ -21,7 +21,6 @@ void BackTop::init() {
   rename = new Ren(ctx);
   dis = new Dispatch(ctx);
   isu = new Isu(ctx);
-  prf = new Prf(ctx);
   exu = new Exu(ctx);
   csr = new Csr();
   rob = new Rob(ctx);
@@ -36,10 +35,9 @@ void BackTop::init() {
   rename->wires = this;
   dis->wires = this;
   isu->wires = this;
-  prf->wires = this;
   exu->wires = this;
   rob->wires = this;
-  prf->ftq = pre;
+  exu->ftq = pre;
   rob->ftq = pre;
   csr->wires = this;
   lsu->wires = this;
@@ -50,7 +48,6 @@ void BackTop::init() {
   rename->init();
   dis->init();
   isu->init();
-  prf->init();
   exu->init();
   csr->init();
   rob->init();
@@ -115,7 +112,7 @@ void BackTop::comb_stage_decode_and_resources() {
   idu->comb_decode();
   csr->comb_interrupt();
   rename->comb_alloc();
-  prf->comb_awake();
+  exu->comb_load_wake();
   isu->comb_ready();
   lsu->comb_cal();
   lsu->comb_lsu2dis();
@@ -161,7 +158,6 @@ void BackTop::comb_stage_issue_and_translate() {
 
 // Register reads, next-cycle wakeups, exceptions, rename and dispatch of the instructions leaving decode.
 void BackTop::comb_stage_operands_and_dispatch() {
-  prf->comb_read();
 
   isu->comb_awake();
   isu->comb_calc_latency_next();
@@ -194,7 +190,6 @@ void BackTop::comb_stage_fire_and_recover() {
   isu->comb_flush();
 
   pre->comb_fire();
-  prf->comb_pipeline();
   exu->comb_pipeline();
   dis->comb_pipeline();
   rename->comb_pipeline();
@@ -286,14 +281,12 @@ void BackTop::comb() {
 
 void BackTop::seq() {
   // rename -> isu/stq/rob
-  // exu -> prf
   pre->seq();
   rename->seq();
   dis->seq();
   idu->seq();
   isu->seq();
   exu->seq();
-  prf->seq();
   rob->seq();
   csr->seq();
   if (dtlb_mmu != nullptr) {

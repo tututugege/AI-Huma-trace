@@ -8,7 +8,6 @@
 #include "Idu.h"
 #include "Isu.h"
 #include "PreIduQueue.h"
-#include "Prf.h"
 #include "Ren.h"
 #include "RealLsu.h"
 #include "Rob.h"
@@ -25,7 +24,6 @@ class Idu;
 class Ren;
 class Isu;
 struct CPU_state;
-class Prf;
 class Exu;
 class Rob;
 class Csr;
@@ -54,7 +52,6 @@ public:
   Ren *rename;
   Dispatch *dis;
   Isu *isu;
-  Prf *prf;
   Exu *exu;
   Csr *csr;
   Rob *rob;
@@ -88,7 +85,6 @@ public:
     delete idu;
     delete isu;
     delete exu;
-    delete prf;
     delete rob;
     delete csr;
     delete lsu;

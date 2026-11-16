@@ -84,7 +84,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | | change | back-end phases |
 | --- | --- | --- |
 | A | FTQ PC read ports -> a direct read of the FTQ array | 69 -> 65 (f13f6d2) |
-| B | PRF stage: comb_read / comb_pipeline into one | |
+| B | the PRF module folded into the EXU | 65 -> 63 |
 | C | LSU ldq / stq phase pairs merged | |
 | D | CSR read chain (exu.comb_to_csr -> csr.comb_csr_read -> result) | |
 | E | comb_pipeline into seq, comb_begin into the first phase | |
@@ -95,3 +95,10 @@ A (f13f6d2): `PreIduQueue::ftq_pc(idx, off)` reads the registered `ftq_lookup_en
 operand, BRU) and `Rob::comb_commit` (the head's redirect pc) call it through `const PreIduQueue *ftq`. Removed:
 `ftq_prf_pc_req / resp`, `ftq_rob_pc_req / resp` and the phases `Prf::comb_req_ftq`, `Rob::comb_ftq_pc_req`,
 `PreIduQueue::comb_ftq_lookup_prf / rob`. Module-to-module wire edges 44 -> 41.
+
+B: the PRF module had no register file and two unrelated jobs: `comb_read` copied `iss2prf` to `prf2exe` in the same
+cycle (plus the FTQ pc), and `inst_r` was a one-cycle register of all 21 `exe2prf` entries used only for the late load
+wakeup. Now `Exu::comb_pipeline` reads `iss2prf` directly (and fills the pc through the FTQ read port), and the EXU
+keeps a write-back register of just what the wakeup uses (`LoadWake`: valid, preg, br_mask; filled in
+`Exu::comb_pipeline`, read by `Exu::comb_load_wake` at the old `Prf::comb_awake` position, copied in `Exu::seq`).
+Removed: `Prf.cpp` / `Prf.h`, `prf2exe` (`PrfExeIO`). Module-to-module wire edges 41 -> 36.

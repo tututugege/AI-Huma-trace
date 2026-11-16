@@ -219,16 +219,6 @@ struct IssPrfIO {
   IssPrfEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
-struct PrfExeIO {
-
-  struct PrfExeEntry {
-    wire<1> valid = {};
-    Uop uop = {};
-  };
-
-  PrfExeEntry iss_entry[ISSUE_WIDTH] = {};
-};
-
 struct ExePrfIO {
 
   struct ExePrfEntry {

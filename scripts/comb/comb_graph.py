@@ -38,7 +38,7 @@ def body_of(cls, fn):
 
 # phases in BackTop::comb() order (expanding the comb_stage_* helpers)
 bt = rd('back-end/BackTop.cpp')
-member_cls = {'pre': 'PreIduQueue', 'rename': 'Ren', 'dis': 'Dispatch', 'idu': 'Idu', 'isu': 'Isu', 'exu': 'Exu', 'prf': 'Prf',
+member_cls = {'pre': 'PreIduQueue', 'rename': 'Ren', 'dis': 'Dispatch', 'idu': 'Idu', 'isu': 'Isu', 'exu': 'Exu',
               'rob': 'Rob', 'csr': 'Csr', 'lsu': 'RealLsu', 'dtlb_mmu': 'TlbMmu'}
 def expand(fn, out):
     b = body_of('BackTop', fn)
