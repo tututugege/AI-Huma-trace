@@ -67,6 +67,9 @@ void SimCpu::init() {
   f2b.back_out = &back.out;
   f2b.to_back = &back.in;
   f2b.init();
+  b2f.back_out = &back.out;
+  b2f.init(&back.csr_status);
+  front.from_back = &b2f.q();
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -78,6 +81,7 @@ void SimCpu::sync_mmio_devices_from_backing() {
 void SimCpu::restore_pc(pc_t pc) {
   // each top restarts at pc (the front end refetches, the back end shows a redirect); a held fetch group is dropped
   front.restart_at(pc);
+  b2f.restart_at(pc);
   f2b.restart();
   back.restart_at(pc);
 }
@@ -104,8 +108,8 @@ void SimCpu::cycle() {
   f2b.comb();
   mem_subsystem.comb_outputs();
   back.comb();
-  front.comb_from_back(back);
   f2b.comb_hold();
+  b2f.comb();
   mem_subsystem.comb_commit_store();
   mem_subsystem.comb_inputs();
   back.comb_late();
@@ -113,7 +117,7 @@ void SimCpu::cycle() {
   // END GENERATED
 
   front.seq_core();
-  front.seq_back2front();
+  b2f.seq();
   f2b.seq();
 
   back.seq();

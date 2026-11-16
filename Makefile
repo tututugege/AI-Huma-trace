@@ -87,7 +87,8 @@ CXXSRC := $(shell find ./back-end -name "*.cpp") \
           $(AXI_KIT_SRC) \
           ./SimCpu.cpp \
           ./AxiSubsystem.cpp \
-          ./Front2Back.cpp
+          ./Front2Back.cpp \
+          ./Back2Front.cpp
 
 # DRAMsim3 DRAM timing backend for SimDDR (EXP-006). DRAMsim3 is the pinned git submodule third_party/DRAMsim3
 # (`git submodule update --init third_party/DRAMsim3`); its library is compiled here into build_dramsim3/libdramsim3.a (also used by

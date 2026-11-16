@@ -399,3 +399,18 @@ half of FrontTop::comb. `comb_hold` (EXPORT in: fetch_group back2front): the hol
 `comb_in_regs` (EXPORT default: back_in) clears back.in and puts it in. SimCpu has no registers and no comb glue left
 but the cycle counter. Identical: gates, FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT, FE_PAIR / FE_IPF (fact excluded),
 the Linux checkpoint.
+
+## Top-level glue, part 3: Back2Front (exp/global-sched)
+
+The back end -> front end register is a module, as in the RTL (core_back2front.sv): `Back2Front` (include/Back2Front.h,
+Back2Front.cpp, object `b2f`). `comb` (EXPORT in: b2f_reg back2front) is FrontTop::comb_from_back moved over unchanged
+(back2front_1 -> d.in, back2front -> q_.in): the redirect, fence flushes, stall and the BPU training of the commit;
+`seq` loads the register (was FrontTop::seq_back2front). FrontTop reads its q through `from_back` (port b2f_reg) and
+keeps only the front end; restore_pc restarts both (FrontTop::restart_at: its own inputs, Back2Front::restart_at: the
+register). FrontTop now has one SimCpu-level phase.
+
+SimCpu::cycle() is the generated list of the tops' phases only (back, axi, front, f2b, mem_subsystem, b2f) plus the cycle
+counter; SimCpu holds no registers and no comb code. Identical: gates, FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT,
+FE_PAIR / FE_IPF, the Linux checkpoint, the dhrystone checkpoint (back and front door). Speed (dhrystone user time,
+interleaved, a loaded machine): part 1 about 2% slower than before, parts 2 and 3 no change; swapping back.comb_late
+and mem_subsystem.comb_inputs back recovers about half (code order / locality); not resolved.

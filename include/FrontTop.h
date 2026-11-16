@@ -6,6 +6,7 @@
 class PtwWalkPort;
 class BackTop;
 struct FrontPreIO;
+struct Back2FrontRegs;
 struct CsrStatusIO;
 class SimContext;
 struct FrontReadData;
@@ -27,8 +28,7 @@ struct ICacheMemPortResp{
 };
 
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb            in: csr_status  out: front_out axi_ic_req axi_ic_resp_ready icache_probe itlb_walk
-//   EXPORT comb_from_back  in: csr_status back2front
+//   EXPORT comb            in: csr_status b2f_reg  out: front_out axi_ic_req axi_ic_resp_ready icache_probe itlb_walk
 class FrontTop {
 public:
   FrontTopIn in;
@@ -39,10 +39,7 @@ public:
   ICacheMemPortResp *icache_mem_resp_port = nullptr;
   axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;    // the I-cache drives its requests here
   const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr; // and reads the port's outputs here (a register)
-  FrontTopIn back2front = {};
-  FrontTopIn back2front_1 = {};
-  reg<1> back2front_stall = false;
-  reg<1> back2front_stall_1 = false;
+  const Back2FrontRegs *from_back = nullptr;   // the back end's registered outputs (Back2Front's q), bound by SimCpu
   bool can_read = false;   // the back end takes a group from out this cycle (it did not stall, or a refetch is pending)
 
   FrontTop();
@@ -51,9 +48,7 @@ public:
   void read_core_q();
   void comb_core();
   void seq_core();
-  void seq_back2front();
   void comb(CsrStatusIO *csr_status);   // one cycle (the fetch group for the back end: out, can_read)
-  void comb_from_back(BackTop &back);                        // next cycle's inputs from the back end (back2front_1)
   // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
   void restart_at(pc_t pc);
   void step_bpu();

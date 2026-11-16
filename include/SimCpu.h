@@ -1,6 +1,7 @@
 #pragma once
 #include "AxiSubsystem.h"
 #include "BackTop.h"
+#include "Back2Front.h"
 #include "Front2Back.h"
 #include "FrontTop.h"
 #include "MemSubsystem.h"
@@ -17,6 +18,7 @@
 //   PORT csr_status         = back.csr_status
 //   PORT back_in            = back.in
 //   PORT front_out          = front.out front.can_read
+//   PORT b2f_reg            = b2f.q_                 (Back2Front's register: the front end's inputs of the cycle)
 //   PORT fetch_group        = back.in.{inst,pc,is_rvc,valid,front_stall,front_upd_free,front_tq_free,predict_dir,meta,predict_next_fetch_address,page_fault_inst}
 //   PORT dcache2lsu         = back.in.dcache2lsu
 //   PORT lsu2dcache         = back.out.lsu2dcache
@@ -53,6 +55,7 @@ public:
   MemSubsystem mem_subsystem;
   AxiSubsystem axi;
   Front2Back f2b;   // front end -> back end (the RTL's core_front2back)
+  Back2Front b2f;   // back end -> front end register (the RTL's core_back2front)
 
   void init();
   void sync_mmio_devices_from_backing();

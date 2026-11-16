@@ -17,19 +17,21 @@ A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by Me
 import re, os
 from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS, FRONT_ROWS
 
-ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'icache_req',
+ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'icache_req',
          'icache_resp', 'icache_resp_q', 'icache_axi_q', 'ctx')
-SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
+SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
 SEQ_CALLS = ('front.seq_core',)
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
-INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out|can_read'),
+INLINE = {'front.comb': ('FrontTop', r'in|out|can_read'),
+          'b2f.comb': ('Back2Front', r'q_|d|csr_status'),
           'f2b.comb': ('Front2Back', r'q_|d'),
           'f2b.comb_hold': ('Front2Back', r'q_|d'),
-          'front.comb_from_back': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out'),
           'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
 BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')],
+         'FrontTop': [(r'\bfrom_back->', 'b2f.q_.')],
+         'Back2Front': [(r'\*back_out\b', 'back.out')],
          'Front2Back': [(r'\*front_out\b', 'front.out'), (r'\*can_read\b', 'front.can_read'), (r'\bback_out->', 'back.out.'),
                         (r'\*to_back\b', 'back.in')]}   # pointer members of an inlined class -> the object bound
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
