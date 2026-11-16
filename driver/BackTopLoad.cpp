@@ -160,7 +160,7 @@ void BackTop::load_image(const std::string &filename) {
 // Architectural state taken from the reference model / a checkpoint that the timing model itself uses: PC, privilege,
 // CSRs (address translation, interrupts, traps) and the LR/SC reservation.
 void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
-  number_PC = state.pc;
+  restored_pc = state.pc;
   csr->q_mut().privilege = csr->d.privilege = privilege;
   for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = csr->d.CSR_RegFile[i] = state.csr[i];
   lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
@@ -257,6 +257,13 @@ void BackTop::restore_checkpoint_front_door(const std::string &filename, const s
             << stub_file << std::endl;
 
   refcore_seed_devices();
+}
+
+void BackTop::restart_at(pc_t pc) {
+  out.flush = true;
+  out.mispred = true;
+  out.redirect_pc = pc;
+  comb_csr_status();
 }
 
 void BackTop::restore_from_ref() {

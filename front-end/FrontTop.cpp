@@ -73,7 +73,11 @@ void FrontTop::seq_back2front() {
   back2front_stall = back2front_stall_1;
 }
 
-void FrontTop::force_back2front_refetch(pc_t pc) {
+void FrontTop::restart_at(pc_t pc) {
+  in.ctrl.reset = false;
+  in.ctrl.fifo_read_enable = false;
+  in.redirect.valid = true;
+  in.redirect.address = pc;
   back2front.redirect.valid = true;
   back2front.redirect.address = pc;
   back2front_1 = back2front;

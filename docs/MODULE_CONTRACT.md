@@ -277,3 +277,30 @@ Idu::decode copies it into the uop and keeps only the timing rules (AMO dest, x0
 and sim time), so cycles do not change.
 Gates RVC=0 62/62, RVC=1 67/67 identical, FPR (4 programs) identical, TB_TRACE_COMMIT and LSU_PIPE_EVT identical
 with the previous binary.
+
+## SimCpu cleanup (exp/simcpu)
+
+rv_simu_mmu_v2.cpp (the original simulator's name for the SimCpu implementation) is SimCpu.cpp, in the form of the
+other tops:
+* No `#define private public` around AXI_Interconnect.h (it was for kit revisions without comb_inputs_internal_tick();
+  everything SimCpu uses is public). Unused includes and the oracle-mode hold register removed.
+* The program's exit code is a0 of the function model (`tbhook::arch_gpr(10)`); `BackTop::get_reg` returned 0, so a
+  non-zero exit code was never reported.
+* AxiSubsystem (include/AxiSubsystem.h): the interconnect, DDR, MMIO bus and UART with comb_begin / comb_outputs /
+  comb_inputs / seq, in place of free functions over SimCpu and a field-by-field copy outside a class. SimCpu's
+  axi_comb_* phases call it; the LLC lookup table (in MemSubsystem) is passed in and its table out read in seq.
+  comb_top.py inlines AxiSubsystem's phases like FrontTop's (members -> axi.*); the scan is the same as before but for
+  the path names.
+* SimCpu's registers are `Regs q_, d` (the held fetch group with its valid bit, the MMIO response) with
+  `regs_seq() { q_ = d; }`; the `live` flags are gone (copying the whole Regs each cycle costs nothing measurable on
+  dhrystone; copying only a valid group was ~3% slower, a code-layout effect). The I-cache port registers stay as they
+  are (loaded at the start of the cycle, REG_WIRE.md).
+* Side doors: `back.number_PC` was written by SimCpu every cycle but read only right after a restore set it; it is
+  `restored_pc` now, set only by install_arch_state. `restore_pc` (a switch from fast mode) wrote back.out and
+  front.in directly; FrontTop::restart_at / BackTop::restart_at do it now, in the same order.
+* Kept: the commit hooks (Ren -> SimContext -> SimCpu::commit_sync -> the peripheral model) are the environment's
+  action at commit, as in the RTL testbench (rtl/docs/modules/soc_top.md): a committed store to a modeled device acts
+  in the same back.comb, where csr.comb_interrupt_inject reads the interrupt line. A port read after back.comb would
+  delay it a cycle.
+Gates RVC=0 62/62, RVC=1 67/67 identical, FPR / TB_TRACE_COMMIT / LSU_PIPE_EVT identical; the restore path: a
+function-model special checkpoint of dhrystone (instruction 300000) run for 400000 instructions, log identical.

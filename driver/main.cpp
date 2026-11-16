@@ -402,7 +402,7 @@ int main(int argc, char *argv[]) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
       cpu.back.restore_from_ref();
       cpu.sync_mmio_devices_from_backing();
-      cpu.restore_pc(cpu.back.number_PC); // resync the front-end PC
+      cpu.restore_pc(cpu.back.restored_pc); // restart the fetch at the restored pc
       if (fast_warm_active) fast_warm_install(cpu);
     }
 

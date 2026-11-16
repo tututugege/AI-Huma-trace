@@ -53,7 +53,8 @@ public:
   void seq_back2front();
   void comb(CsrStatusIO *csr_status, FrontPreIO &to_back);   // one cycle; the fetch group for the back end
   void comb_from_back(BackTop &back);                        // next cycle's inputs from the back end (back2front_1)
-  void force_back2front_refetch(pc_t pc);
+  // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
+  void restart_at(pc_t pc);
   void step_bpu();
   // fast-warmup replay (EXP-011): BPU training, ready-made L1I tag / valid and ITLB state
   void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false);

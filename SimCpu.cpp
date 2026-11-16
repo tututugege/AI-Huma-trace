@@ -8,6 +8,10 @@
 #include "util.h"
 #include <cstdint>
 
+// Environment actions at commit (not ports of a module; the RTL testbench does the same, rtl/docs/modules/soc_top.md):
+// Ren calls them through SimContext while it commits. A committed store to a modeled device (CLINT timer / timecmp,
+// ...) takes effect in the peripheral model at once: its interrupt line is read by csr.comb_interrupt_inject later in
+// the same back.comb. An interrupt taken at commit is reported to the trace bridge.
 void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
   BackTop *back = &this->back;
   Assert(commit_slot >= 0 && commit_slot < COMMIT_WIDTH &&
@@ -94,21 +98,11 @@ void SimCpu::sync_mmio_devices_from_backing() {
 
 // force the front-end PC (switch from fast mode)
 void SimCpu::restore_pc(pc_t pc) {
-  front.in.ctrl.reset = false;
-  front.in.ctrl.fifo_read_enable = false;
-  // an explicit refetch for the front end and the back end's redirect outputs: the fetch restarts at pc even if
-  // the caller set no flush / mispred
-  front.in.redirect.valid = true;
-  front.in.redirect.address = pc;
-  front.force_back2front_refetch(pc);
-  q_.front2back_hold_valid = false;   // a held fetch group is dropped
+  // each top restarts at pc (the front end refetches, the back end shows a redirect); a held fetch group is dropped
+  front.restart_at(pc);
+  q_.front2back_hold_valid = false;
   d.front2back_hold_valid = false;
-  back.out.flush = true;
-  back.out.mispred = true;
-  back.out.redirect_pc = pc;
-
-  // refresh the CSR status (satp, privilege) so the MMU mode is right
-  back.comb_csr_status();
+  back.restart_at(pc);
 }
 
 // The clock edge of the I-cache port registers (at the start of the cycle: nothing between the end of the previous
@@ -171,10 +165,6 @@ void SimCpu::cycle() {
   if (ctx.exit_reason != ExitReason::NONE) {
     printf("Simulation Exited with Reason: %d\n", (int)ctx.exit_reason);
     return;
-  }
-
-  if (back.out.mispred || back.out.flush) {
-    back.number_PC = back.out.redirect_pc;
   }
 }
 
