@@ -69,6 +69,7 @@ struct Wires {
   LsuRobIO lsu2rob;
   RobDisIO rob2dis;
   RobCsrIO rob2csr;
+  TopCsrIO top2csr;
   RobBroadcastIO rob_bcast;
   RobCommitIO rob_commit;
   CsrRobIO csr2rob;

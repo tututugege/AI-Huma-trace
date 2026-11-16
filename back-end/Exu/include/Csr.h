@@ -131,7 +131,7 @@ typedef struct {
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_interrupt         in: -                          out: csr2rob
 //   CONTRACT comb_commit            in: exe2csr rob2csr rob_bcast  out: csr2front
-//   CONTRACT comb_interrupt_inject  in: csr_interrupt_inject_io    out: -
+//   CONTRACT comb_interrupt_inject  in: csr_interrupt_inject_io top2csr    out: -
 //   CONTRACT owns: csr2rob csr2front
 class Csr {
 public:
@@ -164,7 +164,6 @@ public:
   // 执行时存下需要写入的idx，cmd和data
   // 提交时才写入
   // 否则csr指令未提交，其更改就已经生效
-  bool fs_dirty_req = false;   // F/D: set at commit of an instruction that turned mstatus.FS to Dirty; applied in comb_interrupt_inject
 
 
 

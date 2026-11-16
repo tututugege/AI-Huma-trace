@@ -72,12 +72,11 @@ void Csr::comb_interrupt_inject() {
     d.CSR_RegFile[csr_mip] = l.pending ? (d.CSR_RegFile[csr_mip] | l.bit) : (d.CSR_RegFile[csr_mip] & ~l.bit);
     d.CSR_RegFile[csr_sip] = d.CSR_RegFile[csr_mip] & (d.CSR_RegFile[csr_mideleg] & kDelegBits);
   }
-  // FS = Dirty, SD (an FP instruction committed: BackTop::comb_outputs sets fs_dirty_req): on top of whatever else
+  // FS = Dirty, SD (an FP instruction committed: top2csr.fs_dirty from BackTop::comb_outputs): on top of whatever else
   // changed mstatus this cycle; this is the CSR's last phase of the cycle
-  if (fs_dirty_req) {
+  if (wires->top2csr.fs_dirty) {
     d.CSR_RegFile[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     d.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_mstatus] & kSstatusMask;
-    fs_dirty_req = false;
   }
 }
 

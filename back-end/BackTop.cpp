@@ -125,13 +125,14 @@ void BackTop::comb_outputs() {
     }
   }
 
+  top2csr.fs_dirty = false;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     out.commit_entry[i] =
         rob_commit.commit_entry[i].uop.to_inst_entry(
             rob_commit.commit_entry[i].valid);
     if (rob_commit.commit_entry[i].valid &&
         !rob_bcast.interrupt) {
-      if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) csr->fs_dirty_req = true;
+      if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) top2csr.fs_dirty = true;
       tbhook::on_commit(
           (uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }

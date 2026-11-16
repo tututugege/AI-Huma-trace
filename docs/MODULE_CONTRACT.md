@@ -44,6 +44,11 @@ places where a register changed outside the edge or seq held logic:
   phase;
 * Csr `csr_write` used the register `csr_wdata` as a scratch variable (CSRRS / CSRRC): a local;
 * (Rename, before) `arch_cnt` written in comb: through `d`.
-Not yet under the contract: Exu's FU state (`units`, updated in place in comb), BackTop setting `csr->fs_dirty_req`
-directly (a cross-module write; should be a port), Rob, Isu, the LSU. Gates RVC=0 62/62, RVC=1 67/67 identical, FPR
+Not yet under the contract: Exu's FU state (`units`, updated in place in comb), Rob, Isu, the LSU. (BackTop setting
+`csr->fs_dirty_req` directly is the port `top2csr.fs_dirty` now.) Gates RVC=0 62/62, RVC=1 67/67 identical, FPR
 identical at every commit.
+
+Exu FU state: a q / d split with a copy at seq costs 8-13% of the run time (31 units, each with 3 ExuInst and a ring of
+them; rvc-alu 11.29 -> 12.79 s) for no change in behaviour. Every unit's state is read before it is written in a
+cycle, so the in-place update is the d-only form of a register (the q copy elided); a debug check of read-before-write
+would make that explicit without the cost.

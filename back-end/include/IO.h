@@ -313,6 +313,11 @@ struct RobCsrIO {
   wire<1> commit = {};
 };
 
+// BackTop -> CSR: an instruction committed this cycle turned mstatus.FS to Dirty (a fact of the trace)
+struct TopCsrIO {
+  wire<1> fs_dirty = {};
+};
+
 struct PtwWalkReq {
   wire<XLEN> vaddr = {};
   wire<XLEN> satp = {};
