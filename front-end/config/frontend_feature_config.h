@@ -156,7 +156,6 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #endif
 
 /* Dual request only active under ideal icache mode */
-#define FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE 0
 
 // 统一使用全局 config.h 中的 ICACHE_LINE_SIZE。
 // 真实 icache miss 延迟由 shared AXI / SimDDR 配置建模。

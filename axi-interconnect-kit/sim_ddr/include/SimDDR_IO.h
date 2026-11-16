@@ -26,11 +26,7 @@ constexpr uint8_t AXI_ID_WIDTH =
     AXI_KIT_AXI_ID_WIDTH; // configurable, 6-bit default supports 64 IDs
 
 #ifndef AXI_KIT_SIM_DDR_BEAT_BYTES
-#ifdef CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES
 #define AXI_KIT_SIM_DDR_BEAT_BYTES CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES
-#else
-#define AXI_KIT_SIM_DDR_BEAT_BYTES 4
-#endif
 #endif
 static_assert(AXI_KIT_SIM_DDR_BEAT_BYTES == 4 ||
                   AXI_KIT_SIM_DDR_BEAT_BYTES == 8 ||

@@ -9,9 +9,7 @@
 #include <memory>
 
 #include "AXI_Interconnect.h"
-#define AXI_KIT_HEADERS_AVAILABLE 1
 
-#define AXI_KIT_RUNTIME_ENABLED 1
 
 namespace {
 

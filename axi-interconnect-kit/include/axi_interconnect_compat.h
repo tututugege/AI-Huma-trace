@@ -10,21 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-#ifndef AXI_KIT_HAS_PARENT_CONFIG
-#if __has_include("config.h")
-#define AXI_KIT_HAS_PARENT_CONFIG 1
-#else
-#define AXI_KIT_HAS_PARENT_CONFIG 0
-#endif
-#endif
 
-#ifndef AXI_KIT_USE_PARENT_WIRE_REG
-#ifdef SIMULATOR_HAS_PARENT_WIRE_REG
-#define AXI_KIT_USE_PARENT_WIRE_REG 1
-#else
-#define AXI_KIT_USE_PARENT_WIRE_REG 0
-#endif
-#endif
 
 namespace axi_compat {
 
@@ -48,112 +34,8 @@ struct has_byte_array<
 template <typename T>
 inline constexpr bool has_byte_array_v = has_byte_array<T>::value;
 
-#if !AXI_KIT_USE_PARENT_WIRE_REG
-template <int Bits>
-struct wide_bits {
-  static_assert(Bits > 0, "wire/reg bit width must be positive");
-
-  static constexpr uint32_t kBits = Bits;
-  static constexpr uint32_t kLaneCount = (Bits + 63) / 64;
-
-  std::array<uint64_t, kLaneCount> lanes{};
-
-  constexpr wide_bits() = default;
-
-  template <typename T,
-            typename = std::enable_if_t<is_builtin_wire_v<T>>>
-  constexpr wide_bits(T value) {
-    *this = value;
-  }
-
-  constexpr void clear() { lanes.fill(0); }
-
-  constexpr void trim_unused_bits() {
-    if constexpr ((Bits % 64) != 0) {
-      lanes[kLaneCount - 1] &=
-          (static_cast<uint64_t>(1u) << (Bits % 64)) - 1u;
-    }
-  }
-
-  template <typename T,
-            typename = std::enable_if_t<is_builtin_wire_v<T>>>
-  constexpr wide_bits &operator=(T value) {
-    clear();
-    if constexpr (std::is_same_v<remove_cvref_t<T>, bool>) {
-      lanes[0] = value ? 1u : 0u;
-    } else if constexpr (sizeof(remove_cvref_t<T>) <= sizeof(uint64_t)) {
-      lanes[0] = static_cast<uint64_t>(value);
-    } else {
-      const unsigned __int128 wide = static_cast<unsigned __int128>(value);
-      lanes[0] = static_cast<uint64_t>(wide);
-      if constexpr (kLaneCount > 1) {
-        lanes[1] = static_cast<uint64_t>(wide >> 64u);
-      }
-    }
-    trim_unused_bits();
-    return *this;
-  }
-
-  constexpr wide_bits &operator|=(const wide_bits &other) {
-    for (uint32_t lane = 0; lane < kLaneCount; ++lane) {
-      lanes[lane] |= other.lanes[lane];
-    }
-    trim_unused_bits();
-    return *this;
-  }
-
-  template <typename T,
-            typename = std::enable_if_t<is_builtin_wire_v<T>>>
-  constexpr wide_bits &operator|=(T value) {
-    wide_bits other;
-    other = value;
-    return (*this |= other);
-  }
-
-  constexpr bool operator==(const wide_bits &other) const {
-    return lanes == other.lanes;
-  }
-
-  template <typename T,
-            typename = std::enable_if_t<is_builtin_wire_v<T>>>
-  constexpr bool operator==(T value) const {
-    wide_bits other;
-    other = value;
-    return *this == other;
-  }
-};
-
-template <int Bits,
-          typename T,
-          typename = std::enable_if_t<is_builtin_wire_v<T>>>
-constexpr bool operator==(T value, const wide_bits<Bits> &rhs) {
-  return rhs == value;
-}
-
-template <int Bits>
-constexpr wide_bits<Bits> operator|(wide_bits<Bits> lhs,
-                                    const wide_bits<Bits> &rhs) {
-  lhs |= rhs;
-  return lhs;
-}
-
-template <int Bits,
-          typename T,
-          typename = std::enable_if_t<is_builtin_wire_v<T>>>
-constexpr wide_bits<Bits> operator|(wide_bits<Bits> lhs, T value) {
-  lhs |= value;
-  return lhs;
-}
-
 template <typename T>
 struct is_wide_bits : std::false_type {};
-
-template <int Bits>
-struct is_wide_bits<wide_bits<Bits>> : std::true_type {};
-#else
-template <typename T>
-struct is_wide_bits : std::false_type {};
-#endif
 
 template <typename T>
 inline constexpr bool is_wide_bits_v = is_wide_bits<remove_cvref_t<T>>::value;
@@ -307,269 +189,96 @@ inline std::string hex_string(const T &value, uint32_t byte_count) {
 
 } // namespace axi_compat
 
-#if !AXI_KIT_USE_PARENT_WIRE_REG
-template <int Bits>
-struct AutoTypeHelper {
-  static_assert(Bits > 0, "wire/reg bit width must be positive");
 
-  using type = std::conditional_t<
-      Bits == 1, bool,
-      std::conditional_t<
-          (Bits <= 8), uint8_t,
-          std::conditional_t<
-              (Bits <= 16), uint16_t,
-              std::conditional_t<
-                  (Bits <= 32), uint32_t,
-                  std::conditional_t<
-                      (Bits <= 64), uint64_t,
-                      std::conditional_t<(Bits <= 128), unsigned __int128,
-                                         axi_compat::wide_bits<Bits>>>>>>>;
-};
-
-template <int Bits>
-using AutoType = typename AutoTypeHelper<Bits>::type;
-template <int Bits>
-using wire = AutoType<Bits>;
-template <int Bits>
-using reg = AutoType<Bits>;
-
-static_assert(std::is_same_v<wire<1>, bool>);
-static_assert(std::is_same_v<wire<32>, uint32_t>);
-static_assert(sizeof(wire<128>) == 16,
-              "wire<128> must remain a real 128-bit carrier in standalone "
-              "axi-interconnect-kit");
-static_assert(sizeof(wire<256>) == 32,
-              "wire<256> must remain a real 256-bit carrier in standalone "
-              "axi-interconnect-kit");
-#endif
-
-#if AXI_KIT_HAS_PARENT_CONFIG
-#ifndef CONFIG_SIM_DDR_LATENCY
-#error "simulator config.h must define CONFIG_SIM_DDR_LATENCY for AXI kit integration"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES"
-#endif
-#ifndef CONFIG_AXI_KIT_MAX_OUTSTANDING
-#error "simulator config.h must define CONFIG_AXI_KIT_MAX_OUTSTANDING"
-#endif
-#ifndef CONFIG_AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER
-#error "simulator config.h must define CONFIG_AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER"
-#endif
-#ifndef CONFIG_AXI_KIT_MAX_WRITE_OUTSTANDING
-#error "simulator config.h must define CONFIG_AXI_KIT_MAX_WRITE_OUTSTANDING"
-#endif
-#ifndef CONFIG_AXI_KIT_MAX_WRITE_TRANSACTION_BYTES
-#error "simulator config.h must define CONFIG_AXI_KIT_MAX_WRITE_TRANSACTION_BYTES"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_MAX_OUTSTANDING
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_MAX_OUTSTANDING"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND"
-#endif
-#ifndef CONFIG_AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND
-#error "simulator config.h must define CONFIG_AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND"
-#endif
-#ifndef CONFIG_AXI_KIT_AXI_ID_WIDTH
-#error "simulator config.h must define CONFIG_AXI_KIT_AXI_ID_WIDTH"
-#endif
-#ifndef CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC
-#error "simulator config.h must define CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC"
-#endif
-#ifndef CONFIG_AXI_KIT_DEBUG
-#error "simulator config.h must define CONFIG_AXI_KIT_DEBUG"
-#endif
-#ifndef CONFIG_AXI_KIT_UART_BASE
-#error "simulator config.h must define CONFIG_AXI_KIT_UART_BASE"
-#endif
-#ifndef CONFIG_AXI_KIT_MMIO_BASE
-#error "simulator config.h must define CONFIG_AXI_KIT_MMIO_BASE"
-#endif
-#ifndef CONFIG_AXI_KIT_MMIO_SIZE
-#error "simulator config.h must define CONFIG_AXI_KIT_MMIO_SIZE"
-#endif
-#endif
 
 // Configurable defaults for standalone build (can be overridden via -D).
-#ifndef CONFIG_SIM_DDR_LATENCY
-#define CONFIG_SIM_DDR_LATENCY 50
-#endif
 
 #ifndef AXI_KIT_SIM_DDR_READ_LATENCY
 #define AXI_KIT_SIM_DDR_READ_LATENCY CONFIG_SIM_DDR_LATENCY
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY
 #define AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY
-#else
-#define AXI_KIT_SIM_DDR_WRITE_RESP_LATENCY 1
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_MAX_OUTSTANDING
-#ifdef CONFIG_AXI_KIT_SIM_DDR_MAX_OUTSTANDING
 #define AXI_KIT_SIM_DDR_MAX_OUTSTANDING CONFIG_AXI_KIT_SIM_DDR_MAX_OUTSTANDING
-#else
-#define AXI_KIT_SIM_DDR_MAX_OUTSTANDING 8
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH
 #define AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH
-#else
-#define AXI_KIT_SIM_DDR_WRITE_QUEUE_DEPTH AXI_KIT_SIM_DDR_MAX_OUTSTANDING
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP
 #define AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP
-#else
-#define AXI_KIT_SIM_DDR_WRITE_ACCEPT_GAP 0
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH
 #define AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH
-#else
-#define AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH 8
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP
 #define AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP
-#else
-#define AXI_KIT_SIM_DDR_WRITE_DRAIN_GAP 0
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND
-#ifdef CONFIG_AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND
 #define AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND \
   CONFIG_AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND
-#else
-#define AXI_KIT_SIM_DDR_READ_TO_WRITE_TURNAROUND 0
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND
 #define AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND
-#else
-#define AXI_KIT_SIM_DDR_WRITE_TO_READ_TURNAROUND 0
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK
 #define AXI_KIT_SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK
-#else
-#define AXI_KIT_SIM_DDR_WRITE_DRAIN_HIGH_WATERMARK \
-  AXI_KIT_SIM_DDR_WRITE_DATA_FIFO_DEPTH
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_WRITE_DRAIN_LOW_WATERMARK
-#ifdef CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_LOW_WATERMARK
 #define AXI_KIT_SIM_DDR_WRITE_DRAIN_LOW_WATERMARK \
   CONFIG_AXI_KIT_SIM_DDR_WRITE_DRAIN_LOW_WATERMARK
-#else
-#define AXI_KIT_SIM_DDR_WRITE_DRAIN_LOW_WATERMARK 0
-#endif
 #endif
 
 #ifndef AXI_KIT_AXI_ID_WIDTH
-#ifdef CONFIG_AXI_KIT_AXI_ID_WIDTH
 #define AXI_KIT_AXI_ID_WIDTH CONFIG_AXI_KIT_AXI_ID_WIDTH
-#else
-#define AXI_KIT_AXI_ID_WIDTH 6
-#endif
 #endif
 
 #ifndef AXI_KIT_LLC_DCACHE_READ_MISS_NOALLOC
-#ifdef CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC
 #define AXI_KIT_LLC_DCACHE_READ_MISS_NOALLOC \
   CONFIG_AXI_LLC_DCACHE_READ_MISS_NOALLOC
-#else
-#define AXI_KIT_LLC_DCACHE_READ_MISS_NOALLOC 0
-#endif
 #endif
 
 #ifndef AXI_KIT_SIM_DDR_BEAT_BYTES
-#ifdef CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES
 #define AXI_KIT_SIM_DDR_BEAT_BYTES CONFIG_AXI_KIT_SIM_DDR_BEAT_BYTES
-#else
-#define AXI_KIT_SIM_DDR_BEAT_BYTES 4
-#endif
 #endif
 
 #ifndef AXI_KIT_MAX_OUTSTANDING
-#ifdef CONFIG_AXI_KIT_MAX_OUTSTANDING
 #define AXI_KIT_MAX_OUTSTANDING CONFIG_AXI_KIT_MAX_OUTSTANDING
-#else
-#define AXI_KIT_MAX_OUTSTANDING 8
-#endif
 #endif
 
 #ifndef AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER
-#ifdef CONFIG_AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER
 #define AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER \
   CONFIG_AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER
-#else
-#define AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER 4
-#endif
 #endif
 
 #ifndef AXI_KIT_MAX_WRITE_OUTSTANDING
-#ifdef CONFIG_AXI_KIT_MAX_WRITE_OUTSTANDING
 #define AXI_KIT_MAX_WRITE_OUTSTANDING CONFIG_AXI_KIT_MAX_WRITE_OUTSTANDING
-#else
-#define AXI_KIT_MAX_WRITE_OUTSTANDING 8
-#endif
 #endif
 
 #ifndef AXI_KIT_MAX_WRITE_TRANSACTION_BYTES
-#ifdef CONFIG_AXI_KIT_MAX_WRITE_TRANSACTION_BYTES
 #define AXI_KIT_MAX_WRITE_TRANSACTION_BYTES \
   CONFIG_AXI_KIT_MAX_WRITE_TRANSACTION_BYTES
-#else
-#define AXI_KIT_MAX_WRITE_TRANSACTION_BYTES 64
-#endif
 #endif
 
 #ifndef AXI_KIT_DEBUG
-#ifdef CONFIG_AXI_KIT_DEBUG
 #define AXI_KIT_DEBUG CONFIG_AXI_KIT_DEBUG
-#else
-#define AXI_KIT_DEBUG 0
-#endif
 #endif
 
 #ifndef AXI_KIT_DCACHE_LOG
@@ -581,42 +290,18 @@ static_assert(sizeof(wire<256>) == 32,
 #endif
 
 #ifndef AXI_KIT_UART_BASE
-#ifdef CONFIG_AXI_KIT_UART_BASE
 #define AXI_KIT_UART_BASE CONFIG_AXI_KIT_UART_BASE
-#else
-#define AXI_KIT_UART_BASE 0x10000000u
-#endif
 #endif
 
 #ifndef AXI_KIT_MMIO_BASE
-#ifdef CONFIG_AXI_KIT_MMIO_BASE
 #define AXI_KIT_MMIO_BASE CONFIG_AXI_KIT_MMIO_BASE
-#elif defined(MMIO_TEST_BASE)
-#define AXI_KIT_MMIO_BASE MMIO_TEST_BASE
-#else
-#define AXI_KIT_MMIO_BASE AXI_KIT_UART_BASE
-#endif
 #endif
 
-#ifdef MMIO_TEST_BASE
-#undef AXI_KIT_MMIO_BASE
-#define AXI_KIT_MMIO_BASE MMIO_TEST_BASE
-#endif
 
 #ifndef AXI_KIT_MMIO_SIZE
-#ifdef CONFIG_AXI_KIT_MMIO_SIZE
 #define AXI_KIT_MMIO_SIZE CONFIG_AXI_KIT_MMIO_SIZE
-#elif defined(MMIO_TEST_SIZE)
-#define AXI_KIT_MMIO_SIZE MMIO_TEST_SIZE
-#else
-#define AXI_KIT_MMIO_SIZE 0x00001000u
-#endif
 #endif
 
-#ifdef MMIO_TEST_SIZE
-#undef AXI_KIT_MMIO_SIZE
-#define AXI_KIT_MMIO_SIZE MMIO_TEST_SIZE
-#endif
 
 static_assert(AXI_KIT_AXI_ID_WIDTH > 0,
               "AXI_KIT_AXI_ID_WIDTH must be positive");
@@ -649,7 +334,6 @@ static_assert(AXI_KIT_MAX_READ_OUTSTANDING_PER_MASTER <= AXI_KIT_MAX_OUTSTANDING
 static_assert(AXI_KIT_MAX_WRITE_OUTSTANDING <= (1u << AXI_KIT_AXI_ID_WIDTH),
               "AXI_KIT_MAX_WRITE_OUTSTANDING exceeds available AXI IDs");
 
-#if AXI_KIT_HAS_PARENT_CONFIG
 static_assert(AXI_KIT_SIM_DDR_READ_LATENCY == CONFIG_SIM_DDR_LATENCY,
               "parent simulator DDR read latency must come from config.h");
 static_assert(
@@ -713,15 +397,11 @@ static_assert(AXI_KIT_MMIO_BASE == CONFIG_AXI_KIT_MMIO_BASE,
               "parent simulator MMIO base must come from config.h");
 static_assert(AXI_KIT_MMIO_SIZE == CONFIG_AXI_KIT_MMIO_SIZE,
               "parent simulator MMIO size must come from config.h");
-#endif
 
 #ifndef DEBUG
 #define DEBUG AXI_KIT_DEBUG
 #endif
 
-#ifndef DCACHE_LOG
-#define DCACHE_LOG AXI_KIT_DCACHE_LOG
-#endif
 
 
 #ifndef MMIO_BASE

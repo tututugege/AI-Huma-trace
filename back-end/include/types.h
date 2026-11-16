@@ -52,7 +52,6 @@ constexpr uint8_t SWAP = 0b00001;
 constexpr uint8_t LR = 0b00010;
 constexpr uint8_t SC = 0b00011;
 constexpr uint8_t OR = 0b01000;
-constexpr uint8_t MAX = 0b10100;
 } // namespace AmoOp
 
 // ==========================================

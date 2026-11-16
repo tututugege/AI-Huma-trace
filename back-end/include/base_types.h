@@ -3,7 +3,6 @@
 // F/D build switch: -DFP=1 (default) = standard F/D on rv32 and rv64, -DFP=0 = no floating point at all; also defined in config.h
 #include <type_traits>
 
-#define SIMULATOR_HAS_PARENT_WIRE_REG 1
 
 template <typename T>
 using RemoveCvRefT = std::remove_cv_t<std::remove_reference_t<T>>;
@@ -18,7 +17,6 @@ template <int Bits>
 struct WideBits {
   static_assert(Bits > 0, "wire/reg bit width must be positive");
 
-  static constexpr int kBits = Bits;
   static constexpr int kByteCount = (Bits + 7) / 8;
 
   uint8_t bytes[kByteCount] = {};
