@@ -536,6 +536,14 @@ struct DcacheLsuIO {
   // otherwise a new request wins the port every cycle and the retry starves (LSU_PIPE_RBLK).
   wire<1> load_retry_busy[LSU_LDU_COUNT] = {};
   wire<1> store_retry_busy[LSU_STA_COUNT] = {};  // same for the store ports
+
+  // no response this cycle: the response valids and the stand-alone signals (mshr_fill, the retry-busy bits)
+  void clear_valid() {
+    resp_ports.clear();
+    mshr_fill = false;
+    for (auto &b : load_retry_busy) b = false;
+    for (auto &b : store_retry_busy) b = false;
+  }
 };
 
 struct LsuDisIO {

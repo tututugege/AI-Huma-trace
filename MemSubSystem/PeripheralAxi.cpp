@@ -72,7 +72,7 @@ void PeripheralAxi::comb_outputs() {
   out.read->req.bypass = out.write->req.bypass = true;   // MMIO: never through the LLC
 
   if (out.resp != nullptr) {
-    *out.resp = {};
+    out.resp->is_mmio = false;
     out.resp->ready = !q.busy && !q.resp_valid;
     if (q.resp_valid) {
       out.resp->is_mmio = 1;

@@ -119,13 +119,13 @@ void RealDcache::comb_stage1() {
     }
 
 
-    for (auto &r : out.dcache2wb->bypass_req) r = {};
-    for (auto &r : out.dcache2wb->merge_req) r = {};
-    for (auto &r : out.dcache2mshr->find_req) r = {};
-    *out.fillout = {};
+    for (auto &r : out.dcache2wb->bypass_req) r.valid = false;
+    for (auto &r : out.dcache2wb->merge_req) r.valid = false;
+    for (auto &r : out.dcache2mshr->find_req) r.valid = false;
+    out.fillout->valid = false;
 
     for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
-        *out.dcachereadreq[i] = {};
+        out.dcachereadreq[i]->valid = false;
     }
 
 
@@ -202,9 +202,7 @@ void RealDcache::comb_stage1() {
             out.dcache2wb->bypass_req[i].valid = true;
             out.dcache2wb->bypass_req[i].addr = req_addr;
 
-            out.dcache2mshr->find_req[i].valid = true;
-            out.dcache2mshr->find_req[i].set_idx = f.set_idx;
-            out.dcache2mshr->find_req[i].tag = f.tag;
+            out.dcache2mshr->find_req[i] = MSHRFindReq{.valid = true, .is_prefetch = false, .set_idx = f.set_idx, .tag = f.tag};
         }        
     }
 
@@ -284,9 +282,7 @@ void RealDcache::comb_stage1() {
             out.dcache2wb->merge_req[i].valid = true;
             out.dcache2wb->merge_req[i].addr = req_addr;
 
-            out.dcache2mshr->find_req[idx].valid = true;
-            out.dcache2mshr->find_req[idx].set_idx = f.set_idx;
-            out.dcache2mshr->find_req[idx].tag = f.tag;
+            out.dcache2mshr->find_req[idx] = MSHRFindReq{.valid = true, .is_prefetch = false, .set_idx = f.set_idx, .tag = f.tag};
         }
     }
 
@@ -311,10 +307,7 @@ void RealDcache::comb_stage1() {
             out.dcachereadreq[i]->word_off = f.word_off;
             out.dcache2wb->bypass_req[i].valid = true;     // a line still in the write buffer must not be re-read
             out.dcache2wb->bypass_req[i].addr = pf_addr;
-            out.dcache2mshr->find_req[i].valid = true;
-            out.dcache2mshr->find_req[i].set_idx = f.set_idx;
-            out.dcache2mshr->find_req[i].tag = f.tag;
-            out.dcache2mshr->find_req[i].is_prefetch = true;
+            out.dcache2mshr->find_req[i] = MSHRFindReq{.valid = true, .is_prefetch = true, .set_idx = f.set_idx, .tag = f.tag};
             pf.head_taken = true;
             break;
         }
@@ -333,16 +326,16 @@ void RealDcache::comb_stage1() {
 void RealDcache::comb_stage2() {
     const Regs &q = q_;
 
-    for (auto &r : out.dcache2lsu->resp_ports.load_resps) r = {};
-    for (auto &r : out.dcache2lsu->resp_ports.store_resps) r = {};
-    for (auto &r : out.dcache2mshr->mshr_req) r = {};
-    out.dcache2wb->dirty_info = {};
-    out.dcache2mshr->fill_resp = {};
+    for (auto &r : out.dcache2lsu->resp_ports.load_resps) r.valid = false;
+    for (auto &r : out.dcache2lsu->resp_ports.store_resps) r.valid = false;
+    for (auto &r : out.dcache2mshr->mshr_req) r.valid = false;
+    out.dcache2wb->dirty_info.valid = false;
+    out.dcache2mshr->fill_resp.done = false;
     
-    *out.fill_write = {};
+    out.fill_write->valid = false;
     for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){
-        *out.lru_updates[i] = {};
-        *out.pendingwrite[i] = {};
+        out.lru_updates[i]->valid = false;
+        out.pendingwrite[i]->valid = false;
     }
     for (auto &entry : fill_req_merge_wires) {
         entry = {};
@@ -478,10 +471,7 @@ void RealDcache::comb_stage2() {
 
                 }
                 else { // The only free MSHR entry is being allocated by the other load port in the same cycle, so can't accept this new miss
-                    out.dcache2mshr->mshr_req[i].valid = true;
-                    out.dcache2mshr->mshr_req[i].addr = slot.addr;
-                    out.dcache2mshr->mshr_req[i].lsu_origin =
-                        l1d_perf_is_lsu_req(slot.req_id);
+                    out.dcache2mshr->mshr_req[i] = MSHRReq{.valid = true, .addr = slot.addr, .lsu_origin = l1d_perf_is_lsu_req(slot.req_id)};
 
                     resp.valid = true;
                     resp.replay = ReplayType::MSHR_HIT;
@@ -581,11 +571,7 @@ void RealDcache::comb_stage2() {
 
             }
             else if(in.mshr2dcache->find_resp[iidx].valid){
-                out.dcache2mshr->mshr_req[iidx].valid = true;
-                out.dcache2mshr->mshr_req[iidx].addr = slot.addr;
-                out.dcache2mshr->mshr_req[iidx].is_store = true;
-                out.dcache2mshr->mshr_req[iidx].lsu_origin =
-                    l1d_perf_is_lsu_req(slot.req_id);
+                out.dcache2mshr->mshr_req[iidx] = MSHRReq{.valid = true, .addr = slot.addr, .is_store = true, .lsu_origin = l1d_perf_is_lsu_req(slot.req_id)};
                 resp.valid = true;
                 resp.replay = ReplayType::HIT;
                 resp.req_id = slot.req_id;
@@ -599,11 +585,7 @@ void RealDcache::comb_stage2() {
 
                 }
                 else {
-                    out.dcache2mshr->mshr_req[iidx].valid = true;
-                    out.dcache2mshr->mshr_req[iidx].addr = slot.addr;
-                    out.dcache2mshr->mshr_req[iidx].is_store = true;
-                    out.dcache2mshr->mshr_req[iidx].lsu_origin =
-                        l1d_perf_is_lsu_req(slot.req_id);
+                    out.dcache2mshr->mshr_req[iidx] = MSHRReq{.valid = true, .addr = slot.addr, .is_store = true, .lsu_origin = l1d_perf_is_lsu_req(slot.req_id)};
 
                     resp.valid = true;
                     resp.replay = ReplayType::HIT;
@@ -630,12 +612,7 @@ void RealDcache::comb_stage2() {
             mshr_free_entries <= PF_MSHR_RESERVE) {
             // the line is in the write buffer / the cache / an MSHR, or the MSHRs are reserved for demand misses: the prefetch is dropped
         } else {
-            out.dcache2mshr->mshr_req[pf_slot].valid = true;
-            out.dcache2mshr->mshr_req[pf_slot].addr = slot.addr;
-            out.dcache2mshr->mshr_req[pf_slot].is_store = false;
-            out.dcache2mshr->mshr_req[pf_slot].lsu_origin = false;
-            out.dcache2mshr->mshr_req[pf_slot].is_prefetch = true;
-            out.dcache2mshr->mshr_req[pf_slot].no_fill = pf_llc_only;
+            out.dcache2mshr->mshr_req[pf_slot] = MSHRReq{.valid = true, .addr = slot.addr, .is_prefetch = true, .no_fill = pf_llc_only};
             mshr_free_entries--;
         }
     }

@@ -14,10 +14,10 @@ void MemRouteBlock::init() {
 void MemRouteBlock::comb_response() {
     const Regs &q = q_;
 
-  *out.icache_resp = {};
-  *out.lsu_resp = {};
-  *out.ptw_events = {};
-  *out.wakeup = {};
+  out.icache_resp->resp_valid = out.icache_resp->resp_retry = out.icache_resp->resp_miss = false;
+  out.lsu_resp->clear_valid();
+  out.ptw_events->valid = false;
+  out.wakeup->walk = false;
 
   memcpy(out.lsu_resp, in.dcache_resp, sizeof(DcacheLsuIO));
 
@@ -78,8 +78,9 @@ void MemRouteBlock::comb_response() {
 
 void MemRouteBlock::comb_request() {
     const Regs &q = q_;
-  *out.ptw_grant = {};
-  *out.dcache_req = LsuDcacheIO{};
+  out.ptw_grant->valid = false;
+  out.dcache_req->req_ports.clear();
+  out.dcache_req->icache_req = LSU_LDU_COUNT;
 
   memcpy(&out.dcache_req->req_ports, in.lsu_req, sizeof(DCacheReqPorts));
 
