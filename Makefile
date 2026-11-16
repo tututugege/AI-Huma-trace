@@ -86,11 +86,9 @@ CXXSRC := $(shell find ./back-end -name "*.cpp") \
           $(AXI_KIT_SRC) \
           ./rv_simu_mmu_v2.cpp
 
-# DRAMsim3 DRAM timing backend for SimDDR (EXP-006), on by default; `gmake DS3=0` builds the fixed-latency SimDDR.
-# DRAMsim3 is the pinned git submodule third_party/DRAMsim3 (`git submodule update --init third_party/DRAMsim3`); its
-# library is compiled here into build_dramsim3/libdramsim3.a (also used by rtl/tb/soc/build.sh, `gmake dramsim3`).
-# Core frequency: `gmake CPU_FREQ_MHZ=...` or the CPU_FREQ_MHZ environment variable at run time.
-DS3 ?= 1
+# DRAMsim3 DRAM timing backend for SimDDR (EXP-006). DRAMsim3 is the pinned git submodule third_party/DRAMsim3
+# (`git submodule update --init third_party/DRAMsim3`); its library is compiled here into build_dramsim3/libdramsim3.a (also used by
+# rtl/tb/soc/build.sh, `gmake dramsim3`).  Core frequency: `gmake CPU_FREQ_MHZ=...`.
 DS3_DIR ?= third_party/DRAMsim3
 DS3_LIB ?= build_dramsim3/libdramsim3.a
 DS3_SRC := bankstate channel_state command_queue common configuration controller dram_system hmc refresh simple_stats timing memory_system
@@ -98,14 +96,12 @@ DS3_OBJS := $(DS3_SRC:%=$(dir $(DS3_LIB))%.o)
 ifdef CPU_FREQ_MHZ
 CXXFLAGS += -DCONFIG_CPU_FREQ_MHZ=$(CPU_FREQ_MHZ)u
 endif
-ifneq ($(DS3),0)
 ifeq ($(wildcard $(DS3_DIR)/src/dramsim3.h),)
-$(error DRAMsim3 not found in $(DS3_DIR): run 'git submodule update --init third_party/DRAMsim3' (or build with DS3=0))
+$(error DRAMsim3 not found in $(DS3_DIR): run 'git submodule update --init third_party/DRAMsim3')
 endif
 INCLUDES += -I$(DS3_DIR)/src
-CXXFLAGS += -DSIM_DDR_DS3 -DDS3_DEFAULT_CONFIG='"$(abspath $(DS3_DIR))/configs/DDR4_8Gb_x16_3200.ini"'
+CXXFLAGS += -DDS3_DEFAULT_CONFIG='"$(abspath $(DS3_DIR))/configs/DDR4_8Gb_x16_3200.ini"'
 LIBS += $(DS3_LIB)
-endif
 $(dir $(DS3_LIB))%.o: $(DS3_DIR)/src/%.cc
 	@mkdir -p $(dir $(DS3_LIB))
 	@echo "Compiling DRAMsim3 $*.cc"

@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file SimDDR_DS3.h
- * @brief DRAMsim3 backend for SimDDR (EXP-004, build with SIM_DDR_DS3=1).
+ * @brief DRAMsim3 backend for SimDDR (EXP-004 / EXP-006).
  *
  * SimDDR keeps its AXI front end (queues, W FIFO, R burst drain). Only the DRAM timing comes from DRAMsim3: reads become
  * 64 B DRAM reads issued in order, a read is ready for data after all of its lines return plus a fixed extra latency

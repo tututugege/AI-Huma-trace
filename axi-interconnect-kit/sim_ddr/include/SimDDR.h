@@ -3,11 +3,9 @@
  * @file SimDDR.h
  * @brief Timing model of a DDR controller behind an AXI4 slave port.
  *
- * Reads: up to MAX_OUTSTANDING requests, each ready after SIM_DDR_LATENCY cycles; bursts drain contiguously and the next
- * burst is chosen round-robin. Writes: AW queue, a W beat FIFO that is drained in bursts (high/low watermark), and a
- * delayed B response. Reads and writes share the backend; switching direction costs a turnaround. No data is stored
- * (functional memory lives in the trace bridge); with SIM_DDR_DATA (RTL closed-loop platform) read data comes from and write
- * data goes to PhysMemory (pmem_read / pmem_write).
+ * Reads: up to MAX_OUTSTANDING requests, each ready when DRAMsim3 returns its lines plus a fixed latency; bursts drain
+ * contiguously and the next burst is chosen round-robin. Writes: AW queue, a W beat FIFO that is drained in bursts, and a
+ * delayed B response. No data is stored (functional memory lives in the trace bridge).
  */
 
 #include "SimDDR_IO.h"
@@ -42,7 +40,6 @@ public:
   void seq();
 
   SimDDR_IO_t io;
-#ifdef SIM_DDR_DS3
   SimDDR();
   void ds3_advance(uint32_t n);
   ~SimDDR();
@@ -52,26 +49,17 @@ private:
   struct Ds3Holder;
   std::unique_ptr<Ds3Holder> ds3_;
 public:
-#endif
 
 private:
   enum Mode : uint8_t { None, Read, Write };
   struct WrTxn { uint16_t beats, accepted, drained; uint8_t id; bool data_done; uint32_t addr = 0; };
   struct RdTxn { uint32_t lat; uint8_t id, len, beat; bool in_data, complete;
-#ifdef SIM_DDR_DS3
     uint32_t tag;
-#endif
     uint32_t addr = 0;
   };
   struct Resp { uint8_t id; uint32_t lat; };
 
-  // write side: the data itself is not kept, only the beat count (SIM_DDR_DATA: the beats are kept and written to PhysMemory at drain)
-#ifdef SIM_DDR_DATA
-  struct WBeat { uint32_t addr; axi_data_t data; axi_strb_t strb; };
-  std::deque<WBeat> wbeats_;
-  static void do_memory_write(uint32_t addr, axi_data_t data, axi_strb_t wstrb);
-  static axi_data_t do_memory_read(uint32_t addr);
-#endif
+  // write side: the data itself is not kept, only the beat count
   std::deque<WrTxn> pend_;
   uint32_t fifo_, accept_cd_, drain_cd_;
   bool drain_mode_;
