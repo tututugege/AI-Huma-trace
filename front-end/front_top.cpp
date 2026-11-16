@@ -507,11 +507,8 @@ void FrontComb::run_icache() {
   ic_in.fence_i = in.fence_i;
   ic_in.invalidate_req = false;
   ic_in.csr_status = in.csr_status;
-  ic_in.run_comb_only = false;
   ic_in.icache_read_valid = fetch_addr_head.read_valid;
   ic_in.fetch_address = fetch_addr_head.read_valid ? fetch_addr_head.fetch_address : 0;
-  ic_in.icache_read_valid_2 = false;
-  ic_in.fetch_address_2 = 0;
   icache_comb_calc(&ic_in, &ic_out);
   g_pmu_front.icache_req_fire = ic_out.perf_req_fire;
   g_pmu_front.icache_miss_issue = ic_out.perf_miss_event;
@@ -859,21 +856,15 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   instruction_FIFO_in fifo_in;
   PTAB_in ptab_in;
   front2back_FIFO_in front2back_in;
-  icache_in icache_inp;
-  icache_out icache_outp;
   std::memset(&fetch_addr_in, 0, sizeof(fetch_addr_in));
   std::memset(&fifo_in, 0, sizeof(fifo_in));
   std::memset(&ptab_in, 0, sizeof(ptab_in));
   std::memset(&front2back_in, 0, sizeof(front2back_in));
-  std::memset(&icache_inp, 0, sizeof(icache_inp));
-  icache_inp.csr_status = inp.csr_status;
-  std::memset(&icache_outp, 0, sizeof(icache_outp));
 
   fetch_address_FIFO_seq_read(&fetch_addr_in, &rd.fetch_addr_fifo_rd_snapshot);
   instruction_FIFO_seq_read(&fifo_in, &rd.fifo_rd_snapshot);
   PTAB_seq_read(&ptab_in, &rd.ptab_rd_snapshot);
   front2back_FIFO_seq_read(&front2back_in, &rd.front2back_fifo_rd_snapshot);
-  icache_seq_read(&icache_inp, &icache_outp);
   (void)inp;
 }
 
@@ -890,7 +881,6 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   PTAB_seq_write(&req.ptab_req);
   front2back_FIFO_seq_write(&req.front2back_fifo_req);
   predecode_checker_seq_write();
-  icache_seq_write();
 
   ipf::tick(front_ctx ? front_ctx->perf.cycle : 0, req.front_state.ipf_cand, req.front_state.valid ? req.front_state.ipf_ncand : 0, inp.csr_status);
   if (req.front_state.valid) {

@@ -71,18 +71,13 @@ struct icache_in {
   // from BPU
   wire1_t icache_read_valid;
   fetch_addr_t fetch_address;
-  wire1_t icache_read_valid_2;
-  fetch_addr_t fetch_address_2;
   CsrStatusIO *csr_status;
-  wire1_t run_comb_only;
 };
 
 struct icache_out {
   // to BPU & instruction FIFO
   wire1_t icache_read_ready;
   wire1_t icache_read_complete; // fetched current fetch group
-  wire1_t icache_read_ready_2;
-  wire1_t icache_read_complete_2;
   // perf / debug observability for front-end attribution
   wire1_t perf_req_fire;
   wire1_t perf_req_blocked;
@@ -102,11 +97,7 @@ struct icache_out {
   inst_word_t fetch_group[FETCH_WIDTH];
   wire1_t page_fault_inst[FETCH_WIDTH];
   wire1_t inst_valid[FETCH_WIDTH];
-  inst_word_t fetch_group_2[FETCH_WIDTH];
-  wire1_t page_fault_inst_2[FETCH_WIDTH];
-  wire1_t inst_valid_2[FETCH_WIDTH];
   pc_t fetch_pc; // PC address of the cache line (the address used to fetch instructions from icache)
-  pc_t fetch_pc_2;
   pc_t fetch_paddr;           // FE_PAIR: physical address of fetch_pc
   wire1_t fetch_single_word;
   wire1_t fetch_page_fault;
