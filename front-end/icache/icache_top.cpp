@@ -72,6 +72,27 @@ struct Binding {
   }
 } g_bind;
 
+// One I-cache cycle as in the RTL (rtl/frontend/icache/icache_ctl.sv): the fetch step R1 = N(R0) (icache_comb_calc), on a
+// predecode flush R2 = K(R1) on top of it (icache_invalidate_step); the module registers, the ITLB and the tag / valid arrays
+// are updated once, at the clock edge (icache_seq). The table writes of the steps wait for the edge; a read of the arrays in
+// the same cycle sees them (forwarded, as through a write-through bypass).
+struct Edge {
+  bool reset = false;                 // reset this cycle: arrays and module back to the reset state at the edge
+  int n = 0;                          // steps of this cycle (1, or 2 with the invalidate)
+  icache_module_n::ICache_table_write_t tw[2] = {};   // each step's table write, applied in order at the edge
+  bool kill_step = false;             // inside icache_invalidate_step (K must not use the ITLB)
+} g_edge;
+
+template <class TagP, class ValidP>
+void forward_pending(uint32_t index, TagP &tag, ValidP &valid) {
+  if (g_edge.reset) { tag = TagP{}; valid = ValidP{}; }
+  for (int s = 0; s < g_edge.n; ++s) {
+    const auto &tw = g_edge.tw[s];
+    if (tw.invalidate_all) valid = ValidP{};
+    if (tw.we && tw.index == index) { tag.chunks[tw.way][0] = tw.tag; valid.chunks[tw.way][0] = tw.valid; }
+  }
+}
+
 void clear_outputs(icache_out *out) {
   out->icache_read_complete = false;
   out->fetch_pc = 0;
@@ -153,8 +174,7 @@ void comb(icache_in *in, icache_out *out) {
   out->fetch_paddr = 0;
   out->fetch_single_word = false;
   auto *rp = g_bind.read;
-  if (in->reset) {
-    icache.reset();
+  if (in->reset) {   // (the module itself is reset at the edge: icache_seq)
     if (rp) { rp->req.valid = false; rp->req.addr = 0; rp->req.total_size = 0; rp->req.id = 0; rp->req.bypass = false; rp->req.accepted = false; rp->req.accepted_id = 0; rp->resp.ready = false; }
     if (g_bind.probe_req) { g_bind.probe_req->req_valid = false; g_bind.probe_req->req_addr = 0; }
     if (TlbMmu *m = g_bind.mmu()) m->flush();
@@ -194,6 +214,7 @@ void comb(icache_in *in, icache_out *out) {
     if (in->itlb_flush) m->flush();
     if (in->refetch) m->cancel_pending_walk();
     if (!in->refetch && icache.io.out.mmu_req_valid) {
+      if (g_edge.kill_step) { std::printf("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); std::exit(1); }
       itlb_invoked = true;
       uint32_t pa = 0;
       itlb_ret = m->translate(pa, static_cast<pc_t>(icache.io.out.mmu_req_vtag) << 12, 0, in->csr_status);
@@ -235,11 +256,10 @@ void icache_set_context(SimContext *ctx) { g_bind.ctx_set = ctx; }
 // I-cache's comb runs.
 bool icache_read_ready(bool hold_for_recovery, bool reset) { return read_ready(hold_for_recovery, reset); }
 
-// One cycle: array read, comb, clock edge of the module / ITLB / arrays.
-void icache_comb_calc(icache_in *in, icache_out *out) {
-  if (in->reset) { g_tags.reset(); g_valid.reset(); }
+namespace {
+// One step: the array read (the pending table writes of this cycle forwarded), the module comb, the step's table write.
+void step(icache_in *in, icache_out *out) {
   g_bind.bind();
-
   const auto &r = icache.io.regs;
   const pc_t lookup_pc = r.req_valid_r ? r.req_pc_r : r.lookup_pending_r ? r.lookup_pc_r : in->fetch_address;
   const uint32_t index = (lookup_pc >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
@@ -253,6 +273,7 @@ void icache_comb_calc(icache_in *in, icache_out *out) {
   ValidTable::ReadResp valid_resp{};
   g_tags.comb(tag_read, tag_resp);
   g_valid.comb(valid_read, valid_resp);
+  if (tag_resp.valid) forward_pending(index, tag_resp.payload, valid_resp.payload);
   g_lookup = {};
   g_lookup.meta_valid = tag_resp.valid && valid_resp.valid;
   g_lookup.data_valid = tag_resp.valid;
@@ -260,42 +281,64 @@ void icache_comb_calc(icache_in *in, icache_out *out) {
   for (uint32_t w = 0; w < ICACHE_WAY_NUM; ++w) { g_lookup.tag[w] = tag_resp.payload.chunks[w][0]; g_lookup.valid[w] = valid_resp.payload.chunks[w][0]; }
 
   comb(in, out);
+  g_edge.tw[g_edge.n++] = icache.io.table_write;   // (a reset cycle does not run the module: its last table write again)
+}
+}  // namespace
 
-  // clock edge
-  if (!in->reset) icache.seq();
-  if (g_bind.itlb) g_bind.itlb->seq();
-  tag_read.enable = r.lookup_pending_r;
-  valid_read.enable = tag_read.enable;
-  tag_read.address = valid_read.address = r.lookup_index_r;
-  TagTable::WriteReq tag_write{};
-  ValidTable::WriteReq valid_write{};
-  const auto &tw = icache.io.table_write;
-  if (tw.we) {
-    if (g_icache_fill_hook && tw.valid) g_icache_fill_hook(tw.index, tw.tag);
-    tag_write.enable = valid_write.enable = true;
-    tag_write.address = valid_write.address = tw.index;
-    tag_write.payload.chunks[tw.way][0] = tw.tag;
-    valid_write.payload.chunks[tw.way][0] = tw.valid;
-    tag_write.chunk_enable[tw.way] = valid_write.chunk_enable[tw.way] = true;
-  }
-  if (tw.invalidate_all) g_valid.reset();
-  g_tags.seq(tag_read, tag_write);
-  g_valid.seq(valid_read, valid_write);
+// The fetch step of the cycle (R1 = N(R0)): outputs, memory-side requests, the ITLB lookup. Nothing is latched here.
+void icache_comb_calc(icache_in *in, icache_out *out) {
+  g_edge = {};
+  g_edge.reset = in->reset;
+  step(in, out);
 }
 
-// A predecode flush invalidates the I-cache's request in flight: one more step of the I-cache (comb and clock edge) in
-// the same CPU cycle, whose outputs replace this cycle's (see docs/REG_WIRE.md: the I-cache steps inside the front comb).
+// A predecode flush invalidates the I-cache's request in flight: R2 = K(R1), the kill step evaluated on this cycle's
+// fetch-step result (the module's comb reads io.regs, so R1 is presented there for the evaluation and the registers are
+// restored after it; they change only at the edge). Its outputs replace this cycle's; its memory-side requests are the
+// cycle's last (RTL: the memory-side outputs are those of the last step).
 void icache_invalidate_step(CsrStatusIO *csr_status, icache_out *out) {
+  if (g_edge.reset || g_edge.n != 1) { std::printf("[icache_top] ERROR: invalidate step without a fetch step\n"); std::exit(1); }
   icache_in inv{};
   inv.invalidate_req = true;
   inv.csr_status = csr_status;
-  icache_comb_calc(&inv, out);
+  const icache_module_n::ICache_regs_t q = icache.io.regs;
+  icache.io.regs = icache.io.reg_write;   // R1
+  g_edge.kill_step = true;
+  step(&inv, out);
+  g_edge.kill_step = false;
+  icache.io.regs = q;
+}
+
+// The clock edge: module registers (R1 or R2, or the reset state), the ITLB, the table writes of the steps in order.
+void icache_seq() {
+  if (g_edge.n == 0) return;   // (no I-cache step this cycle)
+  if (g_edge.reset) { g_tags.reset(); g_valid.reset(); icache.reset(); }
+  else icache.seq();
+  if (g_bind.itlb) g_bind.itlb->seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
+  for (int s = 0; s < g_edge.n; ++s) {
+    const auto &tw = g_edge.tw[s];
+    TagTable::WriteReq tag_write{};
+    ValidTable::WriteReq valid_write{};
+    if (tw.we) {
+      if (g_icache_fill_hook && tw.valid) g_icache_fill_hook(tw.index, tw.tag);
+      tag_write.enable = valid_write.enable = true;
+      tag_write.address = valid_write.address = tw.index;
+      tag_write.payload.chunks[tw.way][0] = tw.tag;
+      valid_write.payload.chunks[tw.way][0] = tw.valid;
+      tag_write.chunk_enable[tw.way] = valid_write.chunk_enable[tw.way] = true;
+    }
+    if (tw.invalidate_all) g_valid.reset();
+    g_tags.seq(TagTable::ReadReq{}, tag_write);
+    g_valid.seq(ValidTable::ReadReq{}, valid_write);
+  }
+  g_edge = {};
 }
 
 // FE_PAIR / FE_IPF: functional tag peek (no state change): is the line with this physical tag resident in set `index`?
 bool icache_peek_hit(uint32_t index, uint32_t ptag) {
-  const auto &tp = g_tags.peek_row(index);
-  const auto &vp = g_valid.peek_row(index);
+  auto tp = g_tags.peek_row(index);
+  auto vp = g_valid.peek_row(index);
+  forward_pending(index, tp, vp);   // (this cycle's table writes, before the edge)
   for (int w = 0; w < ICACHE_WAY_NUM; ++w)
     if (vp.chunks[w][0] && tp.chunks[w][0] == ptag) return true;
   return false;

@@ -88,6 +88,7 @@ struct FrontUpdateRequest;
 bool icache_read_ready(bool hold_for_recovery, bool reset);
 void icache_comb_calc(struct icache_in *in, struct icache_out *out);
 void icache_invalidate_step(CsrStatusIO *csr_status, struct icache_out *out);
+void icache_seq();   // the I-cache's clock edge (front_seq_write)
 bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
 void icache_set_context(SimContext *ctx);
 void front_set_context(SimContext *ctx);

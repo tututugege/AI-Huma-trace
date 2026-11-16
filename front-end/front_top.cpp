@@ -749,6 +749,7 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
 
 void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &req,
                      bool reset) {
+  icache_seq();   // first: the I-cache edge comes before everything below that reads the arrays / ITLB (FE_IPF)
   (void)inp;
   (void)reset;
   if (req.bpu_seq_txn.valid) {
