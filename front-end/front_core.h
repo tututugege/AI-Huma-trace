@@ -3,6 +3,7 @@
 // FIFOs, the I-cache, the I-cache prefetcher. One cycle is read_q (the registers' q, read data of the FIFOs), comb (the
 // phases of FrontComb, front_top.cpp; the write requests into a FrontUpdateRequest) and seq (the clock edge).
 #include "BPU/BPU_pipe.h"
+#include "env.h"
 #include "fifo/front_fifo.h"
 #include "icache/icache_top.h"
 #include "train_IO.h"
@@ -41,8 +42,8 @@ private:
   static constexpr size_t kMaxFl = 4;   // in-flight instruction-prefetch fills
   struct Fl { uint32_t index, tag; uint64_t ready; };
   static uint32_t key(uint32_t index, uint32_t tag) { return (tag << 8) | index; }
-  const int on_ = std::getenv("FE_IPF") ? std::atoi(std::getenv("FE_IPF")) : 0;
-  const int lat_ = std::getenv("FE_IPF_LAT") ? std::atoi(std::getenv("FE_IPF_LAT")) : 12;
+  const int on_ = sim_env().fe_ipf;
+  const int lat_ = sim_env().fe_ipf_lat;
   bool hooked_ = false;   // the I-cache reports its demand fills from the first tick on
   std::vector<Fl> fl_;
   std::unordered_set<uint32_t> seen_;   // lines filled before

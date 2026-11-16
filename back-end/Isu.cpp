@@ -5,48 +5,6 @@
 #include <cstring>
 #include <vector>
 
-// Completion-cycle table of the issue ports (EXP-034): a port completes one uop per cycle (one ROB / write-back entry), so the
-// issue stage reserves the cycle in which a granted uop completes and a uop that would collide with an earlier one on the same
-// port stays in the queue (like XiangShan's WbFuBusyTable).
-namespace {
-struct WbBusy {
-  static constexpr int kRing = 64;
-  uint8_t busy[ISSUE_WIDTH][kRing] = {};
-  long long last_cycle = -1;
-  void new_cycle(bool flush) {
-    if (sim_time == last_cycle) return;
-    last_cycle = sim_time;
-    for (int p = 0; p < ISSUE_WIDTH; p++) busy[p][(sim_time - 1) & (kRing - 1)] = 0;
-    if (flush) std::memset(busy, 0, sizeof busy);
-  }
-  bool free(int port, int off) const {
-    Assert(off >= 1 && off < kRing);
-    return !busy[port][(sim_time + off) & (kRing - 1)];
-  }
-  void reserve(int port, int off) { busy[port][(sim_time + off) & (kRing - 1)] = 1; }
-};
-WbBusy g_wb;
-// FP register-file write ports (EXP-032): at most FP_WB_PORTS writes of the pipelined / iterative FP units (FMA, MISC with an FP destination,
-// FDIV, I2F) per cycle; the write cycle is known at issue, so it is reserved there.  (FP loads write through the LSU and are not limited.)
-struct FpWbBusy {
-  static constexpr int kRing = 64, FP_WB_PORTS = 2;
-  uint8_t busy[kRing] = {};
-  long long last_cycle = -1;
-  void new_cycle(bool flush) {
-    if (sim_time == last_cycle) return;
-    last_cycle = sim_time;
-    busy[(sim_time - 1) & (kRing - 1)] = 0;
-    if (flush) std::memset(busy, 0, sizeof busy);
-  }
-  bool try_reserve(int lat) {
-    uint8_t &b = busy[(sim_time + lat) & (kRing - 1)];
-    if (b >= FP_WB_PORTS) return false;
-    b++;
-    return true;
-  }
-};
-FpWbBusy g_fpwb;
-}  // namespace
 
 Isu::Isu(SimContext *context) : ctx(context) {}
 
@@ -141,18 +99,18 @@ bool Isu::grant_gate(const Uop &u, int port) {
   const UopType t = decode_uop_type(u.op);
   const int lat = get_latency(t, u->func7, u->is_word);
   const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
-  if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
+  if (!wb_busy_.free(port, off)) return false;   // another uop of the port completes in that cycle
   if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
-      !g_fpwb.try_reserve(lat)) return false;
-  g_wb.reserve(port, off);
+      !fp_wb_busy_.try_reserve(lat)) return false;
+  wb_busy_.reserve(port, off);
   return true;
 }
 
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) out.iss2prf.iss_entry[i].valid = false;
-  g_wb.new_cycle(in.rob_bcast->flush);
-  g_fpwb.new_cycle(in.rob_bcast->flush);
+  wb_busy_.new_cycle(in.rob_bcast->flush);
+  fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   for (auto &q : iqs) {
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];

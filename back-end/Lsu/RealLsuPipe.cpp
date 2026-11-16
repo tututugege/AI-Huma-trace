@@ -17,6 +17,7 @@
 //   comb_lsu2dcache_stq              committed-store drain
 //   comb_mmio_out, comb_check        MMIO request, STQ retire, wake-up pass, replay-register fill
 #include <type_traits>
+#include "env.h"
 #include "BackPorts.h"
 #include "RealLsu.h"
 #include "DcacheConfig.h"
@@ -69,24 +70,6 @@ inline uint32_t replay_wait(ReplayType r) {
 // violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is set does not pass unknown-address stores. Training as in the RTL:
 // the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
 // trains the table in the following cycle, and the bit is written at the start of the cycle after that.
-constexpr unsigned lp_mdp_bits = CFG_LSU_MDP_BITS;
-constexpr unsigned lp_mdp_clr = CFG_LSU_MDP_CLR;
-static uint64_t g_trn = 0;  // flagged violators (LDQ bit mask)
-static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
-static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> SLOT_SHIFT) ^ (pc >> (SLOT_SHIFT + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }   // (RVC=1: instructions are 2-byte aligned)
-static std::vector<bool> g_mdp;
-static long long g_mdp_next_clear = 0;
-static inline bool mdp_wait(uint32_t pc) {
-  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, false);
-  return g_mdp[mdp_idx(pc)];
-}
-static inline void mdp_write_pending() {
-  if (g_mdp_pend.empty()) return;
-  if (g_mdp.empty()) g_mdp.assign(1u << lp_mdp_bits, false);
-  for (int ix : g_mdp_pend) g_mdp[ix] = true;
-  g_mdp_pend.clear();
-}
-
 // youngest older store that may conflict (partial CAM on page offset + size; unknown address always conflicts).
 struct CamRes {
   bool v = false;
@@ -338,12 +321,12 @@ void RealLsu::seq_pipe() {
 void RealLsu::cal() {
   const lp::LsuPipeState &pcur = pcur_;
   pw = {};
-  mdp_write_pending();
+  mdp_.write_pending();
   {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
-    for (int i = 0; i < LDQ_SIZE && g_trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
-      if ((g_trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) g_trn &= ~(1ULL << i);
-    for (int i = 0; i < LDQ_SIZE && g_trn; i++)
-      if (g_trn >> i & 1) { g_trn &= ~(1ULL << i); g_mdp_pend.push_back(mdp_idx(pcur.ldq[i].pc)); break; }
+    for (int i = 0; i < LDQ_SIZE && mdp_.trn; i++)  // the flag of an entry that died is dropped (the RTL clears it when the entry is EMPTY)
+      if ((mdp_.trn >> i & 1) && pcur.ldq[i].st == L_EMPTY) mdp_.trn &= ~(1ULL << i);
+    for (int i = 0; i < LDQ_SIZE && mdp_.trn; i++)
+      if (mdp_.trn >> i & 1) { mdp_.trn &= ~(1ULL << i); mdp_.pend.push_back(MemDepPred::idx(pcur.ldq[i].pc)); break; }
   }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
@@ -837,7 +820,7 @@ void RealLsu::exe2lsu() {
     }
   }
   if (vio_new) {
-    g_trn |= vio_set;
+    mdp_.trn |= vio_set;
   }
   int nl = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
@@ -1052,11 +1035,11 @@ void RealLsu::dis2lsu() {
     e.br_mask = d.ldq_br_mask[i];
     e.pc = d.ldq_pc[i];
     {
-      if (lp_mdp_clr && (long long)sim_time >= g_mdp_next_clear) {
-        std::fill(g_mdp.begin(), g_mdp.end(), false);
-        g_mdp_next_clear = (long long)sim_time + lp_mdp_clr;
+      if (MemDepPred::kClr && (long long)sim_time >= mdp_.next_clear) {
+        std::fill(mdp_.table.begin(), mdp_.table.end(), false);
+        mdp_.next_clear = (long long)sim_time + MemDepPred::kClr;
       }
-      e.wait = mdp_wait(e.pc);
+      e.wait = mdp_.wait(e.pc);
     }
     e.st = L_ALLOC;
   }
@@ -1278,7 +1261,7 @@ void RealLsu::check() {
 
   // DCache response watchdog: a request whose response never arrives (lost bank-retry latch in the DCache) is replayed.
   // The RTL has none: LSU_PIPE_NOWD=1 turns it off (needed to match the RTL's cycles, e.g. crc32).
-  static const bool nowd = std::getenv("LSU_PIPE_NOWD") != nullptr;
+  const bool nowd = sim_env().lsu_pipe_nowd;
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_DCW) { if (e.wd) e.wd = 0; continue; }   // (no store to an idle entry: it would dirty the line every cycle)
@@ -1289,7 +1272,7 @@ void RealLsu::check() {
     if (!t.iss) { if (t.wd) t.wd = 0; continue; }
     if (++t.wd == 63 && !nowd) { t.wd = 0; t.iss = 0; t.rwait = 0; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } }
   }
-  if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
+  if (sim_env().lsu_pipe_evt) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
     for (int p = 0; p < LD; p++)
       if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)out.lsu2exe.wb_req[p].uop.rob_idx, (int)out.lsu2exe.wb_req[p].uop.dest_preg,
@@ -1354,7 +1337,7 @@ void RealLsu::check() {
     for (int p = 0; p < LSU_AGU_COUNT; p++)
       if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_LOAD)
         std::fprintf(stderr, " G%d=%d", p, (int)in.exe2lsu->agu_req[p].uop.ldq_idx);
-    if (const char *si = std::getenv("LSU_PIPE_STQ")) {
+    if (const char *si = sim_env().lsu_pipe_stq) {
       const PStq &q = pcur.stq[std::atoi(si)];  // registers at the start of the cycle (RTL prints the registers)
       std::fprintf(stderr, " Q[%s]: va=%d pa=%d dv=%d pf=%d wbp=%d wbd=%d cmt=%d iss=%d done=%d", si, (int)q.va_v, (int)q.pa_v, (int)q.data_v, (int)q.pf,
                    (int)q.wbp, (int)q.wbd, (int)q.cmt, (int)q.iss, (int)q.done);

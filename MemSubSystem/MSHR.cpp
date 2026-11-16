@@ -35,11 +35,8 @@ void merge_store_into_entry(MSHREntry &entry, const MSHRReq &req) {
 // init
 // ─────────────────────────────────────────────────────────────────────────────
 
-static MSHR *g_dbg_mshr = nullptr;
-
 void MSHR::init()
 {
-    g_dbg_mshr = this;
     q_ = {};
     d = {};
     axi_resp_accepted_this_cycle = false;

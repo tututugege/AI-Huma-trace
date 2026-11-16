@@ -1,4 +1,5 @@
 #include "Pmu.h"
+#include "env.h"
 #include "config.h"
 #include <algorithm>
 #include <cstring>
@@ -22,22 +23,16 @@ const char *const kDesc[] = {
 constexpr int kMaxCommit = COMMIT_WIDTH;
 constexpr int kOccBins = 17;  // histogram bins: occupancy in sixteenths of capacity (+ full)
 
-std::string getenv_str(const char *n, const char *dflt) {
-  const char *v = std::getenv(n);
-  return v ? v : dflt;
-}
 }  // namespace
 
 
 void Pmu::init_from_env() {
-  const char *on = std::getenv("PMU");
-  enabled = on && std::strcmp(on, "0") != 0;
+  const SimEnv &e = sim_env();
+  enabled = e.pmu;
   if (!enabled) return;
-  out_prefix = getenv_str("PMU_OUT", "pmu");
-  const char *iv = std::getenv("PMU_INTERVAL");
-  interval = iv ? std::strtoull(iv, nullptr, 0) : 0;
-  const char *pp = std::getenv("PMU_PCPROF");
-  pcprof = !(pp && std::strcmp(pp, "0") == 0);
+  out_prefix = e.pmu_out;
+  interval = e.pmu_interval;
+  pcprof = e.pmu_pcprof;
   reset();
 }
 

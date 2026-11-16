@@ -13,6 +13,7 @@
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
+#include "env.h"
 #include "fatal.h"
 #include "fpr.h"
 #include <type_traits>
@@ -31,7 +32,7 @@ constexpr int BANKBLK = 4;             // block banks (32 B windows), one row ac
 constexpr int TQ_N = 4;                // uBTB train queue entries
 // FE_PAIR=1: dual-block fetch. When the S0 guess of a block is a taken branch, the block at its target is looked up in the same cycle
 // (second uBTB read, second set of main-predictor reads in S1) and both are fetched as one group (<= FETCH_WIDTH slots in total).
-inline int cfg_pair() { static const int v = std::getenv("FE_PAIR") ? std::atoi(std::getenv("FE_PAIR")) : 0; return v; }
+inline int cfg_pair() { return sim_env().fe_pair; }
 
 constexpr int MAXW = 4;       // uBTB ways
 constexpr int PQ = 64;        // PTAB checkpoint records (BPO_PDCKPT)

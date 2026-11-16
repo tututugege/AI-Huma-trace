@@ -1,4 +1,5 @@
 #include "trace_hook.h"
+#include "env.h"
 #include "TraceBridge.h"
 extern long long sim_time;   // timing-model cycle counter (main.cpp)
 #include "config.h"
@@ -66,7 +67,7 @@ void on_commit(uint64_t uid) {
   // dispatched after the mispredict): undo them and re-execute the younger ones before the fact is used.
   g_bridge->kill_older_than(uid);
   // TB_TRACE_COMMIT=1: one line per committed instruction, compared with the RTL's SOC_TB_COMMIT by rtl/scripts/first_diff.sh
-  if (static const bool tr = std::getenv("TB_TRACE_COMMIT") != nullptr; tr) {
+  if (sim_env().tb_trace_commit) {
     if (const tb::Fact *tf = g_bridge->find(uid))
       std::fprintf(stderr, "[COMMIT] cyc=%lld pc=0x%08llx inst=0x%08x rd=%d v=0x%08llx\n", (long long)sim_time, (unsigned long long)tf->pc, tf->inst,
                    tf->rd_valid ? tf->rd : -1, (unsigned long long)tf->rd_value);

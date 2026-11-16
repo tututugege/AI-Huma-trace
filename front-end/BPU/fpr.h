@@ -8,6 +8,7 @@
 //              FPR_DUMP=<from>:<to> also prints every event of that cycle window ("FPRRAW ...").
 // The event cycle is the cycle of the RTL's free-running counter (0 in the first cycle after reset): the model's cycle counter is one ahead.
 #include <cstdint>
+#include "env.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -34,11 +35,11 @@ struct State {
   Stream pt{"PT"}, up{"UP"};
   uint64_t cycle = 0;   // set by the front end once per cycle (the model's cycle - 1)
   State() {
-    const char *e = std::getenv("FPR");
-    on = e && std::atoi(e) > 0;
+    const SimEnv &e = sim_env();
+    on = e.fpr;
     if (!on) return;
-    bin = static_cast<uint32_t>(std::atoi(e));
-    if (const char *d = std::getenv("FPR_DUMP")) { unsigned f = 0, t = 0; if (std::sscanf(d, "%u:%u", &f, &t) == 2) { from = f; to = t; dump = true; } }
+    bin = e.fpr_bin;
+    if (e.fpr_dump) { from = e.fpr_from; to = e.fpr_to; dump = true; }
   }
   ~State() { if (on) { pt.flush(); up.flush(); } }
 };

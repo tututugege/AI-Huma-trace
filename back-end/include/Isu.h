@@ -2,6 +2,8 @@
 #include "IssueQueue.h"
 #include "config.h"
 #include "IO.h"
+#include "util.h"
+#include <cstring>
 #include <cstdint>
 
 // MUL fixed-latency wakeup entry (shift register)
@@ -111,5 +113,45 @@ private:
   }
 
 private:
+  // Completion-cycle table of the issue ports (EXP-034): a port completes one uop per cycle (one ROB / write-back entry), so the
+  // issue stage reserves the cycle in which a granted uop completes and a uop that would collide with an earlier one on the same
+  // port stays in the queue (like XiangShan's WbFuBusyTable).
+  struct WbBusy {
+    static constexpr int kRing = 64;
+    uint8_t busy[ISSUE_WIDTH][kRing] = {};
+    long long last_cycle = -1;
+    void new_cycle(bool flush) {
+      if (sim_time == last_cycle) return;
+      last_cycle = sim_time;
+      for (int p = 0; p < ISSUE_WIDTH; p++) busy[p][(sim_time - 1) & (kRing - 1)] = 0;
+      if (flush) std::memset(busy, 0, sizeof busy);
+    }
+    bool free(int port, int off) const {
+      Assert(off >= 1 && off < kRing);
+      return !busy[port][(sim_time + off) & (kRing - 1)];
+    }
+    void reserve(int port, int off) { busy[port][(sim_time + off) & (kRing - 1)] = 1; }
+  };
+  // FP register-file write ports (EXP-032): at most FP_WB_PORTS writes of the pipelined / iterative FP units (FMA, MISC with an FP destination,
+  // FDIV, I2F) per cycle; the write cycle is known at issue, so it is reserved there.  (FP loads write through the LSU and are not limited.)
+  struct FpWbBusy {
+    static constexpr int kRing = 64, FP_WB_PORTS = 2;
+    uint8_t busy[kRing] = {};
+    long long last_cycle = -1;
+    void new_cycle(bool flush) {
+      if (sim_time == last_cycle) return;
+      last_cycle = sim_time;
+      busy[(sim_time - 1) & (kRing - 1)] = 0;
+      if (flush) std::memset(busy, 0, sizeof busy);
+    }
+    bool try_reserve(int lat) {
+      uint8_t &b = busy[(sim_time + lat) & (kRing - 1)];
+      if (b >= FP_WB_PORTS) return false;
+      b++;
+      return true;
+    }
+  };
+  WbBusy wb_busy_;
+  FpWbBusy fp_wb_busy_;
   Regs q_;
 };

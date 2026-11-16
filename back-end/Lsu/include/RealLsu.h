@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 
 #include "IO.h"
 #include "MemUtils.h"
@@ -119,6 +120,30 @@ private:
   void dcache2lsu_stq();
   LsuMMUIO tlb_req_{};    // this cycle's DTLB requests and responses (also printed by LSU_PIPE_EVT)
   MMULsuIO tlb_resp_{};
+  // Wait table of the memory-dependence predictor (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries
+  // indexed by a PC hash, set when a load of that PC violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is
+  // set does not pass unknown-address stores. Training as in the RTL: the violators of a cycle are only flagged (trn, one
+  // bit per LDQ entry); one flagged live entry per cycle (the lowest LDQ index) trains the table in the following cycle
+  // (pend), and the bit is written at the start of the cycle after that. Updated in place (read before written).
+  struct MemDepPred {
+    static constexpr unsigned kBits = CFG_LSU_MDP_BITS, kClr = CFG_LSU_MDP_CLR;
+    uint64_t trn = 0;           // flagged violators (LDQ bit mask)
+    std::vector<int> pend;      // table indices trained in the previous cycle, written at the start of this one
+    std::vector<bool> table;
+    long long next_clear = 0;
+    static uint32_t idx(uint32_t pc) { return ((pc >> SLOT_SHIFT) ^ (pc >> (SLOT_SHIFT + kBits))) & ((1u << kBits) - 1); }   // (RVC=1: 2-byte aligned)
+    bool wait(uint32_t pc) {
+      if (table.empty()) table.assign(1u << kBits, false);
+      return table[idx(pc)];
+    }
+    void write_pending() {
+      if (pend.empty()) return;
+      if (table.empty()) table.assign(1u << kBits, false);
+      for (int ix : pend) table[ix] = true;
+      pend.clear();
+    }
+  };
+  MemDepPred mdp_;
   LsuState cur_;
   lp::LsuPipeState pcur_;
 };

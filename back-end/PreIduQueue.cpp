@@ -5,11 +5,6 @@
 #include <cstring>
 #include <cstdlib>
 
-// Instructions accepted from the front end this cycle (comb_accept_front), pushed into the buffer in comb_fire.
-static InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH];
-static int push_count = 0;
-// With an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
-static bool g_bypass = false;
 
 FtqPc PreIduQueue::ftq_pc(uint32_t idx, uint32_t off) const {
   const Regs &q = q_;
@@ -86,7 +81,7 @@ void PreIduQueue::begin_cycle() {
   out.pre2front.ready = false;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.pre2front.fire[i] = false;
   push_count = 0;
-  g_bypass = false;
+  push_bypass = false;
 }
 
 // Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
@@ -139,7 +134,7 @@ void PreIduQueue::comb_accept_front() {
     e.uop_id = uop_alloc();
   }
   if (q.ibuf.count() == 0 && push_count > 0) {
-    g_bypass = true;
+    push_bypass = true;
     for (int i = 0; i < DECODE_WIDTH; i++) out.pre_issue.entries[i] = i < push_count ? push_entries[i] : InstructionBufferEntry{};
   }
 }
@@ -165,10 +160,10 @@ void PreIduQueue::comb_fire() {
   int pop_count = 0;
   while (pop_count < DECODE_WIDTH && in.idu_consume->fire[pop_count]) pop_count++;
   int first_push = 0;
-  if (g_bypass) {  // the first pop_count pushed entries were consumed by decode in the cycle they arrived
+  if (push_bypass) {  // the first pop_count pushed entries were consumed by decode in the cycle they arrived
     first_push = pop_count < push_count ? pop_count : push_count;
     pop_count = 0;
-    g_bypass = false;
+    push_bypass = false;
   }
   if (pop_count > 0) d.ibuf.pop_front(pop_count);
   for (int i = first_push; i < push_count; i++) d.ibuf.push_back(push_entries[i]);

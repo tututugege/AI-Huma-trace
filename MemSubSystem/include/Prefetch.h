@@ -9,6 +9,7 @@
 // Inputs per cycle: up to LSU_LDU_COUNT load access events. Output: one candidate line from the
 // head of the request FIFO (the L1D probes the tag array through an idle load port and allocates an MSHR on a miss).
 #include <cstdint>
+#include "env.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,8 +34,7 @@ inline uint32_t wmask(int w) { return w >= 32 ? 0xFFFFFFFFu : ((1u << w) - 1u); 
 
 // runtime design parameters (degree, distance, thresholds): not state, read once from PF_<name>
 inline int param(const char *name, int def) {
-  std::string k = std::string("PF_") + name;
-  const char *v = std::getenv(k.c_str());
+  const char *v = std::strcmp(name, "ENABLE") == 0 ? sim_env().pf_enable : nullptr;   // (PF_ENABLE: the one parameter)
   return v ? std::atoi(v) : def;
 }
 

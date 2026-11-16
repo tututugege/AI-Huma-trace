@@ -74,6 +74,11 @@ private:
   bool ibuf_dirty = false;
   bool ftq_dirty = false;
   uint64_t ftq_alloc_mask = 0; // slots allocated this cycle (FTQ_SIZE <= 64)
+  // wires of the cycle: the instructions accepted from the front end (comb_accept_front), pushed into the buffer in
+  // comb_fire; with an empty buffer the accepted block goes straight to decode (push_bypass)
+  InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH] = {};
+  int push_count = 0;
+  bool push_bypass = false;
 
 
 private:

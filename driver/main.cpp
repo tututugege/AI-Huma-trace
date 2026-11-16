@@ -1,4 +1,5 @@
 #include "FastWarm.h"
+#include "env.h"
 #include "SimDDR.h"
 #include "trace_hook.h"
 #include "SimCpu.h"
@@ -332,7 +333,7 @@ int main(int argc, char *argv[]) {
     if (!config.max_commit_inst_set) {
       config.max_commit_inst = ckpt_interval;
     }
-    if (const char *e = std::getenv("FAST_WARMUP"); e != nullptr && e[0] == '1') config.fast_warmup = true;
+    if (sim_env().fast_warmup) config.fast_warmup = true;
     if (!config.ckpt_warmup_target_set) {
       // --fast-warmup: the detailed warm-up is short (1M); the rest of the interval is replayed functionally
       config.ckpt_warmup_target = config.fast_warmup ? std::min<uint64_t>(1000000, ckpt_interval) : ckpt_interval;
@@ -438,9 +439,7 @@ int main(int argc, char *argv[]) {
   if (cpu.ctx.exit_reason == ExitReason::NONE) {
     // Regression guard: SIM_MAX_CYCLES stops a run that does not terminate (exit code 3) instead of
     // waiting for an external timeout.
-    const long long cycle_limit = std::getenv("SIM_MAX_CYCLES")
-                                      ? std::atoll(std::getenv("SIM_MAX_CYCLES"))
-                                      : (long long)MAX_SIM_TIME;
+    const long long cycle_limit = sim_env().sim_max_cycles_set ? sim_env().sim_max_cycles : (long long)MAX_SIM_TIME;
     for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
       if (sim_time >= cycle_limit) {
         std::cout << "[sim] SIM_MAX_CYCLES=" << cycle_limit << " reached without termination" << std::endl;
