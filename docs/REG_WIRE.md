@@ -185,3 +185,12 @@ write port (push), both filling the cycle's request directly. Staged reads 71 ->
 double evaluation: the FIFO read ports take the whole input struct (control and write data), the I-cache is evaluated
 three times per cycle (ready peek in read_fifos, the comb in run_icache, an invalidate in finish), and the predecode
 check edits the instruction-FIFO head in place.
+
+I-cache (after df0183b): of the three I-cache evaluations per cycle, the ready check was a read of registered state
+done by filling the shared `ic_in` / `ic_out` (which `run_icache` then overwrote); it is the query
+`icache_read_ready(hold, reset)` now. The invalidate on a predecode flush is `icache_invalidate_step()`. Front staged
+reads 60 -> 48. Kept, because it is timing: `icache_comb_calc()` runs the I-cache's comb *and its clock edge*
+(`icache.seq()`, the ITLB's `seq()`, the tag / valid arrays) inside `front.comb_bpu()`, so later front-end steps of the
+same cycle (FE_PAIR's `icache_fetch_second`) see the updated arrays, and a predecode flush steps the I-cache a second
+time in the same CPU cycle. Moving the edge to the front end's seq or dropping the second step changes cycles; it is a
+decision for the RTL alignment, not a refactor.

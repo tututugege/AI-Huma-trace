@@ -1,5 +1,5 @@
 // I-cache top: the tag / valid arrays, the ITLB (TlbMmu), the memory ports and the icache_module state machine, one cycle per
-// icache_comb_calc() call. The module computes the request / miss / refill state; this file only connects it:
+// icache_comb_calc() call (comb and the I-cache's own clock edge: the I-cache steps inside the front end's comb). The module computes the request / miss / refill state; this file only connects it:
 //   arrays (register file, read in the cycle of the lookup) -> module meta lookup -> ITLB translation -> module meta + data lookup
 //   -> memory read / D-cache probe requests -> fetch-group output (instruction words from the functional memory) -> clock edge.
 #include "trace_hook.h"
@@ -231,12 +231,9 @@ void comb(icache_in *in, icache_out *out) {
 
 void icache_set_context(SimContext *ctx) { g_bind.ctx_set = ctx; }
 
-// Ready as visible before the cycle's comb (the BPU needs it first).
-void icache_peek_ready(icache_in *in, icache_out *out) {
-  g_bind.bind();
-  clear_outputs(out);
-  out->icache_read_ready = read_ready(in->itlb_flush || in->fence_i || in->invalidate_req, in->reset);
-}
+// The I-cache can take a request this cycle: from its registers, so the fetch-address FIFO read can use it before the
+// I-cache's comb runs.
+bool icache_read_ready(bool hold_for_recovery, bool reset) { return read_ready(hold_for_recovery, reset); }
 
 // One cycle: array read, comb, clock edge of the module / ITLB / arrays.
 void icache_comb_calc(icache_in *in, icache_out *out) {
@@ -284,6 +281,15 @@ void icache_comb_calc(icache_in *in, icache_out *out) {
   if (tw.invalidate_all) g_valid.reset();
   g_tags.seq(tag_read, tag_write);
   g_valid.seq(valid_read, valid_write);
+}
+
+// A predecode flush invalidates the I-cache's request in flight: one more step of the I-cache (comb and clock edge) in
+// the same CPU cycle, whose outputs replace this cycle's (see docs/REG_WIRE.md: the I-cache steps inside the front comb).
+void icache_invalidate_step(CsrStatusIO *csr_status, icache_out *out) {
+  icache_in inv{};
+  inv.invalidate_req = true;
+  inv.csr_status = csr_status;
+  icache_comb_calc(&inv, out);
 }
 
 // FE_PAIR / FE_IPF: functional tag peek (no state change): is the line with this physical tag resident in set `index`?

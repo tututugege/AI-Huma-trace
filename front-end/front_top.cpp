@@ -311,13 +311,7 @@ void FrontComb::read_fifos() {
   global_reset = in.reset;
   global_refetch = in.refetch || rd.q.predecode_refetch;
 
-  ic_in.reset = global_reset;
-  ic_in.refetch = global_refetch;
-  ic_in.itlb_flush = in.itlb_flush;
-  ic_in.fence_i = in.fence_i;
-  ic_in.invalidate_req = false;
-  ic_in.csr_status = in.csr_status;
-  icache_peek_ready(&ic_in, &ic_out);
+  const bool icache_ready = icache_read_ready(in.itlb_flush || in.fence_i, global_reset);
 
   // BPU_PIPE: the pipeline's last stage may override an older block this cycle. The youngest squash_n fetch addresses are
   // dropped, and the FIFO head is not popped when it is one of them. An entry is popped only when it is at least
@@ -340,7 +334,7 @@ void FrontComb::read_fifos() {
     if (ptab_bypass) { front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in); ptab_in.write_enable = true; ptab_written = true; }
     if (ptab_bypass) fpr_ptab(ptab_in);
   }
-  const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.q.fetch_addr_fifo_empty &&
+  const bool fetch_addr_read_enable = icache_ready && !rd.q.fetch_addr_fifo_empty &&
                                       !global_reset && !global_refetch && pipe_head_ok;
   fifo_read_enable = !rd.q.fifo_empty && (!rd.q.ptab_empty || ptab_bypass) &&
                      !rd.q.f2b_full && !global_reset && !global_refetch;
@@ -641,12 +635,7 @@ void FrontComb::write_front2back() {
 void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
   PendingFrontState &state = req.front_state;
   state.valid = true;
-  if (predecode_flush) {
-    icache_in invalidate_in{};
-    invalidate_in.invalidate_req = true;
-    invalidate_in.csr_status = in.csr_status;
-    icache_comb_calc(&invalidate_in, &ic_out);
-  }
+  if (predecode_flush) icache_invalidate_step(in.csr_status, &ic_out);
   {   // FE_PAIR: remember the second block of the ICache request that is still in flight
     bool nv = rd.q.pend_valid; fetch_addr_t na = rd.q.pend_addr; FetchPair np = rd.q.pend_pair;
     const bool head_done = ic_out.icache_read_complete && fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc;
