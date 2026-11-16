@@ -15,50 +15,36 @@ public:
   void init();
   void seq();
 
-  // register
-  Uop inst_r[DECODE_WIDTH];
-  reg<1> inst_valid[DECODE_WIDTH];
-  reg<PRF_IDX_WIDTH> arch_RAT[ARF_NUM + 1];
-  reg<PRF_IDX_WIDTH> spec_RAT[ARF_NUM + 1];
-  reg<PRF_IDX_WIDTH> RAT_checkpoint[MAX_BR_NUM][ARF_NUM + 1];
-  // move elimination: number of arch_RAT entries that name each physical register (a register is freed at 0)
-  int arch_cnt[PRF_NUM];
-  bool elim_refs_ok(int i) const;
-  reg<PRF_IDX_WIDTH> free_list[PRF_NUM];
-  reg<PRF_IDX_WIDTH> free_head; // speculative head
-  reg<PRF_IDX_WIDTH> free_head_commit;
-  reg<PRF_IDX_WIDTH> free_tail;
-  reg<PRF_IDX_WIDTH> alloc_checkpoint_head[MAX_BR_NUM];
-
-  // F/D: the FP rename state (32 architectural registers, no x0; tags FP_TAG_BASE + 0..FPRF_NUM-1), same structure as the integer one
-  reg<PRF_IDX_WIDTH> fp_arch_RAT[FP_ARF_NUM];
-  reg<PRF_IDX_WIDTH> fp_spec_RAT[FP_ARF_NUM];
-  reg<PRF_IDX_WIDTH> fp_RAT_checkpoint[MAX_BR_NUM][FP_ARF_NUM];
-  reg<PRF_IDX_WIDTH> fp_free_list[FPRF_NUM];
-  reg<PRF_IDX_WIDTH> fp_free_head, fp_free_head_commit, fp_free_tail;
-  reg<PRF_IDX_WIDTH> fp_alloc_checkpoint_head[MAX_BR_NUM];
-  wire<PRF_IDX_WIDTH> fp_arch_RAT_1[FP_ARF_NUM];
-  wire<PRF_IDX_WIDTH> fp_spec_RAT_1[FP_ARF_NUM];
-  wire<PRF_IDX_WIDTH> fp_RAT_checkpoint_1[MAX_BR_NUM][FP_ARF_NUM];
-  wire<PRF_IDX_WIDTH> fp_free_list_1[FPRF_NUM];
-  wire<PRF_IDX_WIDTH> fp_free_head_1, fp_free_head_commit_1, fp_free_tail_1;
-  wire<PRF_IDX_WIDTH> fp_alloc_checkpoint_head_1[MAX_BR_NUM];
-  uint64_t ckpt_dirty_fp = 0;  // rows of fp_RAT_checkpoint_1 written this cycle
-
-  Uop inst_r_1[DECODE_WIDTH];
-  wire<1> inst_valid_1[DECODE_WIDTH];
-  wire<PRF_IDX_WIDTH> arch_RAT_1[ARF_NUM + 1];
-  wire<PRF_IDX_WIDTH> spec_RAT_1[ARF_NUM + 1];
-  wire<PRF_IDX_WIDTH> RAT_checkpoint_1[MAX_BR_NUM][ARF_NUM + 1];
+  // Registers: q (read in comb through a const reference, written only by seq) and d (their next value; comb writes
+  // it, d == q at the start of every cycle). seq copies d to q.
+  struct Regs {
+    Uop inst_r[DECODE_WIDTH];                                 // the group waiting for dispatch
+    reg<1> inst_valid[DECODE_WIDTH];
+    reg<PRF_IDX_WIDTH> arch_RAT[ARF_NUM + 1];
+    reg<PRF_IDX_WIDTH> spec_RAT[ARF_NUM + 1];
+    reg<PRF_IDX_WIDTH> RAT_checkpoint[MAX_BR_NUM][ARF_NUM + 1];
+    int arch_cnt[PRF_NUM];   // move elimination: number of arch_RAT entries that name each physical register (freed at 0)
+    reg<PRF_IDX_WIDTH> free_list[PRF_NUM];
+    reg<PRF_IDX_WIDTH> free_head;   // speculative head
+    reg<PRF_IDX_WIDTH> free_head_commit;
+    reg<PRF_IDX_WIDTH> free_tail;
+    reg<PRF_IDX_WIDTH> alloc_checkpoint_head[MAX_BR_NUM];
+    // F/D: the FP rename state (32 architectural registers, no x0; tags FP_TAG_BASE + 0..FPRF_NUM-1)
+    reg<PRF_IDX_WIDTH> fp_arch_RAT[FP_ARF_NUM];
+    reg<PRF_IDX_WIDTH> fp_spec_RAT[FP_ARF_NUM];
+    reg<PRF_IDX_WIDTH> fp_RAT_checkpoint[MAX_BR_NUM][FP_ARF_NUM];
+    reg<PRF_IDX_WIDTH> fp_free_list[FPRF_NUM];
+    reg<PRF_IDX_WIDTH> fp_free_head, fp_free_head_commit, fp_free_tail;
+    reg<PRF_IDX_WIDTH> fp_alloc_checkpoint_head[MAX_BR_NUM];
+  };
+  Regs d;
   static_assert(MAX_BR_NUM <= 64, "ckpt_dirty is a 64-bit row mask");
-  uint64_t ckpt_dirty = 0;  // rows of RAT_checkpoint_1 written this cycle
-  wire<PRF_IDX_WIDTH> free_list_1[PRF_NUM];
-  wire<PRF_IDX_WIDTH> free_head_1;
-  wire<PRF_IDX_WIDTH> free_head_commit_1;
-  wire<PRF_IDX_WIDTH> free_tail_1;
-  wire<PRF_IDX_WIDTH> alloc_checkpoint_head_1[MAX_BR_NUM];
+  uint64_t ckpt_dirty = 0, ckpt_dirty_fp = 0;   // checkpoint rows of d written this cycle (seq copies only those)
+  bool cnt_dirty = false;                        // d.arch_cnt changed this cycle
+  bool elim_refs_ok(int i) const;
 
 private:
+  Regs q_;
   // phases of one cycle, run in the order of the methods above
   void alloc();
   void rename();
