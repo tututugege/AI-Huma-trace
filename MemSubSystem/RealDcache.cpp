@@ -19,7 +19,7 @@ static bool l1d_perf_is_lsu_req(uint32_t req_id) {
 } // namespace
 
 void RealDcache::init() {
-    init_dcache();
+    arrays.init();
     q_.s1s2 = {};
     d.s1s2 = {};
     q_.bank_retry = {};
@@ -434,8 +434,8 @@ void RealDcache::comb_stage2() {
         }else if (hit_way >= 0 ) {
             if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) {
                 g_pf_stats.demand_hit++;
-                if (pf_array[f.set_idx][hit_way]) {        // first use of a prefetched line
-                    pf_array[f.set_idx][hit_way] = false;
+                if (arrays.pf_array[f.set_idx][hit_way]) {        // first use of a prefetched line
+                    arrays.pf_array[f.set_idx][hit_way] = false;
                     g_pf_stats.useful++;
                     pf.acc[i] = PfAccess{true, slot.addr, false, true};
                 }

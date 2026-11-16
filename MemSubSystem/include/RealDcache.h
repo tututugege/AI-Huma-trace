@@ -52,6 +52,7 @@ public:
 
     DcacheINIO in;
     DcacheOUTIO out;
+    DcacheArrays arrays;   // the tag / valid / dirty / prefetched / PLRU arrays
 
     void comb_stage1();
     void comb_stage2();

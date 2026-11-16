@@ -79,6 +79,7 @@ public:
   void seq();
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
+  bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line) { return dcache_.arrays.warm_access(paddr, is_store, wb_line); }   // fast-warmup replay
   void on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3);
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }

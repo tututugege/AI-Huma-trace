@@ -220,7 +220,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
         const bool wr = is_st || (is_amo && bits(inst, 31, 27) != 2);
         wr ? ++st.stores : ++st.loads;
         uint32_t wb;
-        if (dcache_warm_access(pa, wr, &wb)) {
+        if (cpu.mem_subsystem.dcache_warm_access(pa, wr, &wb)) {
           ++st.l1d_miss;
           if (W.llc.enabled()) {
             if (wb != 0xffffffffu) W.llc.access(wb, true);

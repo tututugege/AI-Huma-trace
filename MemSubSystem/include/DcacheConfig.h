@@ -4,10 +4,6 @@
 #include "IO.h"
 #include "config.h"
 
-extern uint32_t tag_array  [DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
-extern wire<1>  valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
-extern wire<1>  dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];
-extern wire<1>  pf_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM];  // line was brought in by the prefetcher and not used yet
 
 static_assert((DCACHE_WAYS_NUM & (DCACHE_WAYS_NUM - 1)) == 0,
               "tree-PLRU requires power-of-two DCACHE_WAYS_NUM");
@@ -16,7 +12,6 @@ static_assert((DCACHE_BANK_NUM & (DCACHE_BANK_NUM - 1)) == 0,
               "DCache bank conflict model requires power-of-two DCACHE_BANK_NUM");
 constexpr int DCACHE_PLRU_TREE_BITS =
     (DCACHE_WAYS_NUM > 1) ? (DCACHE_WAYS_NUM - 1) : 1;
-extern wire<1>  plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS];
 
 struct MSHRFindReq{
     wire<1> valid;
@@ -203,19 +198,40 @@ struct AddrFields {
     wire<DCACHE_OFFSET_BITS> word_off; // which 32-bit word within the cacheline [4:2]
 };
 
-void init_dcache();
 AddrFields decode(uint32_t addr);
 uint32_t get_addr(uint32_t set_idx, uint32_t tag, uint32_t word_off);
 uint32_t choose_plru_tree_victim(const bool plru_tree[DCACHE_PLRU_TREE_BITS], const bool valid[DCACHE_WAYS_NUM]);
-void plru_tree_touch(uint32_t set_idx, uint32_t way);
-bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line);  // fast-warmup replay (EXP-011)
-
-
-void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
-
 bool cache_line_match(uint32_t addr1, uint32_t addr2);
 
-void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],DcacheLineReadResp resp[LSU_LDU_COUNT+LSU_STA_COUNT], const FillOut &fillout,FillIn &fillin);
-void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FillWrite &fillwrite);
+// The D-cache's tag / valid / dirty / prefetched arrays and its tree-PLRU state (a register file, owned by RealDcache:
+// read in stage 2 and written at its end, Dcache_Read / Dcache_Write), with a per-cycle data-bank conflict check (a
+// debug aid: two accesses to one bank in a cycle abort).
+class DcacheArrays {
+public:
+    uint32_t tag_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
+    wire<1> valid_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
+    wire<1> dirty_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};
+    wire<1> pf_array[DCACHE_SETS_NUM][DCACHE_WAYS_NUM] = {};   // line was brought in by the prefetcher and not used yet
+    wire<1> plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS] = {};
+
+    void init();
+    void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
+    void plru_touch_way(uint32_t set_idx, uint32_t way);
+    bool warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line);   // fast-warmup replay (EXP-011)
+    void begin_data_bank_cycle();
+    void check_data_bank_access(uint32_t set_idx, const char *op, const char *source);
+
+private:
+    struct DataBankAccessRecord {
+        bool valid = false;
+        const char *op = "";
+        const char *source = "";
+        uint32_t set_idx = 0;
+    };
+    DataBankAccessRecord data_bank_access[DCACHE_BANK_NUM] = {};
+};
+
+void Dcache_Read(DcacheArrays &a, const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],DcacheLineReadResp resp[LSU_LDU_COUNT+LSU_STA_COUNT], const FillOut &fillout,FillIn &fillin);
+void Dcache_Write(DcacheArrays &a, const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FillWrite &fillwrite);
 
 bool CheckAddr(uint32_t addr1, uint8_t strb1, uint32_t addr2, uint8_t strb2);

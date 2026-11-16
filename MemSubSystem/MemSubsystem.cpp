@@ -477,12 +477,12 @@ static bool replay_waits_for_mshr_fill(ReplayType replay) {
 // DCache stage 2 of the request that stage 1 issued last cycle: the tag / fill array read, the stage-2 logic, the
 // array writes, the response to the route block.
 void MemSubsystem::dcache_stage2() {
-  Dcache_Read(dcache_s1_q_.line_read_req,
+  Dcache_Read(dcache_.arrays, dcache_s1_q_.line_read_req,
               dcache_line_read_resp_,
               dcache_s1_q_.fill_out,
               fill_in_);
   dcache_.comb_stage2();
-  Dcache_Write(pending_writes_,
+  Dcache_Write(dcache_.arrays, pending_writes_,
                lru_updates_,
                fill_writes_);
   drive_dcache_response();
