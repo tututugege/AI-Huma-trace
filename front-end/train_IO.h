@@ -19,29 +19,17 @@ struct FetchAddrCombOut {
   uint8_t drop_tail_n;
 };
 
-struct InstructionCombOut {
-  InstFifoOut out_regs;
+// An entry FIFO's request of the cycle, applied at the edge: the pushed entry is the write port's data (its In's
+// wdata, which holds still until seq), not a copy.
+template <class Entry> struct FifoReq {
   wire<1> clear_fifo;
   wire<1> push_en;
-  InstFifoEntry push_entry;
+  const Entry *push;
   wire<1> pop_en;
 };
-
-struct PtabCombOut {
-  PtabOut out_regs;
-  wire<1> clear_fifo;
-  wire<1> push_en;
-  PtabEntry push_entry;
-  wire<1> pop_en;
-};
-
-struct Front2BackCombOut {
-  F2bFifoOut out_regs;
-  wire<1> clear_fifo;
-  wire<1> push_en;
-  F2bFifoEntry push_entry;
-  wire<1> pop_en;
-};
+using InstructionCombOut = FifoReq<InstFifoEntry>;
+using PtabCombOut = FifoReq<PtabEntry>;
+using Front2BackCombOut = FifoReq<F2bFifoEntry>;
 
 
 struct PendingBpuSeqTxn {

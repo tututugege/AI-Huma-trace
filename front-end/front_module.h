@@ -16,27 +16,24 @@ struct FetchAddrFifoReadData {
 struct InstFifoReadData {
   instruction_fifo_size_t size;
   wire<1> head_valid;
-  InstFifoEntry head_entry;
+  const InstFifoEntry *head;   // in the FIFO's storage, or the entry written this cycle
 };
 
 
 struct PtabReadData {
   ptab_size_t size;
   wire<1> head_valid;
-  PtabEntry head_entry;
+  const PtabEntry *head;   // in the FIFO's storage, or the entry written this cycle
 };
 
 
 struct F2bFifoReadData {
   front2back_fifo_size_t size;
   wire<1> head_valid;
-  F2bFifoEntry head_entry;
+  const F2bFifoEntry *head;   // in the FIFO's storage, or the entry written this cycle
 };
 
 struct FetchAddrCombOut;
-struct InstructionCombOut;
-struct PtabCombOut;
-struct Front2BackCombOut;
 struct FrontReadData;
 
 #endif // FRONT_MODULE_H

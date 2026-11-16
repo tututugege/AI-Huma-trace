@@ -16,7 +16,8 @@
 // three entry FIFOs of the front end (instruction FIFO, PTAB, front-to-back FIFO): one registered ring of N entries, one push
 // and one pop per cycle; a read of an empty FIFO in the cycle of a write returns the written entry (bypass); reset / refetch empty it.
 // read() (first: clear / pop, the head out) and write() (push) fill the cycle's request from the registered read data and
-// advance it; seq() applies the request.
+// advance it; seq() applies the request. The read data and the request point at entries (the storage, the written
+// entry): only the head's output and the pushed entry at the edge are copies.
 
 
 // Per FIFO: its IO types, depth, "full" threshold and how an entry is taken from the input / put on the output.
@@ -25,7 +26,7 @@ struct InstFifo {
   using Comb = InstructionCombOut; using Entry = InstFifoEntry;
   static constexpr int N = INSTRUCTION_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "instruction FIFO";
-  static void load(const In &in, Entry &e) { e = in.wdata; }
+  static void load(const Entry &src, Entry &e) { e = src; }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) {
       o.instructions[i] = e.instructions[i]; o.pc[i] = e.pc[i]; o.page_fault_inst[i] = e.page_fault_inst[i];
@@ -42,7 +43,7 @@ struct Ptab {
   using In = PtabIn; using Out = PtabOut; using Rd = PtabReadData; using Comb = PtabCombOut; using Entry = PtabEntry;
   static constexpr int N = PTAB_SIZE, FULL_AT = N - 1;
   static constexpr const char *name = "PTAB";
-  static void load(const In &in, Entry &e) { e = in.wdata; e.meta.mask(); }
+  static void load(const Entry &src, Entry &e) { e = src; e.meta.mask(); }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) { o.predict_dir[i] = e.predict_dir[i]; o.predict_base_pc[i] = e.predict_base_pc[i]; }
     o.meta = e.meta; o.meta.mask();
@@ -55,7 +56,7 @@ struct F2bFifo {
   using Comb = Front2BackCombOut; using Entry = F2bFifoEntry;
   static constexpr int N = FRONT2BACK_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "front-to-back FIFO";
-  static void load(const In &in, Entry &e) { e = in.wdata; e.meta.mask(); }
+  static void load(const Entry &src, Entry &e) { e = src; e.meta.mask(); }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) {
       o.fetch_group[i] = e.fetch_group[i]; o.page_fault_inst[i] = e.page_fault_inst[i]; o.inst_valid[i] = e.inst_valid[i];
@@ -79,10 +80,9 @@ class FrontFifo {
 
  public:
   void read_q(typename F::Rd &rd) const {
-    rd = {};
     rd.size = size_;
     rd.head_valid = size_ > 0;
-    if (rd.head_valid) rd.head_entry = entries_[head_];
+    rd.head = rd.head_valid ? &entries_[head_] : nullptr;
   }
 
   // Read port, the first use of the FIFO in the cycle: reset / refetch clear it, a read pops the head (from an empty FIFO
@@ -90,7 +90,8 @@ class FrontFifo {
   // the read data rd past it.
   void read(const typename F::In &in, typename F::Rd &rd, typename F::Out &out, typename F::Comb &c) const {
     c = {};
-    c.out_regs.empty = true;
+    out = {};
+    out.empty = true;
     if (in.reset) {
       c.clear_fifo = true;
     } else {
@@ -98,21 +99,18 @@ class FrontFifo {
       int size = rd.size;
       if (in.refetch) { c.clear_fifo = true; has_data = false; size = 0; }
       const bool do_read = in.read_enable && (has_data || in.write_enable);
-      Entry we{};
-      if (in.write_enable) F::load(in, we);
       if (do_read) {
         if (has_data && !rd.head_valid) fifo_die(F::name, "missing head snapshot for same-cycle reread");
-        F::store(has_data ? rd.head_entry : we, c.out_regs);
+        F::store(has_data ? *rd.head : in.wdata, out);
       }
       c.push_en = in.write_enable;
-      c.push_entry = we;
+      c.push = in.write_enable ? &in.wdata : nullptr;
       c.pop_en = do_read;
       size += (c.push_en ? 1 : 0) - (c.pop_en ? 1 : 0);
       if (size < 0) size = 0;
-      c.out_regs.empty = size == 0;
-      c.out_regs.full = size >= F::FULL_AT;
+      out.empty = size == 0;
+      out.full = size >= F::FULL_AT;
     }
-    out = c.out_regs;
     advance(rd, c);
   }
 
@@ -120,10 +118,10 @@ class FrontFifo {
   void write(const typename F::In &in, typename F::Rd &rd, typename F::Comb &req) const {
     if (req.push_en) fifo_die(F::name, "two pushes in one cycle");
     req.push_en = true;
-    F::load(in, req.push_entry);
+    req.push = &in.wdata;
     typename F::Comb c{};
     c.push_en = true;
-    c.push_entry = req.push_entry;
+    c.push = &in.wdata;
     advance(rd, c);
   }
 
@@ -133,14 +131,14 @@ class FrontFifo {
     const int size_before = rd.size;
     if (c.push_en) {
       if (rd.size >= F::N) fifo_die(F::name, "overflow");
-      if (rd.size == 0) { rd.head_entry = c.push_entry; rd.head_valid = true; }
+      if (rd.size == 0) { rd.head = c.push; rd.head_valid = true; }
       ++rd.size;
     }
     if (c.pop_en) {
       if (rd.size == 0) fifo_die(F::name, "underflow");
       --rd.size;
-      if (rd.size == 0 || size_before > 1) { rd.head_entry = Entry{}; rd.head_valid = false; }
-      else if (c.push_en) { rd.head_entry = c.push_entry; rd.head_valid = true; }
+      if (rd.size == 0 || size_before > 1) { rd.head = nullptr; rd.head_valid = false; }
+      else if (c.push_en) { rd.head = c.push; rd.head_valid = true; }
     }
   }
 
@@ -148,7 +146,7 @@ class FrontFifo {
     if (c.clear_fifo) size_ = head_ = 0;
     if (c.push_en) {
       if (size_ >= F::N) fifo_die(F::name, "overflow");
-      entries_[(head_ + size_) % F::N] = c.push_entry;
+      F::load(*c.push, entries_[(head_ + size_) % F::N]);
       ++size_;
     }
     if (c.pop_en) {
