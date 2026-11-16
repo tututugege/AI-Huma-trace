@@ -8,9 +8,9 @@ public:
   Prf(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc)
 
   void comb_awake();
-  void comb_req_ftq();
   void comb_read();
   void comb_pipeline();
   void init();

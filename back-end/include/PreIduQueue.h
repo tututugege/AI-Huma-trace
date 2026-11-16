@@ -18,8 +18,6 @@ public:
   void comb_begin();
   void comb_accept_front();
   void comb_fire();
-  void comb_ftq_lookup_prf();
-  void comb_ftq_lookup_rob();
   void comb_commit_info();
   void seq();
 
@@ -27,6 +25,8 @@ public:
   uint16_t ftq_blk_id(uint32_t idx, uint32_t off = 0) const { return ftq_train_meta_fifo[idx].meta.blk_id[off]; }
   uint64_t ftq_slot_pc(uint32_t idx, uint32_t off) const { return ftq_lookup_entries[idx].slot_pc[off]; }
   bool ftq_slot_rvc(uint32_t idx, uint32_t off) const { return ftq_lookup_entries[idx].slot_rvc[off]; }
+  // FTQ PC read (the PRF's ALU / BRU ports, the ROB head): a combinational read of the registered FTQ array
+  FtqPc ftq_pc(uint32_t idx, uint32_t off) const;
 private:
 
   int ftq_alloc();

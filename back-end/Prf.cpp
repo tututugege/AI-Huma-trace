@@ -1,5 +1,6 @@
 #include "Wires.h"
 #include "Prf.h"
+#include "PreIduQueue.h"
 #include "IO.h"
 #include "config.h"
 #include "util.h"
@@ -37,25 +38,6 @@ void Prf::init() {
   }
 }
 
-// 功能：根据当前发出的指令，向 FTQ 提取 PC 读请求。
-void Prf::comb_req_ftq() {
-  for (int i = 0; i < FTQ_PRF_PC_PORT_NUM; i++) {
-    wires->ftq_prf_pc_req.req[i] = {};
-  }
-  for (int p_idx = 0; p_idx < ISSUE_WIDTH; p_idx++) {
-    if (!wires->iss2prf.iss_entry[p_idx].valid) {
-      continue;
-    }
-    const auto &uop = wires->iss2prf.iss_entry[p_idx].uop;
-    uint64_t req_bit = (1ULL << uop.op);
-    int ftq_slot = get_prf_ftq_slot(p_idx, uop, req_bit);
-    if (ftq_slot >= 0) {
-      wires->ftq_prf_pc_req.req[ftq_slot].valid = true;
-      wires->ftq_prf_pc_req.req[ftq_slot].ftq_idx = uop->ftq_idx;
-      wires->ftq_prf_pc_req.req[ftq_slot].ftq_offset = uop->ftq_offset;
-    }
-  }
-}
 
 // Register-read stage: there is no register file (operand values are facts of the trace), so the issued uops pass through
 // to the EXU and the ALU/BRU ports that need the instruction PC take it from the FTQ response.
@@ -70,11 +52,11 @@ void Prf::comb_read() {
     
     // Set PC and FTQ fields from FTQ response
     uint64_t req_bit = (1ULL << wires->iss2prf.iss_entry[i].uop.op);
-    int ftq_slot = get_prf_ftq_slot(i, wires->iss2prf.iss_entry[i].uop, req_bit);
-    if (ftq_slot >= 0 && wires->ftq_prf_pc_resp.resp[ftq_slot].valid) {
-      entry.uop->pc = wires->ftq_prf_pc_resp.resp[ftq_slot].pc;
-      entry.uop->ftq_pred_taken = wires->ftq_prf_pc_resp.resp[ftq_slot].pred_taken;
-      entry.uop->ftq_next_pc = wires->ftq_prf_pc_resp.resp[ftq_slot].next_pc;
+    if (get_prf_ftq_slot(i, wires->iss2prf.iss_entry[i].uop, req_bit) >= 0) {   // the ALU (pc operand) and BRU ports
+      const FtqPc r = ftq->ftq_pc(entry.uop->ftq_idx, entry.uop->ftq_offset);
+      entry.uop->pc = r.pc;
+      entry.uop->ftq_pred_taken = r.pred_taken;
+      entry.uop->ftq_next_pc = r.next_pc;
     } else {
       entry.uop->pc = 0;
       entry.uop->ftq_pred_taken = false;

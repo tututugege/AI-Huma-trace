@@ -31,7 +31,6 @@ public:
   void seq();
   void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
   void comb_ready();
-  void comb_ftq_pc_req();
   void comb_commit();
   void comb_complete();
   void comb_fire();
@@ -41,6 +40,7 @@ public:
   bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
   RobOut out;
 
   // 状态
@@ -68,6 +68,7 @@ public:
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
 private:
+  FtqPc head_pc_{};   // the FTQ read of the head (comb_commit)
   int stall_cycle = 0;
   bool is_empty() const { return c_count == 0; }
   bool is_full() const { return c_count == ROB_NUM; }

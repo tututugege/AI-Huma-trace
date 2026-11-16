@@ -64,34 +64,12 @@ struct DecBroadcastIO {
   }
 };
 
-struct FtqPcReadReq {
-  wire<1> valid = {};
-  wire<FTQ_IDX_WIDTH> ftq_idx = {};
-  wire<FTQ_OFFSET_WIDTH> ftq_offset = {};
-};
-
-struct FtqPcReadResp {
-  wire<1> valid = {};
+// What an FTQ PC read returns (PreIduQueue::ftq_pc: a combinational read of the registered FTQ array)
+struct FtqPc {
   wire<XLEN> pc = {};
   wire<1> is_rvc = {};
   wire<1> pred_taken = {};
   wire<XLEN> next_pc = {};
-};
-
-struct FtqPrfPcReqIO {
-  FtqPcReadReq req[FTQ_PRF_PC_PORT_NUM] = {};
-};
-
-struct FtqPrfPcRespIO {
-  FtqPcReadResp resp[FTQ_PRF_PC_PORT_NUM] = {};
-};
-
-struct FtqRobPcReqIO {
-  FtqPcReadReq req[FTQ_ROB_PC_PORT_NUM] = {};
-};
-
-struct FtqRobPcRespIO {
-  FtqPcReadResp resp[FTQ_ROB_PC_PORT_NUM] = {};
 };
 
 struct FtqCommitInfoResp {

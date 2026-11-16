@@ -11,17 +11,17 @@ static int push_count = 0;
 // With an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
 static bool g_bypass = false;
 
-static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1> entry_valid, const FtqPcReadReq &req) {
-  resp = {};
-  if (!req.valid) return;
-  resp.valid = true;
-  resp.pc = entry.slot_pc[req.ftq_offset];
-  resp.is_rvc = entry.slot_rvc[req.ftq_offset];
-  resp.pred_taken = entry.pred_taken_mask[req.ftq_offset];
-  resp.next_pc = entry.next_pc;
+FtqPc PreIduQueue::ftq_pc(uint32_t idx, uint32_t off) const {
+  const FTQEntry &entry = ftq_lookup_entries[idx];
+  FtqPc r;
+  r.pc = entry.slot_pc[off];
+  r.is_rvc = entry.slot_rvc[off];
+  r.pred_taken = entry.pred_taken_mask[off];
+  r.next_pc = entry.next_pc;
   // FE_PAIR: a taken branch followed by a slot of a different fetch block (the group continues at its target)
-  if (entry.pred_taken_mask[req.ftq_offset] && req.ftq_offset + 1 < entry.nslots && entry.slot_pc[req.ftq_offset + 1] != entry.slot_pc[req.ftq_offset] + ilen_of(entry.slot_rvc[req.ftq_offset]))
-    resp.next_pc = entry.slot_pc[req.ftq_offset + 1];
+  if (entry.pred_taken_mask[off] && off + 1 < entry.nslots && entry.slot_pc[off + 1] != entry.slot_pc[off] + ilen_of(entry.slot_rvc[off]))
+    r.next_pc = entry.slot_pc[off + 1];
+  return r;
 }
 
 // FTQ: ring of fetch blocks, allocated at the tail when a block is accepted, freed at the head when its last
@@ -175,21 +175,7 @@ void PreIduQueue::comb_fire() {
   ftq_pop(committed_blocks);
 }
 
-void PreIduQueue::comb_ftq_lookup_prf() {
-  for (int i = 0; i < FTQ_PRF_PC_PORT_NUM; i++) {
-    const FtqPcReadReq &req = wires->ftq_prf_pc_req.req[i];
-    wires->ftq_prf_pc_resp.resp[i] = {};
-    if (req.valid) fill_ftq_pc_resp(wires->ftq_prf_pc_resp.resp[i], ftq_lookup_entries[req.ftq_idx], ftq_valid[req.ftq_idx], req);
-  }
-}
 
-void PreIduQueue::comb_ftq_lookup_rob() {
-  for (int i = 0; i < FTQ_ROB_PC_PORT_NUM; i++) {
-    const FtqPcReadReq &req = wires->ftq_rob_pc_req.req[i];
-    wires->ftq_rob_pc_resp.resp[i] = {};
-    if (req.valid) fill_ftq_pc_resp(wires->ftq_rob_pc_resp.resp[i], ftq_lookup_entries[req.ftq_idx], ftq_valid[req.ftq_idx], req);
-  }
-}
 
 // What the predictor needs to train on each committing instruction: the fetched PC / direction and the prediction
 // metadata of its block. Blocks commit in order, so the metadata cursor starts at the FTQ head and advances after the

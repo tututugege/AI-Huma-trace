@@ -1,4 +1,5 @@
 #include "Rob.h"
+#include "PreIduQueue.h"
 #include "IO.h"
 #include "RealLsu.h"
 #include "SimCpu.h"
@@ -84,21 +85,14 @@ void Rob::comb_ready() {
   w.rob2dis.ready = !is_full();
 }
 
-// PC lookup for the oldest instruction.
-void Rob::comb_ftq_pc_req() {
-  auto &req = wires->ftq_rob_pc_req.req[0];
-  req = {};
-  if (is_empty()) return;
-  req.valid = true;
-  req.ftq_idx = cent(c_head).uop->ftq_idx;
-  req.ftq_offset = cent(c_head).uop->ftq_offset;
-}
 
 // Commit: the longest completed prefix from the head (at most COMMIT_WIDTH entries), cut by the BPU commit
 // credits (below). Flush-type instructions, fences, WFI and interrupts retire alone at
 // the head; one of them inside the prefix ends it. Commit slot k is the k-th oldest entry.
 void Rob::comb_commit() {
   Wires &w = *wires;
+  // the pc of the head (a trap / interrupt / flushing instruction redirects to it): the FTQ read port
+  head_pc_ = is_empty() ? FtqPc{} : ftq->ftq_pc(cent(c_head).uop->ftq_idx, cent(c_head).uop->ftq_offset);
   auto &bc = w.rob_bcast;
   bc.flush = bc.exception = bc.mret = bc.sret = bc.ecall = bc.breakpoint = bc.fence = bc.fence_i = false;
   bc.interrupt = false;
@@ -203,9 +197,9 @@ void Rob::single_actions(const Uop &u) {
   if (flush_inst || intr || wfi) {
     xlen_t pc = 0;
     if (flush_inst || intr) {
-      Assert(w.ftq_rob_pc_resp.resp[0].valid);
-      pc = w.ftq_rob_pc_resp.resp[0].pc;
-      bc.is_rvc = w.ftq_rob_pc_resp.resp[0].is_rvc;
+      Assert(!is_empty());
+      pc = head_pc_.pc;
+      bc.is_rvc = head_pc_.is_rvc;
       bc.flush = true;
       bc.exception = rob_is_exception(u) || intr || (!intr && rob_type(u) == EBREAK && is_semihost_marker(pc));
       bc.pc = pc;

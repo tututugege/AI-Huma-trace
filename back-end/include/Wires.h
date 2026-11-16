@@ -62,8 +62,6 @@ struct Wires {
   LsuAwakeIO lsu_awake;
   ExuIdIO exu2id;
   ExuRobIO exu2rob;
-  FtqPrfPcReqIO ftq_prf_pc_req;
-  FtqPrfPcRespIO ftq_prf_pc_resp;
   ExePrfIO exe2prf;
   ExeIssIO exe2iss;
   ExeLsuIO exe2lsu;
@@ -76,8 +74,6 @@ struct Wires {
   RobCsrIO rob2csr;
   RobBroadcastIO rob_bcast;
   RobCommitIO rob_commit;
-  FtqRobPcReqIO ftq_rob_pc_req;
-  FtqRobPcRespIO ftq_rob_pc_resp;
   CsrExeIO csr2exe;
   CsrRobIO csr2rob;
   CsrFrontIO csr2front;

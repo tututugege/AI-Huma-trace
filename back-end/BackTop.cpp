@@ -39,6 +39,8 @@ void BackTop::init() {
   prf->wires = this;
   exu->wires = this;
   rob->wires = this;
+  prf->ftq = pre;
+  rob->ftq = pre;
   csr->wires = this;
   lsu->wires = this;
   idu_br_latch = &idu->br_latch;
@@ -123,8 +125,6 @@ void BackTop::comb_stage_decode_and_resources() {
 // ROB head -> commit group; committed stores release their STQ entries in the LSU.
 void BackTop::comb_stage_commit() {
   rob->comb_ready();
-  rob->comb_ftq_pc_req();
-  pre->comb_ftq_lookup_rob();
   rob->comb_commit();
   pre->comb_commit_info();
   lsu->comb_stq_commit();
@@ -161,8 +161,6 @@ void BackTop::comb_stage_issue_and_translate() {
 
 // Register reads, next-cycle wakeups, exceptions, rename and dispatch of the instructions leaving decode.
 void BackTop::comb_stage_operands_and_dispatch() {
-  prf->comb_req_ftq();
-  pre->comb_ftq_lookup_prf();
   prf->comb_read();
 
   isu->comb_awake();
