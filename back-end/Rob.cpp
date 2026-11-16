@@ -1,4 +1,5 @@
 #include "Rob.h"
+#include "Csr.h"
 #include "PreIduQueue.h"
 #include "IO.h"
 #include "RealLsu.h"
@@ -114,7 +115,7 @@ void Rob::commit() {
 
   const bool front_stall = static_cast<bool>(in.top_in->front_stall);
   const bool mispred = in.dec_bcast->mispred;
-  const bool intr = in.csr2rob->interrupt_req;
+  const bool intr = csr->interrupt_req();
   int n = 0;
   bool single = false;
   if (q.c_count > 0 && !mispred) {
@@ -363,10 +364,11 @@ void Rob::comb_redirect() {
     }
   } else {
     out.top_out->mispred = true;
+    const Csr::TrapOut trap = csr->trap_out();   // (the CSR file: its registers and this cycle's commit)
     if (out.rob_bcast.mret || out.rob_bcast.sret) {
-      out.top_out->redirect_pc = in.csr2front->epc;
+      out.top_out->redirect_pc = trap.epc;
     } else if (out.rob_bcast.exception) {
-      out.top_out->redirect_pc = in.csr2front->trap_pc;
+      out.top_out->redirect_pc = trap.trap_pc;
     } else {
       out.top_out->redirect_pc = out.rob_bcast.pc + ilen_of(out.rob_bcast.is_rvc);
     }

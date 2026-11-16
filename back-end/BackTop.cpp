@@ -35,7 +35,6 @@ void BackTop::init() {
   exu->csr = csr.get();
   rob->ftq = pre.get();
   // the modules' outputs that are the back end's interface (kept here)
-  csr->out.csr_status = &csr_status;
   lsu->out.lsu2dcache = &out.lsu2dcache;
   lsu->out.peripheral_req = &out.peripheral_req;
   lsu->out.commit_store = &out.commit_store;
@@ -72,7 +71,6 @@ void BackTop::init() {
   exu->in.iss2prf = &isu->out.iss2prf;
   exu->in.lsu2exe = &lsu->out.lsu2exe;
   exu->in.rob_bcast = &rob->out.rob_bcast;
-  rob->in.csr2rob = &csr->out.csr2rob;
   rob->in.dec_bcast = &idu->out.dec_bcast;
   rob->in.dis2rob = &dis->out.dis2rob;
   rob->in.exu2rob = &exu->out.exu2rob;
@@ -85,11 +83,11 @@ void BackTop::init() {
   csr->in.top2csr = &top2csr;
   rob->in.pre2front = &pre->out.pre2front;
   rob->in.ftq_commit_info = &pre->out.ftq_commit_info;
-  rob->in.csr2front = &csr->out.csr2front;
+  rob->csr = csr.get();
   rob->in.idu_br_latch = &idu->q().br_latch;
   rob->out.top_out = &out;
   rob->out.top2csr = &top2csr;
-  lsu->in.csr_status = &csr_status;
+  lsu->in.csr_status = &csr->status;
   lsu->in.dec_bcast = &idu->out.dec_bcast;
   lsu->in.dis2lsu = &dis->out.dis2lsu;
   lsu->in.exe2lsu = &exu->out.exe2lsu;
@@ -140,6 +138,7 @@ void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   restored_pc = state.pc;
   csr->q_mut().privilege = privilege;
   for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = state.csr[i];
+  csr->refresh();
   lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
   lsu->cur_mut().lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
   // the pipeline starts with a refetch from the restored pc
@@ -151,5 +150,5 @@ void BackTop::restart_at(pc_t pc) {
   out.flush = true;
   out.mispred = true;
   out.redirect_pc = pc;
-  csr->comb_csr_status();
+  csr->refresh();
 }

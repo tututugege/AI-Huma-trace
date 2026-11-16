@@ -121,11 +121,10 @@ inline int cvt_number_to_csr(int csr_idx) {
   }
 }
 
-// CSR file. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
-// and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_csr_status  in: -  out: out.csr_status
-//   CONTRACT comb_interrupt  in: -  out: out.csr2rob
-//   CONTRACT comb_commit  in: in.rob2csr in.rob_bcast  out: out.csr2front
+// The CSR file: architectural state the whole CPU reads directly (no comb phase of its own). The status view (status:
+// mstatus, sstatus, satp, privilege), the pending interrupt and the CSR read port are functions of its registers; the
+// trap / xRET of this cycle's commit (trap_out: its target, mode, cause) is a function of the registers and the ROB's
+// commit broadcast. seq applies the commit's trap / xRET, the committed CSR write and the interrupt lines.
 class Csr {
 public:
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
@@ -138,17 +137,16 @@ public:
     reg<1> csr_we;
   };
   const Regs &q() const { return q_; }
-  struct TrapWire { uint8_t privilege = 0; uint64_t cause = 0; };   // a trap taken this cycle: its mode and cause
-  const TrapWire &trap() const { return trap_; }   // (the trace bridge's interrupt report)
-  Regs &q_mut() { return q_; }   // checkpoint restore only
-  void comb_commit();  // exceptions and the CSR write of the committing instruction
-  // Outputs: the signals this module drives (it alone).
-  struct Out {
-    CsrRobIO csr2rob;
-    CsrFrontIO csr2front;
-    CsrStatusIO *csr_status = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
-  } out;
-  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  Regs &q_mut() { return q_; }   // checkpoint restore only (then refresh())
+  CsrStatusIO status{};          // the status view of the registers (the front end, the LSU and the TLBs read it)
+  bool interrupt_req() const { return irq_req_; }   // an enabled interrupt is pending
+  struct TrapOut {               // the trap / xRET of this cycle's commit
+    uint8_t privilege = 0;       // a trap: the mode it enters, its cause
+    uint64_t cause = 0;
+    wire<XLEN> trap_pc = 0, epc = 0;   // the redirect target of a trap / of an xRET
+  };
+  TrapOut trap_out() const { return exception(q_, nullptr); }
+  // What seq reads (the commit's broadcast, the executed CSR write, the interrupt lines), bound by BackTop::init.
   struct In {
     const CsrInterruptInjectIO *csr_interrupt_inject_io = nullptr;
     const ExeCsrIO *exe2csr = nullptr;
@@ -159,8 +157,7 @@ public:
 
   void init();
 
-  void comb_csr_status();
-  void comb_interrupt();
+  void refresh();   // the views after the registers changed (seq, checkpoint restore)
   void seq();
   reg<XLEN> read(int idx) const { return q_.CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
 
@@ -171,8 +168,8 @@ public:
 
 private:
   // phases of one cycle, run in the order of the methods above
-  TrapWire trap_{};
-  void exception(const Regs &q, Regs *d);   // d: also apply the state (seq)
+  bool irq_req_ = false;
+  TrapOut exception(const Regs &q, Regs *d) const;   // d: also apply the state (seq)
   void csr_write(const Regs &q, Regs &d);
   void interrupt_inject();
   Regs q_;

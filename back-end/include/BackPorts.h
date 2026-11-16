@@ -48,7 +48,6 @@ struct BackOut {
 
 struct BackPorts {
   TopCsrIO top2csr;                          // BackTop -> CSR
-  CsrStatusIO csr_status;                    // CSR -> the front end, the back end (the CSR drives it)
   CsrInterruptInjectIO csr_interrupt_inject_io;   // the interrupt sources (memory subsystem) -> CSR
   BackIn in;                                 // from SimCpu / the front end / the memory subsystem
   BackOut out;                               // to SimCpu / the front end / the memory subsystem

@@ -284,16 +284,6 @@ struct ExeCsrIO {
   wire<32> wcmd = {};
 };
 
-struct CsrRobIO {
-
-  wire<1> interrupt_req = {};
-};
-
-struct CsrFrontIO {
-
-  wire<XLEN> epc = {};
-  wire<XLEN> trap_pc = {};
-};
 
 struct CsrInterruptInjectIO {
   wire<1> external_irq_pending_valid = {};
