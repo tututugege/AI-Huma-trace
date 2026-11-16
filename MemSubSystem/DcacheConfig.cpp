@@ -202,7 +202,6 @@ void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const Lru
         }
         write_dcache_line(fillwrite.set_idx, fillwrite.way_idx, fillwrite.tag);
         pf_array[fillwrite.set_idx][target_way] = fillwrite.is_prefetch;
-        if (fillwrite.is_prefetch) g_pf_stats.filled++;
         if (fillwrite.dirty) {
             dirty_array[fillwrite.set_idx][target_way] = true;
         }

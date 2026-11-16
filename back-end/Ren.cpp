@@ -211,42 +211,6 @@ void count_commit(SimContext *ctx, const Uop &u) {
 }
 }  // namespace
 
-// ME_CHECK=1: every cycle, (1) arch_cnt equals the number of arch_RAT entries naming each register and (2) free
-// registers + registers held by in-flight allocations + distinct architectural registers == PRF_NUM (no leak).
-void Ren::me_check() const {
-  static const bool on = std::getenv("ME_CHECK") != nullptr;
-  if (!on) return;
-  int seen[PRF_NUM] = {0}, distinct = 0;
-  for (int a = 0; a < ARF_NUM + 1; a++) seen[arch_RAT_1[a]]++;
-  for (int p = 0; p < PRF_NUM; p++) {
-    Assert(seen[p] == arch_cnt[p] && "Ren(ME): arch_cnt differs from arch_RAT");
-    distinct += seen[p] > 0;
-  }
-  Assert(ring_distance(free_head_1, free_tail_1) + ring_distance(free_head_commit_1, free_head_1) + distinct == PRF_NUM &&
-         "Ren(ME): physical register leak");
-  // reference-count statistics: the largest number of arch_RAT / spec_RAT entries naming one register, per cycle
-  static struct Hist {
-    uint64_t arch[ARF_NUM + 2] = {0}, spec[ARF_NUM + 2] = {0};
-    ~Hist() {
-      for (int k = 0; k < 2; k++) {
-        const uint64_t *h = k ? spec : arch;
-        fprintf(stderr, "[ME] max refs on one register (%s_RAT), cycles at each max:", k ? "spec" : "arch");
-        for (int n = 1; n < ARF_NUM + 2; n++)
-          if (h[n]) fprintf(stderr, " %d:%llu", n, (unsigned long long)h[n]);
-        fprintf(stderr, "\n");
-      }
-    }
-  } hist;
-  int sp[PRF_NUM] = {0}, mx_a = 0, mx_s = 0;
-  for (int a = 1; a < ARF_NUM + 1; a++) sp[spec_RAT_1[a]]++;
-  for (int p = 0; p < PRF_NUM; p++) {
-    if (p != 0) mx_a = std::max(mx_a, seen[p]);
-    mx_s = std::max(mx_s, sp[p]);
-  }
-  hist.arch[std::max(mx_a, 1)]++;
-  hist.spec[std::max(mx_s, 1)]++;
-}
-
 // Rename state updates: fired instructions take their register and checkpoint spec_RAT at branches, commits free old
 // registers and update arch_RAT, then flush (restore from arch_RAT) or mispredict (restore a checkpoint) override
 // the next-cycle spec state.
@@ -306,11 +270,6 @@ void Ren::comb_fire() {
         // the old register is freed when no architectural register names it any more; an eliminated move
         // allocated nothing, so it does not advance the commit head
         Assert(!mispred && "Ren(ME): commit together with mispredict");
-        static struct Stat {
-          uint64_t elim = 0;
-          ~Stat() { fprintf(stderr, "[ME] eliminated moves committed: %llu\n", (unsigned long long)elim); }
-        } stat;
-        if (is_eliminated_move(*inst)) stat.elim++;
         if (!is_eliminated_move(*inst)) {
           Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
           LOOP_INC(free_head_commit_1, PRF_NUM);
@@ -350,7 +309,6 @@ void Ren::comb_fire() {
   }
   ren_freelist_sanity(free_head_1, free_head_commit_1, free_tail_1);
   fp_freelist_sanity(fp_free_head_1, fp_free_head_commit_1, fp_free_tail_1);
-  if (move_elim_enabled()) me_check();
 }
 
 // Pipeline register: emptied by flush/mispredict, reloaded from decode when ready, else keeps unfired instructions.

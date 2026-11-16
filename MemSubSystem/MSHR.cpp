@@ -258,7 +258,6 @@ void MSHR::comb_inputs_axi()
                 fe.lsu_origin = false; fe.is_prefetch = false; fe.no_fill = false;
                 if (nxt.mshr_count > 0) nxt.mshr_count = nxt.mshr_count - 1;
                 axi_resp_accepted_this_cycle = true;
-                g_pf_stats.llc_only_done++;
                 nofill_released = true;
             }
             else if (resp_matches_entry) {

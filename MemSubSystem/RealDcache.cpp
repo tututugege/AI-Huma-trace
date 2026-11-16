@@ -320,7 +320,7 @@ void RealDcache::stage1_comb() {
             if (slot.valid) continue;                      // port busy with a demand request or a retry
             const uint32_t pf_addr = pf.head_addr();
             const AddrFields f = decode(pf_addr);
-            if (!try_grant_bank(f, line_id(pf_addr))) { g_pf_stats.probe_conflict++; break; }
+            if (!try_grant_bank(f, line_id(pf_addr))) break;
             slot.valid = true;
             slot.pf = true;
             slot.pf_llc = pf.head_llc_only();
@@ -648,12 +648,10 @@ void RealDcache::stage2_comb() {
         const bool fill_same =
             (s1s2_cur.fill_write.valid && s1s2_cur.fill_write.set_idx == f.set_idx && s1s2_cur.fill_write.tag == f.tag) ||
             (in.mshr2dcache->fill_req.valid && cache_line_match(slot.addr, in.mshr2dcache->fill_req.addr));
-        g_pf_stats.probe++;
-        if (in.wb2dcache->bypass_resp[pf_slot].valid) g_pf_stats.probe_wb++;
-        else if (hit_way >= 0 || fill_same) g_pf_stats.probe_hit++;
-        else if (in.mshr2dcache->find_resp[pf_slot].valid) g_pf_stats.probe_inflight++;
-        else if (mshr_free_entries <= PF_MSHR_RESERVE) g_pf_stats.probe_mshr_full++;
-        else {
+        if (in.wb2dcache->bypass_resp[pf_slot].valid || hit_way >= 0 || fill_same || in.mshr2dcache->find_resp[pf_slot].valid ||
+            mshr_free_entries <= PF_MSHR_RESERVE) {
+            // the line is in the write buffer / the cache / an MSHR, or the MSHRs are reserved for demand misses: the prefetch is dropped
+        } else {
             out.dcache2mshr->mshr_req[pf_slot].valid = true;
             out.dcache2mshr->mshr_req[pf_slot].addr = slot.addr;
             out.dcache2mshr->mshr_req[pf_slot].is_store = false;

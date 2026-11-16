@@ -1,5 +1,4 @@
 #include "Isu.h"
-#include "FpStats.h"
 #include "Wires.h"
 #include "config.h"
 #include <cstdint>
@@ -13,7 +12,6 @@ namespace {
 struct WbBusy {
   static constexpr int kRing = 64;
   uint8_t busy[ISSUE_WIDTH][kRing] = {};
-  uint64_t gated = 0;
   long long last_cycle = -1;
   void new_cycle(bool flush) {
     if (sim_time == last_cycle) return;
@@ -21,15 +19,33 @@ struct WbBusy {
     for (int p = 0; p < ISSUE_WIDTH; p++) busy[p][(sim_time - 1) & (kRing - 1)] = 0;
     if (flush) std::memset(busy, 0, sizeof busy);
   }
-  bool free(int port, int off) {
+  bool free(int port, int off) const {
     Assert(off >= 1 && off < kRing);
-    if (busy[port][(sim_time + off) & (kRing - 1)]) { gated++; return false; }
-    return true;
+    return !busy[port][(sim_time + off) & (kRing - 1)];
   }
   void reserve(int port, int off) { busy[port][(sim_time + off) & (kRing - 1)] = 1; }
-  ~WbBusy() { if (gated) std::fprintf(stderr, "[WB_RESERVE] issue-gated=%llu\n", (unsigned long long)gated); }
 };
 WbBusy g_wb;
+// FP register-file write ports (EXP-032): at most FP_WB_PORTS writes of the pipelined / iterative FP units (FMA, MISC with an FP destination,
+// FDIV, I2F) per cycle; the write cycle is known at issue, so it is reserved there.  (FP loads write through the LSU and are not limited.)
+struct FpWbBusy {
+  static constexpr int kRing = 64, FP_WB_PORTS = 2;
+  uint8_t busy[kRing] = {};
+  long long last_cycle = -1;
+  void new_cycle(bool flush) {
+    if (sim_time == last_cycle) return;
+    last_cycle = sim_time;
+    busy[(sim_time - 1) & (kRing - 1)] = 0;
+    if (flush) std::memset(busy, 0, sizeof busy);
+  }
+  bool try_reserve(int lat) {
+    uint8_t &b = busy[(sim_time + lat) & (kRing - 1)];
+    if (b >= FP_WB_PORTS) return false;
+    b++;
+    return true;
+  }
+};
+FpWbBusy g_fpwb;
 }  // namespace
 
 Isu::Isu(SimContext *context) : ctx(context) {}
@@ -127,7 +143,7 @@ bool Isu::grant_gate(const Uop &u, int port) {
   const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
   if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
   if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
-      !g_fp_stats.try_reserve(lat)) return false;
+      !g_fpwb.try_reserve(lat)) return false;
   g_wb.reserve(port, off);
   return true;
 }
@@ -136,8 +152,7 @@ bool Isu::grant_gate(const Uop &u, int port) {
 void Isu::comb_issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
   g_wb.new_cycle(wires->rob_bcast.flush);
-  g_fp_stats.new_cycle(wires->rob_bcast.flush);
-  int fp_reads = 0, std_reads = 0;
+  g_fpwb.new_cycle(wires->rob_bcast.flush);
   for (auto &q : iqs) {
     q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
@@ -148,29 +163,8 @@ void Isu::comb_issue() {
       Assert(!wires->iss2prf.iss_entry[p].valid);
       wires->iss2prf.iss_entry[p].valid = true;
       wires->iss2prf.iss_entry[p].uop = grant.uop;
-      {
-        const Uop &g = grant.uop;
-        const int reads = (g->src1_en && g->src1_fp) + (g->src2_en && g->src2_fp) + (g->src3_en && g->src3_fp);
-        if (decode_uop_type(g.op) == UOP_STD) std_reads += reads; else fp_reads += reads;
-      }
-      {  // F/D statistics (EXP-030), printed at exit
-        static struct FpStats {
-          uint64_t issued[MAX_UOP_TYPE] = {0};
-          uint64_t d_issued = 0;
-          ~FpStats() {
-            std::fprintf(stderr, "[FP] issued: fma=%llu fmisc=%llu fdiv=%llu i2f=%llu (double precision: %llu)\n",
-                         (unsigned long long)issued[UOP_FMA], (unsigned long long)issued[UOP_FMISC],
-                         (unsigned long long)issued[UOP_FDIV], (unsigned long long)issued[UOP_I2F], (unsigned long long)d_issued);
-          }
-        } st;
-        const UopType t = decode_uop_type(grant.uop.op);
-        st.issued[t]++;
-        if (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV) st.d_issued += grant.uop->func7 & 1;
-      }
     }
   }
-  FpStats::bump(g_fp_stats.rd_hist, fp_reads);
-  FpStats::bump(g_fp_stats.std_hist, std_reads);
 }
 
 // Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and

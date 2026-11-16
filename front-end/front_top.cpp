@@ -47,8 +47,7 @@ static const int lat = std::getenv("FE_IPF_LAT") ? std::atoi(std::getenv("FE_IPF
 static const size_t maxfl = 4;   // in-flight instruction-prefetch fills
 struct Fl { uint32_t index, tag; uint64_t ready; };
 static std::vector<Fl> fl;
-static std::unordered_set<uint32_t> seen, pfd;   // key = tag << 8 | index
-static uint64_t n_issue = 0, n_install = 0, n_res = 0, n_unseen = 0, n_noxl = 0, n_full = 0, n_dup = 0, n_useful = 0, n_demand = 0;
+static std::unordered_set<uint32_t> seen;   // key = tag << 8 | index
 static inline uint32_t key(uint32_t index, uint32_t tag) { return (tag << 8) | index; }
 static void note_fill(uint32_t index, uint32_t tag) { seen.insert(key(index, tag)); }
 static void init() {
@@ -56,65 +55,27 @@ static void init() {
   if (done || !on) return;
   done = true;
   g_icache_fill_hook = note_fill;
-  std::atexit([] { std::printf("[FE_IPF] lat=%d max=%zu issued=%llu installed=%llu useful=%llu (demand line fetches %llu) | skipped: resident=%llu unseen=%llu dup=%llu full=%llu no-xlate=%llu\n", lat, maxfl,
-    (unsigned long long)n_issue, (unsigned long long)n_install, (unsigned long long)n_useful, (unsigned long long)n_demand, (unsigned long long)n_res, (unsigned long long)n_unseen, (unsigned long long)n_dup, (unsigned long long)n_full, (unsigned long long)n_noxl); });
-}
-static void demand(uint32_t paddr) {
-  if (!on) return;
-  n_demand++;
-  const uint32_t k = key((paddr >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u), paddr >> 12);
-  if (pfd.erase(k)) n_useful++;
 }
 static void tick(uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
   if (!on) return;
   init();
   for (size_t i = 0; i < fl.size();) {
-    if (fl[i].ready <= now) { if (icache_prefetch_install(fl[i].index, fl[i].tag)) { n_install++; pfd.insert(key(fl[i].index, fl[i].tag)); } fl.erase(fl.begin() + i); }
+    if (fl[i].ready <= now) { icache_prefetch_install(fl[i].index, fl[i].tag); fl.erase(fl.begin() + i); }
     else i++;
   }
   for (int c = 0; c < n; c++) {
     uint32_t pa;
-    if (!icache_peek_translate(cand[c], csr, pa)) { n_noxl++; continue; }
+    if (!icache_peek_translate(cand[c], csr, pa)) continue;
     const uint32_t index = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u), tag = pa >> 12;
-    if (icache_peek_hit(index, tag)) { n_res++; continue; }
-    if (!seen.count(key(index, tag))) { n_unseen++; continue; }
+    if (icache_peek_hit(index, tag) || !seen.count(key(index, tag))) continue;
     bool dup = false;
     for (const Fl &f : fl) if (f.index == index && f.tag == tag) dup = true;
-    if (dup) { n_dup++; continue; }
-    if (fl.size() >= maxfl) { n_full++; continue; }
+    if (dup || fl.size() >= maxfl) continue;
     fl.push_back({index, tag, now + uint64_t(lat)});
-    n_issue++;
   }
 }
 }  // namespace ipf
 
-// RVC=1 front-end statistics (printed at exit)
-struct RvcFeStats {
-  uint64_t groups = 0, slots_in_range = 0, insts = 0, insts_rvc = 0, carry_used = 0, straddle = 0, straddle_line_end = 0, taken_nonstart = 0;
-  ~RvcFeStats() {
-    if (!kRvc || groups == 0) return;
-    std::printf("[RVC_FE] groups=%llu slots_in_range=%llu insts=%llu (16-bit %llu = %.1f%%) insts/group=%.2f | last-half carry used=%llu | straddling 4-byte insts at the group end=%llu (at a cache-line end=%llu) | predicted taken on a non-start slot=%llu\n",
-                (unsigned long long)groups, (unsigned long long)slots_in_range, (unsigned long long)insts, (unsigned long long)insts_rvc,
-                insts ? 100.0 * insts_rvc / insts : 0.0, double(insts) / double(groups), (unsigned long long)carry_used, (unsigned long long)straddle,
-                (unsigned long long)straddle_line_end, (unsigned long long)taken_nonstart);
-  }
-};
-static RvcFeStats g_rvc_stats;
-// Predecode-checker statistics (printed at exit): how long a flushing group waits at the FIFO head before the check can run (the check needs the
-// front-to-back FIFO to have room), and how much younger work is queued behind it -- what an earlier check stage would save.
-struct PdChkStats {
-  uint64_t groups = 0, flushes = 0, flush_blocked = 0, blocked_cycles = 0, queued_behind = 0, blocked_all_cycles = 0, by_reason[4] = {0, 0, 0, 0};
-  uint64_t head_blocked = 0;   // cycles of the current head spent ready-but-blocked by a full front-to-back FIFO
-  ~PdChkStats() {
-    if (groups == 0) return;
-    std::printf("[PD_CHK] groups checked=%llu flushes=%llu (%.2f%% of groups) | flush groups that waited blocked at the head=%llu (%.1f%% of flushes, %.2f cycles each on average) | younger groups queued behind a flushing one=%.2f on average | all blocked cycles=%llu | flush kind: first taken is a direct branch or jal=%llu, a jalr=%llu, none (predicted taken where the group has no taken branch)=%llu\n",
-                (unsigned long long)groups, (unsigned long long)flushes, 100.0 * flushes / groups, (unsigned long long)flush_blocked,
-                flushes ? 100.0 * flush_blocked / flushes : 0.0, flush_blocked ? double(blocked_cycles) / flush_blocked : 0.0,
-                flushes ? double(queued_behind) / flushes : 0.0, (unsigned long long)blocked_all_cycles,
-                (unsigned long long)by_reason[1], (unsigned long long)by_reason[2], (unsigned long long)by_reason[3]);
-  }
-};
-static PdChkStats g_pd_stats;
 
 static bool lh_valid = false;             // RVC=1 "last half": the next group begins with the second half of an instruction that started in the last slot of the group before
 static uint16_t lh_data = 0;              // C910-style carry: the first halfword of the straddling instruction (its pc is lh_pc - 2)
@@ -183,7 +144,6 @@ static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool 
   while (r.n < FETCH_WIDTH && head.inst_valid[r.n]) r.n++;
   for (int i = 0; i < FETCH_WIDTH; i++) {
     if (!head.inst_valid[i] || chain[i] || (r.carry_used && i == 0)) continue;
-    if (ptab.predict_dir[i]) g_rvc_stats.taken_nonstart++;
     drop(i);
   }
   const int last = r.n - 1;   // the last slot of the group: a 32-bit start there lacks its upper half
@@ -204,12 +164,8 @@ static RvcHeadFix rvc_head_fix(instruction_FIFO_out &head, PTAB_out &ptab, bool 
   } else if (last >= (r.carry_used ? 1 : 0) && head.inst_valid[last] && !head.is_rvc[last] && !head.page_fault_inst[last] && chain[last]) {
     r.straddle = true;
     r.low = head.raw16[last];
-    if (ptab.predict_dir[last]) g_rvc_stats.taken_nonstart++;
     drop(last);
   }
-  g_rvc_stats.groups++; g_rvc_stats.slots_in_range += r.n; g_rvc_stats.carry_used += r.carry_used;
-  for (int i = 0; i < FETCH_WIDTH; i++) if (head.inst_valid[i]) { g_rvc_stats.insts++; g_rvc_stats.insts_rvc += head.is_rvc[i]; }
-  if (r.straddle) { g_rvc_stats.straddle++; if (((head.pc[last] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) == 0) g_rvc_stats.straddle_line_end++; }
   return r;
 }
 
@@ -620,14 +576,10 @@ void FrontComb::write_instruction_fifo() {
   else if (rd.pend_valid_snapshot && rd.pend_addr_snapshot == ic_out.fetch_pc) pr = rd.pend_pair_snapshot;
   inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire1_t gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
   for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * SLOT_BYTES); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
-  ipf::demand(ic_out.fetch_paddr);
   bool fused = false;
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1]) {
     uint32_t w2[FETCH_WIDTH];
     const bool ok = icache_fetch_second(ic_out.fetch_pc, ic_out.fetch_paddr, pr.addr2, pr.b_len, w2);
-    { static uint64_t nok = 0, nbad = 0, npg = 0; static bool rg = false;
-      if (!rg) { rg = true; std::atexit([] { std::printf("[FE_PAIR] second-block fetch: ok=%llu failed=%llu (different page: %llu)\n", (unsigned long long)nok, (unsigned long long)nbad, (unsigned long long)npg); }); }
-      if (ok) nok++; else { nbad++; if ((ic_out.fetch_pc >> 12) != (pr.addr2 >> 12)) npg++; } }
     for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
       const int j = i - pr.a_len;
       gpc[i] = pr.addr2 + SLOT_BYTES * j;
@@ -720,11 +672,6 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     accumulate_ptab_req(req.ptab_req, step);
   }
 
-  {   // PD_CHK statistics
-    const bool head_ready = !rd.fifo_empty_latch_snapshot && (!rd.ptab_empty_latch_snapshot || (!global_reset && !global_refetch && ptab_written)) && !global_reset && !global_refetch;
-    if (global_reset || global_refetch) g_pd_stats.head_blocked = 0;
-    else if (head_ready && rd.front2back_fifo_full_latch_snapshot) { g_pd_stats.head_blocked++; g_pd_stats.blocked_all_cycles++; }
-  }
   if (!fifo_read_enable) return;
   static const bool pair_on = bpuf::cfg_pair() != 0;
   bool multi = false;
@@ -767,16 +714,6 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
   predecode_checker_read_data checker_rd{};
   predecode_checker_seq_read(&checker_in, &checker_rd);
   predecode_checker_comb(checker_rd, checker_out);
-  g_pd_stats.groups++;
-  if (checker_out.predecode_flush_enable) {
-    g_pd_stats.flushes++;
-    if (g_pd_stats.head_blocked) { g_pd_stats.flush_blocked++; g_pd_stats.blocked_cycles += g_pd_stats.head_blocked; }
-    g_pd_stats.queued_behind += fifo_rd.size > 0 ? fifo_rd.size - 1 : 0;
-    int kind = 3;
-    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) { kind = (fifo_head.predecode_type[i] == PREDECODE_DIRECT_JUMP_NO_JAL || fifo_head.predecode_type[i] == PREDECODE_JAL) ? 1 : 2; break; }
-    g_pd_stats.by_reason[kind]++;
-  }
-  g_pd_stats.head_blocked = 0;
   if (checker_out.predecode_flush_enable) {
     predecode_flush = true;
     flush_address = checker_out.predict_next_fetch_address_corrected;
@@ -843,11 +780,6 @@ void FrontComb::write_front2back() {
 
 // Latches for the next cycle, the predecode-flush request, and the output toward the back end.
 void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
-  { static const bool tr = std::getenv("FE_TRACE") != nullptr; static int budget = 24;
-    if (tr && budget > 0 && front_ctx->perf.cycle > 40000 && (global_refetch || budget < 24)) { budget--;
-      std::printf("[FE_TRACE] cyc=%llu refetch=%d bpu_issue=%d(pc=%x) ic_req=%d ic_done=%d fifo_w=%d f2b_w=%d out_valid=%d icrdy=%d faE=%d faSz=%d\n",
-        (unsigned long long)front_ctx->perf.cycle, (int)global_refetch, (int)(bpu_output.icache_read_valid && bpu_can_run), bpu_output.fetch_address,
-        (int)fetch_addr_head.read_valid, (int)ic_out.icache_read_complete, (int)fifo_in.write_enable, (int)f2b_in.write_enable || use_f2b_bypass, (int)(f2b_head.front2back_FIFO_valid || use_f2b_bypass), (int)ic_out.icache_read_ready, (int)rd.fetch_addr_fifo_empty_latch_snapshot, (int)rd.fetch_addr_fifo_rd_snapshot.size); } }
   PendingFrontState &state = req.front_state;
   state.valid = true;
   if (predecode_flush) {

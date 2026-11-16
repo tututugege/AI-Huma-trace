@@ -38,12 +38,6 @@ inline int param(const char *name, int def) {
   return v ? std::atoi(v) : def;
 }
 
-struct StateReport {
-  struct Item { const char *name; long bits; int rd, wr, cam; long cam_bits; };
-  std::vector<Item> items;
-  long total() const { long t = 0; for (auto &i : items) t += i.bits; return t; }
-};
-
 }  // namespace pf
 
 // Entry definition: PF_ENTRY(Name, X) with X(field, width) lines. Gives BITS and trunc().
@@ -86,7 +80,6 @@ class Table {
     return -1;
   }
   void tick() { p.tick(name); }
-  void report(StateReport &r) const { r.items.push_back({name, long(E::BITS) * N, p.rd, p.wr, p.cam, long(cam_w) * N}); }
   E e[N];
   const char *name;
   Port p;
@@ -116,7 +109,6 @@ class Fifo {
     return false;
   }
   void tick() { enq_n = deq_n = cam_n = 0; }
-  void report(StateReport &r) const { r.items.push_back({name, long(E::BITS) * N + 2 * 8, 1, enq_max, 1, long(cam_w) * N}); }
   E e[N];
   int head = 0, cnt = 0;
   const char *name;

@@ -25,9 +25,7 @@ constexpr int PF_MSHR_RESERVE = 0;  // a probe allocates an MSHR whenever one is
 constexpr int PF_LINE_BITS = 32 - 6;  // physical line number (64 B lines, 32-bit physical address)
 
 struct PfStats {  // model-only counters, not hardware
-  uint64_t train_events = 0, train_drop = 0, cand = 0, q_dup = 0, q_full = 0, q_pushed = 0, xpage_drop = 0;
-  uint64_t probe = 0, probe_hit = 0, probe_inflight = 0, probe_mshr_full = 0, probe_wb = 0, probe_conflict = 0;
-  uint64_t issued = 0, filled = 0, useful = 0, late = 0, llc_only_done = 0, demand_miss = 0, demand_hit = 0;
+  uint64_t issued = 0, useful = 0, late = 0, demand_miss = 0, demand_hit = 0;   // read by the PMU
 };
 inline PfStats g_pf_stats;
 
@@ -61,36 +59,6 @@ class DataPrefetcher {
   DataPrefetcher()
       : reqq("pf_reqq", 1), stride("pf_stride", PF_TRAIN_PORTS, PF_TRAIN_PORTS) {
     enabled_ = pf::param("ENABLE", 1) != 0;   // default on; PF_ENABLE=0 turns the prefetcher off
-    if (enabled_ && std::getenv("PF_STATS")) {
-      pf::StateReport r; report(r);
-      std::fprintf(stderr, "[PF] h1: state=%ld bits\n", r.total());
-      for (auto &i : r.items)
-        std::fprintf(stderr, "[PF]   %-12s %6ld bits  rd=%d wr=%d cam=%d\n", i.name, i.bits, i.rd, i.wr, i.cam);
-    }
-  }
-  ~DataPrefetcher() {
-    if (enabled_ && std::getenv("PF_STATS")) {
-      const PfStats &s = g_pf_stats;
-      std::fprintf(stderr,
-                   "[PF-STATS] demand_miss=%llu demand_hit=%llu train=%llu train_drop=%llu cand=%llu q_dup=%llu q_full=%llu "
-                   "pushed=%llu probe=%llu probe_hit=%llu probe_inflight=%llu probe_wb=%llu probe_mshr_full=%llu "
-                   "probe_conflict=%llu issued=%llu filled=%llu useful=%llu late=%llu xpage_drop=%llu llc_only_done=%llu\n",
-                   (unsigned long long)s.demand_miss, (unsigned long long)s.demand_hit, (unsigned long long)s.train_events,
-                   (unsigned long long)s.train_drop, (unsigned long long)s.cand, (unsigned long long)s.q_dup,
-                   (unsigned long long)s.q_full, (unsigned long long)s.q_pushed, (unsigned long long)s.probe,
-                   (unsigned long long)s.probe_hit, (unsigned long long)s.probe_inflight, (unsigned long long)s.probe_wb,
-                   (unsigned long long)s.probe_mshr_full, (unsigned long long)s.probe_conflict, (unsigned long long)s.issued,
-                   (unsigned long long)s.filled, (unsigned long long)s.useful, (unsigned long long)s.late,
-                   (unsigned long long)s.xpage_drop, (unsigned long long)s.llc_only_done);
-    }
-  }
-
-  void report(pf::StateReport &r) const {
-    reqq.report(r);
-    stride.report(r);
-    r.items.push_back({"pf_gen", PF_LINE_BITS + PF_LINE_BITS + 8 + 4 + 1, 1, 1, 0, 0});   // next, base, stride, left/pushed, valid
-    r.items.push_back({"pf_gen2", PF_LINE_BITS + 1 + 1, 1, 1, 0, 0});                    // next line, left, valid (base = next - 1)
-    r.items.push_back({"pf_inreg", PF_TRAIN_PORTS * (PF_LINE_BITS + 2), 1, 1, 0, 0});    // 2 events: line, miss, pf_hit (valid = miss|pf_hit)
   }
 
   // end of cycle: consume the inputs, update the state
@@ -105,10 +73,8 @@ class DataPrefetcher {
       port_used = true;
       const uint32_t line = gen.next;
       if ((line >> 6) != (gen.base >> 6)) {          // stay inside the 4 KiB page: no translation is needed
-        g_pf_stats.xpage_drop++;
         gen.valid = false;
       } else {
-        g_pf_stats.cand++;
         push_candidate(line, /*llc=*/false);
         gen.pushed++;
         gen.next = (gen.next + uint32_t(gen.stride)) & pf::wmask(PF_LINE_BITS);
@@ -121,7 +87,6 @@ class DataPrefetcher {
       if ((line >> 6) != (gen2.base >> 6)) {
         gen2.valid = false;
       } else {
-        g_pf_stats.cand++;
         push_candidate(line, /*llc=*/true);
         gen2.next = (gen2.next + 1) & pf::wmask(PF_LINE_BITS);
         if (--gen2.left == 0) gen2.valid = false;
@@ -137,8 +102,7 @@ class DataPrefetcher {
       for (int i = 0; i < LSU_LDU_COUNT; i++) {
         const PfAccess &a = acc[i];
         if (!a.valid || !(a.miss || a.pf_hit)) continue;
-        g_pf_stats.train_events++;
-        if (taken >= PF_TRAIN_PORTS) { g_pf_stats.train_drop++; continue; }
+        if (taken >= PF_TRAIN_PORTS) continue;
         nq[taken++] = a;
       }
       for (int k = 0; k < PF_TRAIN_PORTS; k++) q_acc[k] = nq[k];
@@ -152,9 +116,9 @@ class DataPrefetcher {
 
   void push_candidate(uint32_t line, bool llc) {
     const bool dup = reqq.contains([&](const PfReqE &x) { return x.line == line; }, PF_LINE_BITS);
-    if (dup) { g_pf_stats.q_dup++; return; }
+    if (dup) return;
     PfReqE e; e.line = line; e.llc = llc;
-    if (reqq.push(e)) g_pf_stats.q_pushed++; else g_pf_stats.q_full++;
+    reqq.push(e);   // a full queue drops the candidate
   }
 
   // A stride burst: the first candidate is DIST strides after the trigger line, then one every stride (a new trigger replaces it).

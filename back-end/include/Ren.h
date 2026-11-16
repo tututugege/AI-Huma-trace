@@ -16,7 +16,6 @@ public:
   void comb_alloc(); // 分配寄存器
   void comb_pipeline();
   void seq();
-  void me_check() const;
 
   // register
   Uop inst_r[DECODE_WIDTH];

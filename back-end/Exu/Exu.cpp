@@ -2,7 +2,6 @@
 #include "Wires.h"
 #include "config.h"
 #include "trace_hook.h"
-#include "FpStats.h"
 
 namespace {
 // A uop whose branch was squashed by this cycle's mispredict is dead.
@@ -235,10 +234,7 @@ void Exu::comb_exec() {
   for (int p = 0; p < ISSUE_WIDTH && cmask; p++) {
     const uint64_t pm = cmask & port_fu_mask[p];
     if (!pm) continue;
-    if (pm & (pm - 1)) {  // two units complete on one port: the later ones wait (the issue stage's completion reservation should prevent it)
-      static struct C { uint64_t n = 0; ~C() { if (n) std::fprintf(stderr, "[EXU] port write-back conflicts=%llu\n", (unsigned long long)n); } } c;
-      c.n++;
-    }
+    // (two units completing on one port: the later ones wait; the issue stage's completion reservation prevents it)
     const int fu = __builtin_ctzll(pm);  // first completing unit in write-back priority order
     FuUnit &winner = units[fu];
     ExuInst u = *cinst[fu];
@@ -301,12 +297,6 @@ void Exu::comb_exec() {
   };
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
     if (w.lsu2exe.wb_req[i].valid) lsu_writeback(IQ_LD_PORT_BASE + i, w.lsu2exe.wb_req[i].uop);
-  {  // FP load write-backs per cycle (the staged LSU's write-back uop carries only the tag: an FP destination has a tag >= FP_TAG_BASE)
-    int n = 0;
-    for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
-      n += w.lsu2exe.wb_req[i].valid && w.lsu2exe.wb_req[i].uop.dest_en && w.lsu2exe.wb_req[i].uop.dest_preg >= FP_TAG_BASE;
-    FpStats::bump(g_fp_stats.ld_hist, n);
-  }
   for (int i = 0; i < LSU_STA_COUNT; i++)
     if (w.lsu2exe.sta_wb_req[i].valid) lsu_writeback(IQ_STA_PORT_BASE + i, w.lsu2exe.sta_wb_req[i].uop);
 
