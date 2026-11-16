@@ -146,7 +146,7 @@ struct RobDisIO {
   wire<1> stall = {};
   wire<ROB_IDX_WIDTH> enq_idx = {};
   wire<1> rob_flag = {};
-  int free_cnt = 0;  // compact ROB (ROB_COMPACT=1): free entries; enq_idx is then the tail entry, not a line
+  int free_cnt = 0;  // free entries; enq_idx is the tail entry
 };
 
 struct DisRobIO {

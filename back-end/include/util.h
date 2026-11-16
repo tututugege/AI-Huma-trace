@@ -27,9 +27,6 @@ extern long long sim_time;
 
 inline int get_rob_line(uint32_t rob_idx) { return rob_idx / ROB_BANK_NUM; }
 inline int get_rob_bank(uint32_t rob_idx) { return rob_idx % ROB_BANK_NUM; }
-inline uint32_t make_rob_idx(uint32_t line, uint32_t bank) {
-  return (line * ROB_BANK_NUM) | bank;
-}
 
 inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
   return static_cast<uint8_t>(__builtin_popcount(static_cast<unsigned>(mask)));

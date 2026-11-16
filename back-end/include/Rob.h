@@ -14,11 +14,9 @@ struct RobOut {
   RobCommitExtra commit_extra[COMMIT_WIDTH];
 };
 
-// Compact ROB (EXP-028, CFG_ROB_COMPACT=1): entries are allocated one after another (rob_idx = ring position,
-// bank = rob_idx % 8, line = rob_idx / 8, same storage), a dispatch group no longer takes a whole line, commit takes the
-// longest completed prefix from the head (max COMMIT_WIDTH, cut by the BPU commit credits), a
-// mispredict pulls the tail back to the entry after the branch.
-constexpr bool rob_compact() { return ROB_COMPACT != 0; }
+// Compact ROB (EXP-028): entries are allocated one after another (rob_idx = ring position, stored at bank = rob_idx % 8,
+// line = rob_idx / 8), commit takes the longest completed prefix from the head (max COMMIT_WIDTH, cut by the BPU commit
+// credits), a mispredict pulls the tail back to the entry after the branch.
 
 struct RobStoredEntry {
   wire<1> valid;
@@ -47,10 +45,6 @@ public:
 
   // 状态
   RobStoredEntry entry[ROB_BANK_NUM][ROB_LINE_NUM];
-  reg<clog2(ROB_LINE_NUM)> enq_ptr;
-  reg<clog2(ROB_LINE_NUM)> deq_ptr;
-  reg<1> enq_flag;
-  reg<1> deq_flag;
 
   RobStoredEntry entry_1[ROB_BANK_NUM][ROB_LINE_NUM];
   // Slots of entry_1 written this cycle; seq() copies only these back (entry_1 == entry at the start of a cycle).
@@ -62,12 +56,8 @@ public:
     dirty_[k >> 6] |= 1ull << (k & 63);
   }
   void touch_all() { dirty_all_ = true; }
-  wire<clog2(ROB_LINE_NUM)> enq_ptr_1;
-  wire<clog2(ROB_LINE_NUM)> deq_ptr_1;
-  wire<1> enq_flag_1;
-  wire<1> deq_flag_1;
 
-  // compact mode state (head entry, number of valid entries, wrap flag of the head)
+  // head entry, number of valid entries, wrap flag of the head
   int c_head = 0, c_count = 0; bool c_hflag = false;
   int c_head_1 = 0, c_count_1 = 0; bool c_hflag_1 = false;
   // control-flow instructions / fetch-block ends committed last cycle (still on their way to the BPU queues)
@@ -75,11 +65,10 @@ public:
   RobStoredEntry &cent(int idx) { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
   RobStoredEntry &cent_1(int idx) { return entry_1[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
   void ctouch(int idx) { touch(idx % ROB_BANK_NUM, idx / ROB_BANK_NUM); }
-  void comb_commit_compact();
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
 private:
   int stall_cycle = 0;
-  bool is_empty() { return rob_compact() ? c_count == 0 : (enq_ptr == deq_ptr) && (enq_flag == deq_flag); };
-  bool is_full() { return rob_compact() ? c_count == ROB_NUM : (enq_ptr == deq_ptr) && (enq_flag != deq_flag); };
+  bool is_empty() const { return c_count == 0; }
+  bool is_full() const { return c_count == ROB_NUM; }
 };
