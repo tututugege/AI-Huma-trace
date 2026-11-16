@@ -273,14 +273,9 @@ constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
 constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 // Staged LSU (RealLsuPipe.cpp, docs/LSU_PIPE.md). Its critical-path cuts are fixed (the former masks CUT 127 / L2 115; RTL: LP_CUT 262143 /
 // LP_L2 1907); the variants, the legacy LSU and the run-time LSU knobs were deleted 2026-11-15 (exp/tm-cleanup).
-// Memory-dependence speculation (EXP-018): 0 = a load never passes an older store whose address is unknown (default model);
-// 1 = loads pass unknown-address stores. A load that passed one writes its result back at once (consumers wake) but its ROB completion is
-// deferred until all older store addresses are known; a store address that overlaps such a load is a violation: the load is replayed with the
-// store visible and its ROB entry flushes the younger instructions at commit (flush_pipe). Env LSU_MEMSPEC overrides (the RTL kill-switch table
-// rtl/scripts/ref_cycles_nomemspec.txt is made with LSU_MEMSPEC=0).
-#ifndef CFG_LSU_MEMSPEC
-#define CFG_LSU_MEMSPEC 1
-#endif
+// Memory-dependence speculation (EXP-018): loads pass older stores whose address is unknown. Such a load writes its result back at once
+// (consumers wake) but its ROB completion is deferred until all older store addresses are known; a store address that overlaps it is a
+// violation: the load is replayed with the store visible and its ROB entry flushes the younger instructions at commit (flush_pipe).
 // Wait table of the memory-dependence predictor: 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, cleared lazily at the first load
 // dispatch CFG_LSU_MDP_CLR cycles after the previous clear; flag-register training (one entry per cycle, two cycles after the violation). Exported to the RTL.
 #ifndef CFG_LSU_MDP_BITS
@@ -289,26 +284,10 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #ifndef CFG_LSU_MDP_CLR
 #define CFG_LSU_MDP_CLR 2000
 #endif
-// Value path of the speculative window (EXP-020, back-end/include/MsData.h): the model follows the stale value a speculative load reads, taints its
-// consumers and lets a branch resolved on a stale value mispredict like the RTL does. Needs LSU_MEMSPEC. Env LSU_MS_DATA overrides; 1 = branches +
-// store data, otherwise a bit mask: 1 branches, 2 stale addresses of loads/stores, 4 stale store data, 8 self checks (debug).
-// Default 7: branches + stale addresses + stale store data.  The stale-address bit is needed to match the RTL: a store whose base register came from a stale load writes
-// to the stale address, a later load at the true address then reads the old memory (rv64 Linux checkpoint windows, scripts/linux_segments_cmp.sh).
-#ifndef CFG_LSU_MS_DATA
-#define CFG_LSU_MS_DATA 7
-#endif
-constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
-// Front-end fast paths (EXP-019, docs/history/FRONTEND_NOTES.md; RTL: FE_RFAST / FE_BFAST of ttg_cfg_pkg). Integrated defaults: RFAST 15 (all four bits), BFAST 0; envs FE_RFAST / FE_BFAST override. FE_PAIR / FE_IPF are model-only, env only, default 0.
-//   FE_RFAST bit0 BPU issues the first block in the redirect cycle, bit1 PTAB write-to-read bypass, bit2 I-cache ready right after a
-//   redirect, bit3 pre-IDU buffer bypass.  FE_BFAST bit0 / bit1: the corrected block issues in the same cycle after an S1 (L1) / S_D override.
-#ifndef CFG_FE_RFAST
-#define CFG_FE_RFAST 15
-#endif
-#ifndef CFG_FE_BFAST
-#define CFG_FE_BFAST 0
-#endif
-constexpr int FE_RFAST = CFG_FE_RFAST;
-constexpr int FE_BFAST = CFG_FE_BFAST;
+// Value path of the speculative window (EXP-020 / EXP-040, back-end/include/MsData.h): the model follows the stale value a speculative load
+// reads, taints its consumers (branches resolve on it, stores write stale data / to stale addresses) like the RTL does.
+// Front-end fast paths (EXP-019, docs/history/FRONTEND_NOTES.md), all built in: the BPU issues the first block in the redirect cycle, PTAB
+// write-to-read bypass, I-cache ready right after a redirect, pre-IDU buffer bypass.  FE_PAIR / FE_IPF are model-only, env only, default 0.
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  store ports the write buffer sends on per cycle (<= STA ports)
 //   CFG_LSU_PIPE_DCAND  drain candidates of the pre-write-buffer drain (the model no longer has that drain; kept for the RTL lp_pkg)

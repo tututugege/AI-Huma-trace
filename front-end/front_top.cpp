@@ -378,8 +378,8 @@ struct FrontComb {
   bool f2b_read_enable = false;
   bpuf::OutputPayload bpu_output{};
   bool bpu_can_run = false;
-  bool bpu_done = false;      // FE_RFAST bit1: run_bpu() already ran inside read_fifos()
-  bool ptab_written = false;  // FE_RFAST bit1: the PTAB write was merged into the head read (write-to-read bypass)
+  bool bpu_done = false;      // run_bpu() already ran inside read_fifos()
+  bool ptab_written = false;  // the PTAB write was merged into the head read (write-to-read bypass)
   bpuf::PdInfo pd_next{};
   predecode_checker_out checker_out{};
   bool lh_new_valid = false;      // RVC=1: the "last half" state after the group at the FIFO head (set when a head is processed)
@@ -427,9 +427,9 @@ void FrontComb::read_fifos() {
     pipe_head_ok = !(g_pipe_dec.ovr && fa.size <= g_pipe_dec.squash_n) && fa.head_age >= min_age;
     fetch_addr_in.drop_tail_n = g_pipe_dec.ovr ? g_pipe_dec.squash_n : 0;
   }
-  // FE_RFAST bit1: the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
+  // the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
   bool ptab_bypass = false;
-  if ((FE_RFAST & 2) && !global_reset && !global_refetch && g_pipe_dec.valid) {
+  if (!global_reset && !global_refetch && g_pipe_dec.valid) {
     run_bpu();
     bpu_done = true;
     ptab_bypass = bpu_output.PTAB_write_enable;

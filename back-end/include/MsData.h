@@ -1,4 +1,4 @@
-// MsData.h -- value path of the memory-dependence speculative window (switch CFG_LSU_MS_DATA / env LSU_MS_DATA=1, needs LSU_MEMSPEC).
+// MsData.h -- value path of the memory-dependence speculative window (EXP-020 / EXP-040).
 //
 // The model is oracle driven: every value is a fact of the trace.  The RTL executes real data, so a load that passed an older store
 // whose address was still unknown returns the STALE byte, its consumers compute with it, a dependent branch can resolve the wrong way, a

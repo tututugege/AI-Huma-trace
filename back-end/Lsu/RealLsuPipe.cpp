@@ -65,7 +65,6 @@ inline uint32_t replay_wait(ReplayType r) {
   return r == ReplayType::MSHR_HIT || r == ReplayType::MSHR_FULL ? LSU_PEPLAY_WAIT_CYCLES : 0;
 }
 
-constexpr unsigned lp_memspec = CFG_LSU_MEMSPEC;  // EXP-018, see config.h
 // Wait table (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC
 // violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is set does not pass unknown-address stores. Training as in the RTL:
 // the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
@@ -609,7 +608,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.dest_en = !l.pf && l.dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
   const bool second = l.second;
-  const bool defer = lp_memspec && !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
+  const bool defer = !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
   bool early = second;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
@@ -728,7 +727,7 @@ void RealLsu::comb_lsu2exe() {
   LP_PORT_CHECK(sta_n, LSU_STA_COUNT, "sta_wb");
 
   // 2b. memory speculation: a written-back load whose older store addresses are all known now sends its completion
-  if (lp_memspec) {
+  {
     for (int i = 0; i < LDQ_SIZE; i++) {
       PLdq &l = pnxt.ldq[i];
       if (l.st != L_SPD) continue;
@@ -802,7 +801,7 @@ void RealLsu::comb_exe2lsu() {
     pw.s1[ns].stq = inst.stq_idx;
     ns++;
     pw.ev_sta |= (stq_mask_t)1 << inst.stq_idx;  // the partial address is known from now on
-    if (lp_memspec) {  // memory-order check: younger loads that passed this store while its address was unknown
+    {  // memory-order check: younger loads that passed this store while its address was unknown
       const uint32_t j = inst.stq_idx;
       const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
       const uint32_t sw = ld_width(inst->func3);
@@ -968,20 +967,6 @@ void RealLsu::comb_tlb_in_stq() {
     }
     pw.ev_sta |= (stq_mask_t)1 << s1.stq;
     if (s1.replay) continue;
-    // memory-order check: CAM over the LDQ with the partial address; a younger load that already read the cache /
-    // forwarded while this store address was unknown must replay. The default policy never lets a load pass an
-    // unknown-address older store, so this CAM is an assertion-like detector (counts must stay 0).
-    const uint32_t j = s1.stq;
-    for (int i = 0; i < LDQ_SIZE && !lp_memspec; i++) {
-      PLdq &l = pnxt.ldq[i];
-      if (l.st != L_DCW && l.st != L_WBP) continue;
-      const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
-      const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
-      const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
-      if (stq_rank(j, pcur.stq_head) >= older) continue;  // store is younger than the load
-      if (range_rel(l.vaddr, ld_width(l.func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT) continue;
-      l.st = L_RDY;  // replay (a flush from the load would be needed if its result had been consumed)
-    }
   }
 }
 
@@ -998,7 +983,7 @@ void RealLsu::comb_stlf() {
     stq_mask_t ov = 0;
     for (int q = 0; q < STA; q++)
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= (stq_mask_t)1 << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/lp_memspec && !e.second && !e.lrsc && !e.wait);
+    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/!e.second && !e.lrsc && !e.wait);
     pnxt.ldq[l.ldq].spec = c.unk;
     pnxt.ldq[l.ldq].skip = c.skip;
     l.cand_v = c.v;
@@ -1039,7 +1024,7 @@ void RealLsu::comb_dis2lsu() {
     e.rob_flag = d.ldq_rob_flag[i];
     e.br_mask = d.ldq_br_mask[i];
     e.pc = d.ldq_pc[i];
-    if (lp_memspec) {
+    {
       if (lp_mdp_clr && (long long)sim_time >= g_mdp_next_clear) {
         std::fill(g_mdp.begin(), g_mdp.end(), false);
         g_mdp_next_clear = (long long)sim_time + lp_mdp_clr;

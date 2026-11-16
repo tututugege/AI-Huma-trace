@@ -227,7 +227,7 @@ void Rob::single_actions(const Uop &u) {
     else if (t == CSR) w.rob2csr.commit = true;
     else if (t == SFENCE_VMA) bc.fence = true;
     else if (t == FENCE_I) bc.fence_i = true;
-    else if (u.flush_pipe) {  // memory-order violator (LSU_MEMSPEC): no CSR/MMU action, refetch from pc+4
+    else if (u.flush_pipe) {  // memory-order violator (EXP-018): no CSR/MMU action, refetch from pc+4
       bc.pc = pc;
     }
     else Assert(0 && "Rob: unexpected single-commit instruction");

@@ -277,7 +277,7 @@ void ICache::lookup(uint32_t index) {
   bool req_valid_next = io.regs.req_valid_r;
 
   if (kill_pipe) {
-    req_ready_w = (FE_RFAST & 4) && state_next == IDLE;   // FE_RFAST bit2: no dead cycle after a redirect
+    req_ready_w = state_next == IDLE;   // no dead cycle after a redirect
     req_valid_next = false;
     io.out.mmu_req_valid = false;
     io.reg_write.req_valid_r = false;

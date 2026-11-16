@@ -816,7 +816,7 @@ class BpuPipe {
         push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
       } else if (!(in.rf_valid && repair_blk(in, n))) { n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = (*stp_).epoch + 1; }
       n.pq_n = 0;
-      if ((FE_RFAST & 1) && in.icache_read_ready) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(in.refetch_address, sp, sr); }   // S0 issues the redirect target in the refetch cycle
+      if (in.icache_read_ready) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(in.refetch_address, sp, sr); }   // S0 issues the redirect target in the refetch cycle
     }
     update_queue(in, n, t);
     // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when no

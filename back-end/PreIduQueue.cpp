@@ -8,9 +8,8 @@
 // Instructions accepted from the front end this cycle (comb_accept_front), pushed into the buffer in comb_fire.
 static InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH];
 static int push_count = 0;
-// FE_RFAST bit3: with an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
+// With an empty instruction buffer the accepted block goes straight to decode (buffer bypass)
 static bool g_bypass = false;
-constexpr bool g_bypass_on = (FE_RFAST & 8) != 0;
 
 static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1> entry_valid, const FtqPcReadReq &req) {
   resp = {};
@@ -136,7 +135,7 @@ void PreIduQueue::comb_accept_front() {
     e.ftq_is_last = (i == last);
     e.uop_id = uop_alloc();
   }
-  if (g_bypass_on && ibuf.count() == 0 && push_count > 0) {
+  if (ibuf.count() == 0 && push_count > 0) {
     g_bypass = true;
     for (int i = 0; i < DECODE_WIDTH; i++) wires->pre_issue.entries[i] = i < push_count ? push_entries[i] : InstructionBufferEntry{};
   }
