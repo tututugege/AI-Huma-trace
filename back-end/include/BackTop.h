@@ -84,9 +84,4 @@ public:
   // window; the DUT and the reference core start from reset and execute it. ckpt_interval_inst_count is still read.
   void restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file);
   void restore_from_ref();
-
-  uint32_t get_reg(uint8_t arch_idx) {
-    (void)arch_idx;
-    return 0;  // no register file: architectural values live in the trace bridge
-  }
 };

@@ -62,17 +62,12 @@ public:
   AxiDdrImpl axi_ddr;
   AxiMmioImpl axi_mmio;
   mmio::UART16550_Device axi_uart{MMIO_RANGE_BASE};
-  // oracle mode: a one-cycle hold register, so a fetch group is not lost when the back end stalls
-  bool oracle_pending_valid = false;
-  FrontTopOut oracle_pending_out = {};
-  // Explicit front-to-back hold register. Previously BackTop::in itself
-  // retained this payload across a backend stall.
+  // the fetch group held while the back end stalls (it re-enters back.in the next cycle)
   FrontPreIO front2back_hold_q{};
   FrontPreIO front2back_hold_d{};
   bool front2back_hold_q_live = false;
   bool front2back_hold_d_live = false;
-  // PeripheralAxi produces this response after BackTop::comb(). Model the
-  // intended one-cycle delay explicitly instead of retaining BackTop::in.
+  // the MMIO response (driven after BackTop::comb()), registered into back.in of the next cycle
   PeripheralRespIO peripheral_resp_hold_q{};
   PeripheralRespIO peripheral_resp_hold_d{};
 
@@ -87,7 +82,6 @@ public:
   void axi_comb_inputs();
   void front2back_hold_seq();
   void peripheral_resp_hold_seq();
-  uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }
   // called by SimContext on the commit path
   void commit_sync(InstInfo *inst, int commit_slot);
 };

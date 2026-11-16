@@ -19,7 +19,7 @@ writes that is part of a port is declared (by a port of the right direction), ev
 two tops share is part of a port, and a port has one writer (aliases name one master's part of a port array).
 
 usage: gen_top_order.py          print the generated order
-       gen_top_order.py --write  rewrite the generated block of SimCpu::cycle() (rv_simu_mmu_v2.cpp)
+       gen_top_order.py --write  rewrite the generated block of SimCpu::cycle() (SimCpu.cpp)
        gen_top_order.py --check  exit 1 if the declarations and the code or the block differ
 """
 import os, re, sys, collections
@@ -169,12 +169,12 @@ def block(order):
 def main():
     ports, phases = declarations()
     order = generate(ports, phases)
-    path = os.path.join(ROOT, 'rv_simu_mmu_v2.cpp')
+    path = os.path.join(ROOT, 'SimCpu.cpp')
     src = open(path).read()
     new = block(order)
     if '--write' in sys.argv or '--check' in sys.argv:
         a = src.find(BEGIN)
-        if a < 0: sys.exit('rv_simu_mmu_v2.cpp: no generated block in SimCpu::cycle()')
+        if a < 0: sys.exit('SimCpu.cpp: no generated block in SimCpu::cycle()')
         b = src.index(END, a) + len(END)
         if '--check' in sys.argv:
             errs = check(ports, phases)

@@ -32,6 +32,11 @@ void ensure() {
 }
 } // namespace
 
+xlen_t arch_gpr(int idx) {
+  ensure();
+  return refcpu_gpr(g_ctx)[idx];
+}
+
 void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx, uint32_t len) {
   ensure();
   g_rob_uid[rob_idx & 4095] = uid;

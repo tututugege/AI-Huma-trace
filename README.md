@@ -8,7 +8,7 @@ and then carried to the RTL; on a merge to `main` the RTL must reproduce this mo
 The model does not compute values. Branch direction/target, addresses, store data and CSR write data come from facts supplied by the
 trace bridge (`bridge/TraceBridge.*`), a functional core (the sibling `function-model` repository, built as `librefcpu`;
 `function-model/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths.
-Layout: the timing model is `front-end/`, `back-end/`, `MemSubSystem/`, `axi-interconnect-kit/` and `rv_simu_mmu_v2.cpp` (the
+Layout: the timing model is `front-end/`, `back-end/`, `MemSubSystem/`, `axi-interconnect-kit/` and `SimCpu.cpp` (the
 core top, `SimCpu::cycle`); `bridge/` is its input (the trace bridge and the model's taps into it); `driver/` runs it (command
 line and run modes in `main.cpp`, image / checkpoint loading in `BackTopLoad.cpp`, the reference core setup and prewarm in
 `RefCore.cpp`, the functional warm-up of caches / TLBs / BPU in `FastWarm.cpp`).

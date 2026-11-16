@@ -1,31 +1,12 @@
-#include "trace_hook.h"
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <queue>
-#include <vector>
-
-// Parent-side compatibility for axi-interconnect-kit revisions that do not
-// expose comb_inputs_internal_tick(). The adapter below snapshots the explicit
-// CPU-boundary ready/hold registers while extra AXI ticks advance only the
-// internal AXI/LLC/DDR state.
-#define private public
-#include "AXI_Interconnect.h"
-#undef private
-
-#include "BackTop.h"
+// SimCpu: the tops (front end, back end, memory subsystem, AXI) wired together, and one cycle of the whole core.
+#include "SimCpu.h"
 #include "Csr.h"
 #include "PhysMemory.h"
 #include "RealLsu.h"
-#include "SimCpu.h"
 #include "config.h"
-#include "RefCore.h"
-#include "front_IO.h"
-#include "front_module.h"
-#include "BPU/BPU.h"
+#include "trace_hook.h"
 #include "util.h"
+#include <cstdint>
 
 namespace {
 void sync_uart_registers_from_backing(mmio::UART16550_Device &uart) {
@@ -205,11 +186,7 @@ void SimCpu::init() {
   front.icache_ptw_walk_port = mem_subsystem.itlb_walk_port;
   front.icache_mem_req_port = &icache_req;
   front.icache_mem_resp_port = &icache_resp_q;   // the I-cache reads its memory responses through the registers
-  // Keep a single active SoC memory topology. DCache/PTW/peripheral already use
-  // the top-level interconnect; frontend icache should use the same shared path
-  // whenever the real BPU frontend is enabled. Oracle mode does not step the
-  // icache model, so it simply leaves the port disconnected instead of falling
-  // back to MemSubsystem's legacy private AXI runtime.
+  // the I-cache's read port of the shared interconnect (the D-cache, PTW and peripherals use the same interconnect)
   front.icache_mem_read_port =
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
   front.icache_mem_read_q = &icache_axi_q;
@@ -221,14 +198,9 @@ void SimCpu::init() {
   axi_ddr.init();
   axi_mmio.init();
   axi_mmio.add_device(UART_ADDR_BASE, UART_MMIO_SIZE, &axi_uart);
-  // In shared-LLC mode, front.init()/front.step_bpu() directly touches the
-  // top-level icache AXI port, so the shared interconnect/MMIO/DDRx must be
-  // reset before frontend init. Keeping the order uniform is harmless in the
-  // LLC-off path.
+  // front.init() steps the BPU once and touches the I-cache's AXI port, so the AXI side is reset first
   icache_port_regs_seq();
   front.init();
-  oracle_pending_valid = false;
-  oracle_pending_out = {};
   front2back_hold_q = {};
   front2back_hold_d = {};
   front2back_hold_q_live = front2back_hold_d_live = false;

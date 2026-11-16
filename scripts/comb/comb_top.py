@@ -100,7 +100,7 @@ def top_domain(root, ASSIGN, back_rows):
     for fn in os.listdir(root):
         if fn.endswith('.cpp'): src.t[os.path.join(root, fn)] = open(os.path.join(root, fn), errors='ignore').read()
     notes = set()
-    sim = strip_comments(src.t[os.path.join(root, 'rv_simu_mmu_v2.cpp')])
+    sim = strip_comments(src.t[os.path.join(root, 'SimCpu.cpp')])
     init = src.body('SimCpu', 'init')[1]
 
     # pointer members of MemSubsystem bound in SimCpu::init(): mem member -> top path
@@ -244,7 +244,7 @@ def top_domain(root, ASSIGN, back_rows):
                     if fn.endswith('_seq'): continue        # a clock edge (register load), not a comb phase
                     walk_body(src.body('SimCpu', fn)[1], fn, dict(mp)); continue
                 fb = src.body(None, fn)
-                if fb and fb[1] in src.t[os.path.join(root, 'rv_simu_mmu_v2.cpp')]:
+                if fb and fb[1] in src.t[os.path.join(root, 'SimCpu.cpp')]:
                     params = [re.search(r'(\w+)\s*$', p.strip()).group(1) for p in split_top(fb[0], ',') if p.strip()]
                     mp2 = dict(mp)
                     for p, a in zip(params, args):

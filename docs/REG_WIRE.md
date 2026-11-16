@@ -126,7 +126,7 @@ their input logic, which belongs to comb; seq stays a pure copy.
 F: the cache-line data was already gone (the vendored AXI kit keeps one word, the MMIO value, in `WideReadData_t` /
 `WideWriteData_t`). What F removed is the glue: every cycle the top level copied the interconnect's DCACHE_R / DCACHE_W
 / EXTRA_R / EXTRA_W master ports field by field into eight MemSubsystem structs (`MshrAxiIn/Out`, `WbAxiIn/Out`,
-`PeripheralAxiRead/WriteIn/Out`) and back (`bridge_*` in rv_simu_mmu_v2.cpp; for the MMIO path a second copy into
+`PeripheralAxiRead/WriteIn/Out`) and back (`bridge_*` in SimCpu.cpp; for the MMIO path a second copy into
 `PeripheralAxi::in/out`). Now SimCpu::init binds the ports into MemSubsystem (`dcache_axi_r/w`, `extra_axi_r/w`), the
 MSHR, the write buffer and PeripheralAxi read the interconnect side through `in.axi` / `in.read|write` and drive the
 request side through `out.axi` / `out.read|write` (`clear_master_fields` in AxiMasterPort.h clears what a master
