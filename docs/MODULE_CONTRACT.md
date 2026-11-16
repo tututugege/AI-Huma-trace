@@ -414,3 +414,23 @@ counter; SimCpu holds no registers and no comb code. Identical: gates, FPR (4), 
 FE_PAIR / FE_IPF, the Linux checkpoint, the dhrystone checkpoint (back and front door). Speed (dhrystone user time,
 interleaved, a loaded machine): part 1 about 2% slower than before, parts 2 and 3 no change; swapping back.comb_late
 and mem_subsystem.comb_inputs back recovers about half (code order / locality); not resolved.
+
+## One schedule for the whole CPU (exp/global-sched)
+
+SimCpu::cycle() is one generated list of every module's comb phases (scripts/comb/gen_top_order.py, the only
+scheduler); no top keeps a comb schedule of its own:
+* back end: each module's CONTRACT phases (`back.<module>-><phase>()`); BackTop::comb / comb_late are gone and BackTop's
+  own logic went into the modules (Rob::comb_redirect, the CSR's comb_csr_status, the LSU's MMIO response register,
+  Front2Back's fetch-group valid);
+* memory subsystem: the blocks' CONTRACT phases and MemSubsystem's phase functions (`mem_subsystem.<block>.<phase>()`,
+  `mem_subsystem.dcache_stage1()` ...); MemSubsystem::comb_outputs / comb_inputs are gone;
+* front end: FrontTop::comb_begin, then FrontComb's nine phases (`front.<phase>()`, the working state in a per-cycle
+  slot of FrontCore);
+* AXI, Front2Back, Back2Front, the commit's device stores: their EXPORT phases.
+gen_comb_order.py, gen_mem_order.py and gen_front_order.py read and check their domain's contracts; gen_top_order.py
+links the phases: a module's phases in their header / contract order, a writer before a reader of the same signal
+(back-end fields and memory signals by their SimCpu paths, @<path> ports; the AXI master ports and the tops' ports by
+name), the trace-bridge users in order. global_graph.py's derivation equals the generated order. Identical: gates,
+FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT, the Linux and dhrystone checkpoints, FE_PAIR / FE_IPF, Linux from reset.
+Not done: the front end's phases are FrontComb's methods (its wires are FrontComb's members), not methods of the
+BPU / FIFO / I-cache classes; BackTop and MemSubsystem still own their modules and bind their ports.
