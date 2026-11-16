@@ -201,7 +201,7 @@ def front_domain(root, ASSIGN, overlap):
     for m in re.finditer(r'^\s*([\w:]+)(?:<[^>]*>)?\s*&\s*(\w+)\s*;', strip_comments(fc), re.M):
         types[m.group(2)] = m.group(1).split('::')[-1]
     calc = src.body('FrontCore', 'comb')[1]
-    phases = re.findall(r'\bc\.(\w+)\(', calc)
+    phases = re.findall(r'(?<![\w.>])c\.(\w+)\(', calc)   # the phases called on the cycle's FrontComb c
     rows, notes = [], set()
     for p in phases:
         r, w = scan(closure(src, 'FrontComb', p), names + persistent, ASSIGN, src, notes, p, types)

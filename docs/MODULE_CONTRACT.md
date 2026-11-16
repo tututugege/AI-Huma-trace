@@ -344,3 +344,14 @@ AXI outputs | mem outputs | back | SimCpu hold | front from_back | mem inputs | 
 chosen by hand (front comb / comb_from_back, back comb_csr_status / comb, AXI begin / outputs / inputs) and the derived
 one (mem comb_outputs / comb_inputs) is where the global graph needs a cut, and nowhere else. `comb_graph.py --check`
 fails when the derived schedule and cycle() differ (a new cross-module dependency, or a split no longer needed).
+
+## Global schedule, step 3: a persistent FrontComb measured, not adopted (exp/global-sched)
+
+To cut the front end between its phases (two calls per cycle), the cycle's working state FrontComb must outlive one
+call: a FrontCore-owned slot (`std::optional<FrontComb>` behind a unique_ptr, emplaced anew each cycle). Identical
+results (gates, FPR, TB_TRACE_COMMIT), but dhrystone 2% slower (user time, 5 interleaved runs: min 7.43 -> 7.60 s): as
+a local the compiler keeps the struct's fields in registers across the inlined phases; in the slot every access goes
+through memory. The derived schedule does not cut the front end, so the change is not kept; a generator that cuts a
+domain would emit the slot form only for that domain. Kept: the front-domain scan takes only calls on a bare `c.` as
+phases. The back end and the memory subsystem need nothing of the kind: their phases are methods of persistent
+objects.
