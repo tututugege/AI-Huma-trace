@@ -27,30 +27,17 @@ static SimContext *icache_ctx = nullptr;
 
 extern void (*g_icache_fill_hook)(uint32_t index, uint32_t tag);   // FE_IPF: demand fills are reported to the prefetcher (defined in ICacheTop.cpp)
 namespace {
-using LookupTimingPolicy =
-    RegfileTablePolicy;
-
 constexpr int kRows = ICACHE_SET_NUM;
 constexpr int kTagChunks = ICACHE_WAY_NUM;
 constexpr int kTagChunkBits = ICACHE_TAG_BITS;
 constexpr int kValidChunks = ICACHE_WAY_NUM;
 constexpr int kValidChunkBits = 1;
 
-using TagTable = GenericTable<kRows, kTagChunks, kTagChunkBits, LookupTimingPolicy>;
-using ValidTable = GenericTable<kRows, kValidChunks, kValidChunkBits, LookupTimingPolicy>;
+using TagTable = GenericTable<kRows, kTagChunks, kTagChunkBits>;
+using ValidTable = GenericTable<kRows, kValidChunks, kValidChunkBits>;
 
-GenericTableTimingConfig make_lookup_timing_config() {
-  GenericTableTimingConfig cfg;
-  cfg.fixed_latency = ICACHE_LOOKUP_LATENCY > 0 ? ICACHE_LOOKUP_LATENCY : 1;
-  cfg.random_delay = false;
-  cfg.random_min = 1;
-  cfg.random_max = 1;
-  return cfg;
-}
-
-
-TagTable &g_tag_table() { static TagTable t(make_lookup_timing_config()); return t; }
-ValidTable &g_valid_table() { static ValidTable t(make_lookup_timing_config()); return t; }
+TagTable &g_tag_table() { static TagTable t; return t; }
+ValidTable &g_valid_table() { static ValidTable t; return t; }
 
 void bind_icache_runtime(ICacheTop *instance) {
   static PtwMemPort *bound_mem_port = nullptr;

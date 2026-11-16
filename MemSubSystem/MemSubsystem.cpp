@@ -14,9 +14,9 @@
 namespace {
 
 struct AxiLlcTableRuntime {
-  DynamicGenericTable<SramTablePolicy> meta;
-  DynamicGenericTable<SramTablePolicy> valid;
-  DynamicGenericTable<SramTablePolicy> repl;
+  DynamicSramTable meta;
+  DynamicSramTable valid;
+  DynamicSramTable repl;
   axi_interconnect::AXI_LLC_LookupIn_t lookup_in{};
   axi_interconnect::AXI_LLCConfig config{};
   bool enabled = false;
@@ -32,8 +32,7 @@ struct AxiLlcTableRuntime {
     cfg.rows = rows;
     cfg.chunks = row_bytes;
     cfg.chunk_bits = 8;
-    cfg.timing.fixed_latency = latency == 0 ? 1 : latency;
-    cfg.timing.random_delay = false;
+    cfg.latency = latency == 0 ? 1 : latency;
     return cfg;
   }
 
