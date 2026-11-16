@@ -206,10 +206,6 @@ struct ICache_out_t {
 
 struct ICache_perf_t {
   wire<1> miss_issue_valid = false;
-  wire<1> miss_penalty_valid = false;
-  wire<64> miss_penalty_cycles = 0;
-  wire<1> axi_read_valid = false;
-  wire<64> axi_read_cycles = 0;
 };
 
 // cache io
@@ -295,16 +291,6 @@ private:
   uint32_t lookup_index_next = 0;
   wire<XLEN> lookup_pc_next = 0;
 
-  // Perf bookkeeping is simulator-local state, not architectural/register
-  // state of the hardware model. Keep it out of generalized IO/reg structs.
-  struct PerfState {
-    bool miss_penalty_active = false;
-    uint64_t miss_penalty_start_cycle = 0;
-    bool axi_read_active = false;
-    uint64_t axi_read_start_cycle = 0;
-  };
-  PerfState perf_state = {};
-  PerfState perf_state_next = {};
 
   // Lookup helpers (current-cycle fold from the table response). The comb entry
   // points are pure functions of generalized input/registered state and only

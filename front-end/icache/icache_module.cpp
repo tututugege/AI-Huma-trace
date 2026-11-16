@@ -12,20 +12,7 @@ inline bool mem_wait_must_drain_on_refetch() {
   return true;
 }
 
-#define CONFIG_ICACHE_FOCUS_VADDR_BEGIN 0u
 
-#define CONFIG_ICACHE_FOCUS_VADDR_END 0u
-
-inline bool icache_focus_pc(uint32_t pc) {
-  const uint32_t begin = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_BEGIN);
-  const uint32_t end = static_cast<uint32_t>(CONFIG_ICACHE_FOCUS_VADDR_END);
-  return end > begin && (pc - begin) < (end - begin);
-}
-
-inline bool icache_window_debug_active(long long cycle) {
-  (void)cycle;
-  return false;
-}
 
 
 
@@ -96,8 +83,6 @@ ICache::ICache() {
     io.regs.txid_inflight_r[i] = false;
     io.regs.txid_canceled_r[i] = false;
   }
-  perf_state = {};
-  perf_state_next = {};
   mem_gnt = 0;
   io.regs.req_valid_r = false;
   io.regs.req_pc_r = 0;
@@ -133,8 +118,6 @@ void ICache::reset() {
     io.regs.txid_inflight_r[i] = false;
     io.regs.txid_canceled_r[i] = false;
   }
-  perf_state = {};
-  perf_state_next = {};
   mem_gnt = 0;
   io.regs.req_valid_r = false;
   io.regs.req_pc_r = 0;
@@ -168,7 +151,6 @@ void ICache::comb_core(bool allow_lookup_data_phase) {
   // Initialize generalized outputs at the start of comb().
   io.out = {};
   perf = {};
-  perf_state_next = perf_state;
   io.table_write = {};
   fast_bypass_fire = false;
   fast_bypass_from_pending = false;
@@ -261,7 +243,6 @@ void ICache::capture_lookup_data_result() {
 
 void ICache::seq() {
   io.regs = io.reg_write;
-  perf_state = perf_state_next;
 }
 
 void ICache::lookup(uint32_t index) {
@@ -375,10 +356,6 @@ void ICache::eval_state_machine() {
   io.out.lookup_data_req_index = 0;
   io.out.lookup_data_req_way = 0;
   perf.miss_issue_valid = false;
-  perf.miss_penalty_valid = false;
-  perf.miss_penalty_cycles = 0;
-  perf.axi_read_valid = false;
-  perf.axi_read_cycles = 0;
   io.out.ifu_resp_pc = io.regs.req_pc_r;
   io.out.ifu_page_fault = false;
   io.out.ifu_resp_single_word = false;
@@ -487,24 +464,6 @@ void ICache::eval_state_machine() {
 
   auto latch_mem_refill = [&](bool same_cycle_issue) {
     mem_gnt = true;
-    if (perf_state.miss_penalty_active &&
-        static_cast<uint64_t>(sim_time) >=
-            perf_state.miss_penalty_start_cycle) {
-      perf.miss_penalty_valid = true;
-      perf.miss_penalty_cycles =
-          static_cast<uint64_t>(sim_time) -
-          perf_state.miss_penalty_start_cycle;
-    }
-    if (same_cycle_issue) {
-      perf.axi_read_valid = true;
-      perf.axi_read_cycles = 0;
-    } else if (perf_state.axi_read_active &&
-               static_cast<uint64_t>(sim_time) >=
-                   perf_state.axi_read_start_cycle) {
-      perf.axi_read_valid = true;
-      perf.axi_read_cycles =
-          static_cast<uint64_t>(sim_time) - perf_state.axi_read_start_cycle;
-    }
     if (icache_req_is_uncache(io.regs)) {
       replace_idx_next = io.regs.replace_idx;
     } else {
@@ -516,14 +475,9 @@ void ICache::eval_state_machine() {
         replace_idx_next = (io.regs.replace_idx + 1) % way_cnt;
       }
     }
-    perf_state_next.miss_penalty_active = false;
-    perf_state_next.miss_penalty_start_cycle = 0;
-    perf_state_next.axi_read_active = false;
-    perf_state_next.axi_read_start_cycle = 0;
   };
 
-  auto finish_refill = [&](uint32_t replace_way,
-                           const char *debug_tag) {
+  auto finish_refill = [&](uint32_t replace_way) {
     const bool single_word = icache_req_is_uncache(io.regs);
     state_next = IDLE;
     mem_axi_state_next = AXI_IDLE;
@@ -533,10 +487,6 @@ void ICache::eval_state_machine() {
     io.reg_write.miss_txid_valid_r = false;
     io.reg_write.miss_ready_seen_r = false;
     reset_dcache_probe_regs();
-    perf_state_next.miss_penalty_active = false;
-    perf_state_next.miss_penalty_start_cycle = 0;
-    perf_state_next.axi_read_active = false;
-    perf_state_next.axi_read_start_cycle = 0;
 
     if (!io.in.flush && !single_word) {
       io.table_write.we = true;
@@ -638,11 +588,6 @@ void ICache::eval_state_machine() {
           io.reg_write.miss_txid_valid_r = true;
           io.reg_write.miss_txid_r = static_cast<uint8_t>(txid & 0xF);
           io.reg_write.miss_ready_seen_r = false;
-          perf_state_next.miss_penalty_active = true;
-          perf_state_next.miss_penalty_start_cycle =
-              static_cast<uint64_t>(sim_time);
-          perf_state_next.axi_read_active = false;
-          perf_state_next.axi_read_start_cycle = 0;
           state_next = SWAP_IN;
         }
       }
@@ -703,10 +648,6 @@ void ICache::eval_state_machine() {
         io.reg_write.miss_txid_valid_r = false;
         io.reg_write.miss_ready_seen_r = false;
         reset_dcache_probe_regs();
-        perf_state_next.miss_penalty_active = false;
-        perf_state_next.miss_penalty_start_cycle = 0;
-        perf_state_next.axi_read_active = false;
-        perf_state_next.axi_read_start_cycle = 0;
         req_ready_w = true;
       } else if (req_waiting_accept) {
         state_next = CANCEL_WAIT_ACCEPT;
@@ -720,10 +661,6 @@ void ICache::eval_state_machine() {
         io.reg_write.miss_txid_valid_r = false;
         io.reg_write.miss_ready_seen_r = false;
         reset_dcache_probe_regs();
-        perf_state_next.miss_penalty_active = false;
-        perf_state_next.miss_penalty_start_cycle = 0;
-        perf_state_next.axi_read_active = false;
-        perf_state_next.axi_read_start_cycle = 0;
         req_ready_w = true;
       }
       break;
@@ -753,16 +690,11 @@ void ICache::eval_state_machine() {
             io.reg_write.miss_ready_seen_r = false;
             req_ready_w = false;
           } else {
-            finish_refill(replace_idx_next,
-                          dcache_step.hit ? "SWAP_DCACHE_HIT_SAME_CYCLE"
-                                          : "SWAP_MEM_GNT_SAME_CYCLE");
+            finish_refill(replace_idx_next);
           }
         } else {
           mem_axi_state_next = AXI_BUSY;
           io.reg_write.txid_inflight_r[io.regs.miss_txid_r & 0xF] = true;
-          perf_state_next.axi_read_active = true;
-          perf_state_next.axi_read_start_cycle =
-              static_cast<uint64_t>(sim_time);
         }
       } else {
         io.out.mem_req_valid = true;
@@ -786,8 +718,7 @@ void ICache::eval_state_machine() {
           req_ready_w = false;
           break;
         }
-        finish_refill(replace_idx_next,
-                      dcache_step.hit ? "SWAP_DCACHE_HIT" : "SWAP_MEM_GNT");
+        finish_refill(replace_idx_next);
       }
     }
     break;
@@ -800,10 +731,6 @@ void ICache::eval_state_machine() {
       io.reg_write.miss_txid_valid_r = false;
       io.reg_write.miss_ready_seen_r = false;
       reset_dcache_probe_regs();
-      perf_state_next.miss_penalty_active = false;
-      perf_state_next.miss_penalty_start_cycle = 0;
-      perf_state_next.axi_read_active = false;
-      perf_state_next.axi_read_start_cycle = 0;
       req_ready_w = true;
       break;
     }
@@ -814,15 +741,7 @@ void ICache::eval_state_machine() {
         req_ready_w = false;
         break;
       }
-      if (perf_state.miss_penalty_active &&
-          static_cast<uint64_t>(sim_time) >= perf_state.miss_penalty_start_cycle) {
-        perf.miss_penalty_valid = true;
-        perf.miss_penalty_cycles =
-            static_cast<uint64_t>(sim_time) - perf_state.miss_penalty_start_cycle;
-      }
-      finish_refill(io.regs.replace_idx,
-                    dcache_step.hit ? "DCACHE_HIT_AFTER_MEM"
-                                    : "MEM_GNT_AFTER_DCACHE_MISS");
+      finish_refill(io.regs.replace_idx);
     }
     break;
 
@@ -840,10 +759,6 @@ void ICache::eval_state_machine() {
     io.reg_write.miss_txid_valid_r = false;
     io.reg_write.miss_ready_seen_r = false;
     reset_dcache_probe_regs();
-    perf_state_next.miss_penalty_active = false;
-    perf_state_next.miss_penalty_start_cycle = 0;
-    perf_state_next.axi_read_active = false;
-    perf_state_next.axi_read_start_cycle = 0;
     req_ready_w = true;
     break;
 
@@ -854,10 +769,6 @@ void ICache::eval_state_machine() {
       io.reg_write.miss_txid_valid_r = false;
       io.reg_write.miss_ready_seen_r = false;
       reset_dcache_probe_regs();
-      perf_state_next.miss_penalty_active = false;
-      perf_state_next.miss_penalty_start_cycle = 0;
-      perf_state_next.axi_read_active = false;
-      perf_state_next.axi_read_start_cycle = 0;
       req_ready_w = true;
       break;
     }
@@ -875,10 +786,6 @@ void ICache::eval_state_machine() {
       }
       io.reg_write.miss_ready_seen_r = false;
       reset_dcache_probe_regs();
-      perf_state_next.miss_penalty_active = false;
-      perf_state_next.miss_penalty_start_cycle = 0;
-      perf_state_next.axi_read_active = false;
-      perf_state_next.axi_read_start_cycle = 0;
       req_ready_w = true;
     } else {
       state_next = DRAIN;
