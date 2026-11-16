@@ -34,31 +34,6 @@
 
 using namespace lp;
 
-// EXP-019: cost of a memory-order violation (LSU_PIPE_STATS prints the averages).  det[] = cycle of the detection per ROB index;
-// the ROB calls on_flush_commit() when the violating load commits and flushes, and on_commit() for every later commit.
-struct MsPenalty {
-  long long det[256], det_zero[256];
-  long long pending = -1;
-  uint64_t zero_cum = 0, ep_zero0 = 0;  // cycles without any commit so far / at the detection of the current episode
-  uint64_t n = 0, n_det = 0, det_flush_sum = 0, resume_sum = 0, resume_n = 0, flushed_sum = 0, idle_sum = 0;
-  MsPenalty() { for (auto &d : det) d = -1; }
-  void on_detect(unsigned rob_idx) { det[rob_idx & 255] = sim_time; det_zero[rob_idx & 255] = zero_cum; }
-  void on_flush_commit(unsigned rob_idx, long long younger) {
-    n++;
-    flushed_sum += younger;
-    long long &d = det[rob_idx & 255];
-    ep_zero0 = zero_cum;
-    if (d >= 0) { n_det++; det_flush_sum += sim_time - d; ep_zero0 = det_zero[rob_idx & 255]; d = -1; }
-    pending = sim_time;
-  }
-  void tick(bool committed) {  // once per cycle from the ROB
-    if (!committed) zero_cum++;
-    else if (pending >= 0 && sim_time > pending) { resume_sum += sim_time - pending; resume_n++; idle_sum += zero_cum - ep_zero0; pending = -1; }
-  }
-} g_msp;
-
-void g_msp_flush_commit(unsigned rob_idx, long long younger) { g_msp.on_flush_commit(rob_idx, younger); }
-void g_msp_tick(bool committed) { g_msp.tick(committed); }
 
 
 #define LP_PORT_CHECK(used, max, what)                                                                  \
@@ -71,51 +46,6 @@ void g_msp_tick(bool committed) { g_msp.tick(committed); }
 
 namespace {
 
-struct LpStats {
-  uint64_t l1_new = 0, l1_replay = 0, l1_tlb = 0;
-  uint64_t dc_launch = 0, dc_wasted = 0;
-  uint64_t hit = 0, fwd = 0, fwd_wait = 0;
-  uint64_t cand = 0, cand_false = 0;
-  uint64_t rp_tlb = 0, rp_addr = 0, rp_hold = 0, rp_data = 0, rp_dc = 0, rp_dc_conflict = 0, rp_dc_mshr = 0;
-  uint64_t rdy_cycles_blocked = 0;
-  uint64_t unk_wait_overlap = 0, unk_wait_disjoint = 0;
-  uint64_t order_violation = 0, spec_loads = 0, spec_released = 0, vio_multi = 0;
-  uint64_t st_drain = 0, st_conflict = 0, st_replay = 0, st_merge_pair = 0;
-  uint64_t sta_replay = 0, wd_ld = 0, wd_st = 0, rblk = 0;
-  uint64_t mmio_ld = 0;
-  uint64_t l3_wake = 0, l3_wb = 0;
-  ~LpStats() {
-    const char *e = std::getenv("LSU_PIPE_STATS");
-    if (!e || e[0] == '0' || l1_new == 0) return;
-    std::fprintf(stderr,
-                 "[LSU_PIPE_STATS] l1_new=%llu l1_replay=%llu l1_tlb=%llu dc_launch=%llu dc_wasted=%llu hit=%llu fwd=%llu fwd_wait=%llu "
-                 "cand=%llu cand_false=%llu\n",
-                 (unsigned long long)l1_new, (unsigned long long)l1_replay, (unsigned long long)l1_tlb, (unsigned long long)dc_launch,
-                 (unsigned long long)dc_wasted, (unsigned long long)hit, (unsigned long long)fwd, (unsigned long long)fwd_wait,
-                 (unsigned long long)cand, (unsigned long long)cand_false);
-    std::fprintf(stderr,
-                 "[LSU_PIPE_STATS] replay: tlb=%llu addr=%llu hold=%llu data=%llu dc=%llu (conflict=%llu mshr=%llu) "
-                 "unk_addr_wait_overlap=%llu unk_addr_wait_disjoint=%llu order_violation=%llu spec_loads=%llu spec_released=%llu vio_multi_cycles=%llu\n",
-                 (unsigned long long)rp_tlb, (unsigned long long)rp_addr, (unsigned long long)rp_hold, (unsigned long long)rp_data,
-                 (unsigned long long)rp_dc, (unsigned long long)rp_dc_conflict, (unsigned long long)rp_dc_mshr,
-                 (unsigned long long)unk_wait_overlap, (unsigned long long)unk_wait_disjoint, (unsigned long long)order_violation, (unsigned long long)spec_loads, (unsigned long long)spec_released, (unsigned long long)vio_multi);
-    if (g_msp.n)
-      std::fprintf(stderr,
-                   "[MS_PENALTY] violations=%llu flush_commits=%llu detect_to_flush_commit_avg=%.2f flush_commit_to_next_commit_avg=%.2f "
-                   "total_avg=%.2f flushed_younger_avg=%.1f idle_commit_cycles_avg=%.2f\n",
-                   (unsigned long long)order_violation, (unsigned long long)g_msp.n,
-                   g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0,
-                   g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0,
-                   (g_msp.n_det ? (double)g_msp.det_flush_sum / g_msp.n_det : 0.0) + (g_msp.resume_n ? (double)g_msp.resume_sum / g_msp.resume_n : 0.0),
-                   (double)g_msp.flushed_sum / g_msp.n, g_msp.resume_n ? (double)g_msp.idle_sum / g_msp.resume_n : 0.0);
-    std::fprintf(stderr,
-                 "[LSU_PIPE_STATS] watchdog ld=%llu st=%llu rblk=%llu\n", (unsigned long long)wd_ld, (unsigned long long)wd_st, (unsigned long long)rblk);
-    std::fprintf(stderr, "[LSU_PIPE_STATS] L2cut: l3_wb=%llu l3_wake=%llu\n", (unsigned long long)l3_wb, (unsigned long long)l3_wake);
-    std::fprintf(stderr, "[LSU_PIPE_STATS] store: drain=%llu conflict_block=%llu replay=%llu merge_pair=%llu sta_replay=%llu mmio_ld=%llu\n",
-                 (unsigned long long)st_drain, (unsigned long long)st_conflict, (unsigned long long)st_replay,
-                 (unsigned long long)st_merge_pair, (unsigned long long)sta_replay, (unsigned long long)mmio_ld);
-  }
-} g_st;
 
 inline uint32_t stq_rank(uint32_t idx, uint32_t head) { return (idx + STQ_SIZE - head) % STQ_SIZE; }
 inline uint32_t ld_width(uint32_t func3) { return get_mem_width(func3); }
@@ -135,7 +65,7 @@ inline uint32_t replay_wait(ReplayType r) {
   return r == ReplayType::MSHR_HIT || r == ReplayType::MSHR_FULL ? LSU_PEPLAY_WAIT_CYCLES : 0;
 }
 
-static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC);  // EXP-018, see config.h
+constexpr unsigned lp_memspec = CFG_LSU_MEMSPEC;  // EXP-018, see config.h
 // Wait table (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries indexed by a PC hash, set when a load of that PC
 // violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is set does not pass unknown-address stores. Training as in the RTL:
 // the violators of a cycle are only flagged (one bit per LDQ entry, a register); one flagged live entry per cycle (the lowest LDQ index)
@@ -143,7 +73,6 @@ static const unsigned lp_memspec = lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMS
 constexpr unsigned lp_mdp_bits = CFG_LSU_MDP_BITS;
 constexpr unsigned lp_mdp_clr = CFG_LSU_MDP_CLR;
 static uint64_t g_trn = 0;  // flagged violators (LDQ bit mask)
-static const bool lp_ms_trace = std::getenv("LSU_MS_TRACE") != nullptr;  // debug aid: memory-speculation events (matches the RTL MS_DBG print)
 static std::vector<int> g_mdp_pend;  // table indices trained in the previous cycle, written at the start of this one
 static inline uint32_t mdp_idx(uint32_t pc) { return ((pc >> SLOT_SHIFT) ^ (pc >> (SLOT_SHIFT + lp_mdp_bits))) & ((1u << lp_mdp_bits) - 1); }   // (RVC=1: instructions are 2-byte aligned)
 static std::vector<bool> g_mdp;
@@ -419,7 +348,7 @@ void RealLsu::comb_cal() {
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (auto &w : wires->lsu_awake.wake) w = {};
-  if (msd::on) {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
+  {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
     for (uint32_t k = 0; k < pnxt.stq_count; k++) {
       PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
       if (t.m_init) continue;
@@ -532,13 +461,6 @@ void RealLsu::comb_dcache2lsu_ldq() {
     e.rcause = cause;
     e.blk_idx = blk;
     e.rwait = wait;
-    switch (cause) {
-    case RC_TLB: g_st.rp_tlb++; break;
-    case RC_ADDR: g_st.rp_addr++; break;
-    case RC_HOLD: g_st.rp_hold++; break;
-    case RC_DATA: g_st.rp_data++; break;
-    default: g_st.rp_dc++; break;
-    }
   };
 
   for (int i = 0; i < LD; i++) {
@@ -557,7 +479,6 @@ void RealLsu::comb_dcache2lsu_ldq() {
     }
     if (sl.mmio) {
       e.st = L_MMW;
-      g_st.mmio_ld++;
       continue;
     }
     if (!sl.cand_v && sl.dcblk) {  // not launched (hidden retry owns the port): replay like a bank conflict
@@ -569,17 +490,15 @@ void RealLsu::comb_dcache2lsu_ldq() {
       continue;
     }
     // STLF confirm against the registered STQ entry (full physical address check)
-    g_st.cand++;
     const uint32_t j = sl.cand;
     const PStq &s = pcur.stq[j];
     const uint32_t rank = stq_rank(j, pcur.stq_head);
     switch (stlf_confirm(e, s, rank < pcur.stq_count)) {
-    case CF_REPLAY: e.st = L_RDY; g_st.cand_false++; break;  // false partial match / candidate gone: replay with the full compare
+    case CF_REPLAY: e.st = L_RDY; break;  // false partial match / candidate gone: replay with the full compare
     case CF_NOADDR: park(e, RC_ADDR, j, 0); break;
     case CF_HOLD: park(e, RC_HOLD, j, 0); break;
-    case CF_DATA: park(e, RC_DATA, j, 0); g_st.fwd_wait++; break;
+    case CF_DATA: park(e, RC_DATA, j, 0); break;
     case CF_FWD:  // hit/forward select picks the STQ data
-      g_st.fwd++;
       pw.wbd_v[i] = true;
       pw.wbd_ldq[i] = sl.ldq;
       break;
@@ -593,13 +512,9 @@ void RealLsu::comb_dcache2lsu_ldq() {
     if (idx >= LDQ_SIZE) continue;
     const uint32_t ep = (r.req_id >> LDQ_IDX_WIDTH) & ((1u << EPOCH_W) - 1);
     PLdq &e = pnxt.ldq[idx];
-    if (!(e.st == L_DCW && e.epoch == ep)) {
-      g_st.dc_wasted++;  // request of a load that forwarded / replayed / was killed
-      continue;
-    }
+    if (!(e.st == L_DCW && e.epoch == ep)) continue;   // request of a load that forwarded / replayed / was killed
     e.rtype = (uint8_t)r.replay;
     if (r.replay == ReplayType::HIT) {
-      g_st.hit++;
       if (pw.wbd_v[i]) {
         e.st = L_WBP;
       } else {
@@ -609,7 +524,6 @@ void RealLsu::comb_dcache2lsu_ldq() {
     } else {
       e.miss = 1;
       park(e, RC_DC, 0, replay_wait(r.replay));
-      if (r.replay == ReplayType::CONFLICT) g_st.rp_dc_conflict++; else g_st.rp_dc_mshr++;
     }
   }
 
@@ -637,9 +551,7 @@ void RealLsu::comb_dcache2lsu_stq() {
       s.rwait = 0;
     } else {
       s.rwait = replay_wait(r.replay);
-      g_st.st_replay++;
     }
-    { static const char *tr = std::getenv("LSU_PIPE_WBTRACE"); if (tr && (long long)sim_time >= std::atoll(tr)) std::fprintf(stderr, "WB t=%lld resp id=%d replay=%d\n", (long long)sim_time, (int)r.req_id, (int)r.replay); }
     wb_response(pnxt, r.req_id, r.replay == ReplayType::HIT);
   }
   {  // stores merged into a write-buffer entry complete with their leader's response
@@ -657,7 +569,6 @@ void RealLsu::comb_dcache2lsu_stq() {
           f.rwait = 0;
         } else {
           f.rwait = replay_wait(r.replay);
-          g_st.st_replay++;
         }
       }
     }
@@ -707,9 +618,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     wires->lsu_awake.wake[LD + port].valid = true;
     wires->lsu_awake.wake[LD + port].preg = l.dest_preg;
     early = true;
-    g_st.l3_wake++;
   }
-  if (from_l3) g_st.l3_wb++;
   wb.early_woken = early;
   wires->lsu2exe.wb_req[port].valid = true;
   wires->lsu2exe.wb_req[port].uop = wb;
@@ -722,57 +631,31 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_br_mask = l.br_mask;
   }
   // every load write-back leaves its register without a stale value unless the paths below set one (MMIO / LR-SC loads and the faulting ones do not go there)
-  if (msd::on && (l.pf || l.mmio || l.lrsc) && l.dest_preg != 0) msd::taint[l.dest_preg] = msd::TV{};
-  if (msd::on && !l.pf && !l.mmio && !l.lrsc) {
+  if ((l.pf || l.mmio || l.lrsc) && l.dest_preg != 0) msd::taint[l.dest_preg] = msd::TV{};
+  if (!l.pf && !l.mmio && !l.lrsc) {
     const tb::Fact *f = tbhook::fact_by_rob(l.rob_idx);
     const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
     xlen_t v = 0;
     if (l.atnt) {  // stale base register: the load reads the stale address, its value stays stale (the load is never re-executed with a good address)
       msd::taint[l.dest_preg] = msd::TV{};
-      if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) {
-        msd::set_taint(l.dest_preg, true, v, 1);
-        msd::st.ld_addr_stale++;
-        if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale-address load preg=%d rob=%d pc=%x va=%x pa=%x value=%x true=%x\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value);
-      } else if (plain) {
-        msd::st.ld_addr_same++;
-      }
+      if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) msd::set_taint(l.dest_preg, true, v, 1);
     } else if (defer) {  // first write-back of a speculative load: the value of the load without the stores it passed
       msd::taint[l.dest_preg] = msd::TV{};
       if (plain && ms_load_value(pnxt, l, true, v)) {
-        msd::st.spec_wb++;
         l.stale = v != f->rd_value;
-        if (l.stale) {
-          msd::st.stale++;
-          msd::set_taint(l.dest_preg, true, v, 0);
-          if (msd::trace) std::fprintf(stderr, "MSD t=%lld stale load preg=%d rob=%d pc=%x va=%x pa=%x stale=%x true=%x vio=%d\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.vaddr, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)l.vio);
-        } else {
-          msd::st.silent++;
-        }
+        if (l.stale) msd::set_taint(l.dest_preg, true, v, 0);
       }
     } else {
-      if (second) {
-        if (l.vio) (l.stale ? msd::st.stale_vio : msd::st.silent_vio)++;
-        else if (l.stale) msd::st.stale_no_vio++;
-        l.stale = false;
-      }
+      if (second) l.stale = false;
       msd::release(l.dest_preg);  // the register holds the true value from here on (for consumers issuing from the next cycle) ...
-      if ((msd::mode & 4) && plain && ms_load_value(pnxt, l, false, v)) {
+      if (plain && ms_load_value(pnxt, l, false, v)) {
         // ... unless it was forwarded from a store whose DATA is stale (mode 4: the STQ holds the stale data): the load returns that
         if (v != f->rd_value) {
           msd::set_taint(l.dest_preg, true, v, 1);
-          msd::st.ld_fwd_stale++;
-          if (msd::trace) std::fprintf(stderr, "MSD t=%lld load forwarded stale store data preg=%d rob=%d pc=%llx va=%llx value=%llx true=%llx\n", (long long)sim_time, (int)l.dest_preg, (int)l.rob_idx, (unsigned long long)l.pc, (unsigned long long)l.vaddr, (unsigned long long)v, (unsigned long long)f->rd_value);
-        }
-      } else if ((msd::mode & 8) && plain && ms_load_value(pnxt, l, false, v)) {  // self check of the value logic
-        msd::st.loads_checked++;
-        if (v != f->rd_value) {
-          if (msd::st.loads_check_bad++ < 8)
-            std::fprintf(stderr, "[MS_DATA] load value mismatch t=%lld rob=%d pc=%x pa=%x got=%x want=%x second=%d vio=%d\n", (long long)sim_time, (int)l.rob_idx, (unsigned)l.pc, (unsigned)l.paddr, (unsigned)v, (unsigned)f->rd_value, (int)second, (int)l.vio);
         }
       }
     }
   }
-  if (lp_ms_trace && (defer || second)) std::fprintf(stderr, "MS t=%lld wb ldq=%d rob=%d defer=%d second=%d vio=%d\n", (long long)sim_time, idx, (int)l.rob_idx, (int)defer, (int)second, (int)l.vio);
   if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
     if (l.vio) {
       l.second = 1;
@@ -780,7 +663,6 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     } else {
       l.st = L_SPD;
     }
-    g_st.spec_loads++;
   } else {
     l.st = L_EMPTY;
   }
@@ -861,8 +743,6 @@ void RealLsu::comb_lsu2exe() {
       if (!unknown) {
         l.second = 1;
         l.st = L_WBP;
-        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld rel ldq=%d rob=%d\n", (long long)sim_time, i, (int)l.rob_idx);
-        g_st.spec_released++;
       }
     }
   }
@@ -907,7 +787,7 @@ void RealLsu::comb_exe2lsu() {
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.va_v = 1;
     e.vaddr = inst.result;
-    if (msd::on && (msd::mode & 2)) {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
+    {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
       const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
       e.m_atnt = f && f->is_store && f->vaddr != static_cast<xlen_t>(inst.result);
     }
@@ -936,9 +816,6 @@ void RealLsu::comb_exe2lsu() {
         const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
         if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
         if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
-        g_st.order_violation++;
-        if (lp_ms_trace) std::fprintf(stderr, "MS t=%lld vio ldq=%d rob=%d stq=%u st=%d\n", (long long)sim_time, i, (int)l.rob_idx, j, (int)l.st);
-        g_msp.on_detect(l.rob_idx);
         vio_new++;
         vio_set |= 1ULL << i;
         l.vio = 1;
@@ -950,7 +827,6 @@ void RealLsu::comb_exe2lsu() {
     }
   }
   if (vio_new) {
-    if (vio_new > 1) g_st.vio_multi++;
     g_trn |= vio_set;
   }
   int nl = 0;
@@ -961,7 +837,7 @@ void RealLsu::comb_exe2lsu() {
     PLdq &e = pnxt.ldq[inst.ldq_idx];
     if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
     e.vaddr = inst.result;
-    if (msd::on && (msd::mode & 2)) {  // a load whose base register was stale reads the stale address
+    {  // a load whose base register was stale reads the stale address
       const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
       e.atnt = f && f->is_load && f->vaddr != static_cast<xlen_t>(inst.result);
     }
@@ -979,7 +855,6 @@ void RealLsu::comb_exe2lsu() {
     pw.l1[nl].need_tlb = true;
     pw.l1[nl].ldq = inst.ldq_idx;
     nl++;
-    g_st.l1_new++;
   }
 }
 
@@ -1007,7 +882,6 @@ void RealLsu::comb_tlb_out() {
     pw.l1[n].need_tlb = !e.pa_v;
     pw.l1[n].ldq = src;
     n++;
-    g_st.l1_replay++;
   }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
@@ -1016,7 +890,6 @@ void RealLsu::comb_tlb_out() {
     rq.vaddr = pnxt.ldq[pw.l1[k].ldq].vaddr;
     rq.entry_idx = pw.l1[k].ldq;
     rq.wait_idx = pw.l1[k].ldq;
-    g_st.l1_tlb++;
   }
 
   int ns = 0;
@@ -1029,7 +902,6 @@ void RealLsu::comb_tlb_out() {
       pw.s1[ns].replay = true;
       pw.s1[ns].stq = j;
       ns++;
-      g_st.sta_replay++;
     }
   }
   for (int k = 0; k < STA; k++) {
@@ -1108,7 +980,6 @@ void RealLsu::comb_tlb_in_stq() {
       const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
       if (stq_rank(j, pcur.stq_head) >= older) continue;  // store is younger than the load
       if (range_rel(l.vaddr, ld_width(l.func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT) continue;
-      g_st.order_violation++;
       l.st = L_RDY;  // replay (a flush from the load would be needed if its result had been consumed)
     }
   }
@@ -1197,7 +1068,7 @@ void RealLsu::comb_dis2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::comb_flush() {
   if (wires->rob_bcast.flush) {
-    if (msd::on) msd::clear_all();  // every stale value dies with the flush
+    msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
             l.st = L_EMPTY;
     }
@@ -1211,7 +1082,6 @@ void RealLsu::comb_flush() {
   }
 
   const DecBroadcastIO &dec = wires->dec_bcast;
-  if (lp_ms_trace && (dec.mispred || wires->rob_bcast.flush)) std::fprintf(stderr, "MS t=%lld %s\n", (long long)sim_time, wires->rob_bcast.flush ? "flush" : "mispred");
   if (dec.mispred) {
     for (PLdq &l : pnxt.ldq)
       if (l.st != L_EMPTY && (l.br_mask & dec.br_mask) != 0) {
@@ -1272,14 +1142,12 @@ void RealLsu::comb_lsu2dcache_ldq() {
     // (12-bit compare, ready with the DTLB result); a port with a pending DCache hidden retry does not launch.
     if (l.hit && !l.mmio && !l.cand_v && wires->in.dcache2lsu.load_retry_busy[k]) {
       sl.dcblk = 1;  // the port belongs to the DCache hidden retry this cycle
-      g_st.rblk++;
     } else if (l.hit && !l.mmio && !l.cand_v) {
       e.epoch = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
       ports[k].valid = true;
       ports[k].addr = l.paddr;
       ports[k].req_id = (uint32_t(e.epoch) << LDQ_IDX_WIDTH) | l.ldq;
       ports[k].replay = e.rtype != (uint8_t)ReplayType::HIT;
-      g_st.dc_launch++;
     }
     sl.epoch = e.epoch;
   }
@@ -1349,7 +1217,7 @@ void RealLsu::comb_lsu2dcache_stq() {
         }
       }
       if (!ready) continue;
-      if (blocked) { g_st.st_conflict++; continue; }
+      if (blocked) { continue; }
       PStq &lead = pnxt.stq[w.mem[0]];
       auto &p = ports[free_port[used++]];
       p.valid = true;
@@ -1364,12 +1232,9 @@ void RealLsu::comb_lsu2dcache_stq() {
         f.iss = 1;
         f.mf = 1;
         f.ml = w.mem[0];
-        g_st.st_merge_pair++;
       }
-      { static const char *tr = std::getenv("LSU_PIPE_WBTRACE"); if (tr && (long long)sim_time >= std::atoll(tr)) std::fprintf(stderr, "WB t=%lld issue e=%d lead=%d cnt=%d port=%d\n", (long long)sim_time, order[k], (int)w.mem[0], (int)w.cnt, free_port[used - 1]); }
       pnxt.wb[order[k]].st = 1;
       issued_now[order[k]] = true;
-      g_st.st_drain++;
     }
     wb_insert(pnxt, C, n, issued_now);
   }
@@ -1391,114 +1256,16 @@ void RealLsu::comb_check() {
   }
   LP_PORT_CHECK(ret, RETIRE_PORTS, "stq_retire");
 
-  static const char *const lsu_dump_env = std::getenv("LSU_PIPE_DUMP");   // (read once: getenv per cycle cost ~2%)
-  if (const char *d = lsu_dump_env) {  // debug aid: dump the queues at one cycle (env = cycle number)
-    if ((long long)sim_time == std::atoll(d)) {
-      for (int i = 0; i < LDQ_SIZE; i++) {
-        const PLdq &l = pnxt.ldq[i];
-        if (l.st == L_EMPTY) continue;
-        std::fprintf(stderr, "LDQ[%d] st=%d cause=%d blk=%d wait=%d rob=%d/%d va=0x%x pa=%d/0x%x mmio=%d pf=%d snap=%d/%d epoch=%d\n", i, (int)l.st,
-                     (int)l.rcause, (int)l.blk_idx, (int)l.rwait, (int)l.rob_idx, (int)l.rob_flag, (unsigned)l.vaddr, (int)l.pa_v,
-                     (unsigned)l.paddr, (int)l.mmio, (int)l.pf, (int)l.snap_idx, (int)l.snap_flag, (int)l.epoch);
-      }
-      std::fprintf(stderr, "STQ head=%d/%d cnt=%d ccnt=%d commit=%d unc=%d\n", (int)pnxt.stq_head, (int)pnxt.stq_head_flag, (int)pnxt.stq_count,
-                   (int)pnxt.stq_ccount, (int)pnxt.stq_commit, (int)nxt.uncached_unit.valid);
-      for (int e = 0; e < WB_MAX; e++)
-        if (pnxt.wb[e].v) std::fprintf(stderr, "WBE[%d] st=%d line=%x seq=%llu cnt=%d mem=%d,%d mergeable=%d\n", e, (int)pnxt.wb[e].st, (unsigned)pnxt.wb[e].line, (unsigned long long)pnxt.wb[e].seq, (int)pnxt.wb[e].cnt, (int)pnxt.wb[e].mem[0], (int)pnxt.wb[e].mem[1], (int)pnxt.wb[e].mergeable);
-      for (uint32_t k = 0; k < pnxt.stq_count; k++) {
-        const PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
-        std::fprintf(stderr, "STQ[%d] rob=%d va=%d pa=%d d=%d pf=%d trp=%d wbp=%d wbd=%d cmt=%d iss=%d mmw=%d done=%d sup=%d mmio=%d lrsc=%d paddr=0x%x rw=%d\n",
-                     (int)((pnxt.stq_head + k) % STQ_SIZE), (int)t.rob_idx, (int)t.va_v, (int)t.pa_v, (int)t.data_v, (int)t.pf, (int)t.trp, (int)t.wbp,
-                     (int)t.wbd, (int)t.cmt, (int)t.iss, (int)t.mmw, (int)t.done, (int)t.suppress, (int)t.mmio, (int)t.lrsc, (unsigned)t.paddr, (int)t.rwait);
-      }
-      for (int r = 0; r < RP_MAX; r++) std::fprintf(stderr, "RP[%d] v=%d ldq=%d\n", r, (int)pnxt.rp[r].v, (int)pnxt.rp[r].ldq);
-      std::fprintf(stderr, "srp v=%d stq=%d; rob head valid=%d idx=%d inc_valid=%d inc_idx=%d\n", (int)pnxt.srp.v, (int)pnxt.srp.ldq,
-                   (int)wires->rob_bcast.head_valid, (int)wires->rob_bcast.head_rob_idx, (int)wires->rob_bcast.head_incomplete_valid,
-                   (int)wires->rob_bcast.head_incomplete_rob_idx);
-    }
-  }
   // DCache response watchdog: a request whose response never arrives (lost bank-retry latch in the DCache) is replayed
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_DCW) { if (e.wd) e.wd = 0; continue; }   // (no store to an idle entry: it would dirty the line every cycle)
-    if (++e.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] load ldq=%d stuck in DCW at cycle %lld\n", i, (long long)sim_time); } else { e.wd = 0; e.st = L_RDY; g_st.wd_ld++; } }
+    if (++e.wd == 63) { e.wd = 0; e.st = L_RDY; }
   }
   for (int j = 0; j < STQ_SIZE; j++) {
     PStq &t = pnxt.stq[j];
     if (!t.iss) { if (t.wd) t.wd = 0; continue; }
-    if (++t.wd == 63) { static const bool nowd = std::getenv("LSU_PIPE_NOWD"); if (nowd) { std::fprintf(stderr, "[WD] store stq=%d stuck issued at cycle %lld\n", j, (long long)sim_time); } else { t.wd = 0; t.iss = 0; t.rwait = 0; g_st.wd_st++; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } } }
-  }
-  if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
-    std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
-    for (int p = 0; p < LD; p++)
-      if (wires->lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)wires->lsu2exe.wb_req[p].uop.rob_idx, (int)wires->lsu2exe.wb_req[p].uop.dest_preg,
-                                                       (int)wires->lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)wires->lsu2exe.wb_req[p].uop.br_mask),
-        std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)wires->lsu2exe.wb_req[p].uop.result, (unsigned)wires->lsu2exe.wb_req[p].uop.diag_val,
-                     (int)wires->lsu2exe.wb_req[p].uop.page_fault_load, (int)wires->lsu2exe.wb_req[p].uop.page_fault_store);
-    std::fprintf(stderr, " sta:");
-    for (int p = 0; p < STA; p++)
-      if (wires->lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)wires->lsu2exe.sta_wb_req[p].uop.rob_idx, (unsigned long long)wires->lsu2exe.sta_wb_req[p].uop.br_mask),
-        std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)wires->lsu2exe.sta_wb_req[p].uop.result, (unsigned)wires->lsu2exe.sta_wb_req[p].uop.diag_val,
-                     (int)wires->lsu2exe.sta_wb_req[p].uop.page_fault_store);
-    std::fprintf(stderr, " dl:");
-    for (int p = 0; p < LD; p++) {
-      const auto &q = wires->out.lsu2dcache.req_ports.load_ports[p];
-      if (q.valid) std::fprintf(stderr, " %d=%x/%x", p, (unsigned)q.addr, (unsigned)(q.req_id & 0x7fffffffu));
-    }
-    std::fprintf(stderr, " ds:");
-    for (int p = 0; p < STA; p++) {
-      const auto &q = wires->out.lsu2dcache.req_ports.store_ports[p];
-      if (q.valid) std::fprintf(stderr, " %d=%x/%d", p, (unsigned)q.addr, (int)q.req_id);
-    }
-    std::fprintf(stderr, " mmu:");
-    for (int p = 0; p < LD; p++)
-      if (wires->lsu2mmu_io.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)wires->lsu2mmu_io.ldq_req[p].entry_idx);
-    for (int p = 0; p < STA; p++)
-      if (wires->lsu2mmu_io.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)wires->lsu2mmu_io.stq_req[p].entry_idx);
-    std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)wires->lsu2dis.stq_free, (int)wires->lsu2dis.ldq_free, (int)wires->lsu2dis.stq_tail,
-                 (int)wires->lsu2dis.stq_tail_flag, (int)wires->lsu2rob.committed_store_pending);
-    {
-      unsigned dsa = 0, dla = 0, cm = 0;
-      for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) dsa |= (unsigned)wires->dis2lsu.alloc_req[i] << i;
-      for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) dla |= (unsigned)wires->dis2lsu.ldq_alloc_req[i] << i;
-      for (int i = 0; i < COMMIT_WIDTH; i++) cm |= (unsigned)wires->rob_commit.commit_entry[i].valid << i;
-      std::fprintf(stderr, " b: mp=%d fl=%d cl=%llx dsa=%x dla=%x cm=%x", (int)wires->dec_bcast.mispred, (int)wires->rob_bcast.flush,
-                   (unsigned long long)wires->dec_bcast.clear_mask, dsa, dla, cm);
-    }
-    std::fprintf(stderr, " in:");
-    for (int p = 0; p < LD; p++)
-      if (wires->mmu2lsu_io.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)wires->mmu2lsu_io.ldq_resp[p].result, (unsigned)wires->mmu2lsu_io.ldq_resp[p].paddr);
-    for (int p = 0; p < STA; p++)
-      if (wires->mmu2lsu_io.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)wires->mmu2lsu_io.stq_resp[p].result, (unsigned)wires->mmu2lsu_io.stq_resp[p].paddr);
-    for (int p = 0; p < LD; p++) {
-      const auto &r = wires->in.dcache2lsu.resp_ports.load_resps[p];
-      if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);
-    }
-    for (int p = 0; p < STA; p++) {
-      const auto &r = wires->in.dcache2lsu.resp_ports.store_resps[p];
-      if (r.valid) std::fprintf(stderr, " sr%d=%d/%d", p, (int)r.req_id, (int)r.replay);
-    }
-    if (wires->in.dcache2lsu.mshr_fill) std::fprintf(stderr, " fill=%x", (unsigned)(wires->in.dcache2lsu.mshr_fill_addr >> 6));
-    for (int p = 0; p < LD; p++) if (wires->in.dcache2lsu.load_retry_busy[p]) std::fprintf(stderr, " rb%d", p);
-    for (int p = 0; p < STA; p++) if (wires->in.dcache2lsu.store_retry_busy[p]) std::fprintf(stderr, " sb%d", p);
-    std::fprintf(stderr, " ai:");
-    for (int p = 0; p < MAX_LDQ_DISPATCH_WIDTH; p++)
-      if (wires->lsu2dis.ldq_alloc_valid[p]) std::fprintf(stderr, " %d", (int)wires->lsu2dis.ldq_alloc_idx[p]);
-    std::fprintf(stderr, " x:");
-    for (int p = 0; p < LSU_SDU_COUNT; p++)
-      if (wires->exe2lsu.sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)wires->exe2lsu.sdu_req[p].uop.stq_idx);
-    for (int p = 0; p < LSU_AGU_COUNT; p++)
-      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_STA)
-        std::fprintf(stderr, " A%d=%d", p - LD, (int)wires->exe2lsu.agu_req[p].uop.stq_idx);
-    for (int p = 0; p < LSU_AGU_COUNT; p++)
-      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_LOAD)
-        std::fprintf(stderr, " G%d=%d", p, (int)wires->exe2lsu.agu_req[p].uop.ldq_idx);
-    if (const char *si = std::getenv("LSU_PIPE_STQ")) {
-      const PStq &q = pcur.stq[std::atoi(si)];  // registers at the start of the cycle (RTL prints the registers)
-      std::fprintf(stderr, " Q[%s]: va=%d pa=%d dv=%d pf=%d wbp=%d wbd=%d cmt=%d iss=%d done=%d", si, (int)q.va_v, (int)q.pa_v, (int)q.data_v, (int)q.pf,
-                   (int)q.wbp, (int)q.wbd, (int)q.cmt, (int)q.iss, (int)q.done);
-    }
-    std::fprintf(stderr, "\n");
+    if (++t.wd == 63) { t.wd = 0; t.iss = 0; t.rwait = 0; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } }
   }
   // wake-up pass
   uint32_t full_wakes = 0;
@@ -1527,10 +1294,6 @@ void RealLsu::comb_check() {
       if ((pw.ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)
         const PStq &s = pnxt.stq[e.blk_idx];
         const Conf c = stlf_confirm(e, s, stq_rank(e.blk_idx, pcur.stq_head) < pcur.stq_count && !(pw.ev_ret & b));  // B
-        if (s.va_v && range_rel(e.vaddr, ld_width(e.func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT)
-          g_st.unk_wait_disjoint++;  // a load that had passed the unknown address would have been right
-        else
-          g_st.unk_wait_overlap++;   // ... would have violated the memory order
         if (c == CF_REPLAY) e.st = L_RDY;
         else if (c == CF_HOLD) e.rcause = RC_HOLD;
         else if (c == CF_DATA) e.rcause = RC_DATA;

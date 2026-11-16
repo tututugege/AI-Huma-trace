@@ -157,7 +157,7 @@ void Ren::comb_rename() {
     // left the stage, so it must not be written.
     if (!inst_valid[i]) continue;
     // EXP-020: a newly allocated physical register holds no stale value; the taint of a squashed wrong-path producer (a mispredict does not clear the table) must not leak to its next owner
-    if (msd::on && inst_r[i].dest_en && !elim[i] && alloc_reg[i] != 0 && alloc_reg[i] < TAG_NUM) msd::taint[alloc_reg[i]] = msd::TV{};
+    if (inst_r[i].dest_en && !elim[i] && alloc_reg[i] != 0 && alloc_reg[i] < TAG_NUM) msd::taint[alloc_reg[i]] = msd::TV{};
     auto lookup = [&](int areg, bool fp) {
       wire<PRF_IDX_WIDTH> p = 0;
       if (fp) p = fp_spec_RAT[areg]; else

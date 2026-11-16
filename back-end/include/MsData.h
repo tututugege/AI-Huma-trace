@@ -19,13 +19,8 @@
 
 namespace msd {
 
-inline const bool on =   // XLEN-wide since EXP-040 (the evaluator below is RV32IMAB + RV64IM; what it does not know stays untainted)
-                       lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) != 0 && lsu_pipe_env_mask("LSU_MEMSPEC", CFG_LSU_MEMSPEC) != 0;
-// LSU_MS_DATA bit mask: 1 = branches resolve on stale values (mispredict redirect), 2 = tainted loads/stores use the stale address (not
-// modelled yet: counted only), 4 = tainted store data goes into the STQ, 8 = evaluator self check against the facts (debug).
-inline const unsigned mode = lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA) == 1 ? 1u | 4u : lsu_pipe_env_mask("LSU_MS_DATA", CFG_LSU_MS_DATA);
-inline const bool trace = std::getenv("LSU_MS_DTRACE") != nullptr;
-
+// Fixed configuration (the LSU_MS_DATA mask sweep was removed): branches resolve on stale values (RTL-only mispredict redirect),
+// loads / stores with a stale base register use the stale address, stale store data goes into the STQ.
 struct TV {
   bool t = false;
   uint8_t depth = 0;  // 0 = the stale load itself
@@ -41,39 +36,6 @@ inline void release(uint32_t preg) {
 }
 inline bool live(uint32_t preg) { return taint[preg].t && (taint[preg].until == 0 || (long long)sim_time <= taint[preg].until); }
 
-struct Stats {
-  uint64_t loads_checked = 0, loads_check_bad = 0;                       // self check of the load value logic (non-speculative loads)
-  uint64_t spec_wb = 0, stale = 0, silent = 0, stale_no_vio = 0;          // first write-backs of speculative loads
-  uint64_t stale_vio = 0, silent_vio = 0;
-  uint64_t consumers = 0, masked = 0, unmodelled = 0;                    // consumers of a tainted register
-  uint64_t br = 0, br_flip = 0, br_flip_to_mispred = 0, br_flip_to_correct = 0, jalr_flip = 0;
-  uint64_t ld_addr_stale = 0, ld_addr_same = 0;                          // loads at a stale address: value differs from / equals the true one
-  uint64_t ld_addr = 0, st_addr = 0, st_data = 0, ld_fwd_stale = 0;      // tainted address of a load / store, tainted store data, loads that forwarded it
-  uint64_t dep_depth[8] = {};                                            // chain length of results that differ from the true value
-  uint64_t br_depth[8] = {};
-  uint64_t chk_n = 0, chk_bad = 0;                                       // evaluator self check
-  ~Stats() {
-    const char *e = std::getenv("LSU_PIPE_STATS");
-    if (!on || !e || e[0] == '0') return;
-    std::fprintf(stderr,
-                 "[MS_DATA] spec_wb=%llu stale=%llu (vio=%llu) silent=%llu (vio=%llu) stale_without_vio=%llu | load check %llu bad %llu\n",
-                 (unsigned long long)spec_wb, (unsigned long long)stale, (unsigned long long)stale_vio, (unsigned long long)silent,
-                 (unsigned long long)silent_vio, (unsigned long long)stale_no_vio, (unsigned long long)loads_checked, (unsigned long long)loads_check_bad);
-    std::fprintf(stderr,
-                 "[MS_DATA] consumers=%llu masked=%llu unmodelled=%llu | branches=%llu flip=%llu (to_mispredict=%llu to_correct=%llu) jalr_flip=%llu | "
-                 "tainted ld_addr=%llu (value differs %llu, same %llu) st_addr=%llu st_data=%llu (forwarded to a load: %llu) | eval self-check %llu bad %llu\n",
-                 (unsigned long long)consumers, (unsigned long long)masked, (unsigned long long)unmodelled, (unsigned long long)br,
-                 (unsigned long long)br_flip, (unsigned long long)br_flip_to_mispred, (unsigned long long)br_flip_to_correct,
-                 (unsigned long long)jalr_flip, (unsigned long long)ld_addr, (unsigned long long)ld_addr_stale, (unsigned long long)ld_addr_same, (unsigned long long)st_addr, (unsigned long long)st_data, (unsigned long long)ld_fwd_stale,
-                 (unsigned long long)chk_n, (unsigned long long)chk_bad);
-    std::fprintf(stderr, "[MS_DATA] chain length of differing results (1..7+):");
-    for (int i = 1; i < 8; i++) std::fprintf(stderr, " %llu", (unsigned long long)dep_depth[i]);
-    std::fprintf(stderr, " | branch flips by chain length:");
-    for (int i = 1; i < 8; i++) std::fprintf(stderr, " %llu", (unsigned long long)br_depth[i]);
-    std::fprintf(stderr, "\n");
-  }
-};
-inline Stats st;
 
 inline void clear_all() {
   for (auto &t : taint) t = TV{};
@@ -322,19 +284,15 @@ inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
   taint[preg].until = 0;
 }
 
-// `kind`: 0 ALU/MUL/DIV/CSR/FPU (any uop with a destination), 1 AGU, 2 SDU, 3 BRU.  Returns nothing; the effects are written into `inst`
-// (BRU: mispred / br_taken / diag_val; SDU: result = store data; AGU: result stays the true address unless mode bit 2 is set).
+// Effects are written into `inst` (BRU: mispred / br_taken / diag_val; SDU: result = store data; AGU / load: result = the stale address).
 template <class Inst>
-inline void exec(int kind, Inst &inst) {
+inline void exec(Inst &inst) {
   const bool d_en = inst.dest_en && inst.dest_preg != 0;
   const auto &u = *inst.operator->();
   const bool s1 = u.src1_en && u.src1_preg != 0 && live(u.src1_preg);
   const bool s2 = u.src2_en && u.src2_preg != 0 && live(u.src2_preg);
   if (!s1 && !s2) {
-    if (d_en && inst.op != UOP_LOAD) {
-      if (trace && taint[inst.dest_preg].t) std::fprintf(stderr, "MSD t=%lld clean producer rob=%u op=%d clears p%u\n", (long long)sim_time, (unsigned)inst.rob_idx, (int)inst.op, (unsigned)inst.dest_preg);
-      taint[inst.dest_preg] = TV{};
-    }  // a clean producer: its register holds the true value
+    if (d_en && inst.op != UOP_LOAD) taint[inst.dest_preg] = TV{};   // a clean producer: its register holds the true value
     return;
   }
   const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
@@ -342,64 +300,42 @@ inline void exec(int kind, Inst &inst) {
     if (d_en && inst.op != UOP_LOAD) taint[inst.dest_preg] = TV{};
     return;
   }
-  st.consumers++;
   const X a = s1 ? taint[u.src1_preg].v : f->rs1_value;
   const X b = s2 ? taint[u.src2_preg].v : f->rs2_value;
   const uint8_t depth = (uint8_t)(std::max(s1 ? (int)taint[u.src1_preg].depth : 0, s2 ? (int)taint[u.src2_preg].depth : 0) + 1);
-  const uint8_t dd = depth > 7 ? 7 : depth;
   const uint32_t w = f->inst, opc = w & 0x7f, f3 = mbits(w, 14, 12);
   switch (inst.op) {
   case UOP_ADD:
   case UOP_MUL:
   case UOP_DIV: {
     X r;
-    if (!eval_alu(w, f->pc, a, b, r)) { st.unmodelled++; if (d_en) taint[inst.dest_preg] = TV{}; return; }
+    if (!eval_alu(w, f->pc, a, b, r)) { if (d_en) taint[inst.dest_preg] = TV{}; return; }
     if (d_en) {
-      if (f->rd_valid && r != f->rd_value) { set_taint(inst.dest_preg, true, r, depth); st.dep_depth[dd]++; }
-      else { taint[inst.dest_preg] = TV{}; st.masked++; }
+      if (f->rd_valid && r != f->rd_value) set_taint(inst.dest_preg, true, r, depth);
+      else taint[inst.dest_preg] = TV{};
     }
     return;
   }
   case UOP_BR: {
     bool taken;
-    if (!eval_branch(f3, a, b, taken)) { st.unmodelled++; return; }
-    st.br++;
-    if (taken != f->br_taken) {
-      st.br_flip++;
-      st.br_depth[dd]++;
-      if (mode & 1) {
-        const bool pred_taken = u.ftq_pred_taken;
-        const X pc = u.pc, pc_br = pc + xs((int32_t)(uint32_t)u.imm);
-        const X pred_target = pred_taken ? (X)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
-        const bool mis = !((taken && pred_taken && pred_target == pc_br) || (!taken && !pred_taken));
-        if (mis && !inst.mispred) st.br_flip_to_mispred++;
-        if (!mis && inst.mispred) st.br_flip_to_correct++;
-        inst.mispred = mis;
-        inst.br_taken = taken;
-        inst.diag_val = taken ? pc_br : pc + ilen_of(u.is_rvc);
-        if (trace) std::fprintf(stderr, "MSD t=%lld branch rob=%u pc=%llx flip true=%d stale=%d mispred=%d | s1=%d(p%u v=%llx) s2=%d(p%u v=%llx) rs1=%llx rs2=%llx\n", (long long)sim_time, (unsigned)inst.rob_idx, (unsigned long long)pc, (int)f->br_taken, (int)taken, (int)mis, (int)s1, (unsigned)u.src1_preg, (unsigned long long)a, (int)s2, (unsigned)u.src2_preg, (unsigned long long)b, (unsigned long long)f->rs1_value, (unsigned long long)f->rs2_value);
-      }
-    } else {
-      st.masked++;
-    }
+    if (!eval_branch(f3, a, b, taken) || taken == f->br_taken) return;
+    const bool pred_taken = u.ftq_pred_taken;
+    const X pc = u.pc, pc_br = pc + xs((int32_t)(uint32_t)u.imm);
+    const X pred_target = pred_taken ? (X)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
+    inst.mispred = !((taken && pred_taken && pred_target == pc_br) || (!taken && !pred_taken));
+    inst.br_taken = taken;
+    inst.diag_val = taken ? pc_br : pc + ilen_of(u.is_rvc);
     return;
   }
   case UOP_JUMP: {
     if (opc != 0x67) return;  // jal has no source
     const X tgt = (a + mimmI(w)) & ~(X)1;
-    st.br++;
-    if (tgt != f->next_pc) {
-      st.jalr_flip++;
-      st.br_depth[dd]++;
-      if (mode & 1) {
-        const bool pred_taken = u.ftq_pred_taken;
-        const X pred_target = pred_taken ? (X)u.ftq_next_pc : (X)u.pc + ilen_of(u.is_rvc);
-        const bool mis = !(pred_taken && pred_target == tgt);
-        inst.mispred = mis;
-        inst.br_taken = true;
-        inst.diag_val = tgt;
-      }
-    }
+    if (tgt == f->next_pc) return;
+    const bool pred_taken = u.ftq_pred_taken;
+    const X pred_target = pred_taken ? (X)u.ftq_next_pc : (X)u.pc + ilen_of(u.is_rvc);
+    inst.mispred = !(pred_taken && pred_target == tgt);
+    inst.br_taken = true;
+    inst.diag_val = tgt;
     return;
   }
   case UOP_LOAD:
@@ -407,54 +343,16 @@ inline void exec(int kind, Inst &inst) {
     // loads: I-type immediate (int 0x03, FP 0x07); stores: S-type (int 0x23, FP 0x27); AMO / LR / SC (0x2f) have none
     const X imm = inst.op == UOP_LOAD ? ((opc == 0x03 || opc == 0x07) ? mimmI(w) : 0) : ((opc == 0x23 || opc == 0x27) ? mimmS(w) : 0);
     const X va = a + imm;
-    if (va != f->vaddr) {
-      (inst.op == UOP_LOAD ? st.ld_addr : st.st_addr)++;
-      if (mode & 2) inst.result = va;
-    } else {
-      st.masked++;
-    }
+    if (va != f->vaddr) inst.result = va;
     return;
   }
   case UOP_STD: {
-    if (opc != 0x23) { st.unmodelled++; return; }
-    if (b != f->rs2_value) {
-      st.st_data++;
-      if (mode & 4) inst.result = b;
-    } else {
-      st.masked++;
-    }
+    if (opc == 0x23 && b != f->rs2_value) inst.result = b;
     return;
   }
   default:
-    st.unmodelled++;
     if (d_en) taint[inst.dest_preg] = TV{};
     return;
-  }
-}
-
-// debug: check the evaluator on every untainted ALU/branch uop against the facts (mode bit 8)
-template <class Inst>
-inline void self_check(Inst &inst) {
-  if (!(mode & 8)) return;
-  const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
-  if (!f || f->blocked != tb::Blocked::None || f->trapped) return;
-  const auto &u = *inst.operator->();
-  const uint32_t w = f->inst;
-  if (inst.op == UOP_ADD || inst.op == UOP_MUL || inst.op == UOP_DIV) {
-    const uint32_t opc = w & 0x7f;
-    if (opc != 0x33 && opc != 0x13 && opc != 0x37 && opc != 0x17) return;
-    if (!u.src1_en && !u.src2_en && opc != 0x37 && opc != 0x17) return;  // link ADD of jal/jalr
-    X r;
-    if (!f->rd_valid || !eval_alu(w, f->pc, f->rs1_value, f->rs2_value, r)) return;
-    st.chk_n++;
-    if (r != f->rd_value) {
-      if (st.chk_bad++ < 5) std::fprintf(stderr, "[MS_DATA] eval mismatch inst=%08x pc=%llx a=%llx b=%llx got=%llx want=%llx\n", w, (unsigned long long)f->pc, (unsigned long long)f->rs1_value, (unsigned long long)f->rs2_value, (unsigned long long)r, (unsigned long long)f->rd_value);
-    }
-  } else if (inst.op == UOP_BR) {
-    bool t;
-    if (!eval_branch(mbits(w, 14, 12), f->rs1_value, f->rs2_value, t)) return;
-    st.chk_n++;
-    if (t != f->br_taken) st.chk_bad++;
   }
 }
 

@@ -9,8 +9,6 @@
 #include <cstdio>
 #include <cstdlib>
 
-void g_msp_flush_commit(unsigned rob_idx, long long younger);  // RealLsuPipe.cpp: violation penalty statistics (EXP-019)
-void g_msp_tick(bool committed);
 
 namespace {
 inline bool rob_is_store(const Uop &u) { return u.tma.mem_commit_is_store; }
@@ -236,11 +234,6 @@ void Rob::comb_commit() {
     single_actions(u);
   }
 
-  {
-    bool any = false;
-    for (int i = 0; i < ROB_BANK_NUM; i++) any |= (bool)w.rob_commit.commit_entry[i].valid;
-    g_msp_tick(any);
-  }
 
   w.rob2dis.enq_idx = enq_ptr;
   w.rob2dis.rob_flag = enq_flag;
@@ -340,7 +333,6 @@ void Rob::comb_commit_compact() {
   }
   if (single) single_actions(cent(c_head).uop);
 
-  g_msp_tick(n > 0);
 
   // the dispatch stage allocates from the tail of the registered state (entries freed this cycle are reused next cycle)
   const int tail = (c_head + c_count) % ROB_NUM;
@@ -391,10 +383,6 @@ void Rob::single_actions(const Uop &u) {
     else if (t == FENCE_I) bc.fence_i = true;
     else if (u.flush_pipe) {  // memory-order violator (LSU_MEMSPEC): no CSR/MMU action, refetch from pc+4
       bc.pc = pc;
-      long long younger = -1;
-      for (int b = 0; b < ROB_BANK_NUM; b++)
-        for (int l = 0; l < ROB_LINE_NUM; l++) younger += entry[b][l].valid;
-      g_msp_flush_commit(u.rob_idx, younger);
     }
     else Assert(0 && "Rob: unexpected single-commit instruction");
   }

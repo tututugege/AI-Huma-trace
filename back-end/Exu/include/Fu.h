@@ -70,10 +70,7 @@ inline void compute(FuKind kind, ExuInst &inst) {
     break;
   }
   fp_trap(inst);
-  if (msd::on) {
-    msd::self_check(inst);
-    msd::exec(0, inst);
-  }
+  msd::exec(inst);
 }
 
 // F/D: the function model decides what traps (mstatus.FS = Off, reserved rounding mode, ...): an FP-class uop whose fact says
