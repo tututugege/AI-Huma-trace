@@ -197,3 +197,22 @@ I-cache module's own steps (icache_top.cpp, written per the RTL), Exu's FU state
   all four checks. `--emit` (mem, front) prints the lines of the scanned code; `--write` rewrites the generated block.
 The memory order changed in one place (the write buffer's AXI requests now before the MSHR's: the priority list puts
 the write buffer first; they drive different masters and both depend on stage 2 only).
+
+## Front end as objects (exp/front-obj)
+
+The front end kept its state at file scope: the four FIFOs (`g_inst_fifo`, `g_ptab`, `g_f2b_fifo`,
+`g_fetch_addr_fifo_model`) behind free functions (`instruction_FIFO_read`, ...), the I-cache top (`icache`, `g_tags`,
+`g_valid`, `g_lookup`, `g_bind`, `g_edge`, four `extern` port pointers, a fill-hook function pointer, a function-local
+static rotation), `g_regs`, `bpu_pipe`, `front_ctx`, the FE_IPF statics. Now:
+* `FrontCore` (front-end/front_core.h), owned by FrontTop (`core_`), holds all of it: `FrontRegs q_`, `bpu_pipe`,
+  `fetch_addr_fifo`, `inst_fifo`, `ptab`, `f2b_fifo`, `icache`, `ipf`, `ctx`; one cycle is `seq_read` / `comb` (the
+  generated FrontComb phases) / `seq_write`.
+* `ICacheTop` (front-end/icache/icache_top.h): the I-cache top as a class; FrontTop binds its ports with `set_ports`
+  (they take effect at its next step, as before) instead of the extern globals; the prefetcher's fill report is a
+  member callback.
+* The FIFO classes are in front-end/fifo/front_fifo.h (the wrappers are gone); the predecode checker, which has no
+  state, is one comb function `predecode_checker_comb(in, out)` (its seq_read / seq_write were copies / empty).
+* FastWarm reaches the BPU / I-cache / ITLB through `cpu.front.warm_*`.
+FrontComb keeps references to the modules (`bpu_pipe`, `fetch_addr_fifo`, ...): the scan resolves their method calls
+through these types (a method's non-const parameters are its outputs), so the contracts see the same signals; the
+FIFO / I-cache methods' pure outputs are now seen as writes only (read_fifos' declared reads shrank accordingly).

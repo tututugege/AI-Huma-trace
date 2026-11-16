@@ -1,33 +1,35 @@
 #include "FrontTop.h"
 #include "BackTop.h"
 #include "config.h"
+#include "front_core.h"
 #include "front_module.h"
 #include "train_IO.h"
 #include "util.h"
 #include <cstring>
 #include <memory>
 
-namespace {
-inline void sync_icache_ptw_ports(const FrontTop &front) {
-  icache_ptw_walk_port = front.icache_ptw_walk_port;
-  icache_mem_req_port = front.icache_mem_req_port;
-  icache_mem_resp_port = front.icache_mem_resp_port;
-  icache_mem_read_port = front.icache_mem_read_port;
-  icache_mem_read_q = front.icache_mem_read_q;
-}
-} // namespace
-
 FrontTop::FrontTop()
-    : read_data_(std::make_unique<FrontReadData>()),
+    : core_(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()),
       update_req_(std::make_unique<FrontUpdateRequest>()) {}
+
+// the I-cache's ports (SimCpu binds them on FrontTop; they take effect at the I-cache's next step)
+void FrontTop::bind_ports() {
+  ICacheTop::Ports p;
+  p.ptw_walk = icache_ptw_walk_port;
+  p.probe_req = icache_mem_req_port;
+  p.probe_resp = icache_mem_resp_port;
+  p.read = icache_mem_read_port;
+  p.read_q = icache_mem_read_q;
+  core_->icache.set_ports(p);
+}
 
 FrontTop::~FrontTop() = default;
 
 void FrontTop::init() {
   CsrStatusIO *bound_csr = in.csr_status;
-  sync_icache_ptw_ports(*this);
-  front_set_context(ctx);
-  icache_set_context(ctx);
+  bind_ports();
+  core_->ctx = ctx;
+  core_->icache.set_context(ctx);
   std::memset(&in, 0, sizeof(in));
   std::memset(&out, 0, sizeof(out));
   std::memset(&back2front, 0, sizeof(back2front));
@@ -46,20 +48,25 @@ void FrontTop::init() {
 }
 
 void FrontTop::seq_read_bpu() {
-  sync_icache_ptw_ports(*this);
-  front_top_seq_read(in, *read_data_);
+  bind_ports();
+  core_->seq_read(*read_data_);
 }
 
 void FrontTop::comb_bpu() {
-  sync_icache_ptw_ports(*this);
   *update_req_ = {};
-  front_comb_calc(in, *read_data_, out, *update_req_);
+  core_->comb(in, *read_data_, out, *update_req_);
 }
 
-void FrontTop::seq_write_bpu() {
-  sync_icache_ptw_ports(*this);
-  front_top_seq_write(in, *update_req_, in.reset);
+void FrontTop::seq_write_bpu() { core_->seq_write(in, *update_req_); }
+
+void FrontTop::warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {
+  core_->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
 }
+void FrontTop::warm_finish() { core_->bpu_pipe.warm_finish(); }
+void FrontTop::warm_icache(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]) {
+  core_->icache.warm_install(tag, valid);
+}
+void FrontTop::warm_itlb(const void *entries, int count, int repl_ptr) { core_->icache.warm_install_itlb(entries, count, repl_ptr); }
 
 void FrontTop::seq_back2front() {
   back2front = back2front_1;

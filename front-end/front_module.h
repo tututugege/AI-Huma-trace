@@ -4,20 +4,6 @@
 #include "front_IO.h"
 #include <cstdint>
 
-class PtwWalkPort;
-class SimContext;
-struct ICacheMemPortReq;
-struct ICacheMemPortResp;
-namespace axi_interconnect {
-struct ReadMasterPort_t;
-}
-extern PtwWalkPort *icache_ptw_walk_port;
-extern ICacheMemPortReq *icache_mem_req_port;
-extern ICacheMemPortResp *icache_mem_resp_port;
-extern axi_interconnect::ReadMasterPort_t *icache_mem_read_port;
-extern const axi_interconnect::ReadMasterPort_t *icache_mem_read_q;
-
-
 struct fetch_address_FIFO_read_data {
   fetch_addr_fifo_size_t size;
   wire1_t head_valid;
@@ -84,50 +70,5 @@ struct PtabCombOut;
 struct Front2BackCombOut;
 struct FrontReadData;
 struct FrontUpdateRequest;
-
-bool icache_read_ready(bool hold_for_recovery, bool reset);
-void icache_comb_calc(struct icache_in *in, struct icache_out *out);
-void icache_invalidate_step(CsrStatusIO *csr_status, struct icache_out *out);
-void icache_seq();   // the I-cache's clock edge (front_seq_write)
-bool icache_fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
-void icache_set_context(SimContext *ctx);
-void front_set_context(SimContext *ctx);
-
-void instruction_FIFO_seq_read(struct instruction_FIFO_in *in,
-                               struct instruction_FIFO_read_data *rd);
-// FIFO ports of one cycle: read (first: clear / pop, the head out) then write (push). Each fills the cycle's request
-// and advances the read data rd past it; seq_write applies the request at the clock edge.
-void instruction_FIFO_read(const struct instruction_FIFO_in *in, struct instruction_FIFO_read_data *rd,
-                           struct instruction_FIFO_out *out, InstructionCombOut *req);
-void instruction_FIFO_write(const struct instruction_FIFO_in *in, struct instruction_FIFO_read_data *rd,
-                            InstructionCombOut *req);
-void instruction_FIFO_seq_write(const InstructionCombOut *req);
-
-void PTAB_seq_read(struct PTAB_in *in, struct PTAB_read_data *rd);
-void PTAB_read(const struct PTAB_in *in, struct PTAB_read_data *rd, struct PTAB_out *out, PtabCombOut *req);
-void PTAB_write(const struct PTAB_in *in, struct PTAB_read_data *rd, PtabCombOut *req);
-void PTAB_seq_write(const PtabCombOut *req);
-
-void front_top_seq_read(const struct front_top_in &in, FrontReadData &rd);
-void front_comb_calc(const struct front_top_in &in, const FrontReadData &rd,
-                     struct front_top_out &out, FrontUpdateRequest &req);
-void front_top_seq_write(const struct front_top_in &in,
-                         const FrontUpdateRequest &req, bool reset);
-
-void front2back_FIFO_seq_read(struct front2back_FIFO_in *in,
-                              struct front2back_FIFO_read_data *rd);
-void front2back_FIFO_read(const struct front2back_FIFO_in *in, struct front2back_FIFO_read_data *rd,
-                          struct front2back_FIFO_out *out, Front2BackCombOut *req);
-void front2back_FIFO_write(const struct front2back_FIFO_in *in, struct front2back_FIFO_read_data *rd,
-                           Front2BackCombOut *req);
-void front2back_FIFO_seq_write(const Front2BackCombOut *req);
-
-void fetch_address_FIFO_seq_read(struct fetch_address_FIFO_in *in,
-                                 struct fetch_address_FIFO_read_data *rd);
-void fetch_address_FIFO_read(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
-                             struct fetch_address_FIFO_out *out, FetchAddrCombOut *req);
-void fetch_address_FIFO_write(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
-                              FetchAddrCombOut *req);
-void fetch_address_FIFO_seq_write(const FetchAddrCombOut *req);
 
 #endif // FRONT_MODULE_H

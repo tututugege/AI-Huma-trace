@@ -3,7 +3,7 @@
 适用范围：
 - 目录：`front-end/`
 - 重点：除 `icache/` 子目录内部实现和 `FrontTop.cpp` 外的 front-end 代码
-- `icache` 模块通过其声明的接口（`icache_seq_read`, `icache_comb_calc`, `icache_seq_write`）被顶层调用，其内部实现不在本规范范围内
+- `icache` 模块（`ICacheTop`，`front-end/icache/icache_top.h`）通过其方法（`read_ready`、`comb_calc`、`invalidate_step`、`seq`）被顶层调用，其内部实现不在本规范范围内
 - 目标对象：所有参与前端重构、维护、训练数据提取、训练清单统计的开发者/Codex
 
 关联手册（上游文档，不在本仓库）：
@@ -344,10 +344,10 @@
 - `front_top` 是唯一后端调用入口
 - `front_top` 内部主路径必须固定为：
 
-`front_seq_read -> front_comb_calc -> front_seq_write`
+`FrontCore::seq_read -> FrontCore::comb -> FrontCore::seq_write`（front-end/front_core.h）
 
 说明：
-- 这里的 `front_comb_calc` 是顶层总调度层，保留是合理的
+- 这里的 `FrontCore::comb` 是顶层总调度层，保留是合理的
 - 但顶层之外不应随意保留第二套行为入口
 
 ### 6.3 legacy 路径处理原则

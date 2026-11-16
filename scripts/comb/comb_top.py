@@ -6,7 +6,7 @@ wildcard `[]`.  SimCpu methods and free functions called from cycle() are inline
 and local `auto &` aliases substituted).  A call into a sub-object is one phase whose read / write set is a summary:
   back.comb                        the back-end rows (Wires field F -> back.F; BackTop is the Wires)
   front.comb_bpu                   the front rows (in.F -> front.in.F, out.F -> front.out.F) + the I-cache ports
-                                   (icache_top.cpp: g_bind.read -> the AXI ICACHE read port, probe_req / probe_resp ->
+                                   (icache_top.cpp: bind_.read -> the AXI ICACHE read port, probe_req / probe_resp ->
                                    SimCpu::icache_req / icache_resp) + the ITLB walk port
   mem_subsystem.comb_outputs / comb_inputs   the mem rows of that function, pointer members through SimCpu::init()
   axi_interconnect.* / axi_ddr.* / axi_mmio.* / mem_subsystem.llc_*   a scan of that class's member function closure
@@ -140,22 +140,22 @@ def top_domain(root, ASSIGN, back_rows):
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.seq_read_bpu'] = (set(), set())
     fr, fw = from_rows(FRONT_ROWS, front_key)
-    # the I-cache ports (icache_top.cpp, free functions over g_bind)
+    # the I-cache ports (icache_top.cpp, ICacheTop's methods over bind_)
     ict = src.t[os.path.join(root, 'front-end', 'icache', 'icache_top.cpp')]
     ic = ''
-    for fn in ('comb', 'step', 'icache_comb_calc', 'icache_invalidate_step', 'clear_outputs', 'read_ready'):
+    for fn in ('comb', 'step', 'comb_calc', 'invalidate_step', 'clear_outputs', 'read_ready'):
         mm = re.search(r'\n[\w:<>&*\s]*?\b' + fn + r'\s*\([^)]*\)\s*(?:const\s*)?\{', ict)
         if mm: ic += Src.block(ict, mm.end() - 1)
         else: notes.add(f'icache_top.cpp: no {fn}()')
     fb_ = {m.group(1): norm_path(m.group(2)) for m in re.finditer(r'\bfront\.(icache_mem_\w+)\s*=\s*&\s*([\w.\[\]:>-]+)\s*;', init)}
     fb_ = {k: re.sub(r'\[\w+::(MASTER_\w+)\]', r'[\1]', v) for k, v in fb_.items()}
-    ic = re.sub(r'(?:const\s+)?auto\s*\*\s*\w+\s*=\s*g_bind\.\w+\s*;', '', ic)   # pointer aliases: no access
-    ic = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|g_bind\.\w+)\s*\)', 'if (1)', ic)          # null tests of the port pointers
-    ic = re.sub(r'\b(?:rp|rq|pr|g_bind\.\w+)\s*\?', '1 ?', ic)
-    ic = re.sub(r'\bg_bind\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), ic)
-    ic = re.sub(r'\bg_bind\.read\b|\brp\b', 'axi_interconnect.read_ports[MASTER_ICACHE]', ic)
-    ic = re.sub(r'\bg_bind\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), ic)
-    ic = re.sub(r'\bg_bind\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), ic)
+    ic = re.sub(r'(?:const\s+)?auto\s*\*\s*\w+\s*=\s*bind_\.\w+\s*;', '', ic)   # pointer aliases: no access
+    ic = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|bind_\.\w+)\s*\)', 'if (1)', ic)          # null tests of the port pointers
+    ic = re.sub(r'\b(?:rp|rq|pr|bind_\.\w+)\s*\?', '1 ?', ic)
+    ic = re.sub(r'\bbind_\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), ic)
+    ic = re.sub(r'\bbind_\.read\b|\brp\b', 'axi_interconnect.read_ports[MASTER_ICACHE]', ic)
+    ic = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), ic)
+    ic = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), ic)
     ir, iw = scan_paths(ic, ASSIGN, src, notes, 'icache')
     fr |= ir | {'mem_subsystem.itlb_walk.out'}
     fw |= iw | {'mem_subsystem.itlb_walk.in'}

@@ -33,7 +33,7 @@ class Src:
         pats = []
         if cls: pats.append(re.compile(r'\b' + cls + r'::' + fn + r'\s*\(([^)]*)\)\s*(?:const\s*)?\{'))
         else:
-            pats.append(re.compile(r'(?:^|\n)[\w:<>&*\s,]*?\b' + fn + r'\s*\(([^)]*)\)\s*(?:const\s*)?\{'))
+            pats.append(re.compile(r'(?:^|\n)(?:\[\[\w+\]\]\s*)?[\w:<>&*\s,]*?\b' + fn + r'\s*\(([^)]*)\)\s*(?:const\s*)?\{'))
             pats.append(re.compile(r'\b\w+::' + fn + r'\s*\(([^)]*)\)\s*(?:const\s*)?\{'))
         for p, t in self.t.items():
             for pat in pats:
@@ -180,14 +180,14 @@ def hazards_of(rows, overlap, known):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# front end: FrontComb phases in front_comb_calc() order
+# front end: FrontComb phases in FrontCore::comb() order
 # ---------------------------------------------------------------------------------------------------------------------
 FRONT_KNOWN = {
 }
 
 
 def front_domain(root, ASSIGN, overlap):
-    """FrontComb is constructed for every front_comb_calc() call and `req` is cleared before it: a read of one of its
+    """FrontComb is constructed for every FrontCore::comb() call and `req` is cleared before it: a read of one of its
     members before a later phase writes it sees the initial value (a staged input, reported, not a hazard).  Only the
     file-scope state of front_top.cpp lives across cycles: reading it before a later phase writes it is a hazard."""
     src = Src(root, ['front-end', 'include'])
@@ -196,7 +196,11 @@ def front_domain(root, ASSIGN, overlap):
     decls = list(re.finditer(r'^static\s+(?!const\b)([\w:<>, ]+?)\s\*?(\w+)\s*(?:=[^;]*)?;', strip_comments(ft), re.M))
     persistent = [m.group(2) for m in decls]
     types = {m.group(2): m.group(1).split('::')[-1].strip() for m in decls}
-    calc = src.body(None, 'front_comb_calc')[1]
+    # FrontComb's references to the front end's modules (FrontCore): their methods' parameters decide what a call writes
+    fc = Src.block(ft, ft.index('{', re.search(r'struct FrontComb\s*\{', ft).start()))
+    for m in re.finditer(r'^\s*([\w:]+)(?:<[^>]*>)?\s*&\s*(\w+)\s*;', strip_comments(fc), re.M):
+        types[m.group(2)] = m.group(1).split('::')[-1]
+    calc = src.body('FrontCore', 'comb')[1]
     phases = re.findall(r'\bc\.(\w+)\(', calc)
     rows, notes = [], set()
     for p in phases:

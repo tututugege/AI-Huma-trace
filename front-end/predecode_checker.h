@@ -30,14 +30,7 @@ struct predecode_checker_out {
     uint8_t keep_n;   // multi-block groups: number of leading slots that stay valid (everything after the flushing branch is dropped)
 };
 
-struct predecode_checker_read_data {
-  predecode_checker_in inp_regs;
-};
-
-void predecode_checker_seq_read(struct predecode_checker_in *in,
-                                struct predecode_checker_read_data *rd);
-void predecode_checker_comb(const predecode_checker_read_data &input,
-                            predecode_checker_out &output);
-void predecode_checker_seq_write();
+// The predecode check of one group (combinational: the checker keeps no state).
+void predecode_checker_comb(const predecode_checker_in &in, predecode_checker_out &output);
 
 #endif

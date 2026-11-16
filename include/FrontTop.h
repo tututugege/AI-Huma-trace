@@ -10,6 +10,7 @@ struct CsrStatusIO;
 class SimContext;
 struct FrontReadData;
 struct FrontUpdateRequest;
+class FrontCore;
 namespace axi_interconnect {
 struct ReadMasterPort_t;
 }
@@ -54,8 +55,15 @@ public:
   void comb_from_back(BackTop &back);                        // next cycle's inputs from the back end (back2front_1)
   void force_back2front_refetch(pc_t pc);
   void step_bpu();
+  // fast-warmup replay (EXP-011): BPU training, ready-made L1I tag / valid and ITLB state
+  void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false);
+  void warm_finish();
+  void warm_icache(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
+  void warm_itlb(const void *entries, int count, int repl_ptr);
 
 private:
+  std::unique_ptr<FrontCore> core_;   // all state of the front end (front-end/front_core.h)
   std::unique_ptr<FrontReadData> read_data_;
   std::unique_ptr<FrontUpdateRequest> update_req_;
+  void bind_ports();
 };

@@ -21,10 +21,6 @@
 #include <cstring>
 #include <vector>
 
-void front_warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false);
-void front_warm_finish();
-void icache_warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
-void icache_warm_install_itlb(const void *entries, int count, int repl_ptr);
 extern long long sim_time;
 
 namespace {
@@ -162,7 +158,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
     }
   }
 
-  front_warm_finish();  // no-op on a fresh BPU; keeps spec == arch
+  cpu.front.warm_finish();  // no-op on a fresh BPU; keeps spec == arch
   uint32_t last_iline = 0xffffffffu;
   RefCpuState s{}, post{};
   for (uint64_t i = 0; i < steps; ++i) {
@@ -204,10 +200,10 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       if (op == 0x63) { dir = info.br_taken; }
       else if (op == 0x6f) type = (bits(inst, 11, 7) == 1) ? BR_CALL : BR_JAL;
       else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
-      front_warm_commit(pc, type, dir, dir ? narrow_pc(post.pc, "warm-up target") : pc + info.inst_len, info.inst_len == 2);
+      cpu.front.warm_commit(pc, type, dir, dir ? narrow_pc(post.pc, "warm-up target") : pc + info.inst_len, info.inst_len == 2);
       ++st.branches;
     } else {
-      front_warm_commit(pc, BR_NONCTL, false, pc + info.inst_len, info.inst_len == 2);
+      cpu.front.warm_commit(pc, BR_NONCTL, false, pc + info.inst_len, info.inst_len == 2);
     }
     // data side
     const bool is_ld = op == 0x03 || op == 0x07, is_st = op == 0x23 || op == 0x27, is_amo = op == 0x2f;
@@ -241,9 +237,9 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
 void fast_warm_install(SimCpu &cpu) {
   Warm &W = *g_warm;
   // (the replay ran on the trace bridge's own core: its state is already where the bridge continues)
-  front_warm_finish();
-  icache_warm_install(W.l1i.tag, W.l1i.valid);
-  icache_warm_install_itlb(W.itlb.e.data(), int(W.itlb.e.size()), W.itlb.ptr);
+  cpu.front.warm_finish();
+  cpu.front.warm_icache(W.l1i.tag, W.l1i.valid);
+  cpu.front.warm_itlb(W.itlb.e.data(), int(W.itlb.e.size()), W.itlb.ptr);
   cpu.back.warm_dtlb(W.dtlb.e.data(), int(W.dtlb.e.size()), W.dtlb.ptr);
   if (W.llc.enabled()) {
     for (uint32_t set = 0; set < W.llc.sets; ++set) {
