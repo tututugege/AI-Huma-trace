@@ -79,11 +79,6 @@ public:
   // Functional word at a physical address as the core sees it now (RAM or boot ROM).
   bool read_word(uint32_t paddr, uint32_t &word) const;
 
-  struct Stats {
-    uint64_t dispatched = 0, inst_mismatch = 0, forced_jumps = 0, rewinds = 0, entries_dropped = 0, patches = 0, replayed = 0, flush_commits = 0, trap_commits = 0, interrupts = 0;
-    uint64_t blocked[5] = {0}, trapped = 0;
-  } stats;
-
 private:
   struct Entry;
   RefCpuContext *ctx_;

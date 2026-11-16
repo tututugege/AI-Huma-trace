@@ -19,8 +19,6 @@ static constexpr int kTrapCsr[8] = {7 /*mstatus*/, 15 /*sstatus*/, 1 /*mepc*/, 2
 
 struct Bridge::Entry {
   Fact f;
-  uint32_t exec_inst = 0;       // the word the function model executed (compared with the fetched one when the instruction commits)
-  bool exec_cmp = false;
   xlen_t pc_before = 0;
   uint8_t priv_before = 0;
   bool resv_valid_before = false;
@@ -59,14 +57,12 @@ inline xlen_t immJ(uint32_t i) {
 inline xlen_t immS(uint32_t i) { return xs(sext((bits(i, 31, 25) << 5) | bits(i, 11, 7), 12)); }
 
 // Undo one entry on a state copy (CSR/regs/pc/priv/reservation). Memory is the caller's job.
-void undo_into(const Bridge::Stats *, RefCpuState &st, const xlen_t *trap_csr, bool full_csr,
+void undo_into(RefCpuState &st, const xlen_t *trap_csr, bool full_csr,
                const xlen_t *csr_full, xlen_t pc_before, uint8_t priv_before, bool rv,
                uint32_t ra, uint8_t rd, xlen_t rd_old) {
   if (full_csr) std::memcpy(st.csr, csr_full, sizeof st.csr);
   else for (int i = 0; i < 8; i++) st.csr[kTrapCsr[i]] = trap_csr[i];
-#ifndef TB_NEG_NO_RD_UNDO
   if (rd) st.gpr[rd] = rd_old;
-#endif
   st.pc = pc_before;
   st.privilege = priv_before;
   st.reserve_valid = rv;
@@ -137,11 +133,6 @@ const Fact *Bridge::find(uint64_t uid) const {
   // The chain is not always sorted by uid (an instruction can be dispatched again out of order after a rewind / replay): a miss of the binary search
   // is confirmed by a linear scan (a hit is always right).  Without this, Linux lost facts and the kernel oopsed (EXP-036 regression, fixed 2026-11-13).
   if (!r) for (auto *e : chain_) if (e->f.uid == uid) { r = &e->f; break; }
-#ifdef BRIDGE_FIND_CHECK
-  const Fact *lin = nullptr;
-  for (auto *e : chain_) if (e->f.uid == uid) { lin = &e->f; break; }
-  if (lin != r) { std::fprintf(stderr, "[BRIDGE_FIND_CHECK] uid %llu: linear %p binary %p\n", (unsigned long long)uid, (const void *)lin, (const void *)r); std::abort(); }
-#endif
   return r;
 }
 
@@ -164,9 +155,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     e->f.forced_jump = true;
     st.pc = pc;
     refcpu_set_state(ctx_, &st);
-    stats.forced_jumps++;
   }
-  stats.dispatched++;
 
   const uint32_t opcode = bits(inst, 6, 0);
   const uint32_t rd = bits(inst, 11, 7), rs1 = bits(inst, 19, 15), rs2 = bits(inst, 24, 20);
@@ -237,7 +226,6 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   e->f.blocked = blk;
 
   if (blk != Blocked::None) {
-    stats.blocked[(int)blk]++;
     // Not executed. The state stays as before (pc nominal +4); the next dispatch forces
     // a jump if the window continues elsewhere. rd keeps its old value: wrong-path only.
     e->rd = 0;
@@ -266,7 +254,6 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   refcpu_step(ctx_, 1);
   RefCpuStepInfo info{};
   refcpu_get_step_info(ctx_, &info);
-  e->exec_inst = info.instruction; e->exec_cmp = !info.page_fault_inst;
   RefCpuState after{};
   refcpu_get_state(ctx_, &after);
   e->f.fs_dirty = ((after.csr[7] >> 13) & 3) == 3 && ((st.csr[7] >> 13) & 3) != 3;   // (csr index 7 = mstatus)
@@ -276,11 +263,10 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     e->f.trapped = true;
     e->trap_after.reset(new RefCpuState(after));
     e->f.trap_cause = (uint8_t)(((after.csr[1] == pc) ? after.csr[2] : after.csr[12]) & 0x3f);   // mcause if the trap went to M (mepc = pc), else scause
-    stats.trapped++;
     if (e->has_undo) { refcpu_store_word(ctx_, e->undo_addr, e->undo_old); if (e->undo_words == 2) refcpu_store_word(ctx_, e->undo_addr + 4, e->undo_old_hi); }
     e->has_undo = false;
     // A trap writes only pc, privilege and the trap CSRs; rd is untouched.
-    undo_into(&stats, after, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before,
+    undo_into(after, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before,
               e->priv_before, e->resv_valid_before, e->resv_addr_before, 0, 0);
     after.pc = pc + len;
     { bool tk; xlen_t nx;
@@ -328,7 +314,6 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
 }
 
 void Bridge::rewind_after(int64_t uid) {
-  stats.rewinds++;
   // Position, not uid order: some wrong-path entries carry uid 0, so uids are not monotonic along the chain.
   size_t keep = 0;  // number of entries kept (the oldest ones, up to and including `uid`)
   if (uid >= 0) {
@@ -349,33 +334,18 @@ void Bridge::rewind_after(int64_t uid) {
   while (chain_.size() > keep) {
     Entry *e = chain_.back();
     chain_.pop_back();
-#ifndef TB_NEG_NO_STORE_UNDO
     if (e->has_undo) { refcpu_store_word(ctx_, e->undo_addr, e->undo_old); if (e->undo_words == 2) refcpu_store_word(ctx_, e->undo_addr + 4, e->undo_old_hi); }
-#endif
-    undo_into(&stats, st, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before, e->priv_before,
+    undo_into(st, e->trap_csr, e->full_csr, e->csr_full.data(), e->pc_before, e->priv_before,
               e->resv_valid_before, e->resv_addr_before, e->rd, e->rd_old);
     if (e->fp_rd) st.fpr[e->frd] = e->frd_old;
     if (e->fcsr_saved) st.fcsr = e->fcsr_old;
-    stats.entries_dropped++;
     delete e;
   }
   refcpu_set_state(ctx_, &st);
 }
 
 void Bridge::commit(uint64_t uid) {
-  // TB_PCTRACE=<file>: the committed instruction stream ("uid pc"; pc 0 = the entry is not in the chain), for comparing two configurations: the architectural
-  // stream must not depend on the front end's timing (FE_PAIR on / off, ...).  scripts/stream_cmp.sh
-  static FILE *tf = std::getenv("TB_PCTRACE") ? std::fopen(std::getenv("TB_PCTRACE"), "w") : nullptr;
-  if (tf) { const Fact *ff = find(uid); std::fprintf(tf, "%llu %llx\n", (unsigned long long)uid, ff ? (unsigned long long)ff->pc : 0ull); }
   if (chain_.empty() || chain_.front()->f.uid != uid) return;
-  // The word the front end fetched must be the word the function model executed (a second half read from the wrong physical page, a stale I$ line):
-  // the back end decodes the front end's word, the facts come from the function model, so a difference would otherwise only show up later as a wrong result.
-  if (chain_.front()->exec_cmp && chain_.front()->exec_inst != chain_.front()->f.inst) {
-    stats.inst_mismatch++;
-    if (stats.inst_mismatch <= 8)
-      std::fprintf(stderr, "[TB_CHECK] fetched word != executed word at commit: pc=%llx fetched=%08x executed=%08x len=%u\n", (unsigned long long)chain_.front()->f.pc,
-                   chain_.front()->f.inst, chain_.front()->exec_inst, (unsigned)chain_.front()->f.len);
-  }
   delete chain_.front();
   chain_.pop_front();
 }
@@ -389,9 +359,7 @@ bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   struct Re { uint64_t uid; xlen_t pc; uint32_t inst; uint32_t len; };
   std::vector<Re> younger;
   for (auto *e : chain_) if (e->f.uid > uid) younger.push_back({e->f.uid, e->f.pc, e->f.inst, e->f.len});
-  const int64_t saved = stats.rewinds;
   rewind_after((int64_t)uid);
-  stats.rewinds = saved;  // not a pipeline rewind
   RefCpuState st;
   refcpu_get_state(ctx_, &st);
   if (t->rd == 0) {  // not executed (blocked): make the write undoable
@@ -403,34 +371,21 @@ bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   t->f.rd_valid = true;
   t->f.rd = (uint8_t)rd;
   t->f.rd_value = value;
-  stats.patches++;
-  const uint64_t d = stats.dispatched, fj = stats.forced_jumps;
   for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst, r.len);
-  stats.replayed += younger.size();
-  stats.dispatched = d;  // replays are not new dispatches
-  stats.forced_jumps = fj;
   return true;
 }
 
 void Bridge::commit_flush(uint64_t uid) {
   rewind_after((int64_t)uid);
-  stats.rewinds--;  // counted as a flush, not a mispredict rewind
-  stats.flush_commits++;
   if (chain_.empty() || chain_.back()->f.uid != uid) return;
   Entry *x = chain_.back();
-  static const bool neg = std::getenv("TB_NEG_NO_TRAP_STATE") != nullptr;  // negative control
-  if (x->trap_after && !neg) {
-    refcpu_set_state(ctx_, x->trap_after.get());
-    stats.trap_commits++;
-  }
+  if (x->trap_after) refcpu_set_state(ctx_, x->trap_after.get());
   // X retires: every older entry has already retired, so it is the only one left.
   while (!chain_.empty()) { delete chain_.front(); chain_.pop_front(); }
 }
 
 bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
   rewind_after(-1);
-  stats.rewinds--;
-  stats.interrupts++;
   return refcpu_take_forced_interrupt(ctx_, cause, target_priv, pending_snapshot);
 }
 
@@ -443,14 +398,8 @@ size_t Bridge::kill_older_than(uint64_t uid) {
   struct Re { uint64_t uid; xlen_t pc; uint32_t inst; uint32_t len; };
   std::vector<Re> younger;
   for (size_t i = killed; i < chain_.size(); i++) younger.push_back({chain_[i]->f.uid, chain_[i]->f.pc, chain_[i]->f.inst, chain_[i]->f.len});
-  const int64_t saved = stats.rewinds;
   rewind_after(-1);  // undoes the killed entries and everything younger (the chain starts with the killed ones)
-  stats.rewinds = saved;
-  const uint64_t d = stats.dispatched, fj = stats.forced_jumps;
   for (const auto &r : younger) dispatch(r.uid, r.pc, r.inst, r.len);
-  stats.replayed += younger.size();
-  stats.dispatched = d;
-  stats.forced_jumps = fj;
   return killed;
 }
 

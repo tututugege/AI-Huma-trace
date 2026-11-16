@@ -8,7 +8,6 @@ extern long long sim_time;   // timing-model cycle counter (main.cpp)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <map>
 #include <memory>
 
 namespace tbhook {
@@ -18,40 +17,6 @@ RefCpuContext *g_ctx = nullptr;
 std::unique_ptr<tb::Bridge> g_bridge;
 uint64_t g_rob_uid[4096];
 
-struct Counters {
-  uint64_t dispatch = 0, commit = 0, commit_front_miss = 0, flush = 0, mispredict = 0;
-  uint64_t cmp_rd = 0, cmp_br = 0, cmp_addr = 0, cmp_target = 0;
-  uint64_t mis_rd = 0, mis_br = 0, mis_addr = 0, mis_target = 0;
-  uint64_t cmp_pf = 0, mis_pf = 0;   // model page fault (TLB/PTW) vs the function model trapping on the same load/store
-  uint64_t skip_nofact = 0, skip_blocked = 0, skip_trapped = 0, skip_fault = 0, skip_other = 0;
-  uint64_t mis_by_op[32] = {0}, seen_by_op[32] = {0}, nofact_by_op[32] = {0};
-  uint64_t mem_writes = 0, interrupt_rejected = 0, printed = 0, uid_conflict = 0, patch_mmio_load = 0, patch_csr_read = 0;
-  ~Counters() {
-    std::fprintf(stderr,
-      "[TB_CHECK] dispatch=%llu commit=%llu commit_front_miss=%llu flush=%llu mispredict=%llu\n"
-      "[TB_CHECK] compared rd=%llu br=%llu addr=%llu target=%llu | mismatches rd=%llu br=%llu addr=%llu target=%llu\n"
-      "[TB_CHECK] uid_conflict(dbg vs rob map)=%llu patches: mmio_load=%llu csr_read=%llu\n[TB_CHECK] skipped nofact=%llu blocked=%llu trapped=%llu fault=%llu other=%llu\n",
-      (unsigned long long)dispatch, (unsigned long long)commit, (unsigned long long)commit_front_miss,
-      (unsigned long long)flush, (unsigned long long)mispredict,
-      (unsigned long long)cmp_rd, (unsigned long long)cmp_br, (unsigned long long)cmp_addr,
-      (unsigned long long)cmp_target, (unsigned long long)mis_rd, (unsigned long long)mis_br,
-      (unsigned long long)mis_addr, (unsigned long long)mis_target, (unsigned long long)uid_conflict, (unsigned long long)patch_mmio_load, (unsigned long long)patch_csr_read, (unsigned long long)skip_nofact,
-      (unsigned long long)skip_blocked, (unsigned long long)skip_trapped, (unsigned long long)skip_fault,
-      (unsigned long long)skip_other);
-    std::fprintf(stderr, "[TB_CHECK] page faults: compared=%llu mismatches=%llu\n", (unsigned long long)cmp_pf, (unsigned long long)mis_pf);
-    std::fprintf(stderr, "[TB_CHECK] seen/mismatch by op:");
-    for (int i = 0; i < 32; i++) if (seen_by_op[i]) std::fprintf(stderr, " op%d=%llu/%llu", i, (unsigned long long)seen_by_op[i], (unsigned long long)mis_by_op[i]);
-    std::fprintf(stderr, "\n[TB_CHECK] nofact by op:");
-    for (int i = 0; i < 32; i++) if (nofact_by_op[i]) std::fprintf(stderr, " op%d=%llu", i, (unsigned long long)nofact_by_op[i]);
-    std::fprintf(stderr, "\n");
-    if (g_bridge)
-      std::fprintf(stderr, "[TB_CHECK] bridge inst_mismatch=%llu forced_jumps=%llu rewinds=%llu dropped=%llu trapped=%llu blocked=%llu/%llu/%llu/%llu\n",
-        (unsigned long long)g_bridge->stats.inst_mismatch, (unsigned long long)g_bridge->stats.forced_jumps, (unsigned long long)g_bridge->stats.rewinds,
-        (unsigned long long)g_bridge->stats.entries_dropped, (unsigned long long)g_bridge->stats.trapped,
-        (unsigned long long)g_bridge->stats.blocked[1], (unsigned long long)g_bridge->stats.blocked[2],
-        (unsigned long long)g_bridge->stats.blocked[3], (unsigned long long)g_bridge->stats.blocked[4]);
-  }
-} g_c;
 
 void ensure() {
   if (g_bridge) return;
@@ -70,13 +35,10 @@ void on_dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t rob_idx, uint3
   ensure();
   g_rob_uid[rob_idx & 4095] = uid;
   g_bridge->dispatch(uid, pc, inst, len);
-  g_c.dispatch++;
 }
 
 void on_mispredict(uint64_t branch_uid) {
   ensure();
-  g_c.mispredict++;
-  if (std::getenv("TB_NEG_NO_REWIND")) return;  // negative control: the check must fail
   g_bridge->rewind_after((int64_t)branch_uid);
 }
 
@@ -89,24 +51,7 @@ uint32_t mem_read(uint32_t paddr) {
 
 const tb::Fact *fact_by_rob(uint32_t rob_idx) {
   if (!g_bridge) return nullptr;
-  const tb::Fact *f = g_bridge->find(g_rob_uid[rob_idx & 4095]);
-  if (!f) return f;
-  // Positive control: every Nth branch fact is flipped; the run must then differ from the baseline.
-  static const long n = std::getenv("TB_PERTURB_BR") ? std::atol(std::getenv("TB_PERTURB_BR")) : 0;
-  static const long m = std::getenv("TB_PERTURB_ADDR") ? std::atol(std::getenv("TB_PERTURB_ADDR")) : 0;
-  static long cnt_br = 0, cnt_ad = 0;
-  static tb::Fact tmp;
-  if (n && f->is_br && (++cnt_br % n) == 0) { tmp = *f; tmp.br_taken = !tmp.br_taken; return &tmp; }
-  if (m && (f->is_load || f->is_store) && (++cnt_ad % m) == 0) { tmp = *f; tmp.vaddr ^= xlen_t(0x1000); return &tmp; }
-  return f;
-}
-
-static void apply_mem_write(const tb::Fact *f) {
-  static const bool neg = std::getenv("TB_NEG_NO_MEMWRITE") != nullptr;  // negative control
-  if (!neg && f && f->has_mem_write && !f->trapped && f->blocked == tb::Blocked::None) {
-    // (no functional-memory write: the core owns the memory; instruction words and PTEs are read from it)
-    g_c.mem_writes++;
-  }
+  return g_bridge->find(g_rob_uid[rob_idx & 4095]);
 }
 
 bool fs_dirty_at_commit(uint64_t uid) {
@@ -119,31 +64,19 @@ void on_commit(uint64_t uid) {
   ensure();
   // Entries older than the committing one that never committed were killed without a rewind (wrong-path stragglers
   // dispatched after the mispredict): undo them and re-execute the younger ones before the fact is used.
-  if (const size_t k = g_bridge->kill_older_than(uid)) g_c.commit_front_miss += k;
-  apply_mem_write(g_bridge->find(uid));
-  // TB_SAMPLE_PC=N: print the pc of every N-th committed instruction (where is a long run spending its time?)
-  if (static const long long every = std::getenv("TB_SAMPLE_PC") ? std::atoll(std::getenv("TB_SAMPLE_PC")) : 0; every > 0) {
-    static long long n = 0;
-    if (++n % every == 0) if (const tb::Fact *sf = g_bridge->find(uid)) std::fprintf(stderr, "[SAMPLE] cyc=%lld commits=%lld pc=0x%llx inst=0x%08x\n", (long long)sim_time, n, (unsigned long long)sf->pc, sf->inst);
-  }
-  if (static const bool tr = std::getenv("TB_TRACE_COMMIT") != nullptr; tr) { const tb::Fact *tf = g_bridge->find(uid); if (tf) std::fprintf(stderr, "[COMMIT] cyc=%lld pc=0x%08llx inst=0x%08x rd=%d v=0x%08llx\n", (long long)sim_time, (unsigned long long)tf->pc, tf->inst, tf->rd_valid ? tf->rd : -1, (unsigned long long)tf->rd_value); }
-  g_c.commit++;
+  g_bridge->kill_older_than(uid);
   g_bridge->commit(uid);
 }
 
 void on_flush(int64_t uid, bool interrupt) {
   ensure();
-  g_c.flush++;
   if (interrupt || uid < 0) return;  // interrupt: handled by on_interrupt; no committing instruction: nothing to do yet
-  apply_mem_write(g_bridge->find((uint64_t)uid));
   g_bridge->commit_flush((uint64_t)uid);
 }
 
 void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending) {
   ensure();
-  const bool taken = g_bridge->take_interrupt(cause, target_priv, pending);
-  if (!taken) g_c.interrupt_rejected++;
-  if (std::getenv("TB_TRACE_TRAP")) std::fprintf(stderr, "[IRQ] cause=0x%llx target_priv=%u pending=0x%x -> function model %s\n", (unsigned long long)cause, (unsigned)target_priv, pending, taken ? "took it" : "REJECTED it");
+  g_bridge->take_interrupt(cause, target_priv, pending);
 }
 
 // The model's results are 32-bit values (not widened yet): a load result is the sign (or, for lwu, zero) extension of
@@ -154,70 +87,20 @@ static xlen_t widen_result(const ExecObs &o, uint32_t inst) {
   return o.result;
 }
 
+// Values the bridge cannot know (an MMIO load, a CSR read of the timing model's own counters): patched from the model's result.
 void on_exec(const ExecObs &o) {
   ensure();
   const uint64_t uid = g_rob_uid[o.rob_idx & 4095];
-  if (o.uid_dbg != 0 && o.uid_dbg != uid) { g_c.uid_conflict++; if (g_c.uid_conflict <= 4) std::fprintf(stderr, "[TB_CHECK] uid_conflict rob_idx=%u map_uid=%llu dbg_uid=%llu op=%d result=0x%x diag=0x%x\n", o.rob_idx, (unsigned long long)uid, (unsigned long long)o.uid_dbg, o.op, o.result, o.diag_val); }
   const tb::Fact *f = g_bridge->find(uid);
-  if (!f) { g_c.skip_nofact++; g_c.nofact_by_op[o.op & 31]++; if (g_c.nofact_by_op[o.op & 31] <= 3) std::fprintf(stderr, "[TB_CHECK] nofact op=%d uid=%llu oldest=%llu in_flight=%zu\n", o.op, (unsigned long long)uid, (unsigned long long)(g_bridge->in_flight() ? g_bridge->oldest_uid() : 0), g_bridge->in_flight()); return; }
-  // Values the bridge cannot know: patch them from the model, then compare as usual.
+  if (!f) return;
   if (o.op == UOP_LOAD && f->blocked == tb::Blocked::MemOutOfRam && !o.page_fault) {
-    if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_mmio_load++; return; }
+    g_bridge->patch_rd(uid, widen_result(o, f->inst));
+    return;
   }
   // (fflags / frm / fcsr are the function model's own state: the timing model's CSR file keeps no values for them)
   const uint32_t csr_no = f->inst >> 20;
   if (o.op == UOP_CSR && !(csr_no >= 1 && csr_no <= 3) && f->rd_valid && widen_result(o, f->inst) != f->rd_value &&
-      f->blocked == tb::Blocked::None && !f->trapped) {
-    if (static const bool tp = std::getenv("TB_TRACE_PATCH") != nullptr; tp)
-      std::fprintf(stderr, "[PATCH] csr read pc=0x%llx inst=0x%08x model=0x%llx function-model=0x%llx\n", (unsigned long long)f->pc, f->inst, (unsigned long long)widen_result(o, f->inst), (unsigned long long)f->rd_value);
-    if (g_bridge->patch_rd(uid, widen_result(o, f->inst))) { g_c.patch_csr_read++; f = g_bridge->find(uid); }
-  }
-  // The value comparison of P1b only means something while the model still computes values.
-  static const bool compare = std::getenv("TB_CHECK") != nullptr;
-  if (!compare) return;
-  if (f->blocked != tb::Blocked::None) { g_c.skip_blocked++; return; }
-  // a load / store the function model executed: the model's translation must fault exactly when the function model traps
-  // (an executed load or store traps only on a page fault: misaligned and out-of-range accesses are "blocked" above)
-  // (an AMO / SC is a load uop plus a store-address uop: it faults when the store side does, so only that uop is compared;
-  // LR has the load uop only)
-  const bool is_amo = (f->inst & 0x7F) == 0x2F, is_lr = is_amo && (f->inst >> 27) == 2;
-  if ((o.op == UOP_LOAD && (!is_amo || is_lr)) || o.op == UOP_STA) {
-    g_c.cmp_pf++;
-    if (static_cast<bool>(o.page_fault) != f->trapped) {
-      g_c.mis_pf++;
-      if (g_c.mis_pf <= 6) std::fprintf(stderr, "[TB_CHECK][PF-MISMATCH] uid=%llu pc=0x%llx inst=0x%08x vaddr=0x%llx model_fault=%d function_model_trap=%d\n", (unsigned long long)uid, (unsigned long long)f->pc, f->inst, (unsigned long long)f->vaddr, (int)o.page_fault, (int)f->trapped);
-    }
-  }
-  if (f->trapped) { g_c.skip_trapped++; return; }
-  if (o.page_fault) { g_c.skip_fault++; return; }
-  auto report = [&](const char *what, uint64_t got, uint64_t want, uint64_t &cnt) {
-    cnt++; g_c.mis_by_op[o.op & 31]++;
-    if (g_c.printed++ < 20)
-      std::fprintf(stderr, "[TB_CHECK][MISMATCH] %s uid=%llu pc=0x%08llx inst=0x%08x op=%d model=0x%08llx bridge=0x%08llx forced_jump=%d\n",
-                   what, (unsigned long long)uid, (unsigned long long)f->pc, f->inst, o.op, (unsigned long long)got, (unsigned long long)want, (int)f->forced_jump);
-  };
-  switch (o.op) {
-  case UOP_ADD: case UOP_MUL: case UOP_DIV: case UOP_CSR: case UOP_FMA: case UOP_FMISC: case UOP_FDIV: case UOP_I2F: case UOP_LOAD:
-    if (f->rd_valid) {
-      g_c.cmp_rd++;
-      if (widen_result(o, f->inst) != f->rd_value) report("rd", widen_result(o, f->inst), f->rd_value, g_c.mis_rd);
-    } else g_c.skip_other++;
-    break;
-  default: break;
-  }
-  g_c.seen_by_op[o.op & 31]++;
-  if (o.op == UOP_JUMP || o.op == UOP_BR) {
-    // diag_val carries the resolved next pc on the exu->rob interface.
-    g_c.cmp_target++;
-    if (o.diag_val != f->next_pc) report("target", o.diag_val, f->next_pc, g_c.mis_target);
-  }
-  if (o.op == UOP_BR) {
-    g_c.cmp_br++;
-    if (o.br_taken != f->br_taken) report("br_taken", o.br_taken, f->br_taken, g_c.mis_br);
-  }
-  if (o.op == UOP_LOAD || o.op == UOP_STA) {
-    g_c.cmp_addr++;
-    if (o.diag_val != f->vaddr) report("addr", o.diag_val, f->vaddr, g_c.mis_addr);
-  }
+      f->blocked == tb::Blocked::None && !f->trapped)
+    g_bridge->patch_rd(uid, widen_result(o, f->inst));
 }
 } // namespace tbhook

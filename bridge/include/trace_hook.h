@@ -1,5 +1,5 @@
 // Taps of the timing model into the trace bridge: dispatch / commit / flush / mispredict / interrupt drive the bridge, the facts
-// come back through fact_by_rob; TB_CHECK=1 additionally compares what the model still decides (addresses, branches, faults).
+// come back through fact_by_rob; on_exec patches the values only the timing model knows (MMIO loads, CSR reads).
 #pragma once
 #include "xlen_cast.h"
 #include <cstdint>
@@ -23,13 +23,12 @@ void on_commit(uint64_t uid);
 // (not committed; on_interrupt follows with the cause).
 void on_flush(int64_t uid, bool interrupt);
 void on_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending);
-// Execution results as seen on the exu->rob interface.
+// Execution results of loads and CSR reads as seen on the exu->rob interface.
 struct ExecObs {
-  uint32_t rob_idx;          // the LSU path loses dbg.inst_idx: identity is rob_idx -> uid
-  uint64_t uid_dbg;          // dbg.inst_idx as carried (0 on the LSU path)
+  uint32_t rob_idx;
   int op;                    // UopType
-  xlen_t result, diag_val;
-  bool br_taken, mispred, page_fault;
+  xlen_t result;
+  bool page_fault;
 };
 void on_exec(const ExecObs &o);
 } // namespace tbhook
