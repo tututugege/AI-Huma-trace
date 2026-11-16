@@ -17,22 +17,7 @@
 #include <vector>
 #include <cstdlib>
 
-// ============================================================================
-// Latched front-end state (registers)
-// ============================================================================
-static bool predecode_refetch = false;
-static pc_t predecode_refetch_address = 0;
-static bpuf::PdInfo pd_latch{};
-static uint32_t front_sim_time = 0;
-
-// FIFO full/empty latches
-static bool fetch_addr_fifo_full_latch = false;
-static bool fetch_addr_fifo_empty_latch = true;
-static bool fifo_full_latch = false;
-static bool fifo_empty_latch = true;
-static bool ptab_empty_latch = true;
-static bool front2back_fifo_full_latch = false;
-static bool front2back_fifo_empty_latch = true;
+static FrontRegs g_regs;   // the front end's own registers (q)
 // ---- FE_IPF: I-cache prefetch driven by the BPU run-ahead. Every fetch address the BPU pushes into the fetch-address FIFO is a candidate: if its line
 // is not in the I-cache, has been filled before (so it is assumed to sit in the LLC) and no prefetch of it is in flight, a prefetch is started and the
 // line is installed into the I-cache after FE_IPF_LAT cycles (tag + valid only; LLC / bus traffic of the prefetch is not modelled).
@@ -76,12 +61,6 @@ static void tick(uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
 }  // namespace ipf
 
 
-static bool lh_valid = false;             // RVC=1 "last half": the next group begins with the second half of an instruction that started in the last slot of the group before
-static uint16_t lh_data = 0;              // C910-style carry: the first halfword of the straddling instruction (its pc is lh_pc - 2)
-static pc_t lh_pc = 0;                    // ... and that group starts at this pc
-static bool pend_valid = false;           // FE_PAIR: ICache request in flight and its second block
-static uint32_t pend_addr = 0;
-static FetchPair pend_pair{};
 static SimContext *front_ctx = nullptr;
 
 void front_set_context(SimContext *ctx) { front_ctx = ctx; }
@@ -368,7 +347,7 @@ struct FrontComb {
 // predecode checker and the back end).
 void FrontComb::read_fifos() {
   global_reset = in.reset;
-  global_refetch = in.refetch || rd.predecode_refetch_snapshot;
+  global_refetch = in.refetch || rd.q.predecode_refetch;
 
   ic_in.reset = global_reset;
   ic_in.refetch = global_refetch;
@@ -399,10 +378,10 @@ void FrontComb::read_fifos() {
     if (ptab_bypass) { front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in); ptab_in.write_enable = true; ptab_written = true; }
     if (ptab_bypass) fpr_ptab(ptab_in);
   }
-  const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.fetch_addr_fifo_empty_latch_snapshot &&
+  const bool fetch_addr_read_enable = ic_out.icache_read_ready && !rd.q.fetch_addr_fifo_empty &&
                                       !global_reset && !global_refetch && pipe_head_ok;
-  fifo_read_enable = !rd.fifo_empty_latch_snapshot && (!rd.ptab_empty_latch_snapshot || ptab_bypass) &&
-                     !rd.front2back_fifo_full_latch_snapshot && !global_reset && !global_refetch;
+  fifo_read_enable = !rd.q.fifo_empty && (!rd.q.ptab_empty || ptab_bypass) &&
+                     !rd.q.f2b_full && !global_reset && !global_refetch;
   f2b_read_enable = in.FIFO_read_enable;
 
   fetch_addr_in.reset = global_reset;
@@ -439,7 +418,7 @@ void FrontComb::read_fifos() {
 void FrontComb::run_bpu() {
   fpr::set_cycle(front_ctx ? front_ctx->perf.cycle : 0);
   if (bpu_done) return;
-  const bool bpu_stall = rd.fetch_addr_fifo_full_latch_snapshot;
+  const bool bpu_stall = rd.q.fetch_addr_fifo_full;
   bpu_can_run = (!bpu_stall || global_reset || global_refetch);
 
   bpuf::InputPayload bpu_input{};
@@ -447,9 +426,9 @@ void FrontComb::run_bpu() {
   bpu_input.refetch_pd = global_refetch && !in.refetch;
   bpu_input.rf_valid = in.refetch && in.rf_valid;
   bpu_input.rf_blk = in.rf_blk; bpu_input.rf_slot = in.rf_slot; bpu_input.rf_type = in.rf_type; bpu_input.rf_pc = in.rf_pc; bpu_input.rf_is_rvc = in.rf_is_rvc;
-  bpu_input.pd = rd.pd_snapshot;
-  bpu_input.refetch_address = in.refetch ? in.refetch_address : rd.predecode_refetch_address_snapshot;
-  bpu_input.icache_read_ready = bpu_can_run && !rd.fetch_addr_fifo_full_latch_snapshot;
+  bpu_input.pd = rd.q.pd;
+  bpu_input.refetch_address = in.refetch ? in.refetch_address : rd.q.predecode_refetch_address;
+  bpu_input.icache_read_ready = bpu_can_run && !rd.q.fetch_addr_fifo_full;
   bpu_input.ptab_size = rd.ptab_rd_snapshot.size > 255 ? 255 : rd.ptab_rd_snapshot.size;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     bpu_input.in_update_base_pc[i] = in.predict_base_pc[i];
@@ -520,13 +499,13 @@ void FrontComb::run_icache() {
 void FrontComb::write_instruction_fifo() {
   fifo_in.read_enable = false;
   fifo_in.write_enable = false;
-  if (rd.fifo_full_latch_snapshot || !ic_out.icache_read_complete || global_reset || global_refetch) return;
+  if (rd.q.fifo_full || !ic_out.icache_read_complete || global_reset || global_refetch) return;
 
   fifo_in.write_enable = true;
   // FE_PAIR: the second block of the request that completes now (if the entry had one and its line can be read in the same cycle)
   FetchPair pr{};
   if (fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc) pr = fetch_addr_head.pair;
-  else if (rd.pend_valid_snapshot && rd.pend_addr_snapshot == ic_out.fetch_pc) pr = rd.pend_pair_snapshot;
+  else if (rd.q.pend_valid && rd.q.pend_addr == ic_out.fetch_pc) pr = rd.q.pend_pair;
   inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire1_t gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
   for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * SLOT_BYTES); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
   bool fused = false;
@@ -657,7 +636,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
   bool rvc_straddle = false;
   uint16_t carry_low = 0;
   if constexpr (kRvc) {
-    const RvcHeadFix hf = rvc_head_fix(fifo_head, ptab_head, rd.lh_valid_snapshot, rd.lh_pc_snapshot, rd.lh_data_snapshot);
+    const RvcHeadFix hf = rvc_head_fix(fifo_head, ptab_head, rd.q.lh_valid, rd.q.lh_pc, rd.q.lh_data);
     rvc_n = hf.n; rvc_straddle = hf.straddle; carry_low = hf.low;
   }
   predecode_checker_in checker_in;
@@ -715,8 +694,8 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
 // The checked entry goes to the front2back FIFO, or straight to the output when the FIFO is empty and the back end is
 // reading this cycle.
 void FrontComb::write_front2back() {
-  const bool can_write = fifo_read_enable && !rd.front2back_fifo_full_latch_snapshot && !global_reset;
-  use_f2b_bypass = f2b_read_enable && rd.front2back_fifo_empty_latch_snapshot &&
+  const bool can_write = fifo_read_enable && !rd.q.f2b_full && !global_reset;
+  use_f2b_bypass = f2b_read_enable && rd.q.f2b_empty &&
                    !f2b_head.front2back_FIFO_valid && can_write;
   f2b_in.read_enable = false;
   f2b_in.write_enable = can_write && !use_f2b_bypass;
@@ -742,32 +721,31 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
     icache_comb_calc(&invalidate_in, &ic_out);
   }
   {   // FE_PAIR: remember the second block of the ICache request that is still in flight
-    bool nv = rd.pend_valid_snapshot; fetch_addr_t na = rd.pend_addr_snapshot; FetchPair np = rd.pend_pair_snapshot;
+    bool nv = rd.q.pend_valid; fetch_addr_t na = rd.q.pend_addr; FetchPair np = rd.q.pend_pair;
     const bool head_done = ic_out.icache_read_complete && fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc;
-    if (ic_out.icache_read_complete && nv && rd.pend_addr_snapshot == ic_out.fetch_pc) nv = false;
+    if (ic_out.icache_read_complete && nv && rd.q.pend_addr == ic_out.fetch_pc) nv = false;
     if (fetch_addr_head.read_valid && !head_done) { nv = true; na = fetch_addr_head.fetch_address; np = fetch_addr_head.pair; }
     if (global_refetch || global_reset) nv = false;
-    state.next_pend_valid = nv; state.next_pend_addr = na; state.next_pend_pair = np;
+    state.d.pend_valid = nv; state.d.pend_addr = na; state.d.pend_pair = np;
   }
   {   // RVC=1 last-half state
-    bool nv = lh_updated ? lh_new_valid : rd.lh_valid_snapshot;
+    bool nv = lh_updated ? lh_new_valid : rd.q.lh_valid;
     // a back-end redirect (or reset) drops the carry; a predecode flush drops it unless the flushed group itself set it (sequential continuation),
     // and the refetch cycle that follows a predecode flush keeps it
     if (global_reset || in.refetch) nv = false;
     else if (predecode_flush && !(lh_updated && lh_new_valid)) nv = false;
-    state.next_lh_valid = nv; state.next_lh_pc = lh_updated ? lh_new_pc : rd.lh_pc_snapshot; state.next_lh_data = lh_updated ? lh_new_data : rd.lh_data_snapshot;
+    state.d.lh_valid = nv; state.d.lh_pc = lh_updated ? lh_new_pc : rd.q.lh_pc; state.d.lh_data = lh_updated ? lh_new_data : rd.q.lh_data;
   }
-  state.next_predecode_refetch = predecode_flush;
-  state.next_pd = pd_next;
-  state.next_predecode_refetch_address = predecode_flush ? flush_address : 0;
-  state.next_fetch_addr_fifo_full = (fetch_addr_rd.size >= (FETCH_ADDR_FIFO_SIZE - 1));
-  state.next_fetch_addr_fifo_empty = (fetch_addr_rd.size == 0);
-  state.next_fifo_full = (fifo_rd.size == INSTRUCTION_FIFO_SIZE);
-  state.next_fifo_empty = (fifo_rd.size == 0);
-  state.next_ptab_empty = (ptab_rd.size == 0);
-  state.next_front2back_fifo_full = (f2b_rd.size == FRONT2BACK_FIFO_SIZE);
-  state.next_front2back_fifo_empty = (f2b_rd.size == 0);
-  state.next_front_sim_time = rd.front_sim_time_snapshot + 1;
+  state.d.predecode_refetch = predecode_flush;
+  state.d.pd = pd_next;
+  state.d.predecode_refetch_address = predecode_flush ? flush_address : 0;
+  state.d.fetch_addr_fifo_full = (fetch_addr_rd.size >= (FETCH_ADDR_FIFO_SIZE - 1));
+  state.d.fetch_addr_fifo_empty = (fetch_addr_rd.size == 0);
+  state.d.fifo_full = (fifo_rd.size == INSTRUCTION_FIFO_SIZE);
+  state.d.fifo_empty = (fifo_rd.size == 0);
+  state.d.ptab_empty = (ptab_rd.size == 0);
+  state.d.f2b_full = (f2b_rd.size == FRONT2BACK_FIFO_SIZE);
+  state.d.f2b_empty = (f2b_rd.size == 0);
 
   front_output_comb(f2b_head, f2b_bypass, use_f2b_bypass, out);
   out.commit_stall = bpu_output.update_queue_full;
@@ -800,15 +778,15 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
       } else if (global_refetch || cyc - last_refetch <= 6) pf.feo_cause = PMU_FEO_LOSS_REFETCH;
       else if (ic_out.perf_miss_busy) pf.feo_cause = PMU_FEO_LOSS_ICMISS;
       else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
-      else if (rd.fetch_addr_fifo_empty_latch_snapshot && !bpu_output.icache_read_valid) {
+      else if (rd.q.fetch_addr_fifo_empty && !bpu_output.icache_read_valid) {
         if (g_pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
         else if (g_pipe_txn.pmu_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
-        else if (rd.fetch_addr_fifo_full_latch_snapshot || g_pipe_txn.pmu_ptab_stall) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
+        else if (rd.q.fetch_addr_fifo_full || g_pipe_txn.pmu_ptab_stall) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
         else pf.feo_cause = PMU_FEO_LOSS_BPUOTHER;
       }
       else if (!ic_out.icache_read_ready) pf.feo_cause = PMU_FEO_LOSS_ICNOTRDY;
-      else if (rd.fifo_empty_latch_snapshot) pf.feo_cause = PMU_FEO_LOSS_IFIFO;
-      else if (rd.ptab_empty_latch_snapshot) pf.feo_cause = PMU_FEO_LOSS_PTABLAG;
+      else if (rd.q.fifo_empty) pf.feo_cause = PMU_FEO_LOSS_IFIFO;
+      else if (rd.q.ptab_empty) pf.feo_cause = PMU_FEO_LOSS_PTABLAG;
       else pf.feo_cause = PMU_FEO_LOSS_F2B;
     }
   }
@@ -835,19 +813,7 @@ void front_comb_calc(const struct front_top_in &inp, const FrontReadData &rd, st
 namespace {
 
 void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
-  rd.predecode_refetch_snapshot = predecode_refetch;
-  rd.predecode_refetch_address_snapshot = predecode_refetch_address;
-  rd.pd_snapshot = pd_latch;
-  rd.front_sim_time_snapshot = front_sim_time;
-  rd.fetch_addr_fifo_full_latch_snapshot = fetch_addr_fifo_full_latch;
-  rd.fetch_addr_fifo_empty_latch_snapshot = fetch_addr_fifo_empty_latch;
-  rd.fifo_full_latch_snapshot = fifo_full_latch;
-  rd.fifo_empty_latch_snapshot = fifo_empty_latch;
-  rd.ptab_empty_latch_snapshot = ptab_empty_latch;
-  rd.front2back_fifo_full_latch_snapshot = front2back_fifo_full_latch;
-  rd.front2back_fifo_empty_latch_snapshot = front2back_fifo_empty_latch;
-  rd.lh_valid_snapshot = lh_valid; rd.lh_pc_snapshot = lh_pc; rd.lh_data_snapshot = lh_data;
-  rd.pend_valid_snapshot = pend_valid; rd.pend_addr_snapshot = pend_addr; rd.pend_pair_snapshot = pend_pair;
+  rd.q = g_regs;
 
   fetch_address_FIFO_in fetch_addr_in;
   instruction_FIFO_in fifo_in;
@@ -880,21 +846,7 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
   predecode_checker_seq_write();
 
   ipf::tick(front_ctx ? front_ctx->perf.cycle : 0, req.front_state.ipf_cand, req.front_state.valid ? req.front_state.ipf_ncand : 0, inp.csr_status);
-  if (req.front_state.valid) {
-    front_sim_time = req.front_state.next_front_sim_time;
-    predecode_refetch = req.front_state.next_predecode_refetch;
-    predecode_refetch_address = req.front_state.next_predecode_refetch_address;
-    pd_latch = req.front_state.next_pd;
-    fetch_addr_fifo_full_latch = req.front_state.next_fetch_addr_fifo_full;
-    fetch_addr_fifo_empty_latch = req.front_state.next_fetch_addr_fifo_empty;
-    fifo_full_latch = req.front_state.next_fifo_full;
-    fifo_empty_latch = req.front_state.next_fifo_empty;
-    ptab_empty_latch = req.front_state.next_ptab_empty;
-    front2back_fifo_full_latch = req.front_state.next_front2back_fifo_full;
-    front2back_fifo_empty_latch = req.front_state.next_front2back_fifo_empty;
-    lh_valid = req.front_state.next_lh_valid; lh_pc = req.front_state.next_lh_pc; lh_data = req.front_state.next_lh_data;
-    pend_valid = req.front_state.next_pend_valid; pend_addr = req.front_state.next_pend_addr; pend_pair = req.front_state.next_pend_pair;
-  }
+  if (req.front_state.valid) g_regs = req.front_state.d;
 }
 
 } // namespace

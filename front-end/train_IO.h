@@ -49,51 +49,36 @@ struct PendingBpuSeqTxn {
   wire1_t reset = false;
 };
 
+// The front end's own registers (the FIFOs and the BPU keep theirs): q = the value of this cycle, the comb builds d, seq copies d to q.
+struct FrontRegs {
+  wire1_t predecode_refetch = false;          // the predecode checker flushed last cycle: refetch from predecode_refetch_address
+  fetch_addr_t predecode_refetch_address = 0;
+  bpuf::PdInfo pd{};                          // the check of last cycle, reported to the BPU
+  wire1_t fetch_addr_fifo_full = false, fetch_addr_fifo_empty = true;   // FIFO occupancy as registered at the end of last cycle
+  wire1_t fifo_full = false, fifo_empty = true;
+  wire1_t ptab_empty = true;
+  wire1_t f2b_full = false, f2b_empty = true;
+  wire1_t lh_valid = false;     // RVC=1: the next group begins with the second half of an instruction that started in the last slot of the group before
+  pc_t lh_pc = 0;               // ... that group starts at this pc
+  uint16_t lh_data = 0;         // ... and the carried first halfword (C910-style carry)
+  wire1_t pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
+  fetch_addr_t pend_addr = 0;
+  FetchPair pend_pair{};
+};
+
 struct PendingFrontState {
   wire1_t valid = false;
-  wire32_t next_front_sim_time = 0;
-  wire1_t next_predecode_refetch = false;
-  bpuf::PdInfo next_pd{};
-  fetch_addr_t next_predecode_refetch_address = 0;
-  wire1_t next_fetch_addr_fifo_full = false;
-  wire1_t next_fetch_addr_fifo_empty = true;
-  wire1_t next_fifo_full = false;
-  wire1_t next_fifo_empty = true;
-  wire1_t next_ptab_empty = true;
-  wire1_t next_front2back_fifo_full = false;
-  wire1_t next_front2back_fifo_empty = true;
-  wire1_t next_lh_valid = false;     // RVC=1: the last instruction of the group at the FIFO head starts in its last slot (its second half is the next group's first halfword)
-  pc_t next_lh_pc = 0;
-  uint16_t next_lh_data = 0;         // the carried first halfword
-  wire1_t next_pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
-  fetch_addr_t next_pend_addr = 0;
-  FetchPair next_pend_pair{};
+  FrontRegs d;
   int ipf_ncand = 0;                 // FE_IPF: fetch addresses the BPU pushed this cycle (prefetch candidates)
   uint32_t ipf_cand[2] = {0, 0};
 };
 
 struct FrontReadData {
-  wire1_t predecode_refetch_snapshot = false;
-  bpuf::PdInfo pd_snapshot{};
-  fetch_addr_t predecode_refetch_address_snapshot = 0;
-  wire32_t front_sim_time_snapshot = 0;
+  FrontRegs q;
   fetch_address_FIFO_read_data fetch_addr_fifo_rd_snapshot{};
   instruction_FIFO_read_data fifo_rd_snapshot{};
   PTAB_read_data ptab_rd_snapshot{};
   front2back_FIFO_read_data front2back_fifo_rd_snapshot{};
-  wire1_t fetch_addr_fifo_full_latch_snapshot = false;
-  wire1_t fetch_addr_fifo_empty_latch_snapshot = true;
-  wire1_t fifo_full_latch_snapshot = false;
-  wire1_t fifo_empty_latch_snapshot = true;
-  wire1_t ptab_empty_latch_snapshot = true;
-  wire1_t front2back_fifo_full_latch_snapshot = false;
-  wire1_t front2back_fifo_empty_latch_snapshot = true;
-  wire1_t lh_valid_snapshot = false;
-  pc_t lh_pc_snapshot = 0;
-  uint16_t lh_data_snapshot = 0;
-  wire1_t pend_valid_snapshot = false;
-  fetch_addr_t pend_addr_snapshot = 0;
-  FetchPair pend_pair_snapshot{};
 };
 
 struct FrontUpdateRequest {
