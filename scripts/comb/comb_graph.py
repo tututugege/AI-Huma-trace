@@ -249,6 +249,10 @@ trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows, back_cls
 TOP_KNOWN = {('axi.interconnect.comb_outputs', f'axi.interconnect.{io}.{ch}.{ch}valid', 'axi.interconnect.comb_inputs'): 'AXI kit'
              for io in ('axi_ddr_io', 'axi_mmio_io') for ch in ('ar', 'aw', 'w')}
 TOP_KNOWN[('axi.interconnect.comb_outputs', 'axi.interconnect.write_ports[].req.ready', 'axi.interconnect.comb_inputs')] = 'AXI kit'
+# reviewed: comb_outputs reads a write port's addr / total_size only under its req.valid, which axi.comb_begin has
+# cleared at that point (the memory subsystem drives the request later): the stale value is never used
+for f in ('addr', 'total_size'):
+    TOP_KNOWN[('axi.interconnect.comb_outputs', f'axi.interconnect.write_ports[].req.{f}', 'mem_subsystem.comb_inputs')] = 'under valid'
 thaz, tstaged = [], 0
 for i, (n, r, w) in enumerate(trows):
     for j in range(i + 1, len(trows)):

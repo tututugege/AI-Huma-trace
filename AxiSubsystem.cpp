@@ -38,25 +38,9 @@ void AxiSubsystem::sync_uart_from_backing() {
 }
 
 void AxiSubsystem::comb_begin() {
-  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) {
-    auto &port = interconnect.read_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.req.bypass = false;
-    // resp.ready is not cleared: each master drives it, the interconnect samples it at the clock edge.
-  }
-  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) {
-    auto &port = interconnect.write_ports[i];
-    port.req.valid = false;
-    port.req.addr = 0;
-    port.req.wdata.clear();
-    port.req.wstrb = 0;
-    port.req.total_size = 0;
-    port.req.id = 0;
-    port.req.bypass = false;
-  }
+  // only valid: the other request fields are read under valid (a master that requests drives them all)
+  for (int i = 0; i < axi_interconnect::NUM_READ_MASTERS; i++) interconnect.read_ports[i].req.valid = false;
+  for (int i = 0; i < axi_interconnect::NUM_WRITE_MASTERS; i++) interconnect.write_ports[i].req.valid = false;
 }
 
 void AxiSubsystem::comb_outputs() {

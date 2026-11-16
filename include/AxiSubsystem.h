@@ -23,8 +23,8 @@ public:
 
   void init();
   void sync_uart_from_backing();
-  // the masters' request fields cleared (each master drives them anew every cycle; resp.ready stays: the
-  // interconnect samples it at the clock edge)
+  // the masters' request valid cleared (a master that requests this cycle sets it and drives the other fields;
+  // resp.ready stays: the interconnect samples it at the clock edge)
   void comb_begin();
   // the LLC lookup, then slave outputs -> interconnect outputs (req.ready / accepted / resp on the master ports)
   void comb_outputs();
