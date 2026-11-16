@@ -39,13 +39,14 @@ def unit_of(label, group, inner_of):
     """the object whose state a row's phase touches beyond the scanned signals"""
     base = label.split(':')[0].split('#')[0]
     p = base.split('.')
-    if inner_of == 'back.comb': return 'back.' + (p[1] if p[1] != 'pmu_sample' else 'top')
+    if inner_of in ('back.comb', 'back.comb_late'): return 'back.' + (p[1] if p[1] != 'pmu_sample' else 'top')
     if inner_of == 'front.comb_core': return 'front.core'
     if inner_of and inner_of.startswith('mem_subsystem.'): return 'mem_subsystem.' + (p[1] if len(p) > 2 else 'top')
     if base in ('back.comb_csr_status',): return 'back.csr'
     if base in ('front.read_core_q', 'front.comb_core'): return 'front.core'
     if base.startswith(('axi.interconnect', 'axi.ddr', 'axi.mmio')): return '.'.join(p[:2])
     if base.startswith('mem_subsystem.llc'): return 'mem_subsystem.llc'
+    if base == 'mem_subsystem.commit_stores': return 'mem_subsystem.peripheral'
     return 'group:' + group                          # SimCpu / FrontTop / AxiSubsystem glue: its statements in order
 
 

@@ -14,6 +14,27 @@ void RealLsu::init() {
 }
 
 // Commit-time view of a store for the peripheral model (state of the registered STQ).
+// The stores of this cycle's commit that reach a device: a committed store (not page-faulting) whose STQ entry has its
+// address and data and is not suppressed. The STQ is the registered one (pcur_), so the slot shows what the commit sees.
+void RealLsu::comb_commit_store() {
+  const bool interrupt = in.rob_bcast->interrupt;
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    CommitStore &cs = out.commit_store->slot[i];
+    cs = {};
+    if (!in.rob_commit->commit_entry[i].valid || interrupt) continue;
+    const InstEntry ce = in.rob_commit->commit_entry[i].uop.to_inst_entry(true);
+    const InstInfo &inst = ce.uop;
+    if (!inst.tma.mem_commit_is_store || inst.page_fault_store) continue;
+    const StqEntry e = get_stq_entry(inst.stq_idx, inst.stq_flag);
+    const bool suppressed = static_cast<bool>(e.suppress_write) && e.rob_idx == inst.rob_idx && e.rob_flag == inst.rob_flag;
+    if (suppressed || !e.paddr_valid || !e.data_valid) continue;
+    cs.valid = true;
+    cs.paddr = e.paddr;
+    cs.data = e.data;
+    cs.func3 = e.func3;
+  }
+}
+
 StqEntry RealLsu::get_stq_entry(int idx, bool flag) {
   const lp::LsuPipeState &pcur = pcur_;
   if (idx < 0 || idx >= STQ_SIZE) return {};

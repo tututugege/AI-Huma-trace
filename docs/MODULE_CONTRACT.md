@@ -355,3 +355,22 @@ through memory. The derived schedule does not cut the front end, so the change i
 domain would emit the slot form only for that domain. Kept: the front-domain scan takes only calls on a bare `c.` as
 phases. The back end and the memory subsystem need nothing of the kind: their phases are methods of persistent
 objects.
+
+## Global schedule, step 4: the commit's device stores as a port; back.comb cut by the generator (exp/global-sched)
+
+The committed stores to a modeled device (CLINT timer / timecmp, ...) took effect through a callback: Ren's commit loop
+-> SimContext::run_commit_inst -> SimCpu::commit_sync -> the LSU's STQ -> MemSubsystem::on_commit_store -> the
+peripheral model, which drives the CSR's interrupt lines (csr_interrupt_inject_io) read later in the same back.comb by
+csr.comb_interrupt_inject. None of it was in a contract. Now:
+* `RealLsu::comb_commit_store` (CONTRACT in: rob_bcast rob_commit, out: out.commit_store) computes the slots from the
+  ROB's commit and the registered STQ (pcur_, unchanged during comb), the same conditions as commit_sync;
+  `BackOut::commit_store` is the port. Ren, SimContext::run_commit_inst and SimCpu::commit_sync lose the callback.
+* `SimCpu::comb_commit_store` (EXPORT in: commit_store, out: csr_inject periph) applies them to the peripheral model.
+  The model's device state is a port (`periph`) that mem_subsystem.comb_inputs reads (its MMIO loads, read_load64).
+* gen_comb_order.py: a phase that reads a field of BackTop's `EXPORT comb_late` in-ports (through the SimCpu port
+  table) and everything after it goes to `BackTop::comb_late()`: here csr.comb_interrupt_inject alone (pmu_sample stays
+  last). gen_top_order.py places the new phases: back.comb, comb_front2back_hold, comb_commit_store, back.comb_late, ...
+* The global derivation cuts the back end in the same place (back: comb_csr_status | comb | comb_late, 12 runs) and
+  equals cycle().
+Gates RVC=0 62/62, RVC=1 67/67 identical, FPR (4) identical, TB_TRACE_COMMIT and LSU_PIPE_EVT identical, the rv64
+Linux checkpoint (40M instructions, 3M run, 2,126,672 cycles) identical.

@@ -8,34 +8,7 @@
 #include "util.h"
 #include <cstdint>
 
-// Environment actions at commit (not ports of a module; the RTL testbench does the same, rtl/docs/modules/soc_top.md):
-// Ren calls them through SimContext while it commits. A committed store to a modeled device (CLINT timer / timecmp,
-// ...) takes effect in the peripheral model at once: its interrupt line is read by csr.comb_interrupt_inject later in
-// the same back.comb. An interrupt taken at commit is reported to the trace bridge.
-void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
-  BackTop *back = &this->back;
-  Assert(commit_slot >= 0 && commit_slot < COMMIT_WIDTH &&
-         "SimCpu::commit_sync: invalid commit slot");
-  if (inst->tma.mem_commit_is_store && !inst->page_fault_store) {
-    StqEntry e = back->lsu->get_stq_entry(inst->stq_idx, inst->stq_flag);
-    const bool store_suppressed = static_cast<bool>(e.suppress_write) &&
-                                  e.rob_idx == inst->rob_idx &&
-                                  e.rob_flag == inst->rob_flag;
-    if (!store_suppressed && e.paddr_valid && e.data_valid) {
-      mem_subsystem.on_commit_store(e.paddr, e.data, e.func3);
-    }
-  }
-}
-
-void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
-  Assert(cpu != nullptr && "SimContext::run_commit_inst: cpu is null");
-  Assert(inst_entry != nullptr &&
-         "SimContext::run_commit_inst: inst_entry is null");
-  Assert(inst_entry->valid &&
-         "SimContext::run_commit_inst: inst_entry is not valid");
-  cpu->commit_sync(&inst_entry->uop, commit_slot);
-}
-
+// An interrupt taken at commit is reported to the trace bridge (Ren calls it through SimContext while it commits).
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
   const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->d.privilege);
@@ -147,6 +120,8 @@ void SimCpu::cycle() {
   mem_subsystem.comb_outputs();
   back.comb();
   comb_front2back_hold();
+  comb_commit_store();
+  back.comb_late();
   front.comb_from_back(back);
   mem_subsystem.comb_inputs();
   axi_comb_inputs();
@@ -186,4 +161,8 @@ void SimCpu::comb_front2back_hold() {
 }
 
 void SimCpu::regs_seq() { q_ = d; }
+
+// The device stores of this cycle's commit (back.out.commit_store) into the peripheral model, which drives the CSR's
+// interrupt lines (read by back.comb_late) and answers the MMIO loads of mem_subsystem.comb_inputs.
+void SimCpu::comb_commit_store() { mem_subsystem.commit_stores(back.out.commit_store); }
 

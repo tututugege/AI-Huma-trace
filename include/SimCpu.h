@@ -20,6 +20,9 @@
 //   PORT lsu2dcache         = back.out.lsu2dcache
 //   PORT mmio_req           = back.out.peripheral_req
 //   PORT mmio_resp          = d.peripheral_resp
+//   PORT commit_store       = back.out.commit_store
+//   PORT csr_inject         = back.csr_interrupt_inject_io
+//   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)
 //   PORT back2front         = back.out.{commit_entry,commit_extra,commit_ftq,fence_i,fire,flush,itlb_flush,mispred,redirect_pc,rf_blk,rf_is_rvc,rf_pc,rf_slot,rf_type,rf_valid,stall}
 //   PORT dtlb_walk          = mem_subsystem.dtlb_walk
 //   PORT itlb_walk          = mem_subsystem.itlb_walk
@@ -36,6 +39,7 @@
 //   EXPORT axi_comb_outputs      in: axi_ic_req  pre: axi_mem_req  out: axi_slave
 //   EXPORT axi_comb_inputs       in: axi_ic_req axi_mem_req  out: axi_ready_next
 //   EXPORT comb_front2back_hold  in: fetch_group back2front
+//   EXPORT comb_commit_store     in: commit_store  out: csr_inject periph
 class SimCpu {
 public:
   ICacheMemPortReq icache_req{}; // the I-cache probe request (FrontTop drives it; the memory subsystem reads it)
@@ -71,6 +75,5 @@ public:
   void axi_comb_outputs();
   void axi_comb_inputs();
   void regs_seq();
-  // called by SimContext on the commit path
-  void commit_sync(InstInfo *inst, int commit_slot);
+  void comb_commit_store();
 };

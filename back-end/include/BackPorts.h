@@ -38,6 +38,7 @@ struct BackOut {
   // to MemSubsystem
   PeripheralReqIO peripheral_req;
   LsuDcacheIO lsu2dcache;
+  CommitStoreIO commit_store;   // the device stores of this cycle's commit (the peripheral model applies them)
 
   BackOut()
       : mispred(false), stall(false), flush(false), fence_i(false),

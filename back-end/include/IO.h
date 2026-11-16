@@ -343,6 +343,19 @@ struct MemRespMeta {
   wire<ROB_IDX_WIDTH> rob_idx{};
 };
 
+// The stores committed this cycle to a modeled device (CLINT timer / timecmp, interrupt controller, ...): the
+// environment applies them at commit (the RTL testbench does the same, rtl/docs/modules/soc_top.md). One slot per
+// commit slot; LSU drives it from the ROB's commit and its registered STQ.
+struct CommitStore {
+  bool valid = false;
+  uint32_t paddr = 0;
+  uint64_t data = 0;
+  uint8_t func3 = 0;
+};
+struct CommitStoreIO {
+  CommitStore slot[COMMIT_WIDTH] = {};
+};
+
 struct PeripheralReqIO {
   wire<1> is_mmio = {};
   wire<1> wen = {};

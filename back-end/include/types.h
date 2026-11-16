@@ -196,6 +196,5 @@ public:
   // Front-door checkpoint restore: the restore program is still running; the measurement starts at its mret
   bool front_door_pending = false;
   SimCpu *cpu = nullptr;
-  void run_commit_inst(InstEntry *inst_entry, int commit_slot);
   void run_interrupt_hook();
 };

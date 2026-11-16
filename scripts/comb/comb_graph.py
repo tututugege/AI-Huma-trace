@@ -28,7 +28,8 @@ for d0, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
             for fm in re.finditer(r'^\s*[\w:<>, ]+?\s(\w+);', om.group(1), re.M): OUTS[fm.group(1)] = cm.group(1)
 FIELDS = [f for f in FIELDS if f not in ('in', 'out')] + sorted(OUTS) + ['idu_br_latch', 'in', 'out']   # (idu_br_latch: Idu's
 #   br_latch register, a port of the pre-decode queue)
-EXT_PORT = {'lsu2dcache': 'out.lsu2dcache', 'peripheral_req': 'out.peripheral_req', 'csr_status': 'csr_status'}   # module
+EXT_PORT = {'lsu2dcache': 'out.lsu2dcache', 'peripheral_req': 'out.peripheral_req', 'commit_store': 'out.commit_store',
+            'csr_status': 'csr_status'}   # module
 #   output ports bound to BackTop's interface
 
 def as_wires(cls, b):
@@ -80,6 +81,8 @@ def expand(fn, out):
         elif obj is None and f.startswith('comb_'): out.append(('top', 'BackTop', f))
 phases = []
 expand('comb', phases)
+N_EARLY = len(phases)          # BackTop::comb(); the rest: BackTop::comb_late()
+expand('comb_late', phases)
 
 ASSIGN = r'\s*(?:\[[^\]]*\]|\.\w+|\(\))*\s*(?:=(?!=)|\|=|&=|\+=|-=|\^=|<<=|>>=|\+\+|--)'
 def accesses(body, unqualified=False):
@@ -239,7 +242,7 @@ for name, (drows, dhaz, notes) in (('front', front_domain(ROOT, ASSIGN, overlap)
     all_hazards += dhaz
 # top level: SimCpu::cycle() (see comb_top.py)
 from comb_top import top_domain
-trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows, back_cls=cls_of)
+trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows, back_cls=cls_of, back_early=N_EARLY)
 # reviewed: the AXI interconnect keeps some of its own last-cycle outputs in the shared port structs (the downstream
 # AR / AW / W valid it drove, the write-port req.ready) and reads them in comb_outputs: registers inside the AXI kit,
 # to become explicit when the AXI kit is reworked (docs/REG_WIRE.md)

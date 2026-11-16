@@ -36,7 +36,8 @@ class MemSubsystem;
 //   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
 //   EXPORT comb_csr_status  out: csr_status
-//   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk
+//   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk commit_store
+//   EXPORT comb_late        in: csr_inject
 class BackTop : public BackPorts {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
@@ -65,6 +66,7 @@ public:
   void clear_comb_inputs();
   void comb_csr_status();
   void comb();
+  void comb_late();   // the phases after SimCpu::comb_commit_store (gen_comb_order.py)
   void pmu_sample();  // PMU (EXP-013): one cycle of the event bus, called at the end of comb()
   void seq();
   void set_lsu_ptw_walk_port(PtwWalkPort *port);

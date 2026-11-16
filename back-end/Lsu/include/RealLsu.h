@@ -42,13 +42,15 @@ struct BackIn;
 //   CONTRACT comb_writeback  in: dec_bcast rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: lsu2exe lsu_awake
 //   CONTRACT comb_translate  in: csr_status dec_bcast exe2lsu rob_bcast                out: -
 //   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: out.lsu2dcache out.peripheral_req
-//   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe out.lsu2dcache out.peripheral_req
+//   CONTRACT comb_commit_store  in: rob_bcast rob_commit                            out: out.commit_store
+//   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe out.lsu2dcache out.peripheral_req out.commit_store
 class RealLsu {
 public:
   void comb_outputs();  // outputs from the registers: wakeups, free counts to dispatch, completion to the ROB
   void comb_writeback();  // committed stores, MMIO and DCache responses, load write-back to the EXU
   void comb_translate();  // AGU / STD results in, address translation, store-to-load forwarding
   void comb_requests();  // allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
+  void comb_commit_store();  // the committed stores to a modeled device (from the ROB's commit and the registered STQ)
   RealLsu() : nxt{}, ctx(nullptr), cur_{} {}
   explicit RealLsu(SimContext *ctx) : nxt{}, ctx(ctx), cur_{} {}
 
@@ -65,6 +67,7 @@ public:
     LsuExeIO lsu2exe;
     LsuDcacheIO *lsu2dcache = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
+    CommitStoreIO *commit_store = nullptr;       // in BackTop (the back end's interface), bound by BackTop::init
   } out;
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
   struct In {

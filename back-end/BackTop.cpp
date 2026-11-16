@@ -38,6 +38,7 @@ void BackTop::init() {
   csr->out.csr_status = &csr_status;
   lsu->out.lsu2dcache = &out.lsu2dcache;
   lsu->out.peripheral_req = &out.peripheral_req;
+  lsu->out.commit_store = &out.commit_store;
   // the modules' inputs: the other modules' outputs, or the back end's interface
   pre->in.idu_br_latch = &idu->q().br_latch;
   pre->in.idu_consume = &idu->out.idu_consume;
@@ -212,11 +213,19 @@ void BackTop::comb() {
   idu->comb_fire();
   pre->comb_fire();
   lsu->comb_requests();
+  lsu->comb_commit_store();
   exu->comb_pipeline();
   isu->comb_enq();
   comb_outputs();
-  csr->comb_interrupt_inject();
   rob->comb_update();
+  // END GENERATED
+}
+
+// The back end's phases that read an input another top drives after BackTop::comb() (the CSR's interrupt lines, from
+// the commit's device stores: SimCpu::comb_commit_store); gen_comb_order.py puts them here.
+void BackTop::comb_late() {
+  // BEGIN GENERATED (late) by scripts/comb/gen_comb_order.py from the module contracts: do not edit
+  csr->comb_interrupt_inject();
   // END GENERATED
   pmu_sample();
 }

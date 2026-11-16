@@ -102,7 +102,8 @@ def scan_paths(body, ASSIGN, src, notes, owner, roots=ROOTS, prefix='', types=No
     return r, w
 
 
-def top_domain(root, ASSIGN, back_rows, back_cls=None):
+def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
+    if back_early is None: back_early = len(back_rows)
     src = Src(root, ['back-end', 'front-end', 'MemSubSystem', 'axi-interconnect-kit', 'include'])
     for fn in os.listdir(root):
         if fn.endswith('.cpp'): src.t[os.path.join(root, fn)] = open(os.path.join(root, fn), errors='ignore').read()
@@ -142,7 +143,8 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
         return 'mem_subsystem.' + k
 
     S = {}
-    S['back.comb'] = from_rows(back_rows, back_key)
+    S['back.comb'] = from_rows(back_rows[:back_early], back_key)
+    S['back.comb_late'] = from_rows(back_rows[back_early:], back_key)
     S['back.clear_comb_inputs'] = (set(), {'back.in'})
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.read_core_q'] = (set(), set())
@@ -189,14 +191,15 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
                 if mk: w |= mk if isinstance(mk, set) else {mk}
             out.append([prefix + n, r, w, ''])
         return out
-    SUB['back.comb'] = mapped(back_rows, back_key, 'back.')
-    for row in SUB['back.comb']:
+    SUB['back.comb'] = mapped(back_rows[:back_early], back_key, 'back.')
+    SUB['back.comb_late'] = mapped(back_rows[back_early:], back_key, 'back.')
+    for row in SUB['back.comb'] + SUB['back.comb_late']:
         obj, fn = row[0].split('.')[1:3]
         if back_cls and obj in back_cls: row[3] = closure(src, back_cls[obj], fn) or ''
         if row[0] == 'back.lsu.comb_translate':
             row[1].add('mem_subsystem.dtlb_walk.out'); row[2].add('mem_subsystem.dtlb_walk.in')
-    SUB['back.comb'].append(['back.pmu_sample', set(), set(), closure(src, 'BackTop', 'pmu_sample') or ''])
-    for row in SUB['back.comb']:   # calls into the other back-end modules (obj->f(...)): their text too
+    SUB['back.comb_late'].append(['back.pmu_sample', set(), set(), closure(src, 'BackTop', 'pmu_sample') or ''])
+    for row in SUB['back.comb'] + SUB['back.comb_late']:   # calls into the other back-end modules (obj->f(...)): their text too
         for o2, f2 in set(re.findall(r'\b(\w+)->(\w+)\s*\(', row[3])):
             if back_cls and o2 in back_cls: row[3] += closure(src, back_cls[o2], f2) or ''
     def front_key2(k, write=False):   # FrontComb locals: front.c.*
@@ -237,7 +240,12 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
     for grp in ('comb_outputs', 'comb_inputs'):
         SUB['mem_subsystem.' + grp] = mapped(MEM_GROUPS[grp], mem_key, 'mem_subsystem.')
         for row in SUB['mem_subsystem.' + grp]: row[3] = mem_text(row[0].split('.', 1)[1])
+    S['mem_subsystem.commit_stores'] = ({'mem_subsystem.peripheral_model_'},
+                                        {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
+    mr2, mw2 = S['mem_subsystem.comb_inputs']
+    S['mem_subsystem.comb_inputs'] = (mr2 | {'mem_subsystem.peripheral_model_'}, mw2)
     for row in SUB['mem_subsystem.comb_inputs']:
+        if row[0] == 'mem_subsystem.peripheral_axi_.comb': row[1].add('mem_subsystem.peripheral_model_')
         if row[0] == 'mem_subsystem.ptw_request': row[1] |= {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'}
 
     def class_summary(obj, cls, meth, members):

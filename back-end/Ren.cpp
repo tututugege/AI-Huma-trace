@@ -258,7 +258,6 @@ void Ren::handshake() {
       }
       d.arch_RAT[(*inst)->dest_areg] = inst->dest_preg;
     }
-    if (!interrupt) ctx->run_commit_inst(&commit_entry, i);
   }
   if (interrupt) ctx->run_interrupt_hook();
 

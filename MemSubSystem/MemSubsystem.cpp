@@ -458,6 +458,12 @@ void MemSubsystem::on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3)
   peripheral_model_.on_commit_store(paddr, data, func3);
 }
 
+void MemSubsystem::commit_stores(const CommitStoreIO &cs) {
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    if (cs.slot[i].valid) on_commit_store(cs.slot[i].paddr, cs.slot[i].data, cs.slot[i].func3);
+  }
+}
+
 void MemSubsystem::configure_interrupt_latency(uint64_t seed,
                                                uint32_t min_cycles,
                                                uint32_t max_cycles) {
