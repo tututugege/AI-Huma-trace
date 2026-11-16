@@ -2,6 +2,7 @@
 // accesses), page-table walks and the prefetchers are not replayed, caches see line-granular accesses in program order
 // (the real L1D sees them out of order and merged by MSHRs), L1I replacement is LRU (the RTL is random), BPU updates are
 // applied immediately (no update-queue delay, no speculative history).
+#include <memory>
 #include "FastWarm.h"
 #include "xlen_cast.h"
 #include "BPU/BPU.h"
@@ -133,7 +134,7 @@ struct Warm {
   LlcModel llc;
   bool llc_ready = false;
 };
-Warm *g_warm = nullptr;
+std::unique_ptr<Warm> g_warm;   // the replay's state, from fast_warm_replay to fast_warm_install
 
 inline bool is_ram(uint32_t pa) { return pmem_is_ram_addr(pa, 4); }
 
@@ -141,8 +142,7 @@ inline bool is_ram(uint32_t pa) { return pmem_is_ram_addr(pa, 4); }
 
 bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWarmStats &st) {
   RefCpuContext *rc = refcore_ctx();
-  delete g_warm;
-  g_warm = new Warm();
+  g_warm = std::make_unique<Warm>();
   Warm &W = *g_warm;
   W.llc.init(cpu.axi_interconnect.get_llc_config());
   refcpu_set_sim_time(rc, static_cast<uint64_t>(sim_time));

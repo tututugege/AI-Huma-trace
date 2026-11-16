@@ -316,7 +316,7 @@ struct BtbWr {
 };
 
 class Btb {
-  struct Way { btb_tag_t tag; target_addr_t bta; bool valid; wire3_t useful; };
+  struct Way { btb_tag_t tag; target_addr_t bta; bool valid; wire<3> useful; };
   Way btb_[BTB_ENTRY_NUM][BTB_WAY_NUM];
   IttEnt itt_[ITT_MAX][IttCfg::size];
 
@@ -489,52 +489,52 @@ class TypePred {
 // Predecode-check result of the previous cycle (BPO_PDCKPT): the block whose PTAB entry was checked, and when the checker asks for a
 // flush, the history / RAS effect of the corrected block (what the predecode stage knows: conditional branches, JAL, return).
 struct PdInfo {
-  wire1_t valid = false, flush = false;
+  wire<1> valid = false, flush = false;
   uint8_t nbits = 0, bits = 0, ras_op = 0;
   target_addr_t ras_val = 0;
-  wire1_t nb_valid = false;   // the checked block had a taken prediction on an instruction that is not a branch: the type predictor entry of nb_pc is stale
+  wire<1> nb_valid = false;   // the checked block had a taken prediction on an instruction that is not a branch: the type predictor entry of nb_pc is stale
   pc_t nb_pc = 0;
 };
 
 struct InputPayload {
-  wire1_t refetch;
+  wire<1> refetch;
   fetch_addr_t refetch_address;
-  wire1_t icache_read_ready;
+  wire<1> icache_read_ready;
   // commit-stream update
   pc_t in_update_base_pc[CW];
-  wire1_t in_update_is_rvc[CW];   // the committed instruction is 16 bits (RVC=1): its fall-through / return address is pc + 2
-  wire1_t in_upd_valid[CW];
-  wire1_t in_actual_dir[CW];
+  wire<1> in_update_is_rvc[CW];   // the committed instruction is 16 bits (RVC=1): its fall-through / return address is pc + 2
+  wire<1> in_upd_valid[CW];
+  wire<1> in_actual_dir[CW];
   br_type_t in_actual_br_type[CW];
   target_addr_t in_actual_targets[CW];
-  wire1_t in_pred_dir[CW];
-  wire1_t in_alt_pred[CW];
+  wire<1> in_pred_dir[CW];
+  wire<1> in_alt_pred[CW];
   pcpn_t in_pcpn[CW];
   tage_tag_t in_tage_tags[CW][TN];
   tage_idx_t in_tage_idxs[CW][TN];
   uint8_t ptab_size;  // BPU_PIPE: PTAB occupancy (credit for the blocks in flight)
   PdInfo pd;
-  wire1_t rf_valid;    // BPA_REPAIR: the refetch is a backend branch mispredict
-  uint16_t rf_blk; uint8_t rf_slot, rf_type; pc_t rf_pc; wire1_t rf_is_rvc;
-  wire1_t refetch_pd;  // BPU_PIPE statistics: the refetch comes from the predecode checker (not the back end)
+  wire<1> rf_valid;    // BPA_REPAIR: the refetch is a backend branch mispredict
+  uint16_t rf_blk; uint8_t rf_slot, rf_type; pc_t rf_pc; wire<1> rf_is_rvc;
+  wire<1> refetch_pd;  // BPU_PIPE statistics: the refetch comes from the predecode checker (not the back end)
 };
 
 struct OutputPayload {
   fetch_addr_t fetch_address;
-  wire1_t icache_read_valid;
+  wire<1> icache_read_valid;
   fetch_addr_t predict_next_fetch_address;
-  wire1_t PTAB_write_enable;
-  wire1_t out_pred_dir[FW];
+  wire<1> PTAB_write_enable;
+  wire<1> out_pred_dir[FW];
   PredMeta meta;
   pc_t out_pred_base_pc;
   // FE_PAIR: a fetch group of two blocks (fetch across a predicted-taken branch). Fetch side (S0 push): second block of the entry.
-  wire1_t pair_valid;
+  wire<1> pair_valid;
   fetch_addr_t pair_addr2;
   uint8_t pair_a_len, pair_b_len;
   // PTAB side (block leaving S_D): explicit pc of every slot (the second block's instructions follow the first block's taken branch)
-  wire1_t ptab_pcs_valid;
+  wire<1> ptab_pcs_valid;
   pc_t out_pred_pc[FW];
-  wire1_t update_queue_full;  // the update queue drops instead of stalling: always 0
+  wire<1> update_queue_full;  // the update queue drops instead of stalling: always 0
   // free entries of the update queue / uBTB train queue at the start of the cycle (registered): compact ROB commit
   // credits (EXP-028); 255 = no limit
   uint8_t upd_free = 255, tq_free = 255;

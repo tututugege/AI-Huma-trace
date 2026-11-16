@@ -3,7 +3,7 @@
 #include "config.h"
 #include "config/frontend_feature_config.h"
 
-// 是否开启2ahead
+// 2-ahead prediction
 // #define ENABLE_2AHEAD
 
 #ifndef RESET_PC

@@ -6,8 +6,8 @@ class BackTop;
 class Ren;
 
 struct UopPacket {
-  int iq_id;               // 目标 IQ
-  Uop uop; // Dispatch 内部直接使用发往 Issue 的线网格式
+  int iq_id;               // target IQ
+  Uop uop; // in the issue wire format
 };
 
 // Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
@@ -30,23 +30,23 @@ private:
 
   Uop inst_alloc[DECODE_WIDTH];
 
-  // 记录每条指令 Dispatch 是否成功 (comb_dispatch -> comb_fire)
+  // per instruction: dispatched (comb_dispatch -> comb_fire)
   bool dispatch_success_flags[DECODE_WIDTH];
   // PMU only (EXP-014): the issue queue that stopped this slot in comb_dispatch (-1: none) and whether it was its enqueue
   // width (true) or a lack of free entries (false)
   int iq_blk[DECODE_WIDTH];
   bool iq_blk_width[DECODE_WIDTH];
 
-  // 记录每个端口分配到的指令槽位，-1 表示该端口本拍未分配。
+  // per port: the slot it was given, -1 if none this cycle
   int stq_port_owner[MAX_STQ_DISPATCH_WIDTH];
   int ldq_port_owner[MAX_LDQ_DISPATCH_WIDTH];
 
   struct DispatchCache {
-    int count;                     // 拆分数量
-    int iq_ids[MAX_UOPS_PER_INST]; // 仅保存目标 IQ 的 ID
+    int count;                     // number of uops
+    int iq_ids[MAX_UOPS_PER_INST]; // target IQ ids
   };
 
-  // 用于在 comb_dispatch 和 comb_fire 之间传递数据
+  // passed from comb_dispatch to comb_fire
   DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:

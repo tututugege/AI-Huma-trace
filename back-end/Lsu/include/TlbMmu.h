@@ -187,11 +187,11 @@ public:
   void warm_install(const TlbEntry *entries, int count, int repl_ptr);
   void set_ptw_walk_port(PtwWalkPort *port);
 
-  static LookupOutput lookup_table_comb(const LookupInput &in,
+  static LookupOutput comb_lookup_table(const LookupInput &in,
                                         const TlbEntry *entries,
                                         int entry_count);
-  static CoreOutput core_comb(const CoreInput &in);
-  static TopOutput top_comb(const TopInput &in, int entries);
+  static CoreOutput comb_core(const CoreInput &in);
+  static TopOutput comb_top(const TopInput &in, int entries);
 
 private:
 

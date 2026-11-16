@@ -481,7 +481,7 @@ void MemSubsystem::dcache_stage2() {
               dcache_line_read_resp_,
               dcache_s1_q_.fill_out,
               fill_in_);
-  dcache_.stage2_comb();
+  dcache_.comb_stage2();
   Dcache_Write(pending_writes_,
                lru_updates_,
                fill_writes_);
@@ -529,7 +529,7 @@ void MemSubsystem::drive_dcache_response() {
     dcache_resp_route_.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
   }
 
-  const MSHR_FILLReq &fill = mshr_dcache_io_.fill_req;
+  const MSHRFillReq &fill = mshr_dcache_io_.fill_req;
   if (fill.valid) {
     for (int i = 0; i < LSU_LDU_COUNT; i++) {
       const LoadResp &resp = dcache_resp_route_.resp_ports.load_resps[i];
@@ -570,7 +570,7 @@ void MemSubsystem::dcache_stage1() {
   dcache_.set_hidden_bank_retry_blocked(load_resp_blocked,
                                         store_resp_blocked);
 
-  dcache_.stage1_comb();
+  dcache_.comb_stage1();
   record_dcache_stage1_metadata();
 }
 
@@ -646,7 +646,7 @@ void MemSubsystem::ptw_feedback() {
 
   ptw_feedback.wakeup_walk = wakeup.walk;
 
-  // grant 转换
+  // the grant
   if (ptw_grant.valid) {
     ptw_feedback.grant_valid = true;
     ptw_feedback.grant_req_id = ptw_grant.req_id;
@@ -654,7 +654,7 @@ void MemSubsystem::ptw_feedback() {
     if (ptw_grant.owner != Owner::PTW_WALK) ptw_feedback.grant_valid = false;
   }
 
-  // 单个 ptw_event 转换
+  // the walker read response (one event)
   if (ptw_events.valid) {
     const auto &evt = ptw_events;
 

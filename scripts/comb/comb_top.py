@@ -5,7 +5,7 @@ Every access is a path from SimCpu (`back.out.lsu2dcache`, `axi_interconnect.rea
 wildcard `[]`.  SimCpu methods and free functions called from cycle() are inlined statement by statement (parameters
 and local `auto &` aliases substituted).  A call into a sub-object is one phase whose read / write set is a summary:
   back.comb                        the back-end rows (Wires field F -> back.F; BackTop is the Wires)
-  front.comb_bpu                   the front rows (in.F -> front.in.F, out.F -> front.out.F) + the I-cache ports
+  front.comb_core                   the front rows (in.F -> front.in.F, out.F -> front.out.F) + the I-cache ports
                                    (icache_top.cpp: bind_.read -> the AXI ICACHE read port, probe_req / probe_resp ->
                                    SimCpu::icache_req / icache_resp) + the ITLB walk port
   mem_subsystem.comb_outputs / comb_inputs   the mem rows of that function, pointer members through SimCpu::init()
@@ -17,10 +17,10 @@ import re, os
 from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS, FRONT_ROWS
 
 ROOTS = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio', 'axi_uart', 'icache_req',
-         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'front2back_hold', 'front2back_hold_1', 'front2back_hold_live', 'front2back_hold_1_live',
-         'peripheral_resp_hold', 'peripheral_resp_hold_1', 'oracle_pending_valid', 'oracle_pending_out', 'ctx')
+         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'front2back_hold_q', 'front2back_hold_d', 'front2back_hold_q_live', 'front2back_hold_d_live',
+         'peripheral_resp_hold_q', 'peripheral_resp_hold_d', 'oracle_pending_valid', 'oracle_pending_out', 'ctx')
 SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio')
-SEQ_CALLS = ('front.seq_write_bpu',)
+SEQ_CALLS = ('front.seq_core',)
 FRONT_INLINE = ('front.comb', 'front.comb_from_back')   # FrontTop methods inlined like SimCpu's        # cycle() is scanned up to the first of these
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 DEPTH = 4                                   # path components kept below the root
@@ -138,7 +138,7 @@ def top_domain(root, ASSIGN, back_rows):
     S['back.comb'] = from_rows(back_rows, back_key)
     S['back.clear_comb_inputs'] = (set(), {'back.in'})
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
-    S['front.seq_read_bpu'] = (set(), set())
+    S['front.read_core_q'] = (set(), set())
     fr, fw = from_rows(FRONT_ROWS, front_key)
     # the I-cache ports (icache_top.cpp, ICacheTop's methods over bind_)
     ict = src.t[os.path.join(root, 'front-end', 'icache', 'icache_top.cpp')]
@@ -159,7 +159,7 @@ def top_domain(root, ASSIGN, back_rows):
     ir, iw = scan_paths(ic, ASSIGN, src, notes, 'icache')
     fr |= ir | {'mem_subsystem.itlb_walk.out'}
     fw |= iw | {'mem_subsystem.itlb_walk.in'}
-    S['front.comb_bpu'] = (fr, fw)
+    S['front.comb_core'] = (fr, fw)
     br, bw = S['back.comb']
     S['back.comb'] = (br | {'mem_subsystem.dtlb_walk.out'}, bw | {'mem_subsystem.dtlb_walk.in'})
     S['mem_subsystem.comb_outputs'] = from_rows(MEM_GROUPS['comb_outputs'], mem_key)
@@ -227,7 +227,7 @@ def top_domain(root, ASSIGN, back_rows):
                     args = [a.strip() for a in split_top(cm.group(3), ',') if a.strip()]
                     body = strip_comments(fb[1])
                     body = re.sub(r'(?<![\w.>])(back2front_stall_1|back2front_stall|back2front_1|back2front|in|out)\b(?!\s*\()', r'front.\1', body)
-                    body = re.sub(r'(?<![\w.>])(seq_read_bpu|comb_bpu)\s*\(\)', r'front.\1()', body)
+                    body = re.sub(r'(?<![\w.>])(read_core_q|comb_core)\s*\(\)', r'front.\1()', body)
                     mp2 = dict(mp)
                     for p, a in zip(params, args): mp2[p] = a
                     walk_body(body, key, mp2); continue

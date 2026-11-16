@@ -26,7 +26,7 @@ using AxiMmioImpl = mmio::MMIO_Bus_AXI4;
 //   PORT dcache2lsu         = back.in.dcache2lsu
 //   PORT lsu2dcache         = back.out.lsu2dcache
 //   PORT mmio_req           = back.out.peripheral_req
-//   PORT mmio_resp          = peripheral_resp_hold_1
+//   PORT mmio_resp          = peripheral_resp_hold_d
 //   PORT back2front         = back.out.{commit_entry,commit_extra,commit_ftq,fence_i,fire,flush,itlb_flush,mispred,redirect_pc,rf_blk,rf_is_rvc,rf_pc,rf_slot,rf_type,rf_valid,stall}
 //   PORT dtlb_walk          = mem_subsystem.dtlb_walk
 //   PORT itlb_walk          = mem_subsystem.itlb_walk
@@ -42,18 +42,17 @@ using AxiMmioImpl = mmio::MMIO_Bus_AXI4;
 //   EXPORT axi_comb_begin        default: axi_ic_req axi_mem_req
 //   EXPORT axi_comb_outputs      in: axi_ic_req  pre: axi_mem_req  out: axi_slave
 //   EXPORT axi_comb_inputs       in: axi_ic_req axi_mem_req  out: axi_ready_next
-//   EXPORT front2back_hold_comb  in: fetch_group back2front
+//   EXPORT comb_front2back_hold  in: fetch_group back2front
 class SimCpu {
-  // 性能计数器
 public:
-  ICacheMemPortReq icache_req{}; // 供 FrontTop 直接驱动的 ICache 请求端口（可选，取决于 CONFIG_ICACHE_USE_AXI_MEM_PORT）
+  ICacheMemPortReq icache_req{}; // the I-cache probe request (FrontTop drives it; the memory subsystem reads it)
   // The I-cache's view of its memory side is registered: the ICACHE read port of the interconnect (req.ready / accepted /
   // resp, driven by axi_interconnect.comb_outputs()) and the probe response (driven by mem_subsystem.comb_outputs())
   // both come after the front end in the cycle, so the front end sees them as of the previous cycle.
   axi_interconnect::ReadMasterPort_t icache_axi_q{};
   ICacheMemPortResp icache_resp_q{};
   void icache_port_regs_seq();
-  ICacheMemPortResp icache_resp{}; // 供 FrontTop 直接驱动的 ICache 响应端口（可选，取决于 CONFIG_ICACHE_USE
+  ICacheMemPortResp icache_resp{}; // the probe response (the memory subsystem drives it; the I-cache reads it through icache_resp_q)
   SimCpu() : back(&this->ctx), mem_subsystem(&this->ctx) {};
   SimContext ctx;
   BackTop back;
@@ -63,25 +62,25 @@ public:
   AxiDdrImpl axi_ddr;
   AxiMmioImpl axi_mmio;
   mmio::UART16550_Device axi_uart{MMIO_RANGE_BASE};
-  // Oracle 模式下的一拍保留寄存，避免“后端当拍阻塞”导致前端指令丢失。
+  // oracle mode: a one-cycle hold register, so a fetch group is not lost when the back end stalls
   bool oracle_pending_valid = false;
-  front_top_out oracle_pending_out = {};
+  FrontTopOut oracle_pending_out = {};
   // Explicit front-to-back hold register. Previously BackTop::in itself
   // retained this payload across a backend stall.
-  FrontPreIO front2back_hold{};
-  FrontPreIO front2back_hold_1{};
-  bool front2back_hold_live = false;
-  bool front2back_hold_1_live = false;
+  FrontPreIO front2back_hold_q{};
+  FrontPreIO front2back_hold_d{};
+  bool front2back_hold_q_live = false;
+  bool front2back_hold_d_live = false;
   // PeripheralAxi produces this response after BackTop::comb(). Model the
   // intended one-cycle delay explicitly instead of retaining BackTop::in.
-  PeripheralRespIO peripheral_resp_hold{};
-  PeripheralRespIO peripheral_resp_hold_1{};
+  PeripheralRespIO peripheral_resp_hold_q{};
+  PeripheralRespIO peripheral_resp_hold_d{};
 
   void init();
   void sync_mmio_devices_from_backing();
   void restore_pc(pc_t pc);
   void cycle();
-  void front2back_hold_comb();
+  void comb_front2back_hold();
   void back_in_from_regs();
   void axi_comb_begin();
   void axi_comb_outputs();
@@ -89,6 +88,6 @@ public:
   void front2back_hold_seq();
   void peripheral_resp_hold_seq();
   uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }
-  // 由 SimContext 在提交路径调用的本地辅助逻辑。
+  // called by SimContext on the commit path
   void commit_sync(InstInfo *inst, int commit_slot);
 };

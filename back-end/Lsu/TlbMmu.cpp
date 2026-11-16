@@ -155,7 +155,7 @@ bool TlbMmu::entry_matches(const TlbEntry &entry, vaddr_t v_addr,
   return true;
 }
 
-TlbMmu::LookupOutput TlbMmu::lookup_table_comb(const LookupInput &in,
+TlbMmu::LookupOutput TlbMmu::comb_lookup_table(const LookupInput &in,
                                                const TlbEntry *entries,
                                                int entry_count) {
   LookupOutput out{};
@@ -193,7 +193,7 @@ TlbMmu::lookup_table_access(vaddr_t v_addr, uint16_t asid) const {
   req.v_addr = v_addr;
   req.asid = asid;
   const int entry_count = kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES;
-  return lookup_table_comb(req, tlb_entries_.data(), entry_count);
+  return comb_lookup_table(req, tlb_entries_.data(), entry_count);
 }
 
 uint32_t TlbMmu::compose_paddr(vaddr_t v_addr, const TlbEntry &e) {
@@ -240,7 +240,7 @@ bool TlbMmu::check_perm(uint8_t perm, uint32_t type, int eff_priv, bool sum,
   return true;
 }
 
-TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
+TlbMmu::CoreOutput TlbMmu::comb_core(const CoreInput &in) {
   CoreOutput out{};
   out.walk_next = in.walk;
   out.refill_next = in.refill;
@@ -376,7 +376,7 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   return out;
 }
 
-TlbMmu::TopOutput TlbMmu::top_comb(const TopInput &in, int entries) {
+TlbMmu::TopOutput TlbMmu::comb_top(const TopInput &in, int entries) {
   TopOutput out{};
   out.walk_next = in.walk;
   out.refill_next = in.refill;
@@ -423,7 +423,7 @@ TlbMmu::TopOutput TlbMmu::top_comb(const TopInput &in, int entries) {
     core_in.walk_resp_valid = shadow_walk_resp_valid;
     core_in.walk_resp = shadow_walk_resp;
 
-    const CoreOutput core_out = core_comb(core_in);
+    const CoreOutput core_out = comb_core(core_in);
     TopPortOutput &port_out = out.port[i];
     port_out.resp_valid = core_out.resp_valid;
     port_out.result = core_out.result;
@@ -505,7 +505,7 @@ void TlbMmu::run_control_via_top(bool flush, bool cancel) {
   TopInput in = build_top_common_input(nullptr);
   in.flush = flush;
   in.cancel = cancel;
-  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
+  const TopOutput out = comb_top(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
 }
 
@@ -577,7 +577,7 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     }
   }
 
-  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
+  const TopOutput out = comb_top(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
 
   for (int i = 0; i < LSU_LDU_COUNT; ++i) {
@@ -643,7 +643,7 @@ bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, Csr
 }
 
 // Every TLB has a shared page-table walker port (MemPtwBlock): lookup, permission check and walk request / response all go
-// through top_comb, the same function the LSU's ports use.
+// through comb_top, the same function the LSU's ports use.
 TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) {
   Assert(walk_port != nullptr && "TlbMmu: no page-table walker port bound");
   TopInput in = build_top_common_input(status);
@@ -652,7 +652,7 @@ TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type
   in.port[port_idx].v_addr = v_addr;
   in.port[port_idx].type = type;
   in.port[port_idx].lookup = lookup_table_access(v_addr, sv_asid(in.satp));
-  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
+  const TopOutput out = comb_top(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
   const TopPortOutput &port_out = out.port[port_idx];
   p_addr = port_out.p_addr;

@@ -52,15 +52,15 @@ private:
 public:
   SimContext *ctx;
 
-  PreIduQueue *pre;
-  Idu *idu;
-  Ren *rename;
-  Dispatch *dis;
-  Isu *isu;
-  Exu *exu;
-  Csr *csr;
-  Rob *rob;
-  RealLsu *lsu;
+  std::unique_ptr<PreIduQueue> pre;
+  std::unique_ptr<Idu> idu;
+  std::unique_ptr<Ren> rename;
+  std::unique_ptr<Dispatch> dis;
+  std::unique_ptr<Isu> isu;
+  std::unique_ptr<Exu> exu;
+  std::unique_ptr<Csr> csr;
+  std::unique_ptr<Rob> rob;
+  std::unique_ptr<RealLsu> lsu;
 
   void init();
   void clear_comb_inputs();
@@ -72,19 +72,8 @@ public:
 
   BackTop(SimContext *ctx) {
     this->ctx = ctx;
-    pre = nullptr;
   };
-  ~BackTop() {
-    delete pre;
-    delete rename;
-    delete dis;
-    delete idu;
-    delete isu;
-    delete exu;
-    delete rob;
-    delete csr;
-    delete lsu;
-  }
+  ~BackTop();
 
   wire<XLEN> number_PC = 0;
   uint64_t ckpt_interval_inst_count = 0;

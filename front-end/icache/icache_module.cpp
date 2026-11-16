@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include "fatal.h"
 #include "trace_hook.h"
 #include "include/icache_module.h"
 #include "PhysMemory.h"
@@ -18,14 +19,14 @@ inline bool mem_wait_must_drain_on_refetch() {
 
 
 
-inline bool icache_req_slot_idle(const ICache_regs_t &regs) {
+inline bool icache_req_slot_idle(const ICacheRegs &regs) {
   return !regs.req_valid_r &&
          static_cast<ICacheState>(regs.state) == IDLE &&
          static_cast<AXIState>(regs.mem_axi_state) == AXI_IDLE &&
          !regs.miss_txid_valid_r;
 }
 
-inline int alloc_free_txid(const ICache_regs_t &regs) {
+inline int alloc_free_txid(const ICacheRegs &regs) {
   for (int id = 0; id < 16; ++id) {
     if (!regs.txid_inflight_r[id]) {
       return id;
@@ -48,11 +49,11 @@ inline bool icache_paddr_is_uncache(uint32_t paddr) {
   return paddr < static_cast<uint32_t>(CONFIG_ICACHE_MMIO_UNCACHE_LIMIT);
 }
 
-inline bool icache_req_is_uncache(const ICache_regs_t &regs) {
+inline bool icache_req_is_uncache(const ICacheRegs &regs) {
   return icache_paddr_is_uncache(icache_word_addr(regs.ppn_r, regs.req_pc_r));
 }
 
-inline uint32_t icache_req_mem_addr(const ICache_regs_t &regs) {
+inline uint32_t icache_req_mem_addr(const ICacheRegs &regs) {
   return icache_req_is_uncache(regs)
              ? icache_word_addr(regs.ppn_r, regs.req_pc_r)
              : icache_line_base_addr(regs.ppn_r, regs.req_index_r);
@@ -794,10 +795,7 @@ void ICache::eval_state_machine() {
     break;
 
   default:
-    std::cerr << "Error: Invalid state in ICache::eval_state_machine()"
-              << std::endl;
-    exit(1);
-    break;
+    fatal("Error: Invalid state in ICache::eval_state_machine()\n");
   }
 
   // Register write-back (applied in seq).

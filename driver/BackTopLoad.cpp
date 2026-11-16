@@ -18,7 +18,7 @@
 
 void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege);
 
-// --- 辅助函数：简化 zlib 读写 POD 类型 ---
+// --- helpers: zlib reads of POD types ---
 
 template <typename T>
 void gz_read_pod(gzFile file, T &data) {
@@ -145,7 +145,7 @@ void BackTop::load_image(const std::string &filename) {
     Assert(0 && "Image too large for configured RAM window.");
   }
   if (!inst_data.read(reinterpret_cast<char *>(pmem_ram_ptr()), size)) {
-    Assert(0 && "读取文件失败！");
+    Assert(0 && "failed to read the checkpoint file");
   }
 
   inst_data.close();
@@ -284,8 +284,8 @@ void BackTop::restore_checkpoint(const std::string &filename) {
     Assert(0 && "Error: Could not open checkpoint file");
   }
 
-  // 与 SimpleSim/save_checkpoint 写入格式保持一致，确保反序列化对齐。
-  // 注意：reserve_* 当前在本模拟器中暂未使用，但必须读取以避免流错位。
+  // the layout written by SimpleSim / save_checkpoint (field by field);
+  // the reserve_* fields are unused here but must be read to stay aligned
   typedef struct Ckpt_CPU_state {
     xlen_t gpr[32];
     uint64_t fpr[32];
@@ -304,7 +304,7 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   CkptHeader ckpt_header = {};
   uint64_t interval_inst_count;
 
-  // 1. 恢复 header + 状态
+  // 1. header and state
   gz_read_pod(file, ckpt_header);
   if (ckpt_header.magic != kCkptMagic) {
     std::cerr << "Error: Invalid checkpoint magic." << std::endl;
@@ -353,7 +353,7 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   state.reserve_valid = ckpt_state.reserve_valid;
   state.reserve_addr = ckpt_state.reserve_addr;
 
-  // 初始化新字段
+  // fields the file does not have
   state.instruction = 0;
   state.page_fault_inst = false;
   state.page_fault_load = false;
@@ -363,7 +363,7 @@ void BackTop::restore_checkpoint(const std::string &filename) {
   const uint8_t restored_privilege = static_cast<uint8_t>(ckpt_header.privilege_mode & 0x3u);
   install_arch_state(state, restored_privilege);
 
-  // 2. 恢复内存
+  // 2. memory
   if (pmem_ram_ptr() == nullptr || pmem_sdram_ptr() == nullptr) {
     Assert(0 &&
            "Error: Memory backends not allocated during checkpoint restore.");

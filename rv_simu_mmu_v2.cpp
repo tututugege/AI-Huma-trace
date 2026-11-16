@@ -171,21 +171,21 @@ void SimContext::run_interrupt_hook() {
   tbhook::on_interrupt(c, tp, cpu->back.csr->d.CSR_RegFile[csr_mip]);
 }
 
-// 复位逻辑
+// reset
 void SimCpu::init() {
   const auto llc_cfg = make_default_llc_config();
 
-  // 第一阶段：绑定顶层上下文
+  // 1. the top-level context
   ctx.cpu = this;
 
-  // 第二阶段：构建模块对象（生成内部子模块实例）
+  // 2. the module objects (and their submodules)
   back.init();
 
-  // 第三阶段：集中完成跨模块连线
+  // 3. the wires between the modules
   mem_subsystem.csr_interrupt_inject = &back.csr_interrupt_inject_io;
   mem_subsystem.peripheral_req = &back.out.peripheral_req;
-  mem_subsystem.peripheral_resp = &peripheral_resp_hold_1;   // the MMIO response enters the back end through a register
-  mem_subsystem.set_ptw_coherent_source(back.lsu);
+  mem_subsystem.peripheral_resp = &peripheral_resp_hold_d;   // the MMIO response enters the back end through a register
+  mem_subsystem.set_ptw_coherent_source(back.lsu.get());
 
   front.in.csr_status = &back.csr_status;
   front.ctx = &ctx;
@@ -214,8 +214,7 @@ void SimCpu::init() {
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
   front.icache_mem_read_q = &icache_axi_q;
 
-  // 第四阶段：统一执行各模块复位逻辑
-  // 先初始化内存子系统，确保 PTW / DCache / WB 等内部状态已经完成复位。
+  // 4. reset of every module; the memory subsystem first (PTW / D-cache / write buffer state)
   mem_subsystem.init();
   axi_interconnect.set_llc_config(llc_cfg);
   axi_interconnect.init();
@@ -230,11 +229,11 @@ void SimCpu::init() {
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
-  front2back_hold = {};
-  front2back_hold_1 = {};
-  front2back_hold_live = front2back_hold_1_live = false;
-  peripheral_resp_hold = {};
-  peripheral_resp_hold_1 = {};
+  front2back_hold_q = {};
+  front2back_hold_d = {};
+  front2back_hold_q_live = front2back_hold_d_live = false;
+  peripheral_resp_hold_q = {};
+  peripheral_resp_hold_d = {};
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -242,23 +241,23 @@ void SimCpu::sync_mmio_devices_from_backing() {
   mem_subsystem.sync_mmio_devices_from_backing();
 }
 
-// 强制重置前端 PC (用于 FAST 模式切换)
+// force the front-end PC (switch from fast mode)
 void SimCpu::restore_pc(pc_t pc) {
   front.in.reset = false;
   front.in.FIFO_read_enable = false;
-  // 显式给前端一个重取指请求，并同步后端重定向输出，
-  // 保证即使调用方未额外设置 flush/mispred，也会从目标 PC 重新开始。
+  // an explicit refetch for the front end and the back end's redirect outputs: the fetch restarts at pc even if
+  // the caller set no flush / mispred
   front.in.refetch = true;
   front.in.refetch_address = pc;
   front.force_back2front_refetch(pc);
-  front2back_hold = {};
-  front2back_hold_1 = {};
-  front2back_hold_live = front2back_hold_1_live = false;
+  front2back_hold_q = {};
+  front2back_hold_d = {};
+  front2back_hold_q_live = front2back_hold_d_live = false;
   back.out.flush = true;
   back.out.mispred = true;
   back.out.redirect_pc = pc;
 
-  // 刷新 CSR 状态输出 (SATP, Privilege) 以确保 MMU 模式正确
+  // refresh the CSR status (satp, privilege) so the MMU mode is right
   back.comb_csr_status();
 }
 
@@ -273,8 +272,8 @@ void SimCpu::icache_port_regs_seq() {
 // stalled last cycle) and the held peripheral response.
 void SimCpu::back_in_from_regs() {
   back.clear_comb_inputs();
-  if (front2back_hold_live) static_cast<FrontPreIO &>(back.in) = front2back_hold;
-  back.in.peripheral_resp = peripheral_resp_hold;
+  if (front2back_hold_q_live) static_cast<FrontPreIO &>(back.in) = front2back_hold_q;
+  back.in.peripheral_resp = peripheral_resp_hold_q;
 }
 
 // AXI: the master-side request fields are driven anew every cycle (resp.ready stays: it is read before the masters
@@ -299,13 +298,13 @@ void SimCpu::cycle() {
   axi_comb_outputs();
   mem_subsystem.comb_outputs();
   back.comb();
-  front2back_hold_comb();
+  comb_front2back_hold();
   front.comb_from_back(back);
   mem_subsystem.comb_inputs();
   axi_comb_inputs();
   // END GENERATED
 
-  front.seq_write_bpu();
+  front.seq_core();
   front.seq_back2front();
   front2back_hold_seq();
   peripheral_resp_hold_seq();
@@ -325,33 +324,33 @@ void SimCpu::cycle() {
   }
 }
 
-// The hold register: d = front2back_hold_1 (written only when the back end stalls, otherwise left all-zero), q =
-// front2back_hold. The live flags let the cycle skip copying zeros; seq clears d after the copy.
-void SimCpu::front2back_hold_comb() {
+// The hold register: d = front2back_hold_d (written only when the back end stalls, otherwise left all-zero), q =
+// front2back_hold_q. The live flags let the cycle skip copying zeros; seq clears d after the copy.
+void SimCpu::comb_front2back_hold() {
   if (back.out.mispred || back.out.flush || !back.out.stall) {
     return;
   }
 
-  front2back_hold_1_live = true;
-  front2back_hold_1 = static_cast<const FrontPreIO &>(back.in);
+  front2back_hold_d_live = true;
+  front2back_hold_d = static_cast<const FrontPreIO &>(back.in);
   for (int i = 0; i < BACKEND_FETCH_WIDTH; ++i) {
     if (back.out.fire[i]) {
-      front2back_hold_1.valid[i] = false;
+      front2back_hold_d.valid[i] = false;
     }
   }
 }
 
 void SimCpu::front2back_hold_seq() {
-  if (front2back_hold_live || front2back_hold_1_live) front2back_hold = front2back_hold_1;
-  front2back_hold_live = front2back_hold_1_live;
-  if (front2back_hold_1_live) {
-    front2back_hold_1 = {};
-    front2back_hold_1_live = false;
+  if (front2back_hold_q_live || front2back_hold_d_live) front2back_hold_q = front2back_hold_d;
+  front2back_hold_q_live = front2back_hold_d_live;
+  if (front2back_hold_d_live) {
+    front2back_hold_d = {};
+    front2back_hold_d_live = false;
   }
 }
 
 void SimCpu::peripheral_resp_hold_seq() {
-  peripheral_resp_hold = peripheral_resp_hold_1;
+  peripheral_resp_hold_q = peripheral_resp_hold_d;
 }
 
 

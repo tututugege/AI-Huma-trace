@@ -375,7 +375,7 @@ void Exu::exec() {
 // LSU_LOAD_WB_WIDTH of them.
 void Exu::load_wake() {
   const Regs &q = q_;
-  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
+  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   Wires &w = *wires;
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
   int n = 0;

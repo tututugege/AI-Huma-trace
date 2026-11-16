@@ -139,7 +139,7 @@ struct Uop {
 
   wire<ROB_CPLT_MASK_WIDTH> expect_mask;
   wire<ROB_CPLT_MASK_WIDTH> cplt_mask;
-  wire<1> rob_flag; // 用于对比指令年龄
+  wire<1> rob_flag; // age comparison (ring wrap bit)
 
   wire<1> page_fault_inst;
   wire<1> page_fault_load;

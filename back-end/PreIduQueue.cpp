@@ -93,7 +93,7 @@ void PreIduQueue::begin_cycle() {
 // gets an FTQ entry and each instruction a buffer entry (and a uop-pool block).
 void PreIduQueue::comb_accept_front() {
   const Regs &q = q_;
-  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
+  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   if (wires->idu_br_latch->mispred || q.flush_q) return;  // the cycle after a mispredict / flush: ready stays false
 
   int incoming = 0;

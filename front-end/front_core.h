@@ -1,7 +1,7 @@
 #pragma once
 // All state of the front end, owned by FrontTop (one instance per FrontTop): its own registers, the BPU pipeline, the four
-// FIFOs, the I-cache, the I-cache prefetcher. One cycle is seq_read (the registers' q, read data of the FIFOs), comb (the
-// phases of FrontComb, front_top.cpp; the write requests into a FrontUpdateRequest) and seq_write (the clock edge).
+// FIFOs, the I-cache, the I-cache prefetcher. One cycle is read_q (the registers' q, read data of the FIFOs), comb (the
+// phases of FrontComb, front_top.cpp; the write requests into a FrontUpdateRequest) and seq (the clock edge).
 #include "BPU/BPU_pipe.h"
 #include "fifo/front_fifo.h"
 #include "icache/icache_top.h"
@@ -59,9 +59,9 @@ public:
   ICacheTop icache;
   FrontIpf ipf;
 
-  void seq_read(FrontReadData &rd) const;                                    // q and the FIFOs' read data
-  void comb(const front_top_in &in, const FrontReadData &rd, front_top_out &out, FrontUpdateRequest &req);
-  void seq_write(const front_top_in &in, const FrontUpdateRequest &req);   // the clock edge
+  void read_q(FrontReadData &rd) const;                                    // q and the FIFOs' read data
+  void comb(const FrontTopIn &in, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req);
+  void seq(const FrontTopIn &in, const FrontUpdateRequest &req);   // the clock edge
 
 private:
   FrontRegs q_;   // the front end's own registers (q; d is req.front_state.d)

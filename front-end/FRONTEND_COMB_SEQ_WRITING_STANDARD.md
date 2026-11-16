@@ -1,5 +1,9 @@
 # Front-end Comb/Seq 书写规范（BSD 训练友好统一版）
 
+> **Historical (structure before 2026-11-16).** The front end is now `FrontCore` (front-end/front_core.h) with the FIFO classes in
+> front-end/fifo/front_fifo.h and `ICacheTop`; module form, contracts and generated schedules: docs/MODULE_CONTRACT.md.
+> Kept because rtl/docs link here.
+
 适用范围：
 - 目录：`front-end/`
 - 重点：除 `icache/` 子目录内部实现和 `FrontTop.cpp` 外的 front-end 代码

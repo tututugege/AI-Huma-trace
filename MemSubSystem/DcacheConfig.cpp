@@ -168,7 +168,6 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
     }
 
     if(fillout.valid){
-        // check_data_bank_access(fillout.set_idx, "read", "fillout");
         memcpy(fillin.valid_snap,valid_array[fillout.set_idx], sizeof(valid_array[fillout.set_idx]));
         memcpy(fillin.tag_snap,tag_array[fillout.set_idx], sizeof(tag_array[fillout.set_idx]));
         memcpy(fillin.dirty_snap,dirty_array[fillout.set_idx], sizeof(dirty_array[fillout.set_idx]));
@@ -178,12 +177,11 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memset(&fillin, 0, sizeof(fillin));
     }
 }
-void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FILLWrite &fillwrite){
+void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FillWrite &fillwrite){
     for(int i=0;i<LSU_LDU_COUNT+LSU_STA_COUNT;i++){
         const PendingWrite &pw = pws[i];
         const LruUpdate &lru_update = lru_updates[i];
         if(pw.valid){
-            // check_data_bank_access(pw.set_idx, "write", "pending_write");
             dirty_array[pw.set_idx][pw.way_idx] = true;
         }
 

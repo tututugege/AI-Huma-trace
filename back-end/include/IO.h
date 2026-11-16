@@ -388,7 +388,7 @@ enum class StoreState : uint8_t {
   WaitFinish,
   Done
 };
-// STQ 条目结构（定义在此以供 StoreReq 使用）
+// STQ entry (here for StoreReq)
 struct StqEntry {
 
   wire<1> data_valid = false;
@@ -434,7 +434,7 @@ struct StoreReq {
 };
 
 
-// Load响应结构
+// load response
 struct LoadResp {
   wire<1> valid;
   wire<32> req_id;
@@ -443,7 +443,7 @@ struct LoadResp {
   ReplayType replay;
 };
 
-// Store响应结构
+// store response
 struct StoreResp {
   wire<1> valid;
   wire<1> bank_conflict;
@@ -451,7 +451,7 @@ struct StoreResp {
   wire<32>  req_id;
 };
 
-// 请求端口集合（支持4个Load + 4个Store）
+// request ports (loads and stores)
 struct DCacheReqPorts {
 
   LoadReq load_ports[LSU_LDU_COUNT];
@@ -469,7 +469,7 @@ struct DCacheReqPorts {
   }
 };
 
-// 响应端口集合
+// response ports
 struct DCacheRespPorts {
   LoadResp load_resps[LSU_LDU_COUNT];
   StoreResp store_resps[LSU_STA_COUNT];
@@ -535,10 +535,10 @@ struct DcacheLsuIO {
 
 struct LsuDisIO {
 
-  wire<STQ_IDX_WIDTH> stq_tail;                     // 当前分配指针
-  wire<1> stq_tail_flag;                            // stq_tail 对应 ring 代际位
-  wire<bit_width_for_count(STQ_SIZE + 1)> stq_free; // 剩余空闲条目数
-  wire<bit_width_for_count(LDQ_SIZE + 1)> ldq_free; // 剩余 Load 队列空闲数
+  wire<STQ_IDX_WIDTH> stq_tail;                     // allocation pointer
+  wire<1> stq_tail_flag;                            // wrap bit of stq_tail
+  wire<bit_width_for_count(STQ_SIZE + 1)> stq_free; // free entries
+  wire<bit_width_for_count(LDQ_SIZE + 1)> ldq_free; // free LDQ entries
   wire<LDQ_IDX_WIDTH> ldq_alloc_idx[MAX_LDQ_DISPATCH_WIDTH];
   wire<1> ldq_alloc_valid[MAX_LDQ_DISPATCH_WIDTH];
 

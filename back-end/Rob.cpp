@@ -56,7 +56,7 @@ void Rob::init() {
   d = q_;
 }
 
-// Working pointers start from the registered ones; entry_1 already equals entry (seq() copies back the touched slots).
+// Working pointers start from the registered ones; d.entry already equals q.entry (seq() copies back the touched slots).
 void Rob::begin_cycle() {
   const Regs &q = q_;
   d.c_head = q.c_head; d.c_count = q.c_count; d.c_hflag = q.c_hflag;
@@ -66,7 +66,7 @@ void Rob::begin_cycle() {
 // attribution of the oldest incomplete instruction (core bound vs memory bound vs cache miss).
 void Rob::ready() {
   const Regs &q = q_;
-  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
+  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   Wires &w = *wires;
   w.rob2dis.stall = false;
   w.rob2csr.commit = false;
@@ -189,8 +189,7 @@ void Rob::commit() {
   if (++d.stall_cycle > 50000) {
     std::fprintf(stderr, "ROB deadlock at cycle %llu: count=%d head=%d n=%d single=%d front_stall=%d\n",
                  (unsigned long long)ctx->perf.cycle, q.c_count, q.c_head, n, (int)single, (int)front_stall);
-    Assert(0 && "ROB Deadlock detected (d.stall_cycle > 50000)");
-    std::exit(1);
+    std::exit(1);   // (the watchdog: no commit for 50000 cycles)
   }
 }
 

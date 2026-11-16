@@ -67,7 +67,7 @@ void Isu::apply_wakeup_to_uop(Uop &uop) const {
 
 // Empties the wake slots of d (a global flush; init); the registers follow at seq.
 void Isu::clear_wake_state() {
-  for_each_wake_slot_1([](auto &e) { e = {}; });
+  for_each_wake_slot_d([](auto &e) { e = {}; });
 }
 
 // One issue queue per GLOBAL_IQ_CONFIG entry (the order matches the IQ enum); each claims its range of physical issue ports.
@@ -114,7 +114,7 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
 
 // Free slots of each queue go to Dispatch.
 void Isu::ready() {
-  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
+  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   for (int i = 0; i < IQ_NUM; i++) wires->iss2dis.ready_num[i] = iqs[i].out.free_slots;
 }
 
@@ -296,9 +296,9 @@ void Isu::flush() {
   if (flush_all) {
     clear_wake_state();
   } else if (wires->dec_bcast.mispred) {
-    for_each_wake_slot_1([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
+    for_each_wake_slot_d([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
   }
-  if (clear) for_each_wake_slot_1([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });
+  if (clear) for_each_wake_slot_d([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });
 }
 
 void Isu::seq() {

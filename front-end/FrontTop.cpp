@@ -47,17 +47,17 @@ void FrontTop::init() {
   in.reset = false;
 }
 
-void FrontTop::seq_read_bpu() {
+void FrontTop::read_core_q() {
   bind_ports();
-  core_->seq_read(*read_data_);
+  core_->read_q(*read_data_);
 }
 
-void FrontTop::comb_bpu() {
+void FrontTop::comb_core() {
   *update_req_ = {};
   core_->comb(in, *read_data_, out, *update_req_);
 }
 
-void FrontTop::seq_write_bpu() { core_->seq_write(in, *update_req_); }
+void FrontTop::seq_core() { core_->seq(in, *update_req_); }
 
 void FrontTop::warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {
   core_->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
@@ -82,9 +82,9 @@ void FrontTop::force_back2front_refetch(pc_t pc) {
 }
 
 void FrontTop::step_bpu() {
-  seq_read_bpu();
-  comb_bpu();
-  seq_write_bpu();
+  read_core_q();
+  comb_core();
+  seq_core();
 }
 
 // One front-end cycle from the registered back2front: when the back end does not stall (or a refetch is pending) the
@@ -101,8 +101,8 @@ void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
   if (frontend_can_read) {
     in.FIFO_read_enable = true;
 
-    seq_read_bpu();
-    comb_bpu();
+    read_core_q();
+    comb_core();
 
     bool no_taken = true;
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
@@ -127,8 +127,8 @@ void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
   } else {
     in.FIFO_read_enable = false;
     in.refetch = false;
-    seq_read_bpu();
-    comb_bpu();
+    read_core_q();
+    comb_core();
     to_back.front_stall = static_cast<bool>(out.commit_stall); to_back.front_upd_free = out.commit_upd_free; to_back.front_tq_free = out.commit_tq_free;
   }}
 
@@ -189,7 +189,7 @@ void FrontTop::comb_from_back(BackTop &back) {
       back2front_1.actual_br_type[i] = br_type;
       back2front_1.alt_pred[i] = ftq_info.alt_pred;
       back2front_1.pcpn[i] = ftq_info.pcpn;
-      for (int j = 0; j < 4; j++) { // TN_MAX = 4 (分支预测相关索引)
+      for (int j = 0; j < 4; j++) { // TN_MAX
         back2front_1.tage_idx[i][j] = ftq_info.tage_idx[j];
         back2front_1.tage_tag[i][j] = ftq_info.tage_tag[j];
       }

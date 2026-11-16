@@ -1,5 +1,9 @@
 # Front-end FIFO RTL Template Mapping
 
+> **Historical (structure before 2026-11-16).** The front end is now `FrontCore` (front-end/front_core.h) with the FIFO classes in
+> front-end/fifo/front_fifo.h and `ICacheTop`; module form, contracts and generated schedules: docs/MODULE_CONTRACT.md.
+> Kept because rtl/docs link here.
+
 适用范围：`front-end/fifo/`
 
 ---

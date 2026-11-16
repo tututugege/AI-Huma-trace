@@ -55,7 +55,7 @@ private:
   void ftq_recover(int new_tail);
   void ftq_flush();
 
-  // committed (x) == working (x_1) at comb_begin; seq copies only dirty parts.
+  // q == d at the start of the cycle; seq copies only dirty parts.
   bool ibuf_dirty = false;
   bool ftq_dirty = false;
   uint64_t ftq_alloc_mask = 0; // slots allocated this cycle (FTQ_SIZE <= 64)

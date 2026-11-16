@@ -11,6 +11,7 @@
 #include "config.h"
 #include "include/icache_module.h"
 #include <functional>
+#include <memory>
 
 class PtwWalkPort;
 class SimContext;
@@ -32,8 +33,8 @@ public:
   std::function<void(uint32_t index, uint32_t tag)> fill_hook;   // FE_IPF: demand fills are reported to the prefetcher
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
-  void comb_calc(icache_in *in, icache_out *out);              // the fetch step R1 = N(R0)
-  void invalidate_step(CsrStatusIO *csr_status, icache_out *out);   // a predecode flush: R2 = K(R1)
+  void comb_calc(ICacheIn *in, ICacheOut *out);              // the fetch step R1 = N(R0)
+  void invalidate_step(CsrStatusIO *csr_status, ICacheOut *out);   // a predecode flush: R2 = K(R1)
   void seq();                                                  // the clock edge
   bool peek_hit(uint32_t index, uint32_t ptag);
   bool fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
@@ -66,7 +67,7 @@ private:
     const axi_interconnect::ReadMasterPort_t *read_q = nullptr;  // the port's outputs of the last cycle (SimCpu::icache_axi_q)
     ICacheMemPortReq *probe_req = nullptr;
     ICacheMemPortResp *probe_resp = nullptr;
-    TlbMmu *itlb = nullptr;
+    std::unique_ptr<TlbMmu> itlb;
 
     void bind(const Ports &p) {
       if (ptw_walk != p.ptw_walk) { ptw_walk = p.ptw_walk; if (itlb) itlb->set_ptw_walk_port(ptw_walk); }
@@ -78,10 +79,10 @@ private:
     }
     TlbMmu *mmu() {
       if (!itlb && ctx) {
-        itlb = new TlbMmu(ctx, ITLB_ENTRIES, TlbMmu::Kind::ITLB);
+        itlb = std::make_unique<TlbMmu>(ctx, ITLB_ENTRIES, TlbMmu::Kind::ITLB);
         if (ptw_walk) itlb->set_ptw_walk_port(ptw_walk);
       }
-      return itlb;
+      return itlb.get();
     }
   } bind_;
 
@@ -92,16 +93,16 @@ private:
   struct Edge {
     bool reset = false;                 // reset this cycle: arrays and module back to the reset state at the edge
     int n = 0;                          // steps of this cycle (1, or 2 with the invalidate)
-    icache_module_n::ICache_table_write_t tw[2] = {};   // each step's table write, applied in order at the edge
+    icache_module_n::ICacheTableWrite tw[2] = {};   // each step's table write, applied in order at the edge
     bool kill_step = false;             // inside invalidate_step (K must not use the ITLB)
   } edge_;
 
   template <class TagP, class ValidP> void forward_pending(uint32_t index, TagP &tag, ValidP &valid) const;
-  static void clear_outputs(icache_out *out);
-  void drive_fetch_group(icache_out *out);
-  void drive_perf(icache_out *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret);
+  static void clear_outputs(ICacheOut *out);
+  void drive_fetch_group(ICacheOut *out);
+  void drive_perf(ICacheOut *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret);
   void fill_lookup_meta();
   void fill_lookup_data();
-  void comb(icache_in *in, icache_out *out);
-  void step(icache_in *in, icache_out *out);
+  void comb(ICacheIn *in, ICacheOut *out);
+  void step(ICacheIn *in, ICacheOut *out);
 };

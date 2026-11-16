@@ -14,11 +14,11 @@
  *    - PC[5:2]: 4-bit Word offset within a cache line
  *    - PC[1:0]: 2-bit Byte offset within a word
  *
- * 当前实现显式拆成两段组合逻辑：
- * - comb_lookup_meta(): 只消费 tag/valid，完成命中路选择和 miss 判断
- * - comb_lookup_data(): 在命中路确定后消费单路 data，形成最终 hit 响应
- * - perf 统计单独通过 ICache::perf 导出，不混入广义输入/输出
- * - seq(): 只更新请求上下文、ready 状态和 refill 状态
+ * The comb logic is two steps:
+ * - comb_lookup_meta(): tag / valid only: way selection and the miss decision
+ * - comb_lookup_data(): the data of the hit way: the final hit response
+ * - performance events are exported separately (ICache::perf), not part of the IO
+ * - seq(): request context, ready and refill state
  */
 #ifndef ICACHE_MODULE_H
 #define ICACHE_MODULE_H
@@ -83,7 +83,7 @@ enum AXIState {
 // -----------------------------------------------------------------------------
 // Generalized-IO: lookup inputs (split from external inputs)
 // -----------------------------------------------------------------------------
-struct ICache_lookup_in_t {
+struct ICacheLookupIn {
   // Tag/valid response for the looked-up set. Tag match stays inside module.
   wire<1> meta_resp_valid = false;
   wire<ICACHE_TAG_BITS> lookup_set_tag[ICACHE_WAY_NUM] = {0};
@@ -96,7 +96,7 @@ struct ICache_lookup_in_t {
 // -----------------------------------------------------------------------------
 // Generalized-IO: register state (sequential) excluding perf counters
 // -----------------------------------------------------------------------------
-struct ICache_regs_t {
+struct ICacheRegs {
   // Registered request context for the current in-flight lookup/fill.
   reg<1> req_valid_r = false;
   reg<XLEN> req_pc_r = 0;
@@ -131,12 +131,12 @@ struct ICache_regs_t {
 
 // Generalized-IO note:
 // `reg_write` and `regs` share the same structure by design.
-using ICache_reg_write_t = ICache_regs_t;
+using ICache_reg_write_t = ICacheRegs;
 
 // -----------------------------------------------------------------------------
 // Generalized-IO: table write controls (observable write port)
 // -----------------------------------------------------------------------------
-struct ICache_table_write_t {
+struct ICacheTableWrite {
   wire<1> we = false;
   wire<1> invalidate_all = false;
   wire<ICACHE_INDEX_BITS> index = 0;
@@ -145,7 +145,7 @@ struct ICache_table_write_t {
   wire<1> valid = false;
 };
 
-struct ICache_in_t {
+struct ICacheModuleIn {
   // Input from the IFU (Instruction Fetch Unit)
   wire<XLEN> pc = 0;        // Program Counter
   wire<1> ifu_req_valid = false;  // Fetch enable signal
@@ -170,7 +170,7 @@ struct ICache_in_t {
   wire<1> dcache_resp_miss = true;
 };
 
-struct ICache_out_t {
+struct ICacheModuleOut {
   // Output to the IFU (Instruction Fetch Unit)
   wire<1> miss = false;           // Cache miss signal
   wire<1> ifu_resp_valid = false; // Indicates if output data is valid
@@ -202,18 +202,18 @@ struct ICache_out_t {
   wire<8> lookup_data_req_way = 0;
 };
 
-struct ICache_perf_t {
+struct ICachePerf {
   wire<1> miss_issue_valid = false;
 };
 
 // cache io
-struct ICache_IO_t {
-  ICache_in_t in;
-  ICache_regs_t regs;
-  ICache_lookup_in_t lookup_in;
-  ICache_out_t out;
+struct ICacheModuleIO {
+  ICacheModuleIn in;
+  ICacheRegs regs;
+  ICacheLookupIn lookup_in;
+  ICacheModuleOut out;
   ICache_reg_write_t reg_write;
-  ICache_table_write_t table_write;
+  ICacheTableWrite table_write;
 };
 
 class ICache {
@@ -228,8 +228,8 @@ public:
   void seq();
 
   // IO ports
-  ICache_IO_t io;
-  ICache_perf_t perf;
+  ICacheModuleIO io;
+  ICachePerf perf;
 
 private:
   /*

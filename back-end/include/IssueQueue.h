@@ -12,23 +12,23 @@
 #include <functional>
 #include <vector>
 
-// 定义每个issue port操作类型的位掩码
+// operation-type bit masks of the issue ports
 
 // ==========================================
-// 1. 配置结构体
+// 1. configuration
 // ==========================================
 //
 struct PortBinding {
-  int port_idx;             // 物理端口号 (对应 out.iss2prf 下标)
-  uint64_t capability_mask; // 该端口支持的操作码掩码
+  int port_idx;             // physical port number (index of out.iss2prf)
+  uint64_t capability_mask; // operations the port supports
 };
 
 struct IssueQueueConfig {
-  int id;                         // IQ 枚举 (IQ_INT, IQ_LD...)
-  int size;                       // 深度
-  int dispatch_width;             // 每周期最大入队数 (Write Ports)
-  uint64_t supported_ops;         // 支持的操作码掩码
-  std::vector<PortBinding> ports; // 存储端口配置
+  int id;                         // IQ id (IQ_INT, IQ_LD, ...)
+  int size;                       // depth
+  int dispatch_width;             // max enqueues per cycle (write ports)
+  uint64_t supported_ops;         // operations the IQ accepts
+  std::vector<PortBinding> ports; // its issue ports
 };
 
 struct IqStoredEntry {
@@ -55,7 +55,7 @@ struct IssueQueueOut {
 };
 
 // ==========================================
-// 2. IssueQueue (纯逻辑，不含IO)
+// 2. IssueQueue (logic only, no IO)
 // ==========================================
 class IssueQueue {
 public:
@@ -84,14 +84,12 @@ private:
   };
   Regs q_, d;
 
-  // Dirty tracking: entry/wake_matrix (committed) always equal entry_1/
-  // wake_matrix_*_1 (working) at comb_begin (seq copies back). Writes to the
-  // working copy are recorded so seq() copies only what changed.
+  // Dirty tracking: q == d at the start of the cycle; writes to d are recorded so seq() copies only what changed.
   bool entry_dirty = false;
   bool entry_all_dirty = false;
   std::vector<uint64_t> slot_dirty;
-  std::vector<uint64_t> vmask_1;     // bit i = entry_1[i].valid (working copy), so scans visit only the live slots
-  std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]) for the committed copy, refreshed in seq()
+  std::vector<uint64_t> d_vmask;     // bit i = d.entry[i].valid, so scans visit only the live slots
+  std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]), refreshed in seq()
   void refresh_ready(int i) {
     const Regs &q = q_;
     const uint64_t bit = 1ull << (i & 63);
@@ -127,7 +125,7 @@ private:
 
 public:
   IssueQueue(const IssueQueueConfig &cfg)
-      : size(cfg.size), dispatch_width(cfg.dispatch_width), // <--- 初始化
+      : size(cfg.size), dispatch_width(cfg.dispatch_width),
         ports(cfg.ports) {
     if (!ports.empty()) {
       port_lo = port_hi = ports[0].port_idx;
@@ -137,7 +135,7 @@ public:
     d.entry.resize(size);
     slot_dirty.assign((size + 63) / 64, 0);
     ready_bits.assign((size + 63) / 64, 0);
-    vmask_1.assign((size + 63) / 64, 0);
+    d_vmask.assign((size + 63) / 64, 0);
     q_.count = 0;
     d.count = 0;
     wake_words_per_row = (size + 63) / 64;
@@ -182,7 +180,7 @@ public:
         continue;
       }
       int success = enqueue(req);
-      Assert(success && "发射队列溢出！Dispatch 逻辑故障！");
+      Assert(success && "issue queue overflow: dispatch logic error");
     }
     out.free_slots = size - d.count;
   }
@@ -290,12 +288,12 @@ public:
   }
 
 private:
-  // 入队 (返回成功入队的个数)
+  // enqueue (returns the number enqueued)
   int enqueue(const IqStoredEntry &inst) {
     if (d.count >= size)
       return 0;
-    for (size_t w = 0; w < vmask_1.size(); w++) {   // lowest free slot
-      const uint64_t freebits = ~vmask_1[w];
+    for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
+      const uint64_t freebits = ~d_vmask[w];
       if (!freebits) continue;
       const int i = int(w * 64) + __builtin_ctzll(freebits);
       if (i >= size) break;
@@ -304,7 +302,7 @@ private:
 #endif
       d.entry[i] = inst;
       d.entry[i].valid = true;
-      vmask_1[w] |= 1ull << (i & 63);
+      d_vmask[w] |= 1ull << (i & 63);
       set_dep_bits_for_slot(d.entry[i], i);
 
       d.count++;
@@ -315,13 +313,13 @@ private:
 
   // Flush
   void flush_br(wire<BR_MASK_WIDTH> br_mask) {
-    for (size_t w = 0; w < vmask_1.size(); w++)
-      for (uint64_t m = vmask_1[w]; m; m &= m - 1) {
+    for (size_t w = 0; w < d_vmask.size(); w++)
+      for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int i = int(w * 64) + __builtin_ctzll(m);
         if ((d.entry[i].uop.br_mask & br_mask) == 0) continue;
         clear_dep_bits_for_slot(d.entry[i], i);
         d.entry[i].valid = false;
-        vmask_1[w] &= ~(1ull << (i & 63));
+        d_vmask[w] &= ~(1ull << (i & 63));
         mark_slot(i);
         d.count--;
       }
@@ -330,8 +328,8 @@ private:
   // Clear resolved branch bits from surviving entries
   void clear_br(wire<BR_MASK_WIDTH> clear_mask) {
     if (clear_mask == 0) return;
-    for (size_t w = 0; w < vmask_1.size(); w++)
-      for (uint64_t m = vmask_1[w]; m; m &= m - 1) {
+    for (size_t w = 0; w < d_vmask.size(); w++)
+      for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int i = int(w * 64) + __builtin_ctzll(m);
         if ((d.entry[i].uop.br_mask & clear_mask) == 0) continue;   // unchanged entries need no copy at seq()
         d.entry[i].uop.br_mask &= ~clear_mask;
@@ -342,7 +340,7 @@ private:
   void flush_all() {
     for (auto &e : d.entry)
       e.valid = false;
-    std::fill(vmask_1.begin(), vmask_1.end(), 0);
+    std::fill(d_vmask.begin(), d_vmask.end(), 0);
     entry_dirty = true;
     entry_all_dirty = true;
     matrix_all_dirty = true;
@@ -354,13 +352,13 @@ private:
     std::fill(d.wake_matrix_src3.begin(), d.wake_matrix_src3.end(), 0);
   }
 
-  // 提交调度结果 (将选中的指令移出队列)
+  // apply the issue selection (remove the selected entries)
   void commit_issue(const std::vector<int> &indices) {
     for (int idx : indices) {
       if (d.entry[idx].valid) {
         clear_dep_bits_for_slot(d.entry[idx], idx);
         d.entry[idx].valid = false;
-        vmask_1[idx >> 6] &= ~(1ull << (idx & 63));
+        d_vmask[idx >> 6] &= ~(1ull << (idx & 63));
         mark_slot(idx);
         d.count--;
       }

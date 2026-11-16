@@ -15,18 +15,7 @@ struct PredecodeResult {
   target_addr_t target_address;
 };
 
-struct predecode_in {
-  inst_word_t inst;
-  pc_t pc;
-};
-
-struct predecode_read_data {
-  inst_word_t inst;
-  pc_t pc;
-};
-
-void predecode_seq_read(const struct predecode_in *in,
-                        struct predecode_read_data *rd);
-void predecode_comb(const predecode_read_data &input, PredecodeResult &output);
+// The predecode of one instruction word at pc (combinational).
+PredecodeResult predecode(inst_word_t inst, pc_t pc);
 
 #endif

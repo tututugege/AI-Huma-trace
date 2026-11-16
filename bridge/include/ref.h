@@ -41,9 +41,9 @@
 #define MIP_SEIP (1 << 9)
 #define MIP_MEIP (1 << 11)
 
-// 获取 MPP 的值 (0=U, 1=S, 3=M)
+// MPP (0 = U, 1 = S, 3 = M)
 #define GET_MPP(x) ((x >> 11) & 0x3)
-// 获取 SPP 的值
+// SPP
 #define GET_SPP(x) ((x >> 8) & 0x1)
 
 // SV32 Page Table Entry (PTE) Bits

@@ -33,12 +33,12 @@ public:
   void decode(Uop &uop, uint32_t inst);
 
   void init();
-  void comb_fire();  // 发射握手与分支tag推进
-  void seq();              // 时钟跳变，状态更新
+  void comb_fire();  // handshake and branch tag advance
+  void seq();              // clock edge
 
-  // 状态
+  // registers
 
-  // 下一周期状态
+  // next-cycle values
 
 private:
   // phases of one cycle, run in the order of the methods above

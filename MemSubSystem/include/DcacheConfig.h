@@ -18,13 +18,13 @@ constexpr int DCACHE_PLRU_TREE_BITS =
     (DCACHE_WAYS_NUM > 1) ? (DCACHE_WAYS_NUM - 1) : 1;
 extern wire<1>  plru_tree_state[DCACHE_SETS_NUM][DCACHE_PLRU_TREE_BITS];
 
-struct MSHRFINDReq{
+struct MSHRFindReq{
     wire<1> valid;
     wire<1> is_prefetch; // the lookup comes from a prefetch probe (it must not promote an in-flight prefetch)
     wire<DCACHE_SET_BITS> set_idx;
     wire<DCACHE_TAG_BITS> tag;
 };
-struct MSHRFINDResp{
+struct MSHRFindResp{
     wire<1> valid;
     wire<1> hit;
 };
@@ -38,7 +38,7 @@ struct MSHRReq{
     wire<1> no_fill;     // prefetch into the LLC only: the response is dropped, the line is not filled into the L1D
 };
 
-struct MSHR_FILLReq{
+struct MSHRFillReq{
     wire<1> valid;
     wire<DCACHE_MSHR_BITS> id;
     wire<1> dirty;
@@ -47,13 +47,13 @@ struct MSHR_FILLReq{
     wire<DCACHE_WAY_BITS> way_idx;
     wire<32> addr;
 };
-struct MSHR_FILLResp{
+struct MSHRFillResp{
     wire<1> done;
     wire<DCACHE_MSHR_BITS> id;
 };
 struct MSHRDcacheIO {
-    MSHR_FILLReq fill_req;
-    MSHRFINDResp find_resp[LSU_LDU_COUNT + LSU_STA_COUNT]; // one MSHRResp per load/store slot, for miss allocation and hit check
+    MSHRFillReq fill_req;
+    MSHRFindResp find_resp[LSU_LDU_COUNT + LSU_STA_COUNT]; // one MSHRResp per load/store slot, for miss allocation and hit check
     wire<DCACHE_MSHR_COUNT_BITS> free;
     wire<1> release_event; // an LLC-only prefetch entry was released this cycle (wakes loads waiting for a free MSHR)
     void clear() {
@@ -62,9 +62,9 @@ struct MSHRDcacheIO {
 };
 
 struct DcacheMSHRIO {
-    MSHRFINDReq find_req[LSU_LDU_COUNT + LSU_STA_COUNT]; // one MSHRReq per load/store slot, for miss allocation and hit check
+    MSHRFindReq find_req[LSU_LDU_COUNT + LSU_STA_COUNT]; // one MSHRReq per load/store slot, for miss allocation and hit check
     MSHRReq mshr_req[LSU_LDU_COUNT + LSU_STA_COUNT];
-    MSHR_FILLResp fill_resp;
+    MSHRFillResp fill_resp;
     
     void clear() {
         memset(this, 0, sizeof(DcacheMSHRIO));
@@ -122,7 +122,7 @@ struct PendingWrite {
     wire<DCACHE_WAY_BITS> way_idx  = 0;
     wire<DCACHE_OFFSET_BITS> word_off = 0;
 };
-struct FILLWrite {
+struct FillWrite {
     wire<1>     valid    = false;
     wire<DCACHE_MSHR_BITS> id = 0;
     wire<1>     dirty    = false;
@@ -166,7 +166,7 @@ struct FillOut {
 // The stage-1 -> stage-2 register of the DCache: what stage 1 requested in the last cycle, used at the start of this
 // cycle by the MSHR / write-buffer lookups (comb_outputs_dcache) and the tag / fill array reads (Dcache_Read).
 struct DcacheS1Reg {
-    MSHRFINDReq find_req[LSU_LDU_COUNT + LSU_STA_COUNT];
+    MSHRFindReq find_req[LSU_LDU_COUNT + LSU_STA_COUNT];
     BypassReq bypass_req[LSU_LDU_COUNT];
     MergeReq merge_req[LSU_STA_COUNT];
     DcacheLineReadReq line_read_req[LSU_LDU_COUNT + LSU_STA_COUNT];
@@ -188,7 +188,7 @@ struct DcacheOUTIO {
     DcacheWBIO   *dcache2wb   = nullptr;  // DCache bypass/merge req → WB
     PendingWrite *pendingwrite[LSU_LDU_COUNT + LSU_STA_COUNT]; // For tracking pending misses for the store queue and load queue
     LruUpdate *lru_updates[LSU_LDU_COUNT + LSU_STA_COUNT]; // For tracking PLRU updates for the store queue and load queue
-    FILLWrite *fill_write; // For tracking MSHR fill responses for the store queue and load queue
+    FillWrite *fill_write; // For tracking MSHR fill responses for the store queue and load queue
     DcacheLineReadReq *dcachereadreq[LSU_LDU_COUNT + LSU_STA_COUNT] ; // For BSD: output the chosen victim for debugging
     FillOut *fillout; 
 };
@@ -216,6 +216,6 @@ void write_dcache_line(uint32_t set_idx, uint32_t way, uint32_t tag);
 bool cache_line_match(uint32_t addr1, uint32_t addr2);
 
 void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],DcacheLineReadResp resp[LSU_LDU_COUNT+LSU_STA_COUNT], const FillOut &fillout,FillIn &fillin);
-void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FILLWrite &fillwrite);
+void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FillWrite &fillwrite);
 
 bool CheckAddr(uint32_t addr1, uint8_t strb1, uint32_t addr2, uint8_t strb2);

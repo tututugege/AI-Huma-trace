@@ -34,9 +34,9 @@ namespace {
   case 0:
     return 0x1u << off; // SB
   case 1:
-    return 0x3u << off; // SH, 要求 off 为 0 或 2
+    return 0x3u << off; // SH: off is 0 or 2
   case 2:
-    return 0xFu; // SW, 要求 off 为 0
+    return 0xFu; // SW: off is 0
   case 3:
     return 0xFFu;   // SD (rv64) / FSD: 8 bytes, 8-byte aligned (CheckAddr compares up to 8 bytes)
   default:

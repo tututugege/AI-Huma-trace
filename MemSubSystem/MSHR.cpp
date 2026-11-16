@@ -8,7 +8,7 @@
 #include <cstring>
 
 namespace {
-int find_entry_idx(const MSHR_STATE &state, uint32_t line_addr) {
+int find_entry_idx(const MSHRState &state, uint32_t line_addr) {
     for (int i = 0; i < DCACHE_MSHR_ENTRIES; i++) {
         const MSHREntry &e = state.mshr_entries[i];
         if (e.valid && e.addr == line_addr) {

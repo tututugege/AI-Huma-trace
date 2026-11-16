@@ -161,9 +161,8 @@ public:
   void seq();
   reg<XLEN> read(int idx) const { return q_.CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
 
-  // 执行时存下需要写入的idx，cmd和data
-  // 提交时才写入
-  // 否则csr指令未提交，其更改就已经生效
+  // The CSR write (idx, cmd, data) is held at execute and applied at commit:
+  // otherwise an uncommitted CSR instruction would already take effect
 
 
 

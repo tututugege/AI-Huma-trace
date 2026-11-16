@@ -13,6 +13,7 @@
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
+#include "fatal.h"
 #include "fpr.h"
 #include <type_traits>
 #include <vector>
@@ -856,15 +857,13 @@ class BpuPipe {
       static const char *nm[3] = {"type", "tage", "btb"};
       for (int a = 0; a < 3; a++) {
         if (p[a]->rd > 1 || p[a]->wr > 1) {
-          std::printf("[BPU_PIPE] ERROR: port limit exceeded on %s bank %d: rd=%d wr=%d\n", nm[a], b, p[a]->rd, p[a]->wr);
-          std::exit(1);
+          fatal("[BPU_PIPE] ERROR: port limit exceeded on %s bank %d: rd=%d wr=%d\n", nm[a], b, p[a]->rd, p[a]->wr);
         }
       }
     }
     for (int b = 0; b < BANKBLK; b++)
       if (t.bb_rd[b] > 1 || t.bb_wr[b] > 1 || t.bb_rd[b] + t.bb_wr[b] > 1) {
-        std::printf("[BPU_PIPE] ERROR: block bank %d port limit exceeded: rd=%d wr=%d\n", b, t.bb_rd[b], t.bb_wr[b]);
-        std::exit(1);
+        fatal("[BPU_PIPE] ERROR: block bank %d port limit exceeded: rd=%d wr=%d\n", b, t.bb_rd[b], t.bb_wr[b]);
       }
     if (t.rec_v) rec_[t.rec.id & 255] = t.rec;
     if (t.rec2_v) rec_[t.rec2.id & 255] = t.rec2;

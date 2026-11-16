@@ -2,6 +2,7 @@
 #define FRONT_FIFO_H
 
 #include "../front_IO.h"
+#include "fatal.h"
 #include "../frontend.h"
 #include "../front_module.h"
 #include "../BPU/BPU_configs.h"
@@ -15,13 +16,13 @@
 // three entry FIFOs of the front end (instruction FIFO, PTAB, front-to-back FIFO): one registered ring of N entries, one push
 // and one pop per cycle; a read of an empty FIFO in the cycle of a write returns the written entry (bypass); reset / refetch empty it.
 // read() (first: clear / pop, the head out) and write() (push) fill the cycle's request from the registered read data and
-// advance it; seq_write() applies the request.
+// advance it; seq() applies the request.
 
 
 // Per FIFO: its IO types, depth, "full" threshold and how an entry is taken from the input / put on the output.
 struct InstFifo {
-  using In = instruction_FIFO_in; using Out = instruction_FIFO_out; using Rd = instruction_FIFO_read_data;
-  using Comb = InstructionCombOut; using Entry = instruction_FIFO_entry;
+  using In = InstFifoIn; using Out = InstFifoOut; using Rd = InstFifoReadData;
+  using Comb = InstructionCombOut; using Entry = InstFifoEntry;
   static constexpr int N = INSTRUCTION_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "instruction FIFO";
   static void load(const In &in, Entry &e) {
@@ -46,7 +47,7 @@ struct InstFifo {
 };
 
 struct Ptab {
-  using In = PTAB_in; using Out = PTAB_out; using Rd = PTAB_read_data; using Comb = PtabCombOut; using Entry = PTAB_entry;
+  using In = PtabIn; using Out = PtabOut; using Rd = PtabReadData; using Comb = PtabCombOut; using Entry = PtabEntry;
   static constexpr int N = PTAB_SIZE, FULL_AT = N - 1;
   static constexpr const char *name = "PTAB";
   static void load(const In &in, Entry &e) {
@@ -62,8 +63,8 @@ struct Ptab {
 };
 
 struct F2bFifo {
-  using In = front2back_FIFO_in; using Out = front2back_FIFO_out; using Rd = front2back_FIFO_read_data;
-  using Comb = Front2BackCombOut; using Entry = front2back_FIFO_entry;
+  using In = F2bFifoIn; using Out = F2bFifoOut; using Rd = F2bFifoReadData;
+  using Comb = Front2BackCombOut; using Entry = F2bFifoEntry;
   static constexpr int N = FRONT2BACK_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "front-to-back FIFO";
   static void load(const In &in, Entry &e) {
@@ -86,8 +87,7 @@ struct F2bFifo {
 };
 
 [[noreturn]] inline void fifo_die(const char *name, const char *what) {
-  std::printf("[%s] ERROR: %s\n", name, what);
-  std::exit(1);
+  fatal("[%s] ERROR: %s\n", name, what);
 }
 
 template <class F>
@@ -97,7 +97,7 @@ class FrontFifo {
   int size_ = 0, head_ = 0;
 
  public:
-  void seq_read(typename F::Rd &rd) const {
+  void read_q(typename F::Rd &rd) const {
     std::memset(&rd, 0, sizeof(rd));
     rd.size = size_;
     rd.head_valid = size_ > 0;
@@ -163,7 +163,7 @@ class FrontFifo {
     }
   }
 
-  void seq_write(const typename F::Comb &c) {
+  void seq(const typename F::Comb &c) {
     if (c.clear_fifo) size_ = head_ = 0;
     if (c.push_en) {
       if (size_ >= F::N) fifo_die(F::name, "overflow");
@@ -179,10 +179,10 @@ class FrontFifo {
 };
 
 // The fetch-address FIFO: entries in order (index 0 = head), with each entry's FE_PAIR second block and its age (BPU_PIPE).
-// Same port protocol as FrontFifo: seq_read (q), read / write (the cycle's request, the read data advanced), seq_write.
+// Same port protocol as FrontFifo: read_q (q), read / write (the cycle's request, the read data advanced), seq_write.
 class FetchAddrFifo {
 public:
-  static void comb_impl(const fetch_address_FIFO_in &inp, const fetch_address_FIFO_read_data &rd, FetchAddrCombOut &out) {
+  static void comb_impl(const FetchAddrFifoIn &inp, const FetchAddrFifoReadData &rd, FetchAddrCombOut &out) {
     std::memset(&out, 0, sizeof(FetchAddrCombOut));
 
     out.out_regs.full = false;
@@ -209,8 +209,7 @@ public:
 
     if (do_read) {
       if (has_data_before_read && !rd.head_valid) {
-        std::printf("[fetch_address_FIFO] ERROR: missing head snapshot for same-cycle reread\n");
-        std::exit(1);
+        fatal("[fetch_address_FIFO] ERROR: missing head snapshot for same-cycle reread\n");
       }
       out.out_regs.read_valid = true;
       out.out_regs.fetch_address =
@@ -235,7 +234,7 @@ public:
     out.out_regs.empty = (next_size == 0);
   }
 
-  void seq_read(fetch_address_FIFO_read_data &rd) const {
+  void read_q(FetchAddrFifoReadData &rd) const {
     std::memset(&rd, 0, sizeof(rd));
     rd.size = size_;
     rd.head_valid = (size_ > 0);
@@ -246,9 +245,9 @@ public:
     }
   }
 
-  void build_next_read_data(const fetch_address_FIFO_read_data &cur,
+  void build_next_read_data(const FetchAddrFifoReadData &cur,
                             const FetchAddrCombOut &comb_out,
-                            fetch_address_FIFO_read_data &next_rd) const {
+                            FetchAddrFifoReadData &next_rd) const {
     if (&next_rd != &cur) {
       next_rd = cur;
     }
@@ -262,8 +261,7 @@ public:
     const fetch_addr_fifo_size_t size_before_ops = next_rd.size;
     if (comb_out.push_en) {
       if (next_rd.size >= FETCH_ADDR_FIFO_SIZE) {
-        std::printf("[fetch_address_FIFO] ERROR: fifo overflow\n");
-        std::exit(1);
+        fatal("[fetch_address_FIFO] ERROR: fifo overflow\n");
       }
       if (next_rd.size == 0) {
         next_rd.head_entry = comb_out.push_data;
@@ -274,8 +272,7 @@ public:
     }
     if (comb_out.pop_en) {
       if (next_rd.size == 0) {
-        std::printf("[fetch_address_FIFO] ERROR: fifo underflow on read\n");
-        std::exit(1);
+        fatal("[fetch_address_FIFO] ERROR: fifo underflow on read\n");
       }
       --next_rd.size;
       if (next_rd.size == 0) {
@@ -293,7 +290,7 @@ public:
   }
 
   // read port (first use in the cycle): clear / drop the youngest entries / pop, the cycle's request req (fresh here)
-  void read(const fetch_address_FIFO_in &inp, fetch_address_FIFO_read_data &rd, fetch_address_FIFO_out &out,
+  void read(const FetchAddrFifoIn &inp, FetchAddrFifoReadData &rd, FetchAddrFifoOut &out,
             FetchAddrCombOut &req) const {
     comb_impl(inp, rd, req);
     out = req.out_regs;
@@ -301,10 +298,9 @@ public:
   }
 
   // write port (after the read): push the address (and its FE_PAIR second block)
-  void write(const fetch_address_FIFO_in &inp, fetch_address_FIFO_read_data &rd, FetchAddrCombOut &req) const {
+  void write(const FetchAddrFifoIn &inp, FetchAddrFifoReadData &rd, FetchAddrCombOut &req) const {
     if (req.push_en) {
-      std::printf("[fetch_address_FIFO] ERROR: two pushes in one cycle\n");
-      std::exit(1);
+      fatal("[fetch_address_FIFO] ERROR: two pushes in one cycle\n");
     }
     req.push_en = true;
     req.push_data = inp.fetch_address;
@@ -316,7 +312,7 @@ public:
     build_next_read_data(rd, c, rd);
   }
 
-  void seq_write(const FetchAddrCombOut &req) {
+  void seq(const FetchAddrCombOut &req) {
     if (req.clear_fifo) {
       size_ = 0;
       std::memset(entries_, 0, sizeof(entries_));
@@ -331,8 +327,7 @@ public:
     for (fetch_addr_fifo_size_t i = 0; i < size_; ++i) if (ages_[i] < 3) ages_[i]++;  // one cycle older
     if (req.push_en) {
       if (size_ >= FETCH_ADDR_FIFO_SIZE) {
-        std::printf("[fetch_address_FIFO] ERROR: fifo overflow\n");
-        std::exit(1);
+        fatal("[fetch_address_FIFO] ERROR: fifo overflow\n");
       }
       ages_[size_] = 0;
       pairs_[size_] = req.push_pair;
@@ -340,8 +335,7 @@ public:
     }
     if (req.pop_en) {
       if (size_ == 0) {
-        std::printf("[fetch_address_FIFO] ERROR: fifo underflow on read\n");
-        std::exit(1);
+        fatal("[fetch_address_FIFO] ERROR: fifo underflow on read\n");
       }
       for (fetch_addr_fifo_size_t i = 1; i < size_; ++i) {
         entries_[i - 1] = entries_[i];

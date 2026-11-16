@@ -6,7 +6,7 @@
 // #define SRAM_DELAY_ENABLE  // if not defined, no SRAM delay, back to Register
 
 // BPU top-level switches
-// 统一使用全局 config.h 中的 constexpr 宽度配置，避免前后端不一致。
+// widths come from the global config.h (one source for the front and back end)
 static_assert(FETCH_WIDTH > 0, "FETCH_WIDTH must be positive");
 static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 #ifndef BPU_BANK_NUM
@@ -157,8 +157,7 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 
 /* Dual request only active under ideal icache mode */
 
-// 统一使用全局 config.h 中的 ICACHE_LINE_SIZE。
-// 真实 icache miss 延迟由 shared AXI / SimDDR 配置建模。
+// ICACHE_LINE_SIZE comes from config.h; the miss latency is modelled by the shared AXI / DRAM path.
 
 // FIFO sizes
 #ifndef INSTRUCTION_FIFO_SIZE

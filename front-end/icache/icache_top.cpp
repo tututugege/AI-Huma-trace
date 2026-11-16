@@ -3,6 +3,7 @@
 //   arrays (register file, read in the cycle of the lookup) -> module meta lookup -> ITLB translation -> module meta + data lookup
 //   -> memory read / D-cache probe requests -> fetch-group output (instruction words from the functional memory) -> clock edge.
 #include "trace_hook.h"
+#include "fatal.h"
 #include "../front_IO.h"
 #include "../front_module.h"
 #include "../frontend.h"
@@ -35,7 +36,7 @@ void ICacheTop::forward_pending(uint32_t index, TagP &tag, ValidP &valid) const 
   }
 }
 
-void ICacheTop::clear_outputs(icache_out *out) {
+void ICacheTop::clear_outputs(ICacheOut *out) {
   out->icache_read_complete = false;
   out->fetch_pc = 0;
   for (int i = 0; i < FETCH_WIDTH; ++i) { out->fetch_group[i] = INST_NOP; out->page_fault_inst[i] = false; out->inst_valid[i] = false; }
@@ -53,7 +54,7 @@ bool ICacheTop::read_ready(bool hold_for_recovery, bool reset) const {
 }
 
 // Fetch-group output of the module's response: the words come from the functional memory (the I-cache keeps no data array).
-void ICacheTop::drive_fetch_group(icache_out *out) {
+void ICacheTop::drive_fetch_group(ICacheOut *out) {
   const auto &o = mod_.io.out;
   if (!o.ifu_resp_valid) return;
   out->icache_read_complete = true;
@@ -80,7 +81,7 @@ void ICacheTop::drive_fetch_group(icache_out *out) {
   }
 }
 
-void ICacheTop::drive_perf(icache_out *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret) {
+void ICacheTop::drive_perf(ICacheOut *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret) {
   const auto &h = mod_;
   out->perf_req_fire = req_valid && out->icache_read_ready;
   out->perf_miss_event = h.perf.miss_issue_valid;
@@ -111,7 +112,7 @@ void ICacheTop::fill_lookup_data() {
 }
 
 // Combinational part of the cycle (module + ITLB + ports).
-void ICacheTop::comb(icache_in *in, icache_out *out) {
+void ICacheTop::comb(ICacheIn *in, ICacheOut *out) {
   clear_outputs(out);
   out->fetch_paddr = 0;
   out->fetch_single_word = false;
@@ -156,7 +157,7 @@ void ICacheTop::comb(icache_in *in, icache_out *out) {
     if (in->itlb_flush) m->flush();
     if (in->refetch) m->cancel_pending_walk();
     if (!in->refetch && mod_.io.out.mmu_req_valid) {
-      if (edge_.kill_step) { std::printf("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); std::exit(1); }
+      if (edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
       itlb_invoked = true;
       uint32_t pa = 0;
       itlb_ret = m->translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, in->csr_status);
@@ -185,13 +186,12 @@ void ICacheTop::comb(icache_in *in, icache_out *out) {
   drive_fetch_group(out);
   drive_perf(out, req_valid, itlb_invoked, itlb_ret);
   if (ho.ifu_resp_valid && ho.miss) {
-    std::printf("[icache_top] ERROR: miss is true when ifu_resp is valid\n");
-    std::exit(1);
+    fatal("[icache_top] ERROR: miss is true when ifu_resp is valid\n");
   }
 }
 
 // One step: the array read (the pending table writes of this cycle forwarded), the module comb, the step's table write.
-void ICacheTop::step(icache_in *in, icache_out *out) {
+void ICacheTop::step(ICacheIn *in, ICacheOut *out) {
   bind_.bind(ports_set_);
   const auto &r = mod_.io.regs;
   const pc_t lookup_pc = r.req_valid_r ? r.req_pc_r : r.lookup_pending_r ? r.lookup_pc_r : in->fetch_address;
@@ -218,7 +218,7 @@ void ICacheTop::step(icache_in *in, icache_out *out) {
 }
 
 // The fetch step of the cycle (R1 = N(R0)): outputs, memory-side requests, the ITLB lookup. Nothing is latched here.
-void ICacheTop::comb_calc(icache_in *in, icache_out *out) {
+void ICacheTop::comb_calc(ICacheIn *in, ICacheOut *out) {
   edge_ = {};
   edge_.reset = in->reset;
   step(in, out);
@@ -228,12 +228,12 @@ void ICacheTop::comb_calc(icache_in *in, icache_out *out) {
 // fetch-step result (the module's comb reads io.regs, so R1 is presented there for the evaluation and the registers are
 // restored after it; they change only at the edge). Its outputs replace this cycle's; its memory-side requests are the
 // cycle's last (RTL: the memory-side outputs are those of the last step).
-void ICacheTop::invalidate_step(CsrStatusIO *csr_status, icache_out *out) {
-  if (edge_.reset || edge_.n != 1) { std::printf("[icache_top] ERROR: invalidate step without a fetch step\n"); std::exit(1); }
-  icache_in inv{};
+void ICacheTop::invalidate_step(CsrStatusIO *csr_status, ICacheOut *out) {
+  if (edge_.reset || edge_.n != 1) { fatal("[icache_top] ERROR: invalidate step without a fetch step\n"); }
+  ICacheIn inv{};
   inv.invalidate_req = true;
   inv.csr_status = csr_status;
-  const icache_module_n::ICache_regs_t q = mod_.io.regs;
+  const icache_module_n::ICacheRegs q = mod_.io.regs;
   mod_.io.regs = mod_.io.reg_write;   // R1
   edge_.kill_step = true;
   step(&inv, out);

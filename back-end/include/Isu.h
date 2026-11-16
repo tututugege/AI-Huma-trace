@@ -4,14 +4,14 @@
 #include "IO.h"
 #include <cstdint>
 
-// MUL 固定延迟唤醒条目（移位寄存器）
+// MUL fixed-latency wakeup entry (shift register)
 struct MulWakeEntry {
   wire<1> valid = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<BR_MASK_WIDTH> br_mask;
 };
 
-// DIV/FP 迭代唤醒条目（计数器槽位）
+// DIV / FP iterative wakeup entry (countdown slot)
 struct IterWakeEntry {
   wire<1> valid = 0;
   int countdown = 0;
@@ -61,14 +61,14 @@ private:
   void begin_cycle();   // called by ready(), the first phase of the cycle
   SimContext *ctx;
 
-  // 1. 发射队列 (固定顺序: INT, LD, STA, STD, BR...)
-  // 直接使用 vector，但依靠 init 的顺序保证下标对应枚举
+  // 1. issue queues (fixed order: INT, LD, STA, STD, BR, ...)
+  // a vector; init() keeps the index equal to the IQ id
   std::vector<IssueQueue> iqs;
   std::vector<IssueQueueConfig> configs;
 
-  // 2. 延迟唤醒
-  // MUL: 固定延迟，使用移位寄存器模型（深度 = MUL_MAX_LATENCY - 1）
-  // DIV / FP: 迭代单元，使用 countdown 槽位（槽位数 = 对应 FU 个数）
+  // 2. delayed wakeups
+  // MUL: fixed latency, a shift register (depth MUL_MAX_LATENCY - 1)
+  // DIV / FP: iterative units, countdown slots (one per FU)
 
 public:
   uint32_t port_attributes[ISSUE_WIDTH];
@@ -76,11 +76,11 @@ public:
   Isu(SimContext *ctx);
   void init();
 
-  // 组合逻辑
+  // comb
 
-  // 辅助逻辑
+  // helpers
 
-  // 时序逻辑
+  // seq
   void seq();
 
 private:
@@ -90,7 +90,7 @@ private:
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
-  template <class F> void for_each_wake_slot_1(F f) {   // the wake slots of d
+  template <class F> void for_each_wake_slot_d(F f) {   // the wake slots of d
     for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) f(e);
     for (auto &e : d.div_wake_slots) f(e);
     for (auto &e : d.fp_wake_slots) f(e);

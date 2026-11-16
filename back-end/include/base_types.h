@@ -321,15 +321,15 @@ constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G1 = 0x2;
 constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G2 = 0x4;
 
 struct IssuePortConfigInfo {
-  int port_idx;          // 物理端口号 (Out.iss2prf 的下标)
-  uint64_t support_mask; // 该端口支持的操作掩码 (Capability)
+  int port_idx;          // physical port number (index of out.iss2prf)
+  uint64_t support_mask; // operations the port supports (capability mask)
 };
 
 struct IQStaticConfig {
   int id;                 // IQ ID
-  int size;               // 队列深度
-  int dispatch_width;     // 入队宽度 (Dispatch 写端口数)
-  uint64_t supported_ops; // IQ 整体接收什么指令 (用于 Dispatch 路由)
+  int size;               // queue depth
+  int dispatch_width;     // enqueue width (dispatch write ports)
+  uint64_t supported_ops; // operations the IQ accepts (dispatch routing)
   int port_start_idx;
   int port_num;
 };

@@ -14,7 +14,7 @@ static_assert(BPU_TYPE_ENTRY_NUM > 0, "BPU_TYPE_ENTRY_NUM must be > 0");
 static_assert(is_power_of_two_u64(BPU_TYPE_ENTRY_NUM),
               "BPU_TYPE_ENTRY_NUM must be power of two");
 static_assert(BPU_TYPE_ENTRY_NUM <= (1u << 16),
-              "BPU_TYPE_ENTRY_NUM too large for current wire_for_bits_t coverage");
+              "BPU_TYPE_ENTRY_NUM too large for a 64-bit wire");
 static_assert(BASE_ENTRY_NUM > 0, "BASE_ENTRY_NUM must be > 0");
 static_assert(is_power_of_two_u64(BASE_ENTRY_NUM),
               "BASE_ENTRY_NUM must be power of two");
@@ -56,7 +56,7 @@ static_assert(TAGE_IDX_WIDTH > 0 && TAGE_IDX_WIDTH <= 16,
 #endif
 
 #if TYPE_PRED_SET_NUM > (1 << 16)
-#error "TYPE_PRED_SET_NUM too large for current wire_for_bits_t coverage"
+#error "TYPE_PRED_SET_NUM too large for a 64-bit wire"
 #endif
 
 

@@ -31,25 +31,25 @@ struct ICacheMemPortResp{
 //   EXPORT comb_from_back  in: csr_status back2front
 class FrontTop {
 public:
-  front_top_in in;
-  front_top_out out;
+  FrontTopIn in;
+  FrontTopOut out;
   SimContext *ctx = nullptr;
   PtwWalkPort *icache_ptw_walk_port = nullptr;
   ICacheMemPortReq *icache_mem_req_port = nullptr;
   ICacheMemPortResp *icache_mem_resp_port = nullptr;
   axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;    // the I-cache drives its requests here
   const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr; // and reads the port's outputs here (a register)
-  front_top_in back2front = {};
-  front_top_in back2front_1 = {};
+  FrontTopIn back2front = {};
+  FrontTopIn back2front_1 = {};
   reg<1> back2front_stall = false;
   reg<1> back2front_stall_1 = false;
 
   FrontTop();
   ~FrontTop();
   void init();
-  void seq_read_bpu();
-  void comb_bpu();
-  void seq_write_bpu();
+  void read_core_q();
+  void comb_core();
+  void seq_core();
   void seq_back2front();
   void comb(CsrStatusIO *csr_status, FrontPreIO &to_back);   // one cycle; the fetch group for the back end
   void comb_from_back(BackTop &back);                        // next cycle's inputs from the back end (back2front_1)

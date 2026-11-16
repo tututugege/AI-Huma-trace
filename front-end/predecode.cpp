@@ -8,19 +8,13 @@ static inline pc_t sign_extend_u32(uint32_t value, int bits) {
   return static_cast<pc_t>(static_cast<int64_t>(static_cast<int32_t>((value ^ mask) - mask)));
 }
 
-void predecode_seq_read(const struct predecode_in *in,
-                        struct predecode_read_data *rd) {
-  rd->inst = in->inst;
-  rd->pc = in->pc;
-}
-
-void predecode_comb(const predecode_read_data &input, PredecodeResult &output) {
+static void predecode_into(inst_word_t inst_in, pc_t pc_in, PredecodeResult &output) {
   std::memset(&output, 0, sizeof(PredecodeResult));
   output.type = PREDECODE_NON_BRANCH;
   output.target_address = 0;
 
-  const uint32_t inst = input.inst;
-  const pc_t pc = input.pc;
+  const uint32_t inst = inst_in;
+  const pc_t pc = pc_in;
   if (inst == 0 || inst == INST_NOP) {
     return;
   }
@@ -56,4 +50,10 @@ void predecode_comb(const predecode_read_data &input, PredecodeResult &output) {
   default:
     break;
   }
+}
+
+PredecodeResult predecode(inst_word_t inst, pc_t pc) {
+  PredecodeResult r{};
+  predecode_into(inst, pc, r);
+  return r;
 }

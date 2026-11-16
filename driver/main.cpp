@@ -20,18 +20,18 @@
 
 using namespace std;
 
-// 1. 定义配置结构
+// 1. configuration
 struct SimConfig {
   enum Mode {
     RUN,  // run an image from reset
     CKPT  // restore a checkpoint (warmup, then measure)
   } mode = RUN;
 
-  // 目标文件路径
+  // target file
   std::string target_file;
   bool fast_warmup = false;  // CKPT: functional replay of (interval - warmup) instructions into the caches/TLBs/BPU (EXP-011)
   std::string restore_stub_file;  // CKPT: front-door restore program (tools/ckpt2stub.py of the function model)
-  // CKPT 模式下，O3 目标 warmup 步数（0~checkpoint interval）
+  // checkpoint mode: detailed warm-up steps (0 .. checkpoint interval)
   uint64_t ckpt_warmup_target = 0;
   bool ckpt_warmup_target_set = false;
   uint64_t max_commit_inst = static_cast<uint64_t>(MAX_COMMIT_INST);
@@ -41,7 +41,7 @@ struct SimConfig {
   uint32_t irq_delay_max = 64;
 };
 
-// 2. 帮助信息更新
+// 2. help text
 void print_help(char *argv[]) {
   std::cout << "Usage: " << argv[0] << " [options] <target_file>" << std::endl;
   std::cout << "\nOptions:" << std::endl;
@@ -134,7 +134,7 @@ int main(int argc, char *argv[]) {
 
   SimConfig config;
 
-  // 长参数定义
+  // long options
   static struct option long_options[] = {
       {"mode", required_argument, 0, 'm'},
       {"restore-stub", required_argument, 0, 1008},
@@ -150,7 +150,7 @@ int main(int argc, char *argv[]) {
   int opt;
   int option_index = 0;
 
-  // --- A. 解析命令行参数 ---
+  // --- A. options ---
   while ((opt = getopt_long(argc, argv, "m:w:c:h", long_options,
                             &option_index)) != -1) {
     switch (opt) {
@@ -258,7 +258,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // --- B. 解析位置参数 (Target File) ---
+  // --- B. positional argument (target file) ---
   if (optind < argc) {
     config.target_file = argv[optind];
     if (optind + 1 < argc) {
@@ -294,7 +294,7 @@ int main(int argc, char *argv[]) {
             << config.irq_delay_max << " cycles" << std::endl;
   cpu.init();
 
-  // --- D. 模拟器启动逻辑 ---
+  // --- D. start the simulation ---
   if (config.mode == SimConfig::RUN) {
     std::cout << "[Mode] RUN: Loading Execution Image..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
@@ -401,7 +401,7 @@ int main(int argc, char *argv[]) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
       cpu.back.restore_from_ref();
       cpu.sync_mmio_devices_from_backing();
-      cpu.restore_pc(cpu.back.number_PC); // 强制同步前端 PC
+      cpu.restore_pc(cpu.back.number_PC); // resync the front-end PC
       if (fast_warm_active) fast_warm_install(cpu);
     }
 
@@ -434,7 +434,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // 主循环
+  // main loop
   if (cpu.ctx.exit_reason == ExitReason::NONE) {
     // Regression guard: SIM_MAX_CYCLES stops a run that does not terminate (exit code 3) instead of
     // waiting for an external timeout.

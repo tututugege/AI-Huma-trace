@@ -1,12 +1,13 @@
 #include "predecode_checker.h"
+#include "fatal.h"
 
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-void predecode_checker_comb(const predecode_checker_in &in, predecode_checker_out &output) {
-  std::memset(&output, 0, sizeof(predecode_checker_out));
+void predecode_check(const PredecodeCheckerIn &in, PredecodeCheckerOut &output) {
+  std::memset(&output, 0, sizeof(PredecodeCheckerOut));
   output.keep_n = FETCH_WIDTH;
 
   for (int i = 0; i < FETCH_WIDTH; i++) {
@@ -22,9 +23,8 @@ void predecode_checker_comb(const predecode_checker_in &in, predecode_checker_ou
       output.predict_dir_corrected[i] = true;
       break;
     default:
-      std::printf("ERROR!!: predecode_type[%d] = %d\n", i,
+      fatal("ERROR!!: predecode_type[%d] = %d\n", i,
                   in.predecode_type[i]);
-      std::exit(1);
     }
   }
 

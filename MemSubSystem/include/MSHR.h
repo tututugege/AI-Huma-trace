@@ -23,7 +23,7 @@ struct MSHREntry {
 };
 
 
-struct MSHR_STATE{
+struct MSHRState{
     reg<DCACHE_MSHR_COUNT_BITS> mshr_count; 
 
     // Hold one blocked AXI read response when WB backpressure prevents
@@ -35,12 +35,12 @@ struct MSHR_STATE{
     MSHREntry mshr_entries[DCACHE_MSHR_ENTRIES];
 };
 
-struct MSHRINIO{
+struct MSHRIn{
     DcacheMSHRIO* dcache2mshr;          // this cycle's DCache requests (mshr_req, fill_resp)
     const DcacheS1Reg* s1_q = nullptr;  // the stage-1 lookups of the last cycle (find_req)
     const axi_interconnect::ReadMasterPort_t *axi = nullptr;  // the DCACHE_R port: req.accepted / resp (interconnect side)
 };
-struct MSHROUTIO{
+struct MSHROut{
     MSHRDcacheIO* mshr2dcache;
     axi_interconnect::ReadMasterPort_t *axi = nullptr;        // the same port: the request and resp.ready (MSHR side)
 };
@@ -57,9 +57,9 @@ public:
 
     void seq(bool sample_perf = true);
 
-    MSHRINIO in;
-    MSHROUTIO out;
-    using Regs = MSHR_STATE;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
+    MSHRIn in;
+    MSHROut out;
+    using Regs = MSHRState;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
     Regs d;
     const Regs &q() const { return q_; }
     bool axi_resp_accepted_this_cycle = false;

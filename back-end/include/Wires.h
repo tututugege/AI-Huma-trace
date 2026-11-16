@@ -4,15 +4,15 @@
 // evaluates the modules in dependency order, so a wire is valid once the stage that drives it has run.
 #include "IO.h"
 
-struct Back_in : FrontPreIO {
+struct BackIn : FrontPreIO {
   // from MemSubsystem
   PeripheralRespIO peripheral_resp;
   DcacheLsuIO dcache2lsu;
 
-  Back_in() : FrontPreIO(), peripheral_resp{}, dcache2lsu{} {}
+  BackIn() : FrontPreIO(), peripheral_resp{}, dcache2lsu{} {}
 };
 
-struct Back_out {
+struct BackOut {
   // to front-end
   bool mispred;
   bool stall;
@@ -39,7 +39,7 @@ struct Back_out {
   PeripheralReqIO peripheral_req;
   LsuDcacheIO lsu2dcache;
 
-  Back_out()
+  BackOut()
       : mispred(false), stall(false), flush(false), fence_i(false),
         itlb_flush(false), redirect_pc(0), commit_entry{},
         sstatus{}, mstatus{}, satp{}, privilege{}, peripheral_req{},
@@ -82,7 +82,7 @@ struct Wires {
   IduConsumeIO idu_consume;
   FtqCommitInfoIO ftq_commit_info;
   CsrInterruptInjectIO csr_interrupt_inject_io;
-  Back_in in;
-  Back_out out;
+  BackIn in;
+  BackOut out;
   const ExuIdIO *idu_br_latch = nullptr;  // owned by Idu
 };

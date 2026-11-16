@@ -15,9 +15,9 @@ class SimContext;
 // S1S2Reg — pipeline register between Stage 1 (SRAM read) and Stage 2 (hit check)
 // ─────────────────────────────────────────────────────────────────────────────
 struct S1S2Reg {
-    reg<LSU_LDU_WIDTH+1> icache_req; // latched from in.lsu2dcache->icache_req at stage1_comb(); used for timing the critical path of hit check and MSHR lookup
+    reg<LSU_LDU_WIDTH+1> icache_req; // latched from in.lsu2dcache->icache_req at comb_stage1(); used for timing the critical path of hit check and MSHR lookup
     
-    FILLWrite fill_write; // latched from in.mshr2dcache->fill_req at stage1_comb(); used for timing the critical path of hit check and MSHR lookup
+    FillWrite fill_write; // latched from in.mshr2dcache->fill_req at comb_stage1(); used for timing the critical path of hit check and MSHR lookup
     // Load slots
     struct LoadSlot {
         reg<1>     valid    = false;
@@ -43,8 +43,8 @@ struct S1S2Reg {
 };
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
 // against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
-//   CONTRACT stage2_comb  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
-//   CONTRACT stage1_comb  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write out.fillout  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
+//   CONTRACT comb_stage2  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
+//   CONTRACT comb_stage1  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write out.fillout  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
 class RealDcache {
 public:
     void init();
@@ -53,8 +53,8 @@ public:
     DcacheINIO in;
     DcacheOUTIO out;
 
-    void stage1_comb();
-    void stage2_comb();
+    void comb_stage1();
+    void comb_stage2();
     const S1S2Reg &stage1_next_state() const { return d.s1s2; }
     void set_hidden_bank_retry_blocked(
         const bool load_blocked[LSU_LDU_COUNT],
@@ -96,7 +96,7 @@ private:
         BankRetryState bank_retry;  // per-port hidden retry latches for LSU bank conflicts
     };
     Regs q_, d;
-    // Combinational scratch from stage2_comb() to stage1_comb(); not sequenced state.
+    // Combinational scratch from comb_stage2() to comb_stage1(); not sequenced state.
     FillReqMerge fill_req_merge_wires[LSU_STA_COUNT] = {};
     BankRetryState bank_retry_issue_wires = {};
     bool bank_retry_load_blocked[LSU_LDU_COUNT] = {};

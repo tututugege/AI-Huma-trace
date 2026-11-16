@@ -66,7 +66,7 @@ public:
   axi_interconnect::ReadMasterPort_t *extra_axi_r = nullptr;
   axi_interconnect::WriteMasterPort_t *extra_axi_w = nullptr;
 
-  // PTW 端口连线（对外直接赋值/读取）
+  // the PTW walk ports of the TLBs (bound by SimCpu)
   PtwWalkPort *dtlb_walk_port = nullptr;
   PtwWalkPort *itlb_walk_port = nullptr;
   PeripheralReqIO *peripheral_req = nullptr;
@@ -125,7 +125,7 @@ private:
   DcacheLineReadReq dcache_line_read_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   PendingWrite pending_writes_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   LruUpdate lru_updates_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  FILLWrite fill_writes_{};
+  FillWrite fill_writes_{};
   FillIn fill_in_{};
   FillOut fill_out_{};
   bool fill_store_dirty_ = false;   // drive_dcache_response -> DCache stage 1: a store merged into the arriving fill
