@@ -8,6 +8,7 @@
 #include "xlen_cast.h"
 #include <cstdint>
 #include <deque>
+#include <vector>
 
 struct RefCpuContext;
 struct RefCpuState;
@@ -83,6 +84,9 @@ private:
   uint32_t ram_base_, ram_bytes_;
   uint32_t boot_base_ = 0, boot_bytes_ = 0;
   std::deque<Entry *> chain_;
+  std::vector<Entry *> pool_;   // released entries, reused by alloc_entry (no allocation per instruction)
+  Entry *alloc_entry();
+  void free_entry(Entry *e);
   bool in_ram(uint32_t addr, uint32_t size) const;
 };
 

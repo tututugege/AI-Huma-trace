@@ -254,3 +254,14 @@ inputs first (a module's reads become `in.X->`), then the outputs moved into the
 * The staged LSU is one file per phase: RealLsuPipe.cpp (the clock edge and the phases' composition),
   LsuPipeOutputs.cpp, LsuPipeWriteback.cpp, LsuPipeTranslate.cpp, LsuPipeRequests.cpp, with the shared helpers in
   LsuPipeInternal.h. BPU_pipe.h (already in banner sections around one class) and IO.h (a list of IO structs) stay.
+
+## Trace bridge: no state copies, entries pooled (exp/bridge-fast; function-model exp/step-access)
+
+dhrystone profile: the bridge's dispatch read the function model's whole state twice per instruction
+(refcpu_get_state, about 0.7 KB, for a few fields) and allocated an Entry per instruction; with the commit that
+freed it, about 8% of the run time. Now dispatch reads single fields (refcpu_gpr / fpr / csr / pc / privilege /
+reservation / store_info), a forced jump / a blocked instruction sets the pc with refcpu_set_pc (the same effect as
+the get / set round trip, the visible mip / sip latched), only the trap path still takes the whole state; entries
+come from a free list. The bridge's share went to about 4%. The Makefile takes the API header from REFCPU_INC (the
+same checkout as REFCPU_LIB; default the function-model symlink).
+Gates RVC=0 62/62, RVC=1 67/67 identical, FPR identical, TB_TRACE_COMMIT identical.

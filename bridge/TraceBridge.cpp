@@ -136,25 +136,36 @@ const Fact *Bridge::find(uint64_t uid) const {
   return r;
 }
 
+// Entries come from a free list: an entry lives from dispatch to commit / rewind, so the list stays as long as the window.
+Bridge::Entry *Bridge::alloc_entry() {
+  if (pool_.empty()) return new Entry();
+  Entry *e = pool_.back();
+  pool_.pop_back();
+  *e = Entry();
+  return e;
+}
+
+void Bridge::free_entry(Entry *e) { pool_.push_back(e); }
+
 const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t len) {
-  auto *e = new Entry();
+  Entry *e = alloc_entry();
   e->f.uid = uid;
   e->f.pc = pc;
   e->f.inst = inst;
   e->f.len = static_cast<uint8_t>(len);
-  RefCpuState st;
-  refcpu_get_state(ctx_, &st);
+  // The function model's fields are read one by one (no copy of its state); gpr / fpr are its register arrays.
+  const xlen_t *gpr = refcpu_gpr(ctx_);
+  const uint64_t *fpr = refcpu_fpr(ctx_);
+  const xlen_t mstatus_before = refcpu_csr(ctx_, 7);   // (csr index 7 = mstatus)
   // The undo log restores pc to what it was before this dispatch, forced jump included.
-  e->pc_before = st.pc;
-  e->priv_before = st.privilege;
-  e->resv_valid_before = st.reserve_valid;
-  e->resv_addr_before = st.reserve_addr;
-  for (int i = 0; i < 8; i++) e->trap_csr[i] = st.csr[kTrapCsr[i]];
+  e->pc_before = refcpu_pc(ctx_);
+  e->priv_before = refcpu_privilege(ctx_);
+  refcpu_reservation(ctx_, &e->resv_valid_before, &e->resv_addr_before);
+  for (int i = 0; i < 8; i++) e->trap_csr[i] = refcpu_csr(ctx_, kTrapCsr[i]);
 
-  if (st.pc != pc) {
+  if (e->pc_before != pc) {
     e->f.forced_jump = true;
-    st.pc = pc;
-    refcpu_set_state(ctx_, &st);
+    refcpu_set_pc(ctx_, pc);
   }
 
   const uint32_t opcode = bits(inst, 6, 0);
@@ -163,38 +174,39 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   e->f.is_br = (opcode == 0x63);
   const bool is_amo = (opcode == 0x2f);
   const bool is_lr = is_amo && bits(inst, 31, 27) == 2;
-  e->f.rs2_value = st.gpr[rs2];
-  e->f.rs1_value = st.gpr[rs1];
+  e->f.rs2_value = gpr[rs2];
+  e->f.rs1_value = gpr[rs1];
   if (opcode == 0x73) {  // SYSTEM: save the whole CSR file
     e->full_csr = true;
-    e->csr_full.assign(st.csr, st.csr + 21);
-    e->f.csr_wdata = (funct3 & 4) ? rs1 : st.gpr[rs1];  // csrr*i: zimm in the rs1 field
+    e->csr_full.resize(21);
+    for (int i = 0; i < 21; i++) e->csr_full[i] = refcpu_csr(ctx_, i);
+    e->f.csr_wdata = (funct3 & 4) ? rs1 : gpr[rs1];  // csrr*i: zimm in the rs1 field
   }
   // Destination register undo (x0 never changes)
   const bool fp_dest = writes_fpr(inst);
   if (fp_dest) {
     e->fp_rd = true;
     e->frd = (uint8_t)rd;
-    e->frd_old = st.fpr[rd];
+    e->frd_old = fpr[rd];
   }
-  if (touches_fcsr(inst)) { e->fcsr_saved = true; e->fcsr_old = st.fcsr; }
+  if (touches_fcsr(inst)) { e->fcsr_saved = true; e->fcsr_old = refcpu_fcsr(ctx_); }
   const bool writes_rd = opcode != 0x63 && opcode != 0x23 && opcode != 0x27 && opcode != 0x0f && !fp_dest;
   if (writes_rd && rd != 0) {
     e->rd = (uint8_t)rd;
-    e->rd_old = st.gpr[rd];
+    e->rd_old = gpr[rd];
   }
 
   const bool fp_ld = opcode == 0x07, fp_st = opcode == 0x27;   // flw/fld, fsw/fsd: funct3 2 / 3 as lw / ld
-  if (fp_st) e->f.rs2_value = st.fpr[rs2];
+  if (fp_st) e->f.rs2_value = fpr[rs2];
   if (opcode == 0x03 || fp_ld || is_lr) {
     e->f.is_load = true;
-    e->f.vaddr = (opcode == 0x03 || fp_ld) ? st.gpr[rs1] + immI(inst) : st.gpr[rs1];
+    e->f.vaddr = (opcode == 0x03 || fp_ld) ? gpr[rs1] + immI(inst) : gpr[rs1];
     e->f.size = (opcode == 0x03 || fp_ld) ? access_bytes(funct3 & 3) : amo_bytes(funct3);
   } else if (opcode == 0x23 || fp_st || is_amo) {
     e->f.is_store = true;
-    e->f.vaddr = (opcode == 0x23 || fp_st) ? st.gpr[rs1] + immS(inst) : st.gpr[rs1];
+    e->f.vaddr = (opcode == 0x23 || fp_st) ? gpr[rs1] + immS(inst) : gpr[rs1];
     e->f.size = (opcode == 0x23 || fp_st) ? (funct3 <= 3 ? access_bytes(funct3) : 4) : amo_bytes(funct3);
-    e->f.store_data = fp_st ? st.fpr[rs2] : st.gpr[rs2];
+    e->f.store_data = fp_st ? fpr[rs2] : gpr[rs2];
     if (e->f.size == 1) e->f.store_data &= 0xFF;
     if (e->f.size == 2) e->f.store_data &= 0xFFFF;
     if (e->f.size == 4) e->f.store_data &= 0xFFFFFFFFu;
@@ -218,7 +230,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     // An FP load / store with mstatus.FS = Off is an illegal instruction before its address is looked at (the RTL flags it at completion, which stalls the
     // dispatch while it sits in the ROB window): it must reach the function model to trap, not be "blocked" for a misaligned / out-of-RAM address.
     bool fp_mem_fs_off = false;
-    { const uint32_t opc = inst & 0x7f; fp_mem_fs_off = (opc == 0x07 || opc == 0x27) && ((st.csr[7] >> 13) & 3) == 0; }   // (csr index 7 = mstatus)
+    { const uint32_t opc = inst & 0x7f; fp_mem_fs_off = (opc == 0x07 || opc == 0x27) && ((mstatus_before >> 13) & 3) == 0; }   // (csr index 7 = mstatus)
     if (fp_mem_fs_off) { /* executed: traps */ }
     else if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3)) || (sz == 8 && (a & 7))) blk = Blocked::MemMisalign;
     else if (data_xlate_ok && !in_ram(data_pa, sz)) blk = Blocked::MemOutOfRam;
@@ -230,10 +242,10 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     // a jump if the window continues elsewhere. rd keeps its old value: wrong-path only.
     e->rd = 0;
     bool tk; xlen_t nx;
-    if (eval_control(pc, inst, st.gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; st.pc = nx; }
-    else st.pc = pc + len;
-    refcpu_set_state(ctx_, &st);
-    e->f.next_pc = st.pc;
+    xlen_t npc = pc + len;
+    if (eval_control(pc, inst, gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; npc = nx; }
+    refcpu_set_pc(ctx_, npc);
+    e->f.next_pc = npc;
     chain_.push_back(e);
     return e->f;
   }
@@ -254,11 +266,12 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   refcpu_step(ctx_, 1);
   RefCpuStepInfo info{};
   refcpu_get_step_info(ctx_, &info);
-  RefCpuState after{};
-  refcpu_get_state(ctx_, &after);
-  e->f.fs_dirty = ((after.csr[7] >> 13) & 3) == 3 && ((st.csr[7] >> 13) & 3) != 3;   // (csr index 7 = mstatus)
+  const xlen_t mstatus_after = refcpu_csr(ctx_, 7);
+  e->f.fs_dirty = ((mstatus_after >> 13) & 3) == 3 && ((mstatus_before >> 13) & 3) != 3;
 
   if (info.is_exception) {
+    RefCpuState after{};   // (rare: the whole state, kept as the trap's result)
+    refcpu_get_state(ctx_, &after);
     // Speculative trap: undo at once (state and store), continue at pc+4.
     e->f.trapped = true;
     e->trap_after.reset(new RefCpuState(after));
@@ -278,24 +291,27 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     return e->f;
   }
 
-  e->f.next_pc = after.pc;
+  bool did_store = false;
+  uint32_t store_addr = 0;
+  refcpu_store_info(ctx_, &did_store, &store_addr);
+  e->f.next_pc = refcpu_pc(ctx_);
   e->f.control_valid = true;  // executed: the core's outcome
   if (e->rd != 0 || (writes_rd && rd != 0)) {
     e->f.rd_valid = true;
     e->f.rd = rd;
-    e->f.rd_value = after.gpr[rd];
+    e->f.rd_value = gpr[rd];
   }
   if (fp_dest) {
     e->f.rd_valid = true;
     e->f.rd_is_fp = true;
     e->f.rd = rd;
-    e->f.rd_value = after.fpr[rd];
+    e->f.rd_value = fpr[rd];
   }
   if (e->f.is_br) e->f.br_taken = info.br_taken;
-  if (after.store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
+  if (did_store && e->f.is_store) {  // plain stores and AMOs; a failed SC does not set store
     e->f.has_mem_write = true;
     constexpr uint32_t XB = XLEN / 8;   // the unit of the stale-value model (EXP-020): one word on rv32, one aligned dword on rv64
-    e->f.mem_waddr = after.store_addr & ~(XB - 1);
+    e->f.mem_waddr = store_addr & ~(XB - 1);
     auto unit = [&](uint32_t a) { xlen_t v = refcpu_load_word(ctx_, a); v |= xlen_t(refcpu_load_word(ctx_, a + 4)) << 32; return v; };
     e->f.mem_wdata = unit(e->f.mem_waddr);
     e->f.mem_old = e->f.mem_wdata;   // the words the store undid hold the value before it
@@ -339,14 +355,14 @@ void Bridge::rewind_after(int64_t uid) {
               e->resv_valid_before, e->resv_addr_before, e->rd, e->rd_old);
     if (e->fp_rd) st.fpr[e->frd] = e->frd_old;
     if (e->fcsr_saved) st.fcsr = e->fcsr_old;
-    delete e;
+    free_entry(e);
   }
   refcpu_set_state(ctx_, &st);
 }
 
 void Bridge::commit(uint64_t uid) {
   if (chain_.empty() || chain_.front()->f.uid != uid) return;
-  delete chain_.front();
+  free_entry(chain_.front());
   chain_.pop_front();
 }
 
@@ -381,7 +397,7 @@ void Bridge::commit_flush(uint64_t uid) {
   Entry *x = chain_.back();
   if (x->trap_after) refcpu_set_state(ctx_, x->trap_after.get());
   // X retires: every older entry has already retired, so it is the only one left.
-  while (!chain_.empty()) { delete chain_.front(); chain_.pop_front(); }
+  while (!chain_.empty()) { free_entry(chain_.front()); chain_.pop_front(); }
 }
 
 bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {

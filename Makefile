@@ -27,6 +27,8 @@ CXXFLAGS += $(ZLIB_CFLAGS)
 
 # Libraries
 REFCPU_LIB ?= ./function-model/librefcpu.a
+# the function model's API header: from the same checkout as REFCPU_LIB (default: the function-model symlink)
+REFCPU_INC ?= ./function-model/include/api/
 LIBS := $(REFCPU_LIB) ./libs/softfloat.a
 LDFLAGS := -lz -lstdc++fs
 ifneq ($(ZLIB_LIBDIR),)
@@ -55,7 +57,7 @@ INCLUDES := -I./include/ \
             -I./MemSubSystem/include/ \
             -I./bridge/include/ \
             -I./driver/include/ \
-            -I./function-model/include/api/ \
+            -I$(REFCPU_INC) \
             -I$(FRONT_DIR)/
 
 AXI_KIT_IO_HDR := $(AXI_KIT_DIR)/axi_interconnect/include/AXI_Interconnect_IO.h
