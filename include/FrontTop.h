@@ -4,6 +4,9 @@
 #include <memory>
 
 class PtwWalkPort;
+class BackTop;
+struct FrontPreIO;
+struct CsrStatusIO;
 class SimContext;
 struct FrontReadData;
 struct FrontUpdateRequest;
@@ -44,6 +47,8 @@ public:
   void comb_bpu();
   void seq_write_bpu();
   void seq_back2front();
+  void comb(CsrStatusIO *csr_status, FrontPreIO &to_back);   // one cycle; the fetch group for the back end
+  void comb_from_back(BackTop &back);                        // next cycle's inputs from the back end (back2front_1)
   void force_back2front_refetch(pc_t pc);
   void step_bpu();
 

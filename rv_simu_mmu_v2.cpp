@@ -284,7 +284,7 @@ void SimCpu::cycle() {
 
   clear_axi_master_inputs(axi_interconnect);
 
-  front_comb_before_back();
+  front.comb(&back.csr_status, back.in);   // the front end, and the fetch group for the back end
 
   // AXI phase 1: slave outputs -> interconnect outputs (req.ready / accepted / resp on the master ports, which the
   // MSHR, the write buffer and the MMIO path read directly in the memory subsystem's comb).
@@ -300,7 +300,7 @@ void SimCpu::cycle() {
   // AXI phase-2: master requests -> interconnect -> slave inputs.
   axi_subsystem_comb_inputs(*this);
 
-  back2front_comb();
+  front.comb_from_back(back);              // the front end's next-cycle inputs from the back end's commit / redirect
   front2back_hold_comb();
 
   front.seq_write_bpu();
@@ -356,111 +356,4 @@ void SimCpu::peripheral_resp_hold_seq() {
   peripheral_resp_hold = peripheral_resp_hold_1;
 }
 
-void SimCpu::front_comb_before_back() {
-  const bool registered_refetch = static_cast<bool>(front.back2front.refetch);
-  const bool frontend_can_read = !front.back2front_stall || registered_refetch;
 
-  front.in = front.back2front;   // (reset is 0 here: only FrontTop::init() runs the front end with reset)
-  front.in.csr_status = &back.csr_status;
-
-  if (frontend_can_read) {
-    front.in.FIFO_read_enable = true;
-
-    front.seq_read_bpu();
-    front.comb_bpu();
-
-    bool no_taken = true;
-    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-      // FE_PAIR: a fetch group may continue with a second block after a predicted-taken branch (pc discontinuity)
-      if (j > 0 && !no_taken && back.in.valid[j - 1] && front.out.inst_valid[j] && front.out.pc[j] != front.out.pc[j - 1] + ilen_of(front.out.is_rvc[j - 1]) && front.out.predict_dir[j - 1])
-        no_taken = true;
-      back.in.valid[j] =
-          no_taken && front.out.FIFO_valid && front.out.inst_valid[j];
-      back.in.pc[j] = front.out.pc[j];
-      back.in.is_rvc[j] = front.out.is_rvc[j];
-      back.in.predict_next_fetch_address[j] =
-          front.out.predict_next_fetch_address;
-      back.in.page_fault_inst[j] = front.out.page_fault_inst[j];
-      back.in.inst[j] = front.out.instructions[j];
-
-      back.in.predict_dir[j] = front.out.predict_dir[j];
-      if (back.in.valid[j] && front.out.predict_dir[j])
-        no_taken = false;
-    }
-    back.in.meta = front.out.meta;
-    back.in.front_stall = static_cast<bool>(front.out.commit_stall); back.in.front_upd_free = front.out.commit_upd_free; back.in.front_tq_free = front.out.commit_tq_free;
-  } else {
-    front.in.FIFO_read_enable = false;
-    front.in.refetch = false;
-    front.seq_read_bpu();
-    front.comb_bpu();
-    back.in.front_stall = static_cast<bool>(front.out.commit_stall); back.in.front_upd_free = front.out.commit_upd_free; back.in.front_tq_free = front.out.commit_tq_free;
-  }
-}
-
-void SimCpu::back2front_comb() {
-  front.back2front_1 = front.back2front;
-  front.back2front_stall_1 = back.out.stall;
-  front.back2front_1.FIFO_read_enable = false;
-  front.back2front_1.csr_status = &back.csr_status;
-  front.back2front_1.refetch = back.out.mispred || back.out.flush;
-  front.back2front_1.rf_valid = back.out.rf_valid && !back.out.flush;
-  front.back2front_1.rf_blk = back.out.rf_blk;
-  front.back2front_1.rf_slot = back.out.rf_slot;
-  front.back2front_1.rf_type = back.out.rf_type;
-  front.back2front_1.rf_pc = back.out.rf_pc;
-  front.back2front_1.rf_is_rvc = back.out.rf_is_rvc;
-  front.back2front_1.itlb_flush = back.out.itlb_flush;
-  front.back2front_1.fence_i = back.out.fence_i;
-  for (int i = 0; i < COMMIT_WIDTH; i++) {
-    InstInfo *inst = &back.out.commit_entry[i].uop;
-    const auto &commit_extra = back.rob->out.commit_extra[i];
-    const auto &ftq_info = back.ftq_commit_info.resp[i];
-    front.back2front_1.back2front_valid[i] = back.out.commit_entry[i].valid;
-    for (int j = 0; j < 4; j++) {
-      front.back2front_1.tage_tag[i][j] = 0;
-    }
-
-    if (front.back2front_1.back2front_valid[i]) {
-      front.back2front_1.predict_dir[i] = ftq_info.pred_taken;
-      front.back2front_1.predict_base_pc[i] = ftq_info.pc;
-      front.back2front_1.update_is_rvc[i] = ftq_info.is_rvc;
-      front.back2front_1.actual_dir[i] =
-          ((*inst)->type == JAL || (*inst)->type == JALR) ? true : inst->br_taken;
-      front.back2front_1.actual_target[i] =
-          (is_branch((*inst)->type) || (*inst)->type == JAL || (*inst)->type == JALR)
-              ? back.out.commit_entry[i].uop.diag_val
-              : ftq_info.pc + ilen_of(ftq_info.is_rvc);
-      int br_type = BR_NONCTL;
-      if (is_branch((*inst)->type)) {
-        br_type = BR_DIRECT;
-      }
-      if ((*inst)->type == JAL) {
-        br_type = BR_JAL;
-      }
-      if ((*inst)->type == JAL && inst->dest_en && (*inst)->dest_areg == 1) {
-        br_type = BR_CALL;
-      } else if ((*inst)->type == JALR) {
-        if (commit_extra.src1_areg == 1 && (*inst)->dest_areg == 0 &&
-            commit_extra.imm == 0)
-          br_type = BR_RET;
-        else if ((*inst)->dest_areg == 1)
-          br_type = BR_ICALL;
-        else
-          br_type = BR_IDIRECT;
-      }
-
-      front.back2front_1.actual_br_type[i] = br_type;
-      front.back2front_1.alt_pred[i] = ftq_info.alt_pred;
-      front.back2front_1.pcpn[i] = ftq_info.pcpn;
-      for (int j = 0; j < 4; j++) { // TN_MAX = 4 (分支预测相关索引)
-        front.back2front_1.tage_idx[i][j] = ftq_info.tage_idx[j];
-        front.back2front_1.tage_tag[i][j] = ftq_info.tage_tag[j];
-      }
-    }
-  }
-
-  if (back.out.mispred || back.out.flush) {
-    front.back2front_1.refetch_address = back.out.redirect_pc;
-  }
-}

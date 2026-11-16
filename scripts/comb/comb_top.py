@@ -20,7 +20,8 @@ ROOTS = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_m
          'icache_resp', 'icache_resp_q', 'icache_axi_q', 'front2back_hold', 'front2back_hold_1', 'front2back_hold_live', 'front2back_hold_1_live',
          'peripheral_resp_hold', 'peripheral_resp_hold_1', 'oracle_pending_valid', 'oracle_pending_out', 'ctx')
 SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio')
-SEQ_CALLS = ('front.seq_write_bpu',)        # cycle() is scanned up to the first of these
+SEQ_CALLS = ('front.seq_write_bpu',)
+FRONT_INLINE = ('front.comb', 'front.comb_from_back')   # FrontTop methods inlined like SimCpu's        # cycle() is scanned up to the first of these
 DEPTH = 4                                   # path components kept below the root
 
 
@@ -139,7 +140,7 @@ def top_domain(root, ASSIGN, back_rows):
     # the I-cache ports (icache_top.cpp, free functions over g_bind)
     ict = src.t[os.path.join(root, 'front-end', 'icache', 'icache_top.cpp')]
     ic = ''
-    for fn in ('comb', 'icache_comb_calc', 'icache_peek_ready', 'clear_outputs', 'read_ready'):
+    for fn in ('comb', 'step', 'icache_comb_calc', 'icache_invalidate_step', 'clear_outputs', 'read_ready'):
         mm = re.search(r'\n[\w:<>&*\s]*?\b' + fn + r'\s*\([^)]*\)\s*(?:const\s*)?\{', ict)
         if mm: ic += Src.block(ict, mm.end() - 1)
         else: notes.add(f'icache_top.cpp: no {fn}()')
@@ -211,6 +212,16 @@ def top_domain(root, ASSIGN, back_rows):
             if cm and norm_path(cm.group(1)) in SUBOBJ:
                 key = norm_path(cm.group(1)) + '.' + cm.group(2)
                 if key in SEQ_CALLS: stop[0] = True; return
+                if key in FRONT_INLINE:   # a FrontTop method: inlined, its members are front.*
+                    fb = src.body('FrontTop', cm.group(2))
+                    params = [re.search(r'(\w+)\s*$', p.strip()).group(1) for p in split_top(fb[0], ',') if p.strip()]
+                    args = [a.strip() for a in split_top(cm.group(3), ',') if a.strip()]
+                    body = strip_comments(fb[1])
+                    body = re.sub(r'(?<![\w.>])(back2front_stall_1|back2front_stall|back2front_1|back2front|in|out)\b(?!\s*\()', r'front.\1', body)
+                    body = re.sub(r'(?<![\w.>])(seq_read_bpu|comb_bpu)\s*\(\)', r'front.\1()', body)
+                    mp2 = dict(mp)
+                    for p, a in zip(params, args): mp2[p] = a
+                    walk_body(body, key, mp2); continue
                 if key in S:
                     r, w = S[key]
                     ra, wa = scan_paths(cm.group(3), ASSIGN, src, notes, key)   # arguments

@@ -50,12 +50,10 @@ public:
   void sync_mmio_devices_from_backing();
   void restore_pc(pc_t pc);
   void cycle();
-  void front_comb_before_back();
   void front2back_hold_comb();
   void front2back_hold_seq();
   void peripheral_resp_hold_comb();
   void peripheral_resp_hold_seq();
-  void back2front_comb();
   uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }
   // 由 SimContext 在提交路径调用的本地辅助逻辑。
   void commit_sync(InstInfo *inst, int commit_slot);

@@ -194,3 +194,16 @@ reads 60 -> 48. Kept, because it is timing: `icache_comb_calc()` runs the I-cach
 same cycle (FE_PAIR's `icache_fetch_second`) see the updated arrays, and a predecode flush steps the I-cache a second
 time in the same CPU cycle. Moving the edge to the front end's seq or dropping the second step changes cycles; it is a
 decision for the RTL alignment, not a refactor.
+
+I-cache with one clock edge (7e9f34d), as in rtl/frontend/icache/icache_ctl.sv: `icache_comb_calc` is the fetch step
+R1 = N(R0) (nothing latched), `icache_invalidate_step` the kill step R2 = K(R1) evaluated on R1, `icache_seq` (first in
+front_seq_write) the edge: module registers, ITLB, the steps' table writes; a same-cycle array read (the kill step,
+FE_PAIR) forwards this cycle's pending table writes. Checked beyond the gates: FE_IPF=1 identical on the 67 RVC=1
+programs; FE_PAIR=1 identical on the 64 that finish (on the base too, fact / prime / recursion do not finish with
+FE_PAIR; fact's commit stream over 5M cycles is identical, 688,700 commits).
+
+Top-level glue (front end <-> back end): `front_comb_before_back` (the front end's inputs from back2front, the FIFO read
+decision, the fetch group into back.in with the FE_PAIR slot masking) and `back2front_comb` (the BPU training / redirect
+inputs of the next cycle from the back end's commit) were front-end interface logic in SimCpu; they are
+`FrontTop::comb(csr, back.in)` and `FrontTop::comb_from_back(back)`. SimCpu::cycle() is a list of module calls; the
+checker inlines the two FrontTop methods for the analysis (their members are front.*).
