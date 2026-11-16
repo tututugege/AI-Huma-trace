@@ -181,33 +181,41 @@ def hazards_of(rows, overlap, known):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# front end: FrontComb phases in FrontCore::comb() order
+# front end: FrontCore's phases (one module phase each) in FrontCore::comb() order
 # ---------------------------------------------------------------------------------------------------------------------
 FRONT_KNOWN = {
 }
 
 
 def front_domain(root, ASSIGN, overlap):
-    """FrontComb is constructed for every FrontCore::comb() call and `req` is cleared before it: a read of one of its
-    members before a later phase writes it sees the initial value (a staged input, reported, not a hazard).  Only the
+    """The phases of FrontCore::comb(), each a call of one module's phase. The modules' ports are named after the front
+    end's wires (in.<wire> / out.<wire>): a phase's own body is scanned with them as the wires. A read of a wire before a
+    later phase writes it sees the module's output of the cycle before (a staged input, reported, not a hazard).  Only the
     file-scope state of front_top.cpp lives across cycles: reading it before a later phase writes it is a hazard."""
     src = Src(root, ['front-end', 'include'])
     ft = src.t[os.path.join(root, 'front-end', 'front_top.cpp')]
-    names = struct_members(ft, 'FrontComb')
+    fh = src.t[os.path.join(root, 'front-end', 'front_core.h')]
     decls = list(re.finditer(r'^static\s+(?!const\b)([\w:<>, ]+?)\s\*?(\w+)\s*(?:=[^;]*)?;', strip_comments(ft), re.M))
     persistent = [m.group(2) for m in decls]
     types = {m.group(2): m.group(1).split('::')[-1].strip() for m in decls}
-    # FrontComb's references to the front end's modules (FrontCore): their methods' parameters decide what a call writes
-    fc = Src.block(ft, ft.index('{', re.search(r'struct FrontComb\s*\{', ft).start()))
-    for m in re.finditer(r'^\s*([\w:]+)(?:<[^>]*>)?\s*&\s*(\w+)\s*;', strip_comments(fc), re.M):
+    # FrontCore's modules: their methods' parameters decide what a call writes
+    fc = Src.block(fh, fh.index('{', re.search(r'class FrontCore\s*\{', fh).start()))
+    for m in re.finditer(r'^\s*([\w:]+)(?:<[^>]*>)?\s+(\w+)\s*;', strip_comments(fc), re.M):
         types[m.group(2)] = m.group(1).split('::')[-1]
+    # the wires: the modules' Out fields, and the front end's inputs / registers / output
+    names = ['in', 'rd', 'out'] + list(types)
+    for t in set(types.values()):
+        for f in src.t:
+            mm = re.search(r'class ' + t + r'\s*\{', src.t[f])
+            if not mm: continue
+            cb = Src.block(src.t[f], src.t[f].index('{', mm.start()))
+            if 'struct Out' in cb: names += [n for n in struct_members(cb, 'Out') if n not in names]
+            break
     calc = src.body('FrontCore', 'comb')[1]
-    phases = re.findall(r'(?<![\w.>])c\.(\w+)\(', calc)   # the phases called on the cycle's FrontComb c
+    phases = re.findall(r'^\s*(\w+)\(\);', calc, re.M)   # the generated block
     rows, notes = [], set()
     for p in phases:
-        body = closure(src, 'FrontComb', p)
-        # a phase moved into a front-end module: FrontComb's method only calls it; the module's ports are named after the
-        # wires (in.<wire> / out.<wire>), so its body is scanned with them as the wires
+        body = closure(src, 'FrontCore', p)
         fw = re.match(r'\{\s*(\w+)\.(\w+)\(\)\s*;\s*\}$', re.sub(r'\s+', ' ', strip_comments(body)).strip())
         if fw and fw.group(1) in types:
             mb = (src.body(types[fw.group(1)], fw.group(2)) or ('', ''))[1]   # (its own body: the module's internals are its state)
@@ -219,7 +227,7 @@ def front_domain(root, ASSIGN, overlap):
             mb = re.sub(r'(?<![\w.>])out\s*=\s*\{\s*\}\s*;', '', mb)   # (the module's default outputs of the cycle)
             FIFO_OF = {'FetchAddrPort': 'fetch_addr_fifo', 'InstPort': 'inst_fifo', 'PtabPort': 'ptab', 'F2bPort': 'f2b_fifo'}
             if types[fw.group(1)] in FIFO_OF: mb = re.sub(r'(?<![\w.>])fifo\s*->', FIFO_OF[types[fw.group(1)]] + '.', mb)   # its FIFO storage
-            own = fw.group(1)   # the module's calls of its own methods: as FrontComb made them (<member>.<method>)
+            own = fw.group(1)   # the module's calls of its own methods (<member>.<method>)
             mb = re.sub(r'(?<![\w.>:])(\w+)\s*\(', lambda m: (own + '.' + m.group(1) + '(') if (src.body(types[own], m.group(1)) or src.in_class(types[own], m.group(1))) and m.group(1) != fw.group(2) else m.group(0), mb)
             body = mb
         r, w = scan(body, names + persistent, ASSIGN, src, notes, p, types)

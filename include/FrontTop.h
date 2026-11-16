@@ -10,7 +10,6 @@ struct Back2FrontRegs;
 struct CsrStatusIO;
 class SimContext;
 struct FrontReadData;
-struct FrontUpdateRequest;
 class FrontCore;
 namespace axi_interconnect {
 struct ReadMasterPort_t;
@@ -29,7 +28,7 @@ struct ICacheMemPortResp{
 
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
 //   EXPORT comb_begin      in: csr_status b2f_reg  out: front_out
-// The phases (FrontComb's, front-end/front_top.cpp) follow it, in the order of their contracts (gen_front_order.py).
+// The phases (FrontCore's: each a module's, front-end/front_core.h) follow it, in the order of their contracts (gen_front_order.py).
 class FrontTop {
 public:
   FrontTopIn in;
@@ -76,6 +75,5 @@ public:
 private:
   std::unique_ptr<FrontCore> core_;   // all state of the front end (front-end/front_core.h)
   std::unique_ptr<FrontReadData> read_data_;
-  std::unique_ptr<FrontUpdateRequest> update_req_;
   void bind_ports();
 };

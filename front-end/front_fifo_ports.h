@@ -50,7 +50,8 @@ public:
     InstFifoOut fifo_head{};          // the group at the head as the checker sees it (fixed: FE_PAIR cut, RVC carry)
     InstructionCombOut fifo_req{};
     bool multi = false;               // FE_PAIR: the group at the head spans two blocks
-    wire<1> grp_in_range[FETCH_WIDTH] = {}, grp_seg_first[FETCH_WIDTH] = {};   // the group's slots, each block's first
+    wire<1> grp_in_range[FETCH_WIDTH] = {};    // the group's slots
+    wire<1> grp_seg_first[FETCH_WIDTH] = {};   // each block's first slot
     int rvc_n = 0;                    // RVC=1: slots of the group (before the head fix), its straddle and carried half
     bool rvc_straddle = false;
     uint16_t carry_low = 0;

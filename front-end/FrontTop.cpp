@@ -10,8 +10,7 @@
 #include <memory>
 
 FrontTop::FrontTop()
-    : core_(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()),
-      update_req_(std::make_unique<FrontUpdateRequest>()) {}
+    : core_(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()) {}
 
 // the I-cache's ports (SimCpu binds them on FrontTop; they take effect at the I-cache's next step)
 void FrontTop::bind_ports() {
@@ -29,7 +28,7 @@ FrontTop::~FrontTop() = default;
 void FrontTop::init() {
   CsrStatusIO *bound_csr = in.csr_status;
   bind_ports();
-  core_->ctx = ctx;
+  core_->bind(&in, read_data_.get(), &out, ctx);
   core_->icache.set_context(ctx);
   in = {};
   out = {};
@@ -48,11 +47,10 @@ void FrontTop::read_core_q() {
 }
 
 void FrontTop::comb_core() {
-  update_req_->clear_valid();
-  core_->comb(in, *read_data_, out, *update_req_);
+  core_->comb();
 }
 
-void FrontTop::seq_core() { core_->seq(in, *update_req_); }
+void FrontTop::seq_core() { core_->seq(in); }
 
 void FrontTop::warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {
   core_->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
@@ -88,8 +86,6 @@ void FrontTop::comb_begin(CsrStatusIO *csr_status) {
   in.ctrl.fifo_read_enable = can_read;
   if (!can_read) in.redirect.valid = false;
   read_core_q();
-  update_req_->clear_valid();
-  core_->comb_begin(in, *read_data_, out, *update_req_);
 }
 void FrontTop::control() { core_->control(); }
 void FrontTop::run_bpu() { core_->run_bpu(); }

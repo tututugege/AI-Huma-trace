@@ -225,7 +225,7 @@ for e in contract_errors: print('  contract: ' + e)
 all_hazards += contract_errors
 
 # =====================================================================================================================
-# Front end and memory subsystem.  Their phases are member functions of one class (FrontComb) or the statements of
+# Front end and memory subsystem.  Their phases are member functions of one class (FrontCore, one module phase each) or the statements of
 # MemSubsystem::comb_outputs / comb_inputs; their signals are that class's data members (accessed unqualified).
 # A sub-block's comb method reads the signals its `in.F` pointers are bound to and writes those of its `out.F`
 # pointers (bindings parsed from MemSubsystem::init).  A member passed to a function as a non-const reference /

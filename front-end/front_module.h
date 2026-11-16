@@ -38,6 +38,5 @@ struct InstructionCombOut;
 struct PtabCombOut;
 struct Front2BackCombOut;
 struct FrontReadData;
-struct FrontUpdateRequest;
 
 #endif // FRONT_MODULE_H

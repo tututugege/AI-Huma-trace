@@ -143,7 +143,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
             if k.startswith('in.csr_status'): return None if write else 'back.csr_status'   # a pointer to back.csr_status (read)
             return 'front.' + k
         if head == 'out': return 'front.' + k
-        return None                                                    # FrontComb locals / front-internal state
+        return None                                                    # the front end's wires / internal state
     def mem_key(k, write=False):
         head = k.split('.')[0]
         if head in WALK: return None                                   # the walk ports: added explicitly below
@@ -199,7 +199,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
             row[1].add('mem_subsystem.dtlb_walk.out'); row[2].add('mem_subsystem.dtlb_walk.in')
         S[key] = (set(row[1]), set(row[2]))
         SUB[key] = [[key, set(row[1]), set(row[2]), txt]]
-    def front_key2(k, write=False):   # FrontComb locals: front.c.*
+    def front_key2(k, write=False):   # the front end's wires: front.c.*
         if k.split('.')[0] in ('in', 'out'): return front_key(k, write)
         return 'front.c.' + k
     SUB['front.comb_core'] = mapped(FRONT_ROWS, front_key2, 'front.')
@@ -216,7 +216,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
         return scan_paths(t1, ASSIGN, src, notes, 'icache')
     for row in SUB['front.comb_core']:
         ph = row[0].split('.', 1)[1]
-        txt = closure(src, 'FrontComb', ph) or ''
+        txt = closure(src, 'FrontCore', ph) or ''
         for cm2 in set(re.findall(r'\bicache\.(\w+)\s*\(', txt)): txt += closure(src, 'ICacheTop', cm2) or ''
         row[3] = txt
         for fn, phx in IC_PHASE.items():

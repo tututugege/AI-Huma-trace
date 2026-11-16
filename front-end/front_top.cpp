@@ -180,207 +180,6 @@ static void front_output(const F2bFifoOut &saved, const F2bFifoOut &bypass_out,
   out.predict_next_fetch_address = src->predict_next_fetch_address_corrected;
 }
 
-// ============================================================================
-// One front-end cycle
-// ============================================================================
-namespace {
-
-// Working state of one FrontCore::comb() call. Each FIFO's read data advances in place as that FIFO is read and
-// written; the merged requests go straight into the FrontUpdateRequest.
-// The phases' contracts (scripts/comb/gen_front_order.py checks them against the code and generates FrontCore::comb()
-// from them): signals are the members below (the wires of the cycle), in, rd (the registers, q), req.<x> (the write
-// requests applied at the edge, d), out, bpu_pipe.txn (the BPU pipeline's transaction of the cycle). A FIFO's state is
-// written by its read port and then its write port; every other signal has one writer.
-//   CONTRACT fifo fetch_addr: fetch_addr_in fetch_addr_rd fetch_addr_fifo_req ipf  ports: read_fetch_addr write_fetch_addr
-//   CONTRACT fifo instruction: fifo_in fifo_rd fifo_req  ports: read_instruction write_instruction_fifo
-//   CONTRACT fifo front2back: f2b_in f2b_rd front2back_fifo_req f2b_bypass use_f2b_bypass  ports: read_f2b write_front2back
-//   CONTRACT control  in: global_refetch in pipe_dec rd  out: global_refetch global_reset pipe_dec pipe_head_ok
-//   CONTRACT run_bpu  in: bpu_can_run bpu_output global_refetch global_reset in pipe_dec rd  out: bpu_can_run bpu_output bpu_pipe.txn bpu_seq_txn
-//   CONTRACT enables  in: bpu_output global_refetch global_reset in pipe_dec pipe_head_ok ptab_bypass ptab_can_write rd  out: f2b_read_enable fetch_addr_read_enable fifo_read_enable ptab_bypass ptab_can_write
-//   CONTRACT read_fetch_addr  in: fetch_addr_fifo_req fetch_addr_in fetch_addr_rd fetch_addr_read_enable global_refetch global_reset pipe_dec rd  out: fetch_addr_fifo_req fetch_addr_head fetch_addr_in fetch_addr_rd ipf
-//   CONTRACT read_ptab  in: bpu_output fifo_read_enable global_refetch global_reset ptab_bypass ptab_can_write ptab_in ptab_rd ptab_req rd  out: ptab_head ptab_in ptab_rd ptab_req
-//   CONTRACT read_instruction  in: fifo_head fifo_in fifo_rd fifo_read_enable global_refetch global_reset grp_ptab ptab_head rd  out: carry_low fifo_head fifo_in fifo_rd fifo_req grp_in_range grp_ptab grp_seg_first multi rvc_n rvc_straddle
-//   CONTRACT read_f2b  in: f2b_in f2b_rd f2b_read_enable global_reset in rd  out: f2b_bypass f2b_head f2b_in f2b_rd front2back_fifo_req use_f2b_bypass
-//   CONTRACT write_fetch_addr  in: bpu_can_run bpu_output fetch_addr_fifo_req fetch_addr_in fetch_addr_rd global_reset  out: fetch_addr_fifo_req fetch_addr_in fetch_addr_rd ipf
-//   CONTRACT run_icache  in: fetch_addr_head global_refetch global_reset ic_in ic_out in  out: ic_in ic_out
-//   CONTRACT write_instruction_fifo  in: fetch_addr_head fifo_in fifo_rd fifo_req global_refetch global_reset ic_out rd  out: fifo_in fifo_rd fifo_req
-//   CONTRACT check_group  in: carry_low checker_out fifo_head fifo_read_enable grp_in_range grp_ptab grp_seg_first lh_new_pc multi pd_next predecode_flush rvc_n rvc_straddle  out: checker_out flush_address lh_new_data lh_new_pc lh_new_valid lh_updated pd_next predecode_flush
-//   CONTRACT write_front2back  in: checker_out f2b_bypass f2b_head f2b_in f2b_rd f2b_read_enable fifo_head fifo_read_enable front2back_fifo_req global_reset grp_ptab rd use_f2b_bypass  out: f2b_bypass f2b_in f2b_rd front2back_fifo_req use_f2b_bypass
-//   CONTRACT invalidate_icache  in: ic_k predecode_flush  out: ic_k
-//   CONTRACT finish  in: bpu_output bpu_pipe.txn f2b_bypass f2b_head f2b_rd fetch_addr_head fetch_addr_rd fifo_rd flush_address global_refetch global_reset ic_k ic_out in lh_new_data lh_new_pc lh_new_valid lh_updated out pd_next pipe_dec predecode_flush ptab_rd rd use_f2b_bypass  out: out
-struct FrontComb {
-  const FrontTopIn &in;
-  const FrontReadData &rd;
-  FrontTopOut &out;
-  FrontUpdateRequest &req;
-  // the front end's modules (FrontCore): their own state, reached through their ports
-  SimContext *ctx;
-  bpuf::BpuPipe &bpu_pipe;
-  FetchAddrFifo &fetch_addr_fifo;
-  FrontFifo<InstFifo> &inst_fifo;
-  FrontFifo<Ptab> &ptab;
-  FrontFifo<F2bFifo> &f2b_fifo;
-  ICacheTop &icache;
-
-  // the FIFO ports' outputs (FetchAddrPort / InstPort / PtabPort / F2bPort::Out)
-  FetchAddrPort &fa_port;
-  InstPort &inst_port;
-  PtabPort &ptab_port;
-  F2bPort &f2b_port;
-  FetchAddrFifoReadData &fetch_addr_rd;
-  InstFifoReadData &fifo_rd;
-  PtabReadData &ptab_rd;
-  F2bFifoReadData &f2b_rd;
-  FetchAddrFifoIn &fetch_addr_in;
-  InstFifoIn &fifo_in;
-  PtabIn &ptab_in;
-  F2bFifoIn &f2b_in;
-  FetchAddrFifoOut &fetch_addr_head;
-  InstFifoOut &fifo_head;
-  PtabOut &ptab_head;
-  F2bFifoOut &f2b_head;
-  F2bFifoOut &f2b_bypass;
-  bool &use_f2b_bypass;
-  FetchAddrCombOut &fetch_addr_fifo_req;
-  InstructionCombOut &fifo_req;
-  PtabCombOut &ptab_req;
-  Front2BackCombOut &front2back_fifo_req;
-  PendingIpf &ipf;
-  bool &multi;
-  wire<1> (&grp_in_range)[FETCH_WIDTH];
-  wire<1> (&grp_seg_first)[FETCH_WIDTH];
-  int &rvc_n;
-  bool &rvc_straddle;
-  uint16_t &carry_low;
-  PtabOut &grp_ptab;
-  ICacheIn &ic_in;     // (ICacheTop::Out)
-  ICacheOut &ic_out;
-
-  FrontControl &ctrl;   // the control's outputs (FrontControl::Out)
-  bool &global_reset;
-  bool &global_refetch;
-  bool &fetch_addr_read_enable;
-  bool &fifo_read_enable;
-  bool &f2b_read_enable;
-  bool &ptab_can_write;
-  bool &ptab_bypass;
-  bpuf::OutputPayload &bpu_output;   // (BpuPipe::Out)
-  bool &bpu_can_run;
-  bpuf::BpuPipe::SeqTxn &bpu_seq_txn;
-  bool &pipe_head_ok;
-  bool &predecode_flush;   // (FrontChecker::Out) the predecode check of this cycle flushes, to flush_address
-  pc_t &flush_address;
-  ICacheOut &ic_k;   // (ICacheTop::Out) the invalidate step K of a predecode flush
-  // the predecode checker's outputs (FrontChecker::Out)
-  FrontChecker &checker;
-  bpuf::PdInfo &pd_next;
-  PredecodeCheckerOut &checker_out;
-  bool &lh_new_valid;
-  pc_t &lh_new_pc;
-  uint16_t &lh_new_data;
-  bool &lh_updated;
-  bpuf::Decision &pipe_dec;   // (FrontControl::Out)
-
-  FrontComb(FrontCore &fe, const FrontTopIn &i, const FrontReadData &r, FrontTopOut &o, FrontUpdateRequest &q)
-      : in(i), rd(r), out(o), req(q), ctx(fe.ctx), bpu_pipe(fe.bpu_pipe), fetch_addr_fifo(fe.fetch_addr_fifo),
-        inst_fifo(fe.inst_fifo), ptab(fe.ptab), f2b_fifo(fe.f2b_fifo), icache(fe.icache),
-        fa_port(fe.fa_port), inst_port(fe.inst_port), ptab_port(fe.ptab_port), f2b_port(fe.f2b_port),
-        fetch_addr_rd(fe.fa_port.out.fetch_addr_rd), fifo_rd(fe.inst_port.out.fifo_rd), ptab_rd(fe.ptab_port.out.ptab_rd),
-        f2b_rd(fe.f2b_port.out.f2b_rd), fetch_addr_in(fe.fa_port.out.fetch_addr_in), fifo_in(fe.inst_port.out.fifo_in),
-        ptab_in(fe.ptab_port.out.ptab_in), f2b_in(fe.f2b_port.out.f2b_in), fetch_addr_head(fe.fa_port.out.fetch_addr_head),
-        fifo_head(fe.inst_port.out.fifo_head), ptab_head(fe.ptab_port.out.ptab_head), f2b_head(fe.f2b_port.out.f2b_head),
-        f2b_bypass(fe.f2b_port.out.f2b_bypass), use_f2b_bypass(fe.f2b_port.out.use_f2b_bypass),
-        fetch_addr_fifo_req(fe.fa_port.out.fetch_addr_fifo_req), fifo_req(fe.inst_port.out.fifo_req),
-        ptab_req(fe.ptab_port.out.ptab_req), front2back_fifo_req(fe.f2b_port.out.front2back_fifo_req), ipf(fe.fa_port.out.ipf),
-        multi(fe.inst_port.out.multi), grp_in_range(fe.inst_port.out.grp_in_range), grp_seg_first(fe.inst_port.out.grp_seg_first),
-        rvc_n(fe.inst_port.out.rvc_n), rvc_straddle(fe.inst_port.out.rvc_straddle), carry_low(fe.inst_port.out.carry_low), grp_ptab(fe.inst_port.out.grp_ptab),
-        ic_in(fe.icache.out.ic_in), ic_out(fe.icache.out.ic_out), ctrl(fe.ctrl), global_reset(fe.ctrl.out.global_reset),
-        global_refetch(fe.ctrl.out.global_refetch), fetch_addr_read_enable(fe.ctrl.out.fetch_addr_read_enable),
-        fifo_read_enable(fe.ctrl.out.fifo_read_enable), f2b_read_enable(fe.ctrl.out.f2b_read_enable),
-        ptab_can_write(fe.ctrl.out.ptab_can_write), ptab_bypass(fe.ctrl.out.ptab_bypass),
-        bpu_output(fe.bpu_pipe.out.bpu_output), bpu_can_run(fe.bpu_pipe.out.bpu_can_run), bpu_seq_txn(fe.bpu_pipe.out.bpu_seq_txn),
-        pipe_head_ok(fe.ctrl.out.pipe_head_ok),
-        predecode_flush(fe.checker.out.predecode_flush), flush_address(fe.checker.out.flush_address), ic_k(fe.icache.out.ic_k), checker(fe.checker),
-        pd_next(fe.checker.out.pd_next), checker_out(fe.checker.out.checker_out), lh_new_valid(fe.checker.out.lh_new_valid),
-        lh_new_pc(fe.checker.out.lh_new_pc), lh_new_data(fe.checker.out.lh_new_data), lh_updated(fe.checker.out.lh_updated), pipe_dec(fe.ctrl.out.pipe_dec) {
-    auto &ci = fe.checker.in;
-    ci.fifo_read_enable = &fifo_read_enable; ci.fifo_head = &fifo_head; ci.grp_ptab = &grp_ptab; ci.multi = &multi;
-    ci.grp_in_range = grp_in_range; ci.grp_seg_first = grp_seg_first; ci.rvc_n = &rvc_n; ci.rvc_straddle = &rvc_straddle;
-    ci.carry_low = &carry_low;
-    auto &ii = fe.icache.in;
-    ii.global_reset = &global_reset; ii.global_refetch = &global_refetch; ii.in = &in; ii.fetch_addr_head = &fetch_addr_head;
-    auto &bi = fe.bpu_pipe.in;
-    bi.global_reset = &global_reset; bi.global_refetch = &global_refetch; bi.in = &in; bi.rd = &rd; bi.pipe_dec = &pipe_dec;
-    bi.ctx = ctx;
-    auto &fa = fe.fa_port.in;
-    fa.global_reset = &global_reset; fa.global_refetch = &global_refetch; fa.fetch_addr_read_enable = &fetch_addr_read_enable;
-    fa.bpu_can_run = &bpu_can_run; fa.pipe_dec = &pipe_dec; fa.rd = &rd; fa.bpu_output = &bpu_output;
-    auto &ip = fe.inst_port.in;
-    ip.global_reset = &global_reset; ip.global_refetch = &global_refetch; ip.fifo_read_enable = &fifo_read_enable;
-    ip.ptab_head = &ptab_head; ip.rd = &rd; ip.ic_out = &ic_out; ip.fetch_addr_head = &fetch_addr_head; ip.icache = &icache;
-    auto &pp = fe.ptab_port.in;
-    pp.global_reset = &global_reset; pp.global_refetch = &global_refetch; pp.fifo_read_enable = &fifo_read_enable;
-    pp.ptab_bypass = &ptab_bypass; pp.ptab_can_write = &ptab_can_write; pp.bpu_output = &bpu_output; pp.rd = &rd;
-    auto &fp = fe.f2b_port.in;
-    fp.global_reset = &global_reset; fp.f2b_read_enable = &f2b_read_enable; fp.fifo_read_enable = &fifo_read_enable;
-    fp.in = &in; fp.rd = &rd; fp.fifo_head = &fifo_head; fp.grp_ptab = &grp_ptab; fp.checker_out = &checker_out;
-    ii.predecode_flush = &predecode_flush;
-    auto &cc = fe.ctrl.in;
-    cc.in = &in; cc.rd = &rd; cc.bpu_pipe = &bpu_pipe; cc.icache = &icache; cc.ctx = ctx; cc.bpu_output = &bpu_output;
-    cc.fetch_addr_head = &fetch_addr_head; cc.fetch_addr_rd = &fetch_addr_rd; cc.fifo_rd = &fifo_rd; cc.ptab_rd = &ptab_rd;
-    cc.f2b_rd = &f2b_rd; cc.f2b_head = &f2b_head; cc.f2b_bypass = &f2b_bypass; cc.use_f2b_bypass = &use_f2b_bypass;
-    cc.ic_out = &ic_out; cc.ic_k = &ic_k; cc.predecode_flush = &predecode_flush; cc.lh_new_valid = &lh_new_valid;
-    cc.lh_updated = &lh_updated; cc.flush_address = &flush_address; cc.lh_new_pc = &lh_new_pc; cc.lh_new_data = &lh_new_data;
-    cc.pd_next = &pd_next;
-    fe.ctrl.out.out = &out;
-  }
-
-  void control();
-  void run_bpu();
-  void enables();
-  void read_fetch_addr();
-  void read_ptab();
-  void read_instruction();
-  void read_f2b();
-  void write_fetch_addr();
-  void run_icache();
-  void write_instruction_fifo();
-  void check_group();
-  void write_front2back();
-  void invalidate_icache();
-  void finish();
-};
-
-
-
-
-void FrontComb::control() { ctrl.control(); }
-void FrontComb::enables() { ctrl.enables(); }
-void FrontComb::finish() { ctrl.finish(); }
-void FrontComb::invalidate_icache() { icache.comb_invalidate(); }
-void FrontComb::read_fetch_addr() { fa_port.comb_read(); }
-void FrontComb::read_ptab() { ptab_port.comb_read(); }
-void FrontComb::read_instruction() { inst_port.comb_read(); }
-void FrontComb::read_f2b() { f2b_port.comb_read(); }
-void FrontComb::write_fetch_addr() { fa_port.comb_write(); }
-void FrontComb::write_instruction_fifo() { inst_port.comb_write(); }
-void FrontComb::write_front2back() { f2b_port.comb_write(); }
-void FrontComb::run_bpu() { bpu_pipe.comb_front(); }
-
-
-// The ICache takes the address popped from the fetch-address FIFO.
-void FrontComb::run_icache() { icache.comb_fetch(); }
-
-
-// The BPU's prediction enters the PTAB; the predecode checker compares the FIFO head against the PTAB head and may ask
-// for a refetch.
-// The predecode check of the group at the FIFO head against its PTAB entry; the RVC=1 carry and the check's report
-// to the BPU for the next cycle.
-void FrontComb::check_group() { checker.comb(); }
-
-
-
-} // namespace
 
 // ---- the front end's control (front-end/front_ctrl.h) ----
 
@@ -859,54 +658,96 @@ void FrontChecker::comb() {
   }
 }
 
-struct FrontCombSlot {
-  std::optional<FrontComb> c;
-};
-
-FrontCore::FrontCore() : comb_(std::make_unique<FrontCombSlot>()) {
+// The modules' ports, bound once: each input points at the output of the module that drives it (the front end's wires)
+FrontCore::FrontCore() {
   fa_port.fifo = &fetch_addr_fifo;
   inst_port.fifo = &inst_fifo;
   ptab_port.fifo = &ptab;
   f2b_port.fifo = &f2b_fifo;
+  const auto &c = ctrl.out;
+  const auto &k = checker.out;
+  const auto &b = bpu_pipe.out;
+  const auto &ic = icache.out;
+  const auto &fa = fa_port.out;
+  const auto &ip = inst_port.out;
+  const auto &pp = ptab_port.out;
+  const auto &fp = f2b_port.out;
+  auto &ci = checker.in;
+  ci.fifo_read_enable = &c.fifo_read_enable; ci.fifo_head = &ip.fifo_head; ci.grp_ptab = &ip.grp_ptab; ci.multi = &ip.multi;
+  ci.grp_in_range = ip.grp_in_range; ci.grp_seg_first = ip.grp_seg_first; ci.rvc_n = &ip.rvc_n;
+  ci.rvc_straddle = &ip.rvc_straddle; ci.carry_low = &ip.carry_low;
+  auto &ii = icache.in;
+  ii.global_reset = &c.global_reset; ii.global_refetch = &c.global_refetch; ii.fetch_addr_head = &fa.fetch_addr_head;
+  ii.predecode_flush = &k.predecode_flush;
+  auto &bi = bpu_pipe.in;
+  bi.global_reset = &c.global_reset; bi.global_refetch = &c.global_refetch; bi.pipe_dec = &c.pipe_dec;
+  auto &fi = fa_port.in;
+  fi.global_reset = &c.global_reset; fi.global_refetch = &c.global_refetch; fi.fetch_addr_read_enable = &c.fetch_addr_read_enable;
+  fi.bpu_can_run = &b.bpu_can_run; fi.pipe_dec = &c.pipe_dec; fi.bpu_output = &b.bpu_output;
+  auto &ni = inst_port.in;
+  ni.global_reset = &c.global_reset; ni.global_refetch = &c.global_refetch; ni.fifo_read_enable = &c.fifo_read_enable;
+  ni.ptab_head = &pp.ptab_head; ni.ic_out = &ic.ic_out; ni.fetch_addr_head = &fa.fetch_addr_head; ni.icache = &icache;
+  auto &pi = ptab_port.in;
+  pi.global_reset = &c.global_reset; pi.global_refetch = &c.global_refetch; pi.fifo_read_enable = &c.fifo_read_enable;
+  pi.ptab_bypass = &c.ptab_bypass; pi.ptab_can_write = &c.ptab_can_write; pi.bpu_output = &b.bpu_output;
+  auto &qi = f2b_port.in;
+  qi.global_reset = &c.global_reset; qi.f2b_read_enable = &c.f2b_read_enable; qi.fifo_read_enable = &c.fifo_read_enable;
+  qi.fifo_head = &ip.fifo_head; qi.grp_ptab = &ip.grp_ptab; qi.checker_out = &k.checker_out;
+  auto &ti = ctrl.in;
+  ti.bpu_pipe = &bpu_pipe; ti.icache = &icache; ti.bpu_output = &b.bpu_output;
+  ti.fetch_addr_head = &fa.fetch_addr_head; ti.fetch_addr_rd = &fa.fetch_addr_rd; ti.fifo_rd = &ip.fifo_rd; ti.ptab_rd = &pp.ptab_rd;
+  ti.f2b_rd = &fp.f2b_rd; ti.f2b_head = &fp.f2b_head; ti.f2b_bypass = &fp.f2b_bypass; ti.use_f2b_bypass = &fp.use_f2b_bypass;
+  ti.ic_out = &ic.ic_out; ti.ic_k = &ic.ic_k; ti.predecode_flush = &k.predecode_flush; ti.lh_new_valid = &k.lh_new_valid;
+  ti.lh_updated = &k.lh_updated; ti.flush_address = &k.flush_address; ti.lh_new_pc = &k.lh_new_pc; ti.lh_new_data = &k.lh_new_data;
+  ti.pd_next = &k.pd_next;
 }
 FrontCore::~FrontCore() = default;
 
-void FrontCore::comb_begin(const FrontTopIn &inp, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req) {
-  comb_->c.emplace(*this, inp, rd, out, req);
+// The front end's inputs, registers and output (FrontTop's) and the context
+void FrontCore::bind(const FrontTopIn *in, const FrontReadData *rd, FrontTopOut *out, SimContext *c) {
+  ctx = c;
+  icache.in.in = in;
+  bpu_pipe.in.in = in; bpu_pipe.in.rd = rd; bpu_pipe.in.ctx = c;
+  fa_port.in.rd = rd;
+  inst_port.in.rd = rd;
+  ptab_port.in.rd = rd;
+  f2b_port.in.in = in; f2b_port.in.rd = rd;
+  ctrl.in.in = in; ctrl.in.rd = rd; ctrl.in.ctx = c;
+  ctrl.out.out = out;
 }
-void FrontCore::control() { comb_->c->control(); }
-void FrontCore::run_bpu() { comb_->c->run_bpu(); }
-void FrontCore::enables() { comb_->c->enables(); }
-void FrontCore::read_fetch_addr() { comb_->c->read_fetch_addr(); }
-void FrontCore::read_ptab() { comb_->c->read_ptab(); }
-void FrontCore::read_instruction() { comb_->c->read_instruction(); }
-void FrontCore::read_f2b() { comb_->c->read_f2b(); }
-void FrontCore::write_fetch_addr() { comb_->c->write_fetch_addr(); }
-void FrontCore::run_icache() { comb_->c->run_icache(); }
-void FrontCore::write_instruction_fifo() { comb_->c->write_instruction_fifo(); }
-void FrontCore::check_group() { comb_->c->check_group(); }
-void FrontCore::write_front2back() { comb_->c->write_front2back(); }
-void FrontCore::invalidate_icache() { comb_->c->invalidate_icache(); }
-void FrontCore::finish() { comb_->c->finish(); }
 
-// Precondition: req's enables are cleared (FrontUpdateRequest::clear_valid; the merged requests accumulate into it).
-void FrontCore::comb(const FrontTopIn &inp, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req) {
-  FrontComb c(*this, inp, rd, out, req);
-  // BEGIN GENERATED by scripts/comb/gen_front_order.py from the contracts above struct FrontComb: do not edit
-  c.control();
-  c.run_bpu();
-  c.enables();
-  c.read_fetch_addr();
-  c.read_ptab();
-  c.read_instruction();
-  c.read_f2b();
-  c.write_fetch_addr();
-  c.run_icache();
-  c.write_instruction_fifo();
-  c.check_group();
-  c.write_front2back();
-  c.invalidate_icache();
-  c.finish();
+void FrontCore::control() { ctrl.control(); }
+void FrontCore::run_bpu() { bpu_pipe.comb_front(); }
+void FrontCore::enables() { ctrl.enables(); }
+void FrontCore::read_fetch_addr() { fa_port.comb_read(); }
+void FrontCore::read_ptab() { ptab_port.comb_read(); }
+void FrontCore::read_instruction() { inst_port.comb_read(); }
+void FrontCore::read_f2b() { f2b_port.comb_read(); }
+void FrontCore::write_fetch_addr() { fa_port.comb_write(); }
+void FrontCore::run_icache() { icache.comb_fetch(); }
+void FrontCore::write_instruction_fifo() { inst_port.comb_write(); }
+void FrontCore::check_group() { checker.comb(); }
+void FrontCore::write_front2back() { f2b_port.comb_write(); }
+void FrontCore::invalidate_icache() { icache.comb_invalidate(); }
+void FrontCore::finish() { ctrl.finish(); }
+
+// All phases of one cycle (init / step_bpu)
+void FrontCore::comb() {
+  // BEGIN GENERATED by scripts/comb/gen_front_order.py from the contracts above class FrontCore: do not edit
+  control();
+  run_bpu();
+  enables();
+  read_fetch_addr();
+  read_ptab();
+  read_instruction();
+  read_f2b();
+  write_fetch_addr();
+  run_icache();
+  write_instruction_fifo();
+  check_group();
+  write_front2back();
+  invalidate_icache();
+  finish();
   // END GENERATED
 }
 
@@ -918,7 +759,7 @@ void FrontCore::read_q(FrontReadData &rd) const {
   f2b_fifo.read_q(rd.front2back_fifo_rd_snapshot);
 }
 
-void FrontCore::seq(const FrontTopIn &inp, const FrontUpdateRequest &req) {
+void FrontCore::seq(const FrontTopIn &inp) {
   icache.seq();   // first: the I-cache edge comes before everything below that reads the arrays / ITLB (FE_IPF)
   if (bpu_pipe.out.bpu_seq_txn.valid) {
     if (bpu_pipe.out.bpu_seq_txn.reset) bpu_pipe.reset();
