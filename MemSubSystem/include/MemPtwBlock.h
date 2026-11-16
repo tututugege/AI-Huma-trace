@@ -74,9 +74,8 @@ public:
     uint32_t walk_read_addr = 0;
   };
 
-  explicit MemPtwBlock(SimContext *ctx = nullptr) : ctx(ctx) { init(); }
+  MemPtwBlock() { init(); }
 
-  void bind_context(SimContext *c) { ctx = c; }
 
   void init() {
     reset_state(cur_);
@@ -427,7 +426,6 @@ private:
     }
   }
 
-  SimContext *ctx = nullptr;
   State cur_{};
   State nxt_{};
   CombOut comb_{};

@@ -211,8 +211,7 @@ void axi_subsystem_comb_inputs(SimCpu &cpu) {
 }
 
 void axi_subsystem_seq(SimCpu &cpu) {
-  cpu.mem_subsystem.llc_seq(cpu.axi_interconnect.get_llc_table_out(),
-                            cpu.axi_interconnect.get_llc_perf_counters());
+  cpu.mem_subsystem.llc_seq(cpu.axi_interconnect.get_llc_table_out());
   cpu.axi_interconnect.seq();
   cpu.axi_ddr.seq();
   cpu.axi_mmio.seq();

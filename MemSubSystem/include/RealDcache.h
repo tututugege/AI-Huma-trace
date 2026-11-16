@@ -45,7 +45,6 @@ class RealDcache {
 public:
     void init();
     void seq();
-    void bind_context(SimContext *c) { ctx = c; }
 
     DcacheINIO in;
     DcacheOUTIO out;
@@ -96,7 +95,6 @@ private:
     BankRetryState bank_retry_issue_wires = {};
     bool bank_retry_load_blocked[LSU_LDU_COUNT] = {};
     bool bank_retry_store_blocked[LSU_STA_COUNT] = {};
-    SimContext *ctx = nullptr;
 public:
     DataPrefetcher pf; // L1D data prefetcher (EXP-009)
 };

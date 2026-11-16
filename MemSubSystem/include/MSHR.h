@@ -70,7 +70,6 @@ class MSHR {
 public:
     MSHR() = default;
     void init();
-    void bind_context(SimContext *c) { ctx = c; }
 
     void comb_outputs_axi();
     void comb_outputs_dcache();
@@ -84,6 +83,5 @@ public:
     MSHR_STATE cur,nxt;
     bool axi_resp_accepted_this_cycle = false;
     bool nofill_released = false;
-    SimContext *ctx = nullptr;
 
 };

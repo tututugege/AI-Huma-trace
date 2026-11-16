@@ -93,6 +93,4 @@ public:
     WBState cur, nxt;
 
 
-    void bind_context(SimContext *c) { ctx = c; }
-    SimContext *ctx = nullptr;
 };

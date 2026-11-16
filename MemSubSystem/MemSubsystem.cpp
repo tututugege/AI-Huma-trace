@@ -197,7 +197,6 @@ struct AxiLlcTableRuntime {
 
 struct AxiKitRuntime {
   AxiLlcTableRuntime llc_tables;
-  axi_interconnect::AXI_LLCPerfCounters_t llc_perf_snapshot{};
 };
 
 class MemSubsystemPtwWalkPortAdapter : public PtwWalkPort {
@@ -275,16 +274,12 @@ void MemSubsystem::sync_ptw_port_outputs() {
 
 
 void MemSubsystem::set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg) {
-  if (axi_kit_runtime == nullptr) {
-    return;
-  }
   axi_kit_runtime->llc_tables.configure(cfg);
-  axi_kit_runtime->llc_perf_snapshot = {};
 }
 
 void MemSubsystem::llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t *valid, const uint8_t *dirty,
                                 uint32_t repl_next) {
-  if (axi_kit_runtime == nullptr || !axi_kit_runtime->llc_tables.enabled) return;
+  if (!axi_kit_runtime->llc_tables.enabled) return;
   auto &t = axi_kit_runtime->llc_tables;
   const uint32_t ways = t.config.ways;
   DynamicTableWriteReq m, v, r;
@@ -314,35 +309,20 @@ void MemSubsystem::llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t
 }
 
 void MemSubsystem::llc_comb_outputs() {
-  if (axi_kit_runtime == nullptr) {
-    return;
-  }
   axi_kit_runtime->llc_tables.comb_outputs();
 }
 
 const axi_interconnect::AXI_LLC_LookupIn_t &MemSubsystem::llc_lookup_in() const {
-  static const axi_interconnect::AXI_LLC_LookupIn_t kEmpty{};
-  if (axi_kit_runtime == nullptr) {
-    return kEmpty;
-  }
   return axi_kit_runtime->llc_tables.lookup_in;
 }
 
-void MemSubsystem::llc_seq(
-    const axi_interconnect::AXI_LLC_TableOut_t &table_out,
-    const axi_interconnect::AXI_LLCPerfCounters_t &perf) {
-  if (axi_kit_runtime == nullptr) {
-    return;
-  }
+void MemSubsystem::llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out) {
   axi_kit_runtime->llc_tables.seq(table_out);
-  axi_kit_runtime->llc_perf_snapshot = perf;
-
 }
 
 
-MemSubsystem::MemSubsystem(SimContext *ctx) : ctx(ctx) {
+MemSubsystem::MemSubsystem(SimContext *) {
   axi_kit_runtime = std::make_unique<AxiKitRuntime>();
-  ptw_block.bind_context(ctx);
   dtlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
   itlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
   dtlb_walk_port = dtlb_walk_port_inst.get();
@@ -373,9 +353,6 @@ void MemSubsystem::init() {
   mshr_.out.axi_out = &mshr_axi_out; // MSHR output → AXI read/write ports
   wb_.in.axi_in = &wb_axi_in;        // WB comb input ← AXI read/write ports (for write response handling)
   wb_.out.axi_out = &wb_axi_out;     // WB output → AXI read/write ports (for write issuance)
-  dcache_.bind_context(ctx);
-  mshr_.bind_context(ctx);
-  mem_route_block.bind_context(ctx);
 
   // Internal WriteBuffer ↔ DCache wires.
   dcache_.in.wb2dcache = &wb_dcache_io_;  // WB output → DCache input
@@ -409,7 +386,6 @@ void MemSubsystem::init() {
   mem_route_block.out.ptw_grant = &ptw_grant;   // MemRouteBlock output → PTW grant signals
   mem_route_block.out.wakeup = &wakeup;         // MemRouteBlock output → LSU wakeup signals
 
-  wb_.bind_context(ctx);
 
   // ── Initialise sub-modules ─────────────────────────────────────────────────
   mshr_.init();

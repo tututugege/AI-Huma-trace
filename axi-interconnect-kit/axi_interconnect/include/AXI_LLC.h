@@ -34,38 +34,6 @@ constexpr uint8_t AXI_LLC_INVALID_VICTIM_MSHR_SLOT = 0xFFu;
 constexpr uint8_t AXI_LLC_READ_RESP_QUEUE_DEPTH = MAX_OUTSTANDING;
 constexpr uint8_t AXI_LLC_READ_VICTIM_WB_QUEUE_DEPTH = MAX_OUTSTANDING;
 
-struct AXI_LLCPerfCounters_t {
-  uint64_t read_access = 0;
-  uint64_t read_hit = 0;
-  uint64_t read_miss = 0;
-  uint64_t read_access_by_master[NUM_READ_MASTERS]{};
-  uint64_t read_hit_by_master[NUM_READ_MASTERS]{};
-  uint64_t read_miss_by_master[NUM_READ_MASTERS]{};
-  uint64_t bypass_read = 0;
-  uint64_t write_passthrough = 0;
-  uint64_t refill = 0;
-  uint64_t mshr_alloc = 0;
-  uint64_t mshr_merge = 0;
-  uint64_t prefetch_issue = 0;
-  uint64_t prefetch_hit = 0;
-  uint64_t prefetch_drop_inflight = 0;
-  uint64_t prefetch_drop_mshr_full = 0;
-  uint64_t prefetch_drop_queue_full = 0;
-  uint64_t prefetch_drop_table_hit = 0;
-  uint64_t ddr_read_total_cycles = 0;
-  uint64_t ddr_read_samples = 0;
-  uint64_t ddr_write_total_cycles = 0;
-  uint64_t ddr_write_samples = 0;
-  uint64_t lookup_active_cycles = 0;
-  uint64_t read_resp_block_cycles = 0;
-  uint64_t read_resp_pending_cycles = 0;
-  uint64_t mem_read_wait_cycles = 0;
-  uint64_t mem_read_block_cycles = 0;
-  uint64_t victim_writeback_wait_cycles = 0;
-  uint64_t write_lookup_wait_cycles = 0;
-  uint64_t write_victim_wait_cycles = 0;
-};
-
 struct AXI_LLC_ReadReqIn_t {
   wire<1> valid = false;
   wire<32> addr = 0;
@@ -295,7 +263,6 @@ struct AXI_LLCReadVictimWbReq_t {
 struct AXI_LLC_Regs_t {
   bool enable_r = false;
   AXI_LLCState state = AXI_LLCState::kDisabled;
-  AXI_LLCPerfCounters_t perf{};
 
   bool lookup_valid_r = false;
   bool lookup_issued_r = false;
@@ -382,7 +349,6 @@ public:
   void reset();
   void comb();
   void seq();
-  const AXI_LLCPerfCounters_t &perf_counters() const { return io.regs.perf; }
   void debug_print() const;
 
   static uint32_t line_addr(const AXI_LLCConfig &config, uint32_t addr);

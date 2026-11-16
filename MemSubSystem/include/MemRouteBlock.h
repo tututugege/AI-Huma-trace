@@ -89,9 +89,7 @@ public:
   void comb_response();
   void comb_request();
   void seq();
-  void bind_context(SimContext *c) { ctx = c; }
 
 
 private:
-  SimContext *ctx = nullptr;
 };

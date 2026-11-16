@@ -26,7 +26,6 @@ struct ReadMasterPort_t;
 struct AXI_LLCConfig;
 struct AXI_LLC_LookupIn_t;
 struct AXI_LLC_TableOut_t;
-struct AXI_LLCPerfCounters_t;
 }
 class MemSubsystem {
 public:
@@ -78,15 +77,12 @@ public:
   void llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t *valid, const uint8_t *dirty, uint32_t repl_next);
   void llc_comb_outputs();
   const axi_interconnect::AXI_LLC_LookupIn_t &llc_lookup_in() const;
-  void llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out,
-               const axi_interconnect::AXI_LLCPerfCounters_t &perf);
+  void llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out);
 
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }
   const PeripheralAxi &get_peripheral_axi() const { return peripheral_axi_; }
 
 private:
-  SimContext *ctx;
-
   // Sub-modules
   RealDcache  dcache_;
   MSHR          mshr_;
