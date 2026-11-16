@@ -71,7 +71,6 @@ struct Wires {
   RobCsrIO rob2csr;
   RobBroadcastIO rob_bcast;
   RobCommitIO rob_commit;
-  CsrExeIO csr2exe;
   CsrRobIO csr2rob;
   CsrFrontIO csr2front;
   CsrStatusIO csr_status;

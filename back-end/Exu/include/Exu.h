@@ -52,7 +52,6 @@ public:
   void init();
   void comb_begin();    // idle default outputs
   void comb_exec();     // FU controls, FU evaluation, result collection
-  void comb_to_csr();
   void comb_pipeline(); // issued uops enter the FU input slots
   void comb_ready();    // which operation classes each port can accept
   void comb_load_wake(); // late load wakeup from the write-back register (prf_awake)
@@ -60,9 +59,11 @@ public:
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
-  const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU
+  const class PreIduQueue *ftq = nullptr;
+  const class Csr *csr = nullptr;          // CSR read port (Csr::read): the CSR uop's result  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU
 
 private:
+  void to_csr();
   // The write-back register (one cycle after exe2prf.entry), kept only for what it is used for: a load completing on a
   // port that the LSU did not wake early wakes its consumers one cycle later (comb_load_wake -> prf_awake).
   struct LoadWake {

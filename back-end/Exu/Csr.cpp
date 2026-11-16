@@ -51,10 +51,6 @@ void Csr::comb_csr_status() {
   wires->csr_status.privilege = privilege;
 }
 
-void Csr::comb_csr_read() {
-  if (wires->exe2csr.re) wires->csr2exe.rdata = CSR_RegFile[cvt_number_to_csr(wires->exe2csr.idx)];
-}
-
 void Csr::comb_interrupt() {
   const IrqState irq = eval_interrupts(CSR_RegFile[csr_mstatus], CSR_RegFile[csr_mie], CSR_RegFile[csr_mip],
                                        CSR_RegFile[csr_mideleg], privilege);

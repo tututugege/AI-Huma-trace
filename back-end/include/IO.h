@@ -279,11 +279,6 @@ struct ExeCsrIO {
   wire<32> wcmd = {};
 };
 
-struct CsrExeIO {
-
-  wire<XLEN> rdata = {};
-};
-
 struct CsrRobIO {
 
   wire<1> interrupt_req = {};

@@ -39,6 +39,7 @@ void BackTop::init() {
   exu->wires = this;
   rob->wires = this;
   exu->ftq = pre;
+  exu->csr = csr;
   rob->ftq = pre;
   csr->wires = this;
   lsu->wires = this;
@@ -116,8 +117,6 @@ void BackTop::comb_stage_memory_responses() {
   lsu->comb_mmio_in();
   lsu->comb_dcache2lsu();
   lsu->comb_lsu2exe();
-  exu->comb_to_csr();
-  csr->comb_csr_read();
 }
 
 // Functional units execute; their results complete ROB entries.

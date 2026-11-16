@@ -1,5 +1,6 @@
 #include "Exu.h"
 #include "PreIduQueue.h"
+#include "Csr.h"
 #include "Wires.h"
 #include "util.h"
 #include "config.h"
@@ -93,7 +94,7 @@ void Exu::comb_ready() {
 }
 
 // The CSR uop sitting in port 0's FU slot drives the CSR file's read/write request.
-void Exu::comb_to_csr() {
+void Exu::to_csr() {
   Wires &w = *wires;
   if (w.rob_bcast.flush) return;
   for (int fu : port_fus[0]) {
@@ -168,6 +169,7 @@ void Exu::comb_pipeline() {
 // redirects). LSU write-backs come in on their own ports.
 void Exu::comb_exec() {
   Wires &w = *wires;
+  to_csr();   // the CSR uop in port 0's input slot: its read / write request (exe2csr, written at commit by Csr::comb_csr_write)
   const bool flush_all = w.rob_bcast.flush, flush_br = !flush_all && w.dec_bcast.mispred;
   const bool flush_any = flush_all || flush_br, flush = flush_all;  // (results are dead only on a global flush or when killed by the branch mask)
   const wire<BR_MASK_WIDTH> all = ~wire<BR_MASK_WIDTH>(0);
@@ -271,7 +273,7 @@ void Exu::comb_exec() {
     ExuInst u = *cinst[fu];
     const bool dead = flush || is_br_killed(u, w.dec_bcast);
 
-    if (u.op == UOP_CSR && w.exe2csr.re) u.result = w.csr2exe.rdata;
+    if (u.op == UOP_CSR && w.exe2csr.re) u.result = csr->read(w.exe2csr.idx);
     if (!dead) {
       if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back
         w.exu2rob.entry[p].valid = true;

@@ -136,7 +136,7 @@ public:
   void init();
 
   void comb_csr_status();
-  void comb_csr_read();
+  reg<XLEN> read(int idx) const { return CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
   void comb_csr_write();
   void comb_interrupt();
   void comb_interrupt_inject();

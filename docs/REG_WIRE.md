@@ -86,7 +86,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | A | FTQ PC read ports -> a direct read of the FTQ array | 69 -> 65 (f13f6d2) |
 | B | the PRF module folded into the EXU | 65 -> 63 |
 | C | LSU: the DTLB lookup inside the LSU, ldq / stq phase pairs merged | 63 -> 58 |
-| D | CSR read chain (exu.comb_to_csr -> csr.comb_csr_read -> result) | |
+| D | CSR read: a direct read of the CSR file | 58 -> 56 |
 | E | comb_pipeline into seq, comb_begin into the first phase | |
 | F | the cache-line data path (AXI resp.data / wdata, DCache / LLC / DDR line data) | (top level) |
 | G | the DCache response buffering (capture / forward / publish) | (mem) |
@@ -109,3 +109,9 @@ directly (`TlbMmu *dtlb`; a fence flushes it, a flush / mispredict cancels the p
 `mmu2lsu_io` left the Wires and are LSU members (`tlb_req_` / `tlb_resp_`, still printed by `LSU_PIPE_EVT`, whose
 output is byte-identical). The adjacent ldq / stq halves are one phase each: `comb_dcache2lsu()`, `comb_lsu2dcache()`
 (the halves stay as private helpers). LSU phases 19 -> 15.
+
+D: `exu.comb_to_csr` -> `csr.comb_csr_read` -> `exu.comb_exec` were three adjacent steps of one CSR read. The CSR
+file is real model state (counters, interrupts), so the read stays, but `Csr::read(idx)` reads the registered
+`CSR_RegFile` directly (nothing writes it in comb) and `comb_exec` starts with the request (`to_csr`, which still
+drives `exe2csr` for the write at commit). Removed: `csr2exe` (`CsrExeIO`), `Csr::comb_csr_read`, the phase
+`exu.comb_to_csr`.
