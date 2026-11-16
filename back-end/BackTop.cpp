@@ -122,6 +122,11 @@ void BackTop::comb_csr_status() {
 
 void BackTop::clear_comb_inputs() { in = BackIn{}; }
 
+void BackTop::comb_in_regs() {
+  clear_comb_inputs();
+  in.peripheral_resp = in_q_.peripheral_resp;
+}
+
 // ---------------------------------------------------------------------------------------------
 // One back-end cycle is evaluated in dependency order: every stage reads only signals that an
 // earlier stage (or registered state) already produced. The call order in BackTop::comb() is that order.
@@ -231,6 +236,7 @@ void BackTop::comb_late() {
 }
 
 void BackTop::seq() {
+  in_q_ = in_d;
   // rename -> isu/stq/rob
   pre->seq();
   rename->seq();

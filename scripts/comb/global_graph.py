@@ -17,7 +17,7 @@ schedule to be the order of cycle(): the levels' generators plus the exported sp
 """
 import re, collections
 
-TOPS = ('back', 'front', 'mem_subsystem', 'axi')
+TOPS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b')
 
 
 def pseudo(text):

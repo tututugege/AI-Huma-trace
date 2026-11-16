@@ -35,6 +35,7 @@ class MemSubsystem;
 //   CONTRACT comb_outputs  in: csr2front dec_bcast ftq_commit_info pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 //   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
+//   EXPORT comb_in_regs     default: back_in
 //   EXPORT comb_csr_status  out: csr_status
 //   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk commit_store
 //   EXPORT comb_late        in: csr_inject
@@ -64,6 +65,17 @@ public:
 
   void init();
   void clear_comb_inputs();
+  // back.in at the start of the cycle: cleared, the MMIO response of the previous cycle (its register)
+  void comb_in_regs();
+  struct InRegs {
+    PeripheralRespIO peripheral_resp{};   // the MMIO response (the memory subsystem drives it after BackTop::comb())
+  };
+  InRegs in_d;   // written by the memory subsystem (mem_subsystem.peripheral_resp); q: in_q_
+
+private:
+  InRegs in_q_;   // loaded by seq()
+
+public:
   void comb_csr_status();
   void comb();
   void comb_late();   // the phases after SimCpu::comb_commit_store (gen_comb_order.py)

@@ -92,49 +92,18 @@ void FrontTop::step_bpu() {
 }
 
 // One front-end cycle from the registered back2front: when the back end does not stall (or a refetch is pending) the
-// fetch-group FIFO is read; then the BPU / FIFOs / I-cache comb. to_back: the whole fetch group when it was read (after a
-// predicted-taken branch the rest of the group is invalid, unless FE_PAIR continues with the second block), the commit
-// credits always.
-void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
+// fetch-group FIFO is read (can_read; Front2Back then takes the group from out), then the BPU / FIFOs / I-cache comb.
+void FrontTop::comb(CsrStatusIO *csr_status) {
   const bool registered_refetch = static_cast<bool>(back2front.redirect.valid);
-  const bool frontend_can_read = !back2front_stall || registered_refetch;
+  can_read = !back2front_stall || registered_refetch;
 
   in = back2front;   // (reset is 0 here: only init() runs the front end with reset)
   in.csr_status = csr_status;
-
-  if (frontend_can_read) {
-    in.ctrl.fifo_read_enable = true;
-
-    read_core_q();
-    comb_core();
-
-    bool no_taken = true;
-    for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-      // FE_PAIR: a fetch group may continue with a second block after a predicted-taken branch (pc discontinuity)
-      if (j > 0 && !no_taken && to_back.valid[j - 1] && out.inst_valid[j] && out.pc[j] != out.pc[j - 1] + ilen_of(out.is_rvc[j - 1]) && out.predict_dir[j - 1])
-        no_taken = true;
-      to_back.valid[j] =
-          no_taken && out.FIFO_valid && out.inst_valid[j];
-      to_back.pc[j] = out.pc[j];
-      to_back.is_rvc[j] = out.is_rvc[j];
-      to_back.predict_next_fetch_address[j] =
-          out.predict_next_fetch_address;
-      to_back.page_fault_inst[j] = out.page_fault_inst[j];
-      to_back.inst[j] = out.instructions[j];
-
-      to_back.predict_dir[j] = out.predict_dir[j];
-      if (to_back.valid[j] && out.predict_dir[j])
-        no_taken = false;
-    }
-    to_back.meta = out.meta;
-    to_back.front_stall = static_cast<bool>(out.commit_stall); to_back.front_upd_free = out.commit_upd_free; to_back.front_tq_free = out.commit_tq_free;
-  } else {
-    in.ctrl.fifo_read_enable = false;
-    in.redirect.valid = false;
-    read_core_q();
-    comb_core();
-    to_back.front_stall = static_cast<bool>(out.commit_stall); to_back.front_upd_free = out.commit_upd_free; to_back.front_tq_free = out.commit_tq_free;
-  }}
+  in.ctrl.fifo_read_enable = can_read;
+  if (!can_read) in.redirect.valid = false;
+  read_core_q();
+  comb_core();
+}
 
 // The front end's inputs of the next cycle (back2front_1 / back2front_stall_1, registered by seq_back2front): the
 // redirect and the BPU training of the back end's commit. Fields not refreshed keep their registered value.

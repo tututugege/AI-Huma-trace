@@ -1,6 +1,7 @@
 #pragma once
 #include "AxiSubsystem.h"
 #include "BackTop.h"
+#include "Front2Back.h"
 #include "FrontTop.h"
 #include "MemSubsystem.h"
 #include "front_IO.h"
@@ -15,11 +16,12 @@
 // The ports (fields as SimCpu paths; {a,b} lists alternatives):
 //   PORT csr_status         = back.csr_status
 //   PORT back_in            = back.in
+//   PORT front_out          = front.out front.can_read
 //   PORT fetch_group        = back.in.{inst,pc,is_rvc,valid,front_stall,front_upd_free,front_tq_free,predict_dir,meta,predict_next_fetch_address,page_fault_inst}
 //   PORT dcache2lsu         = back.in.dcache2lsu
 //   PORT lsu2dcache         = back.out.lsu2dcache
 //   PORT mmio_req           = back.out.peripheral_req
-//   PORT mmio_resp          = d.peripheral_resp
+//   PORT mmio_resp          = back.in_d.peripheral_resp
 //   PORT commit_store       = back.out.commit_store
 //   PORT csr_inject         = back.csr_interrupt_inject_io
 //   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)
@@ -34,8 +36,6 @@
 //   PORT axi_slave          = axi.interconnect.{read_ports,write_ports}.req.{ready,accepted,accepted_id} axi.interconnect.{read_ports,write_ports}.resp.{valid,data,id,resp}
 //   PORT axi_ready_next     = axi.interconnect.{read_ports,write_ports}.req.ready   (the I-cache's port register samples it)
 // The glue phases (axi_*: the interconnect and its slaves; the others: SimCpu's registers):
-//   EXPORT back_in_from_regs     default: back_in
-//   EXPORT comb_front2back_hold  in: fetch_group back2front
 class SimCpu {
 public:
   ICacheMemPortReq icache_req{}; // the I-cache probe request (FrontTop drives it; the memory subsystem reads it)
@@ -52,20 +52,10 @@ public:
   FrontTop front;
   MemSubsystem mem_subsystem;
   AxiSubsystem axi;
-  // SimCpu's own registers (q_: loaded only by regs_seq() / init(); d: written by the comb phases and the memory
-  // subsystem's MMIO response port)
-  struct Regs {
-    FrontPreIO front2back_hold{};          // the fetch group held while the back end stalls (back.in of the next cycle)
-    bool front2back_hold_valid = false;
-    PeripheralRespIO peripheral_resp{};    // the MMIO response (driven after BackTop::comb()), back.in of the next cycle
-  };
-  Regs q_, d;
+  Front2Back f2b;   // front end -> back end (the RTL's core_front2back)
 
   void init();
   void sync_mmio_devices_from_backing();
   void restore_pc(pc_t pc);
   void cycle();
-  void comb_front2back_hold();
-  void back_in_from_regs();
-  void regs_seq();
 };

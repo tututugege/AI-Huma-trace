@@ -17,17 +17,21 @@ A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by Me
 import re, os
 from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS, FRONT_ROWS
 
-ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'icache_req',
-         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'q_', 'd', 'ctx')
-SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
+ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'icache_req',
+         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'ctx')
+SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
 SEQ_CALLS = ('front.seq_core',)
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
-INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out'),
+INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out|can_read'),
+          'f2b.comb': ('Front2Back', r'q_|d'),
+          'f2b.comb_hold': ('Front2Back', r'q_|d'),
           'front.comb_from_back': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out'),
           'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
-BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')]}   # pointer members of an inlined class -> the object bound
+BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')],
+         'Front2Back': [(r'\*front_out\b', 'front.out'), (r'\*can_read\b', 'front.can_read'), (r'\bback_out->', 'back.out.'),
+                        (r'\*to_back\b', 'back.in')]}   # pointer members of an inlined class -> the object bound
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 TOP_DETAIL = []   # filled by top_domain: per row of cycle() (label, R, W, group, tag, inner); inner: for a sub-object call
                   # summarised from a domain, that domain's phases [label, R, W, source text] as SimCpu paths, else None
@@ -147,6 +151,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
     S['back.comb'] = from_rows(back_rows[:back_early], back_key)
     S['back.comb_late'] = from_rows(back_rows[back_early:], back_key)
     S['back.clear_comb_inputs'] = (set(), {'back.in'})
+    S['back.comb_in_regs'] = ({'back.in_q_'}, {'back.in'})
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.read_core_q'] = (set(), set())
     fr, fw = from_rows(FRONT_ROWS, front_key)

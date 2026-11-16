@@ -385,3 +385,17 @@ comb_outputs runs the lookup first, seq the table update (comb_top.py maps `llc-
 breaks ties as global_graph.derive_cuts does (the previous phase's top while it has a ready phase), so the two agree:
 back.comb_late now runs after mem_subsystem.comb_inputs (12 runs). Identical: gates, FPR (4), TB_TRACE_COMMIT,
 LSU_PIPE_EVT, the Linux checkpoint.
+
+## Top-level glue, part 2: Front2Back (exp/global-sched)
+
+The front end -> back end glue is a module, as in the RTL (core_front2back.sv): `Front2Back` (include/Front2Back.h,
+Front2Back.cpp, object `f2b` in SimCpu). `comb` (EXPORT in: front_out, out: fetch_group): the held group if the
+hold register is valid, then, when the front end may deliver (FrontTop::can_read), the front end's output cut after
+the first predicted-taken instruction (FE_PAIR continuation), and the commit credits every cycle; this was the second
+half of FrontTop::comb. `comb_hold` (EXPORT in: fetch_group back2front): the hold register's d after the back end
+(was SimCpu::comb_front2back_hold); `seq` loads it. FrontTop::comb now only runs the front end and sets can_read
+(port front_out = front.out front.can_read). The MMIO response register is the back end's input register
+(BackTop::in_q_ / in_d, mem_subsystem.peripheral_resp bound to back.in_d), loaded by BackTop::seq; BackTop's own
+`comb_in_regs` (EXPORT default: back_in) clears back.in and puts it in. SimCpu has no registers and no comb glue left
+but the cycle counter. Identical: gates, FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT, FE_PAIR / FE_IPF (fact excluded),
+the Linux checkpoint.
