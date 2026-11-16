@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BackTop::comb() from the module contracts.
+"""The back-end modules' contracts (scripts/comb/gen_top_order.py schedules their phases with the other tops').
 
 Every back-end module declares its comb phases above its class (docs/MODULE_CONTRACT.md):
     //   CONTRACT <phase>  in: <fields | ->  out: <fields | ->
@@ -101,26 +101,7 @@ def block(order, begin=BEGIN):
 
 
 def main():
-    order, order_late = generate()
-    path = os.path.join(ROOT, 'back-end', 'BackTop.cpp')
-    src = open(path).read()
-    if '--write' in sys.argv or '--check' in sys.argv:
-        out = src
-        for begin, od in ((BEGIN, order), (BEGIN_LATE, order_late)):
-            a = out.find(begin)
-            if a < 0: sys.exit('BackTop.cpp: no generated block ' + begin.strip())
-            b = out.index(END, a) + len(END)
-            out = out[:a] + block(od, begin) + out[b:]
-        if '--check' in sys.argv:
-            if out != src:
-                print('BackTop::comb() / comb_late() differ from the contracts: run scripts/comb/gen_comb_order.py --write')
-                sys.exit(1)
-            print(f'comb order: {len(order)} + {len(order_late)} (late) phases, as generated from the contracts')
-            return
-        open(path, 'w').write(out)
-        print(f'wrote {len(order)} + {len(order_late)} (late) phases')
-        return
-    print('\n'.join(order) + '\n-- late --\n' + '\n'.join(order_late))
+    print('\n'.join(generate()[0]))
 
 
 if __name__ == '__main__':

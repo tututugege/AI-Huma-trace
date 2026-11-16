@@ -37,12 +37,11 @@ class MemSubsystem;
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
 //   EXPORT comb_in_regs     default: back_in
 //   EXPORT comb_csr_status  out: csr_status
-//   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk commit_store
-//   EXPORT comb_late        in: csr_inject
+// The modules' comb phases (their CONTRACT lines and comb_outputs above) are SimCpu-level phases themselves:
+// scripts/comb/gen_top_order.py schedules them with the other tops' phases (back.<module>.<phase>).
 class BackTop : public BackPorts {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
-  void comb_outputs();
 
 public:
   void warm_dtlb(const TlbMmu::TlbEntry *entries, int count, int repl_ptr) {  // fast-warmup replay (EXP-011)
@@ -77,9 +76,8 @@ private:
 
 public:
   void comb_csr_status();
-  void comb();
-  void comb_late();   // the phases after SimCpu::comb_commit_store (gen_comb_order.py)
-  void pmu_sample();  // PMU (EXP-013): one cycle of the event bus, called at the end of comb()
+  void comb_outputs();   // the back end's own phase (CONTRACT above); SimCpu::cycle() calls it with the modules' phases
+  void pmu_sample();     // PMU (EXP-013): one cycle of the event bus, after the comb phases of the cycle
   void seq();
   void set_lsu_ptw_walk_port(PtwWalkPort *port);
 

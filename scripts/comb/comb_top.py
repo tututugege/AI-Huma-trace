@@ -19,8 +19,9 @@ from comb_domains import Src, strip_comments, statements, split_top, enclosing_c
 
 ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'icache_req',
          'icache_resp', 'icache_resp_q', 'icache_axi_q', 'ctx')
-SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
-SEQ_CALLS = ('front.seq_core',)
+SUBOBJ = ('back', 'back.pre', 'back.idu', 'back.rename', 'back.dis', 'back.isu', 'back.exu', 'back.csr', 'back.rob',
+          'back.lsu', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
+SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
 INLINE = {'front.comb': ('FrontTop', r'in|out|can_read'),
           'b2f.comb': ('Back2Front', r'q_|d|csr_status'),
@@ -109,8 +110,7 @@ def scan_paths(body, ASSIGN, src, notes, owner, roots=ROOTS, prefix='', types=No
     return r, w
 
 
-def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
-    if back_early is None: back_early = len(back_rows)
+def top_domain(root, ASSIGN, back_rows, back_cls=None):
     src = Src(root, ['back-end', 'front-end', 'MemSubSystem', 'axi-interconnect-kit', 'include'])
     for fn in os.listdir(root):
         if fn.endswith('.cpp'): src.t[os.path.join(root, fn)] = open(os.path.join(root, fn), errors='ignore').read()
@@ -150,8 +150,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
         return 'mem_subsystem.' + k
 
     S = {}
-    S['back.comb'] = from_rows(back_rows[:back_early], back_key)
-    S['back.comb_late'] = from_rows(back_rows[back_early:], back_key)
     S['back.comb_in_regs'] = ({'back.in_q_'}, {'back.in.valid', 'back.in.dcache2lsu', 'back.in.peripheral_resp'})
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.read_core_q'] = (set(), set())
@@ -176,8 +174,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
     fr |= ir | {'mem_subsystem.itlb_walk.out'}
     fw |= iw | {'mem_subsystem.itlb_walk.in'}
     S['front.comb_core'] = (fr, fw)
-    br, bw = S['back.comb']
-    S['back.comb'] = (br | {'mem_subsystem.dtlb_walk.out'}, bw | {'mem_subsystem.dtlb_walk.in'})
     S['mem_subsystem.comb_outputs'] = from_rows(MEM_GROUPS['comb_outputs'], mem_key)
     mr, mw = from_rows(MEM_GROUPS['comb_inputs'], mem_key)
     syncs = any(n == 'sync_ptw_port_outputs' for n, _, _ in MEM_GROUPS['comb_inputs'])   # (else only MemSubsystem::seq sets it)
@@ -198,17 +194,17 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
                 if mk: w |= mk if isinstance(mk, set) else {mk}
             out.append([prefix + n, r, w, ''])
         return out
-    SUB['back.comb'] = mapped(back_rows[:back_early], back_key, 'back.')
-    SUB['back.comb_late'] = mapped(back_rows[back_early:], back_key, 'back.')
-    for row in SUB['back.comb'] + SUB['back.comb_late']:
-        obj, fn = row[0].split('.')[1:3]
-        if back_cls and obj in back_cls: row[3] = closure(src, back_cls[obj], fn) or ''
-        if row[0] == 'back.lsu.comb_translate':
+    # the back-end phases: one SimCpu-level phase each (back.<module>.<phase>, BackTop's own: back.<phase>)
+    for row in mapped(back_rows, back_key, ''):
+        obj, fn = row[0].split('.')
+        key = 'back.' + fn if obj == 'top' else f'back.{obj}.{fn}'
+        txt = (closure(src, back_cls[obj], fn) or '') if back_cls and obj in back_cls else ''
+        for o2, f2 in set(re.findall(r'\b(\w+)->(\w+)\s*\(', txt)):
+            if back_cls and o2 in back_cls: txt += closure(src, back_cls[o2], f2) or ''
+        if key == 'back.lsu.comb_translate':
             row[1].add('mem_subsystem.dtlb_walk.out'); row[2].add('mem_subsystem.dtlb_walk.in')
-    SUB['back.comb_late'].append(['back.pmu_sample', set(), set(), closure(src, 'BackTop', 'pmu_sample') or ''])
-    for row in SUB['back.comb'] + SUB['back.comb_late']:   # calls into the other back-end modules (obj->f(...)): their text too
-        for o2, f2 in set(re.findall(r'\b(\w+)->(\w+)\s*\(', row[3])):
-            if back_cls and o2 in back_cls: row[3] += closure(src, back_cls[o2], f2) or ''
+        S[key] = (set(row[1]), set(row[2]))
+        SUB[key] = [[key, set(row[1]), set(row[2]), txt]]
     def front_key2(k, write=False):   # FrontComb locals: front.c.*
         if k.split('.')[0] in ('in', 'out'): return front_key(k, write)
         return 'front.c.' + k
