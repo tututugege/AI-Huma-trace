@@ -329,8 +329,6 @@ void Ren::comb_fire() {
       }
       arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
     }
-    BE_LOG("ROB commit PC=0x%08x Inst=0x%08x idx=%ld", (*inst)->dbg.pc, (*inst)->dbg.instruction,
-           (*inst)->dbg.inst_idx);
     if (!interrupt) ctx->run_commit_inst(&commit_entry, i);
   }
   if (interrupt) ctx->run_interrupt_hook();

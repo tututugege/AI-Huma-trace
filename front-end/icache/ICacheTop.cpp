@@ -325,25 +325,6 @@ public:
     for (int i = 0; i < ICACHE_LINE_SIZE / 4; ++i) {
       view.resp_data[i] = port_->resp.data[i];
     }
-    if (SIM_DEBUG_PRINT_ACTIVE &&
-        (port_->req.valid || port_->req.ready || port_->req.accepted ||
-         port_->resp.valid || port_->resp.ready)) {
-      std::printf(
-          "[ICACHE][ADAPTER][VIEW] cyc=%lld req_v=%u req_addr=0x%08x "
-          "req_id=%u req_ready=%u req_acc=%u acc_id=%u resp_v=%u resp_id=%u "
-          "resp_ready=%u resp_w0=0x%08x resp_w7=0x%08x\n",
-          (long long)sim_time, static_cast<unsigned>(port_->req.valid),
-          static_cast<unsigned>(port_->req.addr),
-          static_cast<unsigned>(port_->req.id & 0xF),
-          static_cast<unsigned>(port_->req.ready),
-          static_cast<unsigned>(port_->req.accepted),
-          static_cast<unsigned>(port_->req.accepted_id & 0xF),
-          static_cast<unsigned>(port_->resp.valid),
-          static_cast<unsigned>(port_->resp.id & 0xF),
-          static_cast<unsigned>(port_->resp.ready),
-          static_cast<unsigned>(port_->resp.data[0]),
-          static_cast<unsigned>(port_->resp.data[7]));
-    }
     return view;
   }
 
@@ -358,26 +339,6 @@ public:
     port_->req.id = static_cast<uint8_t>(req_id & 0xF);
     port_->req.bypass = req_bypass;
     port_->resp.ready = resp_ready;
-    if (SIM_DEBUG_PRINT_ACTIVE &&
-        (req_valid || resp_ready || port_->req.ready || port_->req.accepted ||
-         port_->resp.valid)) {
-      std::printf(
-          "[ICACHE][ADAPTER][ACCEPT] cyc=%lld req_v=%u req_addr=0x%08x "
-          "req_id=%u resp_ready=%u port_req_ready=%u port_req_acc=%u acc_id=%u "
-          "port_resp_v=%u port_resp_id=%u port_resp_w0=0x%08x "
-          "port_resp_w7=0x%08x\n",
-          (long long)sim_time, static_cast<unsigned>(req_valid),
-          static_cast<unsigned>(req_addr),
-          static_cast<unsigned>(req_id & 0xF),
-          static_cast<unsigned>(resp_ready),
-          static_cast<unsigned>(port_->req.ready),
-          static_cast<unsigned>(port_->req.accepted),
-          static_cast<unsigned>(port_->req.accepted_id & 0xF),
-          static_cast<unsigned>(port_->resp.valid),
-          static_cast<unsigned>(port_->resp.id & 0xF),
-          static_cast<unsigned>(port_->resp.data[0]),
-          static_cast<unsigned>(port_->resp.data[7]));
-    }
   }
 
   void seq(bool, uint32_t, uint8_t, bool, uint8_t, bool) {}

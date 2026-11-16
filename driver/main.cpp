@@ -450,10 +450,6 @@ int main(int argc, char *argv[]) {
       if (sim_time % 10000000 == 0) {
         cout << dec << sim_time << endl;
       }
-      BE_LOG("************************************************************** "
-             "cycle: %lld "
-             "*************************************************************",
-             (long long)sim_time);
 
       cpu.cycle();
 

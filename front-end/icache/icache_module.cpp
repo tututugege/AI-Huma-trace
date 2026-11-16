@@ -329,20 +329,6 @@ void ICache::lookup(uint32_t index) {
 
   if (sram_load_fire) {
     req_valid_next = true;
-    if (SIM_DEBUG_PRINT_ACTIVE && icache_trace_pc(load_pc, sim_time)) {
-      std::printf(
-          "[ICACHE][MODULE][REQ_LOAD] cyc=%lld load_pc=0x%08x load_idx=%u "
-          "slot_idle=%u can_accept=%u lookup_pending_r=%u in_ppn_v=%u "
-          "in_ppn=0x%05x mmu_req_v=%u mmu_vtag=0x%05x\n",
-          (long long)sim_time, static_cast<unsigned>(load_pc),
-          static_cast<unsigned>(load_index),
-          static_cast<unsigned>(slot_idle), static_cast<unsigned>(can_accept),
-          static_cast<unsigned>(io.regs.lookup_pending_r),
-          static_cast<unsigned>(io.in.ppn_valid),
-          static_cast<unsigned>(io.in.ppn),
-          static_cast<unsigned>(io.out.mmu_req_valid),
-          static_cast<unsigned>(io.out.mmu_req_vtag));
-    }
   } else if (req_ready_w) {
     req_valid_next = false;
   }
@@ -569,10 +555,6 @@ void ICache::eval_state_machine() {
       io.out.ifu_resp_valid = true;
       io.out.ifu_resp_single_word = single_word;
       io.out.ifu_resp_paddr = ((io.regs.ppn_r & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
-      if (SIM_DEBUG_PRINT_ACTIVE &&
-          icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-      }
     }
     req_ready_w = true;
   };
@@ -593,10 +575,6 @@ void ICache::eval_state_machine() {
       if (io.in.page_fault) {
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = true;
-        if (SIM_DEBUG_PRINT_ACTIVE &&
-            icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-        }
         req_ready_w = true;
         fast_bypass_fire = true;
         state_next = IDLE;
@@ -610,10 +588,6 @@ void ICache::eval_state_machine() {
         io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = false;
-        if (SIM_DEBUG_PRINT_ACTIVE &&
-            icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-        }
         req_ready_w = true;
         fast_bypass_fire = true;
         state_next = IDLE;
@@ -633,20 +607,11 @@ void ICache::eval_state_machine() {
       if (io.in.page_fault) {
         io.out.ifu_resp_valid = true;
         io.out.ifu_page_fault = true;
-        if (SIM_DEBUG_PRINT_ACTIVE &&
-            icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-        }
         req_ready_w = true;
         state_next = IDLE;
         break;
       }
 
-      if (SIM_DEBUG_PRINT_ACTIVE &&
-          icache_trace_pc(io.regs.req_pc_r, sim_time) &&
-          !io.lookup_in.meta_resp_valid) {
-
-      }
 
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
@@ -654,10 +619,6 @@ void ICache::eval_state_machine() {
       req_ready_w = lookup_hit_valid_w && lookup_data_ready_w;
       if (lookup_hit_valid_w && lookup_data_ready_w) {
         io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
-        if (SIM_DEBUG_PRINT_ACTIVE &&
-            icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-        }
         state_next = IDLE;
       } else if (lookup_hit_valid_w) {
         io.out.lookup_data_req_valid = true;
@@ -665,20 +626,6 @@ void ICache::eval_state_machine() {
         io.out.lookup_data_req_way = lookup_hit_way_w;
         state_next = IDLE;
       } else {
-        if (SIM_DEBUG_PRINT_ACTIVE &&
-            icache_trace_pc(io.out.ifu_resp_pc, sim_time)) {
-
-          std::printf(
-              "[ICACHE][MODULE][REG_MISS_SET] cyc=%lld req_pc=0x%08x req_idx=%u "
-              "cmp_ppn=0x%05x hit_v=%u has_inv=%u first_inv=%u",
-              sim_time, static_cast<unsigned>(io.regs.req_pc_r),
-              static_cast<unsigned>(io.regs.req_index_r),
-              static_cast<unsigned>(io.in.ppn & 0xFFFFF),
-              static_cast<unsigned>(lookup_hit_valid_w),
-              static_cast<unsigned>(lookup_has_invalid_way_w),
-              static_cast<unsigned>(lookup_first_invalid_way_w));
-          std::printf("\n");
-        }
         int txid = io.regs.miss_txid_valid_r ? static_cast<int>(io.regs.miss_txid_r)
                                              : alloc_free_txid(io.regs);
         if (txid < 0) {
@@ -793,10 +740,6 @@ void ICache::eval_state_machine() {
           icache_req_is_uncache(io.regs) ? 3u : ICACHE_LINE_SIZE - 1u;
       io.out.mem_req_bypass = icache_req_is_uncache(io.regs);
       io.out.mem_req_id = io.regs.miss_txid_r;
-      if (SIM_DEBUG_PRINT_ACTIVE &&
-          icache_trace_pc(io.regs.req_pc_r, sim_time)) {
-
-      }
       state_next = SWAP_IN;
       if (io.in.mem_req_accepted &&
           ((io.in.mem_req_accepted_id & 0xF) == (io.regs.miss_txid_r & 0xF))) {

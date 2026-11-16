@@ -255,7 +255,6 @@ void BackTop::comb_outputs() {
     } else {
       out.redirect_pc = rob_bcast.pc + ilen_of(rob_bcast.is_rvc);
     }
-    BE_LOG("flush redirect_pc=0x%08x", (uint32_t)out.redirect_pc);
   }
 
   for (int i = 0; i < COMMIT_WIDTH; i++) {

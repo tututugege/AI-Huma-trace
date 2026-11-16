@@ -6,40 +6,6 @@
 #define LOOP_INC(idx, length) idx = (idx + 1) % (length)
 extern long long sim_time;
 
-// Unified backend/memory logging helpers.
-// Prefer these macros over scattered direct domain checks.
-#define BE_LOG(fmt, ...)                                                       \
-  do {                                                                         \
-    if (BACKEND_LOG) {                                                         \
-      std::printf("[BE][t=%lld] " fmt "\n", (long long)sim_time,              \
-                  ##__VA_ARGS__);                                              \
-    }                                                                          \
-  } while (0)
-
-#define MEM_LOGF(fmt, ...)                                                     \
-  do {                                                                         \
-    if (MEM_LOG) {                                                             \
-      std::printf("[MEM][t=%lld] " fmt "\n", (long long)sim_time,             \
-                  ##__VA_ARGS__);                                              \
-    }                                                                          \
-  } while (0)
-
-#define DCACHE_LOGF(fmt, ...)                                                  \
-  do {                                                                         \
-    if (DCACHE_LOG) {                                                          \
-      std::printf("[DCACHE][t=%lld] " fmt "\n", (long long)sim_time,          \
-                  ##__VA_ARGS__);                                              \
-    }                                                                          \
-  } while (0)
-
-#define MMU_LOGF(fmt, ...)                                                     \
-  do {                                                                         \
-    if (MMU_LOG) {                                                             \
-      std::printf("[MMU][t=%lld] " fmt "\n", (long long)sim_time,             \
-                  ##__VA_ARGS__);                                              \
-    }                                                                          \
-  } while (0)
-
 // Custom Assert Macro to avoid WSL2 issues.
 // Respect NDEBUG so release builds do not pay hot-path assertion cost.
 #ifdef NDEBUG
