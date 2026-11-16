@@ -45,7 +45,6 @@ struct Back_out {
 };
 
 struct Wires {
-  FrontPreIO front2pre;
   PreFrontIO pre2front;
   DecRenIO dec2ren;
   DecBroadcastIO dec_bcast;

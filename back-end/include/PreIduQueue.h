@@ -11,7 +11,7 @@ static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
 
 class PreIduQueue {
 public:
-  explicit PreIduQueue(SimContext *ctx = nullptr) : ctx(ctx) {}
+  explicit PreIduQueue(SimContext * = nullptr) {}
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
@@ -28,7 +28,6 @@ public:
   uint64_t ftq_slot_pc(uint32_t idx, uint32_t off) const { return ftq_lookup_entries[idx].slot_pc[off]; }
   bool ftq_slot_rvc(uint32_t idx, uint32_t off) const { return ftq_lookup_entries[idx].slot_rvc[off]; }
 private:
-  SimContext *ctx = nullptr;
 
   int ftq_alloc();
   void ftq_pop(int pop_cnt);

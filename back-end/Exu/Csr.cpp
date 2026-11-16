@@ -217,7 +217,6 @@ void Csr::comb_csr_write() {
       CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & kSstatusMask;
     }
   } else if (csr_idx == number_satp) {
-    const xlen_t old_satp = CSR_RegFile[csr_satp];
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
     if (!((csr_wdata >> 60) != 0 && (csr_wdata >> 60) != 8)) CSR_RegFile_1[csr_satp] = csr_wdata;
   } else {

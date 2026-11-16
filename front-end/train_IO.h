@@ -59,7 +59,6 @@ struct PendingFrontState {
   wire1_t next_fetch_addr_fifo_empty = true;
   wire1_t next_fifo_full = false;
   wire1_t next_fifo_empty = true;
-  wire1_t next_ptab_full = false;
   wire1_t next_ptab_empty = true;
   wire1_t next_front2back_fifo_full = false;
   wire1_t next_front2back_fifo_empty = true;
@@ -86,7 +85,6 @@ struct FrontReadData {
   wire1_t fetch_addr_fifo_empty_latch_snapshot = true;
   wire1_t fifo_full_latch_snapshot = false;
   wire1_t fifo_empty_latch_snapshot = true;
-  wire1_t ptab_full_latch_snapshot = false;
   wire1_t ptab_empty_latch_snapshot = true;
   wire1_t front2back_fifo_full_latch_snapshot = false;
   wire1_t front2back_fifo_empty_latch_snapshot = true;

@@ -27,13 +27,6 @@ public:
     RETRY,
   };
 
-  enum class RetryReason : uint8_t {
-    NONE = 0,
-    OTHER_WALK_ACTIVE = 1,
-    WALK_REQ_BLOCKED = 2,
-    WAIT_WALK_RESP = 3,
-    LOCAL_WALKER_BUSY = 4,
-  };
 
 
   static constexpr int kItlbTopPortCount = 1;
@@ -121,7 +114,6 @@ public:
     wire<1> resp_valid = false;
     wire<2> result = 0;
     wire<32> p_addr = 0;
-    wire<3> retry_reason = 0;
 
     WalkRegs walk_next{};
     PendingRefill refill_next{};
@@ -143,7 +135,6 @@ public:
     wire<1> resp_valid = false;
     wire<2> result = 0;
     wire<32> p_addr = 0;
-    wire<3> retry_reason = 0;
   };
 
   struct TopInput {
@@ -195,7 +186,6 @@ public:
   // Fast-warmup replay (EXP-011): load a ready-made TLB state (entries in slot order, round-robin pointer).
   void warm_install(const TlbEntry *entries, int count, int repl_ptr);
   void set_ptw_walk_port(PtwWalkPort *port);
-  RetryReason last_retry_reason() const { return last_retry_reason_; }
 
   static LookupOutput lookup_table_comb(const LookupInput &in,
                                         const TlbEntry *entries,
@@ -213,7 +203,6 @@ private:
   std::vector<TlbEntry> tlb_entries_;
   int tlb_capacity_;
   int repl_ptr_;
-  RetryReason last_retry_reason_ = RetryReason::NONE;
 
   WalkRegs walk_regs_{};
   // Per-cycle comb shadow for the in-flight miss record. Multiple translate()

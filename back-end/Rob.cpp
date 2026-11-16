@@ -78,7 +78,6 @@ void Rob::comb_ready() {
       miss = mem && w.lsu2rob.tma.miss_mask.test(idx);
     }
   }
-  w.rob2dis.tma.head_not_ready = found;
   w.rob2dis.tma.head_is_memory = found && mem;
   w.rob2dis.tma.head_is_miss = found && miss;
   w.rob2dis.empty = is_empty();

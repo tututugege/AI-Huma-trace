@@ -15,7 +15,6 @@ static void fill_ftq_pc_resp(FtqPcReadResp &resp, const FTQEntry &entry, wire<1>
   resp = {};
   if (!req.valid) return;
   resp.valid = true;
-  resp.entry_valid = entry_valid;
   resp.pc = entry.slot_pc[req.ftq_offset];
   resp.is_rvc = entry.slot_rvc[req.ftq_offset];
   resp.pred_taken = entry.pred_taken_mask[req.ftq_offset];

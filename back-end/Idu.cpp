@@ -196,7 +196,7 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop.page_fault_inst = false;
   uop.illegal_inst = false;
   uop->type = encode_inst_type(NOP);
-  uop.tma.is_cache_miss = uop.tma.is_ret = uop.tma.mem_commit_is_load = uop.tma.mem_commit_is_store = false;
+  uop.tma.is_ret = uop.tma.mem_commit_is_load = uop.tma.mem_commit_is_store = false;
   static uint64_t global_inst_idx = 0;
   uop->dbg.inst_idx = global_inst_idx++;
 

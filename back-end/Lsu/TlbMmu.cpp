@@ -64,12 +64,10 @@ void TlbMmu::warm_install(const TlbEntry *entries, int count, int repl_ptr) {
 void TlbMmu::cancel_pending_walk() {
   consume_completed_walk_refill(true);
   run_control_via_top(false, true);
-  last_retry_reason_ = RetryReason::NONE;
 }
 
 void TlbMmu::flush() {
   run_control_via_top(true, false);
-  last_retry_reason_ = RetryReason::NONE;
 }
 
 
@@ -247,7 +245,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   out.walk_next = in.walk;
   out.refill_next = in.refill;
   out.result = static_cast<uint32_t>(Result::OK);
-  out.retry_reason = static_cast<uint32_t>(RetryReason::NONE);
 
   if (!in.translate_valid) {
     return out;
@@ -307,7 +304,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     const uint64_t req_page = static_cast<uint64_t>(in.v_addr) >> 12;
     if (walk_page != req_page || static_cast<vaddr_t>(walk.satp) != satp) {
       out.result = static_cast<uint32_t>(Result::RETRY);
-      out.retry_reason = static_cast<uint32_t>(RetryReason::OTHER_WALK_ACTIVE);
       out.walk_next = walk;
       return out;
     }
@@ -316,26 +312,22 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   if (!walk.req_sent) {
     if (!in.walk_req_ready) {
       out.result = static_cast<uint32_t>(Result::RETRY);
-      out.retry_reason = static_cast<uint32_t>(RetryReason::WALK_REQ_BLOCKED);
       out.walk_next = walk;
       return out;
     }
     PtwWalkReq req{};
     req.vaddr = walk.v_addr;
     req.satp = walk.satp;
-    req.access_type = walk.type;
     out.walk_req_valid = true;
     out.walk_req = req;
     walk.req_sent = true;
     out.result = static_cast<uint32_t>(Result::RETRY);
-    out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
     out.walk_next = walk;
     return out;
   }
 
   if (!in.walk_resp_valid) {
     out.result = static_cast<uint32_t>(Result::RETRY);
-    out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
     out.walk_next = walk;
     return out;
   }
@@ -345,7 +337,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
       (static_cast<uint64_t>(walk.v_addr) >> 12)) {
     out.walk_resp_consumed = true;
     out.result = static_cast<uint32_t>(Result::RETRY);
-    out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
     out.walk_next = walk;
     return out;
   }
@@ -437,7 +428,6 @@ TlbMmu::TopOutput TlbMmu::top_comb(const TopInput &in, int entries) {
     port_out.resp_valid = core_out.resp_valid;
     port_out.result = core_out.result;
     port_out.p_addr = core_out.p_addr;
-    port_out.retry_reason = core_out.retry_reason;
 
     shadow_walk = core_out.walk_next;
     shadow_refill = core_out.refill_next;
@@ -590,7 +580,6 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
   const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
 
-  int last_valid_port = -1;
   for (int i = 0; i < LSU_LDU_COUNT; ++i) {
     if (!req.ldq_req[i].valid) {
       continue;
@@ -604,7 +593,6 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     ld_resp.paddr = result == Result::OK ? port.p_addr : 0;
     ld_resp.entry_idx = req.ldq_req[i].entry_idx;
     ld_resp.wait_idx = req.ldq_req[i].wait_idx;
-    last_valid_port = i;
   }
   for (int i = 0; i < LSU_STA_COUNT; ++i) {
     if (!req.stq_req[i].valid) {
@@ -620,11 +608,6 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     st_resp.paddr = result == Result::OK ? port.p_addr : 0;
     st_resp.entry_idx = req.stq_req[i].entry_idx;
     st_resp.wait_idx = req.stq_req[i].wait_idx;
-    last_valid_port = port_idx;
-  }
-  if (last_valid_port >= 0) {
-    last_retry_reason_ = static_cast<RetryReason>(
-        static_cast<uint32_t>(out.port[last_valid_port].retry_reason) & 0x7u);
   }
 }
 
@@ -672,7 +655,6 @@ TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type
   const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
   const TopPortOutput &port_out = out.port[port_idx];
-  last_retry_reason_ = static_cast<RetryReason>(static_cast<uint32_t>(port_out.retry_reason) & 0x7u);
   p_addr = port_out.p_addr;
   return static_cast<Result>(static_cast<uint32_t>(port_out.result) & 0x3u);
 }

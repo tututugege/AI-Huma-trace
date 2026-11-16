@@ -30,7 +30,6 @@ static bool fetch_addr_fifo_full_latch = false;
 static bool fetch_addr_fifo_empty_latch = true;
 static bool fifo_full_latch = false;
 static bool fifo_empty_latch = true;
-static bool ptab_full_latch = false;
 static bool ptab_empty_latch = true;
 static bool front2back_fifo_full_latch = false;
 static bool front2back_fifo_empty_latch = true;
@@ -765,7 +764,6 @@ void FrontComb::finish(bool predecode_flush, pc_t flush_address) {
   state.next_fetch_addr_fifo_empty = (fetch_addr_rd.size == 0);
   state.next_fifo_full = (fifo_rd.size == INSTRUCTION_FIFO_SIZE);
   state.next_fifo_empty = (fifo_rd.size == 0);
-  state.next_ptab_full = (ptab_rd.size >= (PTAB_SIZE - 1));
   state.next_ptab_empty = (ptab_rd.size == 0);
   state.next_front2back_fifo_full = (f2b_rd.size == FRONT2BACK_FIFO_SIZE);
   state.next_front2back_fifo_empty = (f2b_rd.size == 0);
@@ -845,7 +843,6 @@ void front_seq_read(const struct front_top_in &inp, FrontReadData &rd) {
   rd.fetch_addr_fifo_empty_latch_snapshot = fetch_addr_fifo_empty_latch;
   rd.fifo_full_latch_snapshot = fifo_full_latch;
   rd.fifo_empty_latch_snapshot = fifo_empty_latch;
-  rd.ptab_full_latch_snapshot = ptab_full_latch;
   rd.ptab_empty_latch_snapshot = ptab_empty_latch;
   rd.front2back_fifo_full_latch_snapshot = front2back_fifo_full_latch;
   rd.front2back_fifo_empty_latch_snapshot = front2back_fifo_empty_latch;
@@ -892,7 +889,6 @@ void front_seq_write(const struct front_top_in &inp, const FrontUpdateRequest &r
     fetch_addr_fifo_empty_latch = req.front_state.next_fetch_addr_fifo_empty;
     fifo_full_latch = req.front_state.next_fifo_full;
     fifo_empty_latch = req.front_state.next_fifo_empty;
-    ptab_full_latch = req.front_state.next_ptab_full;
     ptab_empty_latch = req.front_state.next_ptab_empty;
     front2back_fifo_full_latch = req.front_state.next_front2back_fifo_full;
     front2back_fifo_empty_latch = req.front_state.next_front2back_fifo_empty;

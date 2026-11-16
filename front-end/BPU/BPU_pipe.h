@@ -186,7 +186,6 @@ struct Decision {                // outcome of the last stage, computed from reg
   uint8_t squash_n = 0;          // younger blocks in flight (already pushed into the fetch-address FIFO)
   const Blk *blk = nullptr;      // the block in S_D of the current registers (valid until the next commit)
   MainOut out;
-  bool pair_unfit = false;
   bool pair = false, ovr_b = false;   // FE_PAIR: the group has a second block that survived the first block's check; the override (if any) is the second block's
   MainOut outB;
   Ckpt ock; MainOut oout; pc_t obase = 0; S0Guess og;   // the overriding block (A, or B of a pair)
@@ -627,7 +626,7 @@ class BpuPipe {
   // fetch-address FIFO pop and to drop its tail entries.
   void decide(bool refetch, Decision &d) const {
     // Only the scalar fields are cleared when no block leaves the pipeline: blk / out / ... are read only under d.valid (and d.ovr, d.pair, which imply it).
-    d.valid = d.ovr = d.pair_unfit = d.pair = d.ovr_b = false;
+    d.valid = d.ovr = d.pair = d.ovr_b = false;
     d.squash_n = 0;
     const Blk &b = (*stp_).R[MAIN_LAT - 1];
     if (refetch || !b.valid) return;
@@ -644,7 +643,7 @@ class BpuPipe {
       S0Guess g2 = b.b2.g;
       const int lenA = d.out.slot + 1, lenB = d.outB.taken ? d.outB.slot + 1 : int((b.b2.bnd - b.b2.base) >> SLOT_SHIFT);
       if (!d.out.taken || lenA != b.g.slot + 1 || lenA + lenB > FW) {   // the final prediction does not fit the fetched group: back to one block, the second one is fetched again as a normal block
-        d.pair = false; d.ovr = true; d.pair_unfit = true;
+        d.pair = false; d.ovr = true;
       } else {
         d.ovr = d.ovr_b = disagree(d.outB, g2, why);
         if (d.ovr_b) { d.ock = b.b2.ck; d.oout = d.outB; d.obase = b.b2.base; d.og = g2; }

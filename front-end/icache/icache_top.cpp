@@ -73,10 +73,8 @@ void clear_outputs(icache_out *out) {
   out->icache_read_complete = false;
   out->fetch_pc = 0;
   for (int i = 0; i < FETCH_WIDTH; ++i) { out->fetch_group[i] = INST_NOP; out->page_fault_inst[i] = false; out->inst_valid[i] = false; }
-  out->perf_req_fire = out->perf_req_blocked = out->perf_resp_fire = out->perf_miss_event = out->perf_miss_busy = false;
-  out->perf_outstanding_req = out->perf_itlb_hit = out->perf_itlb_miss = out->perf_itlb_fault = out->perf_itlb_retry = false;
-  out->perf_itlb_retry_other_walk = out->perf_itlb_retry_walk_req_blocked = false;
-  out->perf_itlb_retry_wait_walk_resp = out->perf_itlb_retry_local_walker_busy = false;
+  out->perf_req_fire = out->perf_miss_event = out->perf_miss_busy = false;
+  out->perf_itlb_hit = out->perf_itlb_miss = out->perf_itlb_fault = false;
 }
 
 // The front end may send a request: the module is idle and ready, no recovery (fence.i / sfence / invalidate) in progress.
@@ -96,7 +94,6 @@ void drive_fetch_group(icache_out *out) {
   out->fetch_pc = o.ifu_resp_pc;
   out->fetch_paddr = o.ifu_resp_paddr;
   out->fetch_single_word = o.ifu_resp_single_word;
-  out->fetch_page_fault = o.ifu_page_fault;
   const bool pf = o.ifu_page_fault;
   if (o.ifu_resp_single_word) {   // an uncached single word
     out->fetch_group[0] = pf ? INST_NOP : tbhook::mem_read(o.ifu_resp_paddr);
@@ -117,27 +114,16 @@ void drive_fetch_group(icache_out *out) {
   }
 }
 
-void drive_perf(icache_out *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret, TlbMmu::RetryReason why) {
+void drive_perf(icache_out *out, bool req_valid, bool itlb_invoked, TlbMmu::Result itlb_ret) {
   const auto &h = icache;
   out->perf_req_fire = req_valid && out->icache_read_ready;
-  out->perf_req_blocked = req_valid && !out->icache_read_ready;
-  out->perf_resp_fire = h.io.out.ifu_resp_valid && h.io.in.ifu_resp_ready;
   out->perf_miss_event = h.perf.miss_issue_valid;
   const auto st = static_cast<icache_module_n::ICacheState>(h.io.regs.state);
   out->perf_miss_busy = st == icache_module_n::SWAP_IN || st == icache_module_n::WAIT_DCACHE_AFTER_MEM || st == icache_module_n::DRAIN;
-  out->perf_outstanding_req = out->perf_miss_busy || h.io.regs.req_valid_r || h.io.regs.lookup_pending_r;
   if (!itlb_invoked) return;
   if (itlb_ret == TlbMmu::Result::OK) out->perf_itlb_hit = true;
   else if (itlb_ret == TlbMmu::Result::FAULT) out->perf_itlb_fault = true;
-  else {
-    out->perf_itlb_miss = out->perf_itlb_retry = true;
-    switch (why) {
-    case TlbMmu::RetryReason::OTHER_WALK_ACTIVE: out->perf_itlb_retry_other_walk = true; break;
-    case TlbMmu::RetryReason::WALK_REQ_BLOCKED: out->perf_itlb_retry_walk_req_blocked = true; break;
-    case TlbMmu::RetryReason::WAIT_WALK_RESP: out->perf_itlb_retry_wait_walk_resp = true; break;
-    default: out->perf_itlb_retry_local_walker_busy = true; break;
-    }
-  }
+  else out->perf_itlb_miss = true;
 }
 
 void fill_lookup_meta() {
@@ -163,7 +149,6 @@ void comb(icache_in *in, icache_out *out) {
   clear_outputs(out);
   out->fetch_paddr = 0;
   out->fetch_single_word = false;
-  out->fetch_page_fault = false;
   auto *rp = g_bind.read;
   if (in->reset) {
     icache.reset();
@@ -203,7 +188,6 @@ void comb(icache_in *in, icache_out *out) {
   // ITLB
   bool itlb_invoked = false;
   TlbMmu::Result itlb_ret = TlbMmu::Result::OK;
-  TlbMmu::RetryReason why = TlbMmu::RetryReason::NONE;
   if (TlbMmu *m = g_bind.mmu()) {
     if (in->itlb_flush) m->flush();
     if (in->refetch) m->cancel_pending_walk();
@@ -213,7 +197,6 @@ void comb(icache_in *in, icache_out *out) {
       itlb_ret = m->translate(pa, static_cast<pc_t>(icache.io.out.mmu_req_vtag) << 12, 0, in->csr_status);
       if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = pa >> 12; }
       else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
-      why = m->last_retry_reason();
     }
   }
 
@@ -235,7 +218,7 @@ void comb(icache_in *in, icache_out *out) {
 
   out->icache_read_ready = read_ready(hold_for_recovery, false);
   drive_fetch_group(out);
-  drive_perf(out, req_valid, itlb_invoked, itlb_ret, why);
+  drive_perf(out, req_valid, itlb_invoked, itlb_ret);
   if (ho.ifu_resp_valid && ho.miss) {
     std::printf("[icache_top] ERROR: miss is true when ifu_resp is valid\n");
     std::exit(1);

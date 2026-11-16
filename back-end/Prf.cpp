@@ -73,12 +73,10 @@ void Prf::comb_read() {
     int ftq_slot = get_prf_ftq_slot(i, wires->iss2prf.iss_entry[i].uop, req_bit);
     if (ftq_slot >= 0 && wires->ftq_prf_pc_resp.resp[ftq_slot].valid) {
       entry.uop->pc = wires->ftq_prf_pc_resp.resp[ftq_slot].pc;
-      entry.uop->ftq_resp_valid = true;
       entry.uop->ftq_pred_taken = wires->ftq_prf_pc_resp.resp[ftq_slot].pred_taken;
       entry.uop->ftq_next_pc = wires->ftq_prf_pc_resp.resp[ftq_slot].next_pc;
     } else {
       entry.uop->pc = 0;
-      entry.uop->ftq_resp_valid = false;
       entry.uop->ftq_pred_taken = false;
       entry.uop->ftq_next_pc = 0;
     }

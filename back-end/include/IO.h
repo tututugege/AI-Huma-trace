@@ -72,7 +72,6 @@ struct FtqPcReadReq {
 
 struct FtqPcReadResp {
   wire<1> valid = {};
-  wire<1> entry_valid = {};
   wire<XLEN> pc = {};
   wire<1> is_rvc = {};
   wire<1> pred_taken = {};
@@ -138,7 +137,6 @@ struct RobDisIO {
   struct TmaMeta {
     wire<1> head_is_memory = {};
     wire<1> head_is_miss = {};
-    wire<1> head_not_ready = {};
   } tma;
 
   wire<1> ready = {};
@@ -355,7 +353,6 @@ struct RobCsrIO {
 struct PtwWalkReq {
   wire<XLEN> vaddr = {};
   wire<XLEN> satp = {};
-  wire<32> access_type; // 0=Fetch, 1=Load, 2=Store
 };
 
 struct PtwWalkResp {
@@ -373,7 +370,6 @@ struct MemReqMeta {
 
 struct MemRespMeta {
   wire<ROB_IDX_WIDTH> rob_idx;
-  bool is_cache_miss;
 
   MemRespMeta() { std::memset(this, 0, sizeof(MemRespMeta)); }
 };
@@ -424,7 +420,6 @@ struct StqEntry {
 
 
 
-  wire<1> vaddr_valid = false;
   wire<XLEN> vaddr = 0;
 
   wire<1> paddr_valid = false;
@@ -434,14 +429,10 @@ struct StqEntry {
   wire<1> suppress_write = 0; // For MMIO: bits to suppress in the write (e.g., for LR/SC)
 
   wire<1> is_mmio = false;
-  wire<1> is_lrsc = false;
   wire<1> sc_pass = false; // For SC: whether the store-conditional succeeded
   wire<PRF_IDX_WIDTH> dest_preg = 0; // SC returns 0/1 through STA writeback
 
-  StoreState store_state = StoreState::Empty;
 
-  ReplayType replay_type = ReplayType::HIT;
-  uint32_t replay_wait_cycles = 0;
 
 
   wire<BR_MASK_WIDTH> br_mask = {};

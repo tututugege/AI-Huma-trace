@@ -80,19 +80,11 @@ struct icache_out {
   wire1_t icache_read_complete; // fetched current fetch group
   // perf / debug observability for front-end attribution
   wire1_t perf_req_fire;
-  wire1_t perf_req_blocked;
-  wire1_t perf_resp_fire;
   wire1_t perf_miss_event;
   wire1_t perf_miss_busy;
-  wire1_t perf_outstanding_req;
   wire1_t perf_itlb_hit;
   wire1_t perf_itlb_miss;
   wire1_t perf_itlb_fault;
-  wire1_t perf_itlb_retry;
-  wire1_t perf_itlb_retry_other_walk;
-  wire1_t perf_itlb_retry_walk_req_blocked;
-  wire1_t perf_itlb_retry_wait_walk_resp;
-  wire1_t perf_itlb_retry_local_walker_busy;
   // to instruction FIFO
   inst_word_t fetch_group[FETCH_WIDTH];
   wire1_t page_fault_inst[FETCH_WIDTH];
@@ -100,7 +92,6 @@ struct icache_out {
   pc_t fetch_pc; // PC address of the cache line (the address used to fetch instructions from icache)
   pc_t fetch_paddr;           // FE_PAIR: physical address of fetch_pc
   wire1_t fetch_single_word;
-  wire1_t fetch_page_fault;
 };
 
 struct instruction_FIFO_in {

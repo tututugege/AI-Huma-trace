@@ -67,7 +67,6 @@ struct DebugMeta {
 };
 
 struct TmaMeta {
-  bool is_cache_miss;
   bool is_ret;
   bool mem_commit_is_load;
   bool mem_commit_is_store;
@@ -110,8 +109,6 @@ struct UopS {
   wire<PRF_IDX_WIDTH> old_dest_preg;
   wire<XLEN> pc;
   wire<XLEN> ftq_next_pc;
-  wire<1> ftq_entry_valid;
-  wire<1> ftq_resp_valid;
   wire<1> ftq_pred_taken;
   wire<1> is_rvc;       // 16-bit (compressed) instruction (RVC=1): pc + 2 instead of pc + 4
   DebugMeta dbg;
