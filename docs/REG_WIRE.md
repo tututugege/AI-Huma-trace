@@ -167,3 +167,21 @@ old phases are private helpers). `BackTop::comb()` is 23 calls. The checker now 
 What is left is the real same-cycle structure: LSU 4 runs (registered outputs | responses and write-back | AGU ->
 translate | requests), ROB 2 (commit at the start, completion / recovery at the end), ISU / EXU / IDU / CSR / rename /
 dis / pre 2-3 each. Fewer would need registers on same-cycle paths that the RTL has, i.e. different cycles.
+
+## Step 2c: memory subsystem and front end (a87d6e8, df0183b)
+
+Memory subsystem (`comb_order.py --mem comb_outputs|comb_inputs`, a block's phases keep their order): 26 -> 11.
+  comb_outputs: wb_ / mshr_.comb_axi_to_dcache, dcache_stage2 (array read, stage 2, array write, response),
+                mem_route_block.comb_response
+  comb_inputs:  ptw_request, mem_route_block.comb_request, dcache_stage1, mshr_ / wb_.comb_dcache_to_axi,
+                ptw_feedback, peripheral_axi_.comb
+The scheduler finds nothing more to merge.
+
+Front end: its 8 steps are one call at the top level (no other module runs between them), so there is nothing to
+merge. What was redundant: each of the four FIFOs ran its whole comb twice per cycle (read pass with the write inputs
+at their defaults, write pass with the read inputs forced off and its output discarded) and accumulate_* merged the
+two requests. Now each FIFO has a read port (first use: clear / pop / head out, PTAB with its bypass write) and a
+write port (push), both filling the cycle's request directly. Staged reads 71 -> 60. What remains is design, not
+double evaluation: the FIFO read ports take the whole input struct (control and write data), the I-cache is evaluated
+three times per cycle (ready peek in read_fifos, the comb in run_icache, an invalidate in finish), and the predecode
+check edits the instruction-FIFO head in place.
