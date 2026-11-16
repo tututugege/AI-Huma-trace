@@ -41,10 +41,10 @@ void FrontTop::init() {
   back2front_stall_1 = false;
   Assert(ctx != nullptr && "FrontTop::init requires bound SimContext");
   Assert(in.csr_status != nullptr && "FrontTop::init requires bound csr_status");
-  in.FIFO_read_enable = true;
-  in.reset = true;
+  in.ctrl.fifo_read_enable = true;
+  in.ctrl.reset = true;
   step_bpu();
-  in.reset = false;
+  in.ctrl.reset = false;
 }
 
 void FrontTop::read_core_q() {
@@ -74,8 +74,8 @@ void FrontTop::seq_back2front() {
 }
 
 void FrontTop::force_back2front_refetch(pc_t pc) {
-  back2front.refetch = true;
-  back2front.refetch_address = pc;
+  back2front.redirect.valid = true;
+  back2front.redirect.address = pc;
   back2front_1 = back2front;
   back2front_stall = false;
   back2front_stall_1 = false;
@@ -92,14 +92,14 @@ void FrontTop::step_bpu() {
 // predicted-taken branch the rest of the group is invalid, unless FE_PAIR continues with the second block), the commit
 // credits always.
 void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
-  const bool registered_refetch = static_cast<bool>(back2front.refetch);
+  const bool registered_refetch = static_cast<bool>(back2front.redirect.valid);
   const bool frontend_can_read = !back2front_stall || registered_refetch;
 
   in = back2front;   // (reset is 0 here: only init() runs the front end with reset)
   in.csr_status = csr_status;
 
   if (frontend_can_read) {
-    in.FIFO_read_enable = true;
+    in.ctrl.fifo_read_enable = true;
 
     read_core_q();
     comb_core();
@@ -125,8 +125,8 @@ void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
     to_back.meta = out.meta;
     to_back.front_stall = static_cast<bool>(out.commit_stall); to_back.front_upd_free = out.commit_upd_free; to_back.front_tq_free = out.commit_tq_free;
   } else {
-    in.FIFO_read_enable = false;
-    in.refetch = false;
+    in.ctrl.fifo_read_enable = false;
+    in.redirect.valid = false;
     read_core_q();
     comb_core();
     to_back.front_stall = static_cast<bool>(out.commit_stall); to_back.front_upd_free = out.commit_upd_free; to_back.front_tq_free = out.commit_tq_free;
@@ -137,33 +137,33 @@ void FrontTop::comb(CsrStatusIO *csr_status, FrontPreIO &to_back) {
 void FrontTop::comb_from_back(BackTop &back) {
   back2front_1 = back2front;
   back2front_stall_1 = back.out.stall;
-  back2front_1.FIFO_read_enable = false;
+  back2front_1.ctrl.fifo_read_enable = false;
   back2front_1.csr_status = &back.csr_status;
-  back2front_1.refetch = back.out.mispred || back.out.flush;
-  back2front_1.rf_valid = back.out.rf_valid && !back.out.flush;
-  back2front_1.rf_blk = back.out.rf_blk;
-  back2front_1.rf_slot = back.out.rf_slot;
-  back2front_1.rf_type = back.out.rf_type;
-  back2front_1.rf_pc = back.out.rf_pc;
-  back2front_1.rf_is_rvc = back.out.rf_is_rvc;
-  back2front_1.itlb_flush = back.out.itlb_flush;
-  back2front_1.fence_i = back.out.fence_i;
+  back2front_1.redirect.valid = back.out.mispred || back.out.flush;
+  back2front_1.redirect.rf_valid = back.out.rf_valid && !back.out.flush;
+  back2front_1.redirect.rf_blk = back.out.rf_blk;
+  back2front_1.redirect.rf_slot = back.out.rf_slot;
+  back2front_1.redirect.rf_type = back.out.rf_type;
+  back2front_1.redirect.rf_pc = back.out.rf_pc;
+  back2front_1.redirect.rf_is_rvc = back.out.rf_is_rvc;
+  back2front_1.ctrl.itlb_flush = back.out.itlb_flush;
+  back2front_1.ctrl.fence_i = back.out.fence_i;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     InstInfo *inst = &back.out.commit_entry[i].uop;
     const auto &commit_extra = back.out.commit_extra[i];
     const auto &ftq_info = back.out.commit_ftq[i];
-    back2front_1.back2front_valid[i] = back.out.commit_entry[i].valid;
+    back2front_1.train[i].valid = back.out.commit_entry[i].valid;
     for (int j = 0; j < 4; j++) {
-      back2front_1.tage_tag[i][j] = 0;
+      back2front_1.train[i].tage_tag[j] = 0;
     }
 
-    if (back2front_1.back2front_valid[i]) {
-      back2front_1.predict_dir[i] = ftq_info.pred_taken;
-      back2front_1.predict_base_pc[i] = ftq_info.pc;
-      back2front_1.update_is_rvc[i] = ftq_info.is_rvc;
-      back2front_1.actual_dir[i] =
+    if (back2front_1.train[i].valid) {
+      back2front_1.train[i].pred_dir = ftq_info.pred_taken;
+      back2front_1.train[i].base_pc = ftq_info.pc;
+      back2front_1.train[i].is_rvc = ftq_info.is_rvc;
+      back2front_1.train[i].actual_dir =
           ((*inst)->type == JAL || (*inst)->type == JALR) ? true : inst->br_taken;
-      back2front_1.actual_target[i] =
+      back2front_1.train[i].target =
           (is_branch((*inst)->type) || (*inst)->type == JAL || (*inst)->type == JALR)
               ? back.out.commit_entry[i].uop.diag_val
               : ftq_info.pc + ilen_of(ftq_info.is_rvc);
@@ -186,16 +186,16 @@ void FrontTop::comb_from_back(BackTop &back) {
           br_type = BR_IDIRECT;
       }
 
-      back2front_1.actual_br_type[i] = br_type;
-      back2front_1.alt_pred[i] = ftq_info.alt_pred;
-      back2front_1.pcpn[i] = ftq_info.pcpn;
+      back2front_1.train[i].br_type = br_type;
+      back2front_1.train[i].alt_pred = ftq_info.alt_pred;
+      back2front_1.train[i].pcpn = ftq_info.pcpn;
       for (int j = 0; j < 4; j++) { // TN_MAX
-        back2front_1.tage_idx[i][j] = ftq_info.tage_idx[j];
-        back2front_1.tage_tag[i][j] = ftq_info.tage_tag[j];
+        back2front_1.train[i].tage_idx[j] = ftq_info.tage_idx[j];
+        back2front_1.train[i].tage_tag[j] = ftq_info.tage_tag[j];
       }
     }
   }
 
   if (back.out.mispred || back.out.flush) {
-    back2front_1.refetch_address = back.out.redirect_pc;
+    back2front_1.redirect.address = back.out.redirect_pc;
   }}

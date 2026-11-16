@@ -16,31 +16,40 @@ struct FetchPair {
   uint8_t a_len = 0, b_len = 0;
 };
 
-struct FrontTopIn {
+// The front end's inputs: control, the back end's redirect, the BPU training of the committing instructions.
+struct FrontCtrl {
   wire<1> reset;
-  // from back-end
-  wire<1> back2front_valid[COMMIT_WIDTH];
-  wire<1> refetch;
-  wire<1> itlb_flush;
+  wire<1> itlb_flush;         // SFENCE.VMA
   wire<1> fence_i;
-  fetch_addr_t refetch_address;
-  wire<1> rf_valid;       // BPA_REPAIR: branch mispredict with block / slot / type of the branch
+  wire<1> fifo_read_enable;   // the back end takes a fetch group this cycle
+};
+struct FrontRedirect {        // a back-end mispredict / flush: refetch from address
+  wire<1> valid;
+  fetch_addr_t address;
+  wire<1> rf_valid;           // BPA_REPAIR: the redirect is a branch mispredict; the block / slot / type of the branch
   wire<16> rf_blk;
   wire<8> rf_slot, rf_type;
   pc_t rf_pc;
-  wire<1> rf_is_rvc;       // the mispredicted branch is a 16-bit instruction
-  pc_t predict_base_pc[COMMIT_WIDTH];
-  wire<1> update_is_rvc[COMMIT_WIDTH];   // the committed instruction is a 16-bit instruction
-  wire<1> predict_dir[COMMIT_WIDTH];
-  wire<1> actual_dir[COMMIT_WIDTH];
-  br_type_t actual_br_type[COMMIT_WIDTH];
-  target_addr_t actual_target[COMMIT_WIDTH];
-  wire<1> alt_pred[COMMIT_WIDTH];
-  pcpn_t pcpn[COMMIT_WIDTH];
-  tage_idx_t tage_idx[COMMIT_WIDTH][4]; // TN_MAX = 4
-  tage_tag_t tage_tag[COMMIT_WIDTH][4]; // TN_MAX = 4
-  wire<1> FIFO_read_enable;
-  CsrStatusIO *csr_status;
+  wire<1> rf_is_rvc;          // the mispredicted branch is a 16-bit instruction
+};
+struct BpuTrain {             // one committing instruction
+  wire<1> valid;
+  pc_t base_pc;
+  wire<1> is_rvc;             // a 16-bit instruction
+  wire<1> pred_dir;
+  wire<1> actual_dir;
+  br_type_t br_type;
+  target_addr_t target;
+  wire<1> alt_pred;
+  pcpn_t pcpn;
+  tage_idx_t tage_idx[TN_MAX];
+  tage_tag_t tage_tag[TN_MAX];
+};
+struct FrontTopIn {
+  FrontCtrl ctrl;
+  FrontRedirect redirect;
+  BpuTrain train[COMMIT_WIDTH];
+  CsrStatusIO *csr_status;    // the CSR status of the cycle (BackPorts::csr_status)
 };
 
 struct FrontTopOut {

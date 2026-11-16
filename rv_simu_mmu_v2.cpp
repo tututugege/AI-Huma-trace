@@ -243,12 +243,12 @@ void SimCpu::sync_mmio_devices_from_backing() {
 
 // force the front-end PC (switch from fast mode)
 void SimCpu::restore_pc(pc_t pc) {
-  front.in.reset = false;
-  front.in.FIFO_read_enable = false;
+  front.in.ctrl.reset = false;
+  front.in.ctrl.fifo_read_enable = false;
   // an explicit refetch for the front end and the back end's redirect outputs: the fetch restarts at pc even if
   // the caller set no flush / mispred
-  front.in.refetch = true;
-  front.in.refetch_address = pc;
+  front.in.redirect.valid = true;
+  front.in.redirect.address = pc;
   front.force_back2front_refetch(pc);
   front2back_hold_q = {};
   front2back_hold_d = {};

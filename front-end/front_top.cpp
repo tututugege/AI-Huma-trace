@@ -280,8 +280,8 @@ private:
 
 // Flush / refetch of the cycle and the BPU pipeline's last-stage decision (from the registers).
 void FrontComb::control() {
-  global_reset = in.reset;
-  global_refetch = in.refetch || rd.q.predecode_refetch;
+  global_reset = in.ctrl.reset;
+  global_refetch = in.redirect.valid || rd.q.predecode_refetch;
   // BPU_PIPE: the pipeline's last stage may override an older block this cycle. The youngest squash_n fetch addresses are
   // dropped, and the FIFO head is not popped when it is one of them. An entry is popped only when it is at least
   // max(0, D-2) cycles old, so a block is never inside the ICache before the decision on its predecessor.
@@ -294,7 +294,7 @@ void FrontComb::control() {
 // The read and write ports of the four FIFOs' heads: read enables, the heads (the fetch-address FIFO feeds the ICache,
 // the other three feed the predecode checker and the back end), the PTAB write of the BPU's block, the head fix-ups.
 void FrontComb::read_fifos() {
-  const bool icache_ready = icache.read_ready(in.itlb_flush || in.fence_i, global_reset);
+  const bool icache_ready = icache.read_ready(in.ctrl.itlb_flush || in.ctrl.fence_i, global_reset);
   fetch_addr_in.drop_tail_n = pipe_dec.ovr ? pipe_dec.squash_n : 0;
   // the block leaving S_D writes the PTAB and the checker may read it in the same cycle (PTAB bypass)
   const bool ptab_can_write = bpu_output.PTAB_write_enable && !global_reset && !global_refetch;
@@ -304,7 +304,7 @@ void FrontComb::read_fifos() {
                                       !global_reset && !global_refetch && pipe_head_ok;
   fifo_read_enable = !rd.q.fifo_empty && (!rd.q.ptab_empty || ptab_bypass) &&
                      !rd.q.f2b_full && !global_reset && !global_refetch;
-  f2b_read_enable = in.FIFO_read_enable;
+  f2b_read_enable = in.ctrl.fifo_read_enable;
 
   fetch_addr_in.reset = global_reset;
   fetch_addr_in.refetch = global_refetch;
@@ -316,7 +316,7 @@ void FrontComb::read_fifos() {
   ptab_in.refetch = global_refetch;
   ptab_in.read_enable = fifo_read_enable;
   f2b_in.reset = global_reset;
-  f2b_in.refetch = in.refetch;
+  f2b_in.refetch = in.redirect.valid;
   f2b_in.read_enable = f2b_read_enable;
 
   // the read ports: each FIFO's request of the cycle starts here
@@ -373,32 +373,32 @@ void FrontComb::run_bpu() {
 
   bpuf::InputPayload bpu_input{};
   bpu_input.refetch = global_refetch;
-  bpu_input.refetch_pd = global_refetch && !in.refetch;
-  bpu_input.rf_valid = in.refetch && in.rf_valid;
-  bpu_input.rf_blk = in.rf_blk; bpu_input.rf_slot = in.rf_slot; bpu_input.rf_type = in.rf_type; bpu_input.rf_pc = in.rf_pc; bpu_input.rf_is_rvc = in.rf_is_rvc;
+  bpu_input.refetch_pd = global_refetch && !in.redirect.valid;
+  bpu_input.rf_valid = in.redirect.valid && in.redirect.rf_valid;
+  bpu_input.rf_blk = in.redirect.rf_blk; bpu_input.rf_slot = in.redirect.rf_slot; bpu_input.rf_type = in.redirect.rf_type; bpu_input.rf_pc = in.redirect.rf_pc; bpu_input.rf_is_rvc = in.redirect.rf_is_rvc;
   bpu_input.pd = rd.q.pd;
-  bpu_input.refetch_address = in.refetch ? in.refetch_address : rd.q.predecode_refetch_address;
+  bpu_input.refetch_address = in.redirect.valid ? in.redirect.address : rd.q.predecode_refetch_address;
   bpu_input.icache_read_ready = bpu_can_run && !rd.q.fetch_addr_fifo_full;
   bpu_input.ptab_size = rd.ptab_rd_snapshot.size > 255 ? 255 : rd.ptab_rd_snapshot.size;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    bpu_input.in_update_base_pc[i] = in.predict_base_pc[i];
-    bpu_input.in_update_is_rvc[i] = in.update_is_rvc[i];
-    bpu_input.in_upd_valid[i] = in.back2front_valid[i];
-    bpu_input.in_actual_dir[i] = in.actual_dir[i];
-    bpu_input.in_actual_br_type[i] = in.actual_br_type[i];
-    bpu_input.in_actual_targets[i] = in.actual_target[i];
-    bpu_input.in_pred_dir[i] = in.predict_dir[i];
-    bpu_input.in_alt_pred[i] = in.alt_pred[i];
-    bpu_input.in_pcpn[i] = in.pcpn[i];
+    bpu_input.in_update_base_pc[i] = in.train[i].base_pc;
+    bpu_input.in_update_is_rvc[i] = in.train[i].is_rvc;
+    bpu_input.in_upd_valid[i] = in.train[i].valid;
+    bpu_input.in_actual_dir[i] = in.train[i].actual_dir;
+    bpu_input.in_actual_br_type[i] = in.train[i].br_type;
+    bpu_input.in_actual_targets[i] = in.train[i].target;
+    bpu_input.in_pred_dir[i] = in.train[i].pred_dir;
+    bpu_input.in_alt_pred[i] = in.train[i].alt_pred;
+    bpu_input.in_pcpn[i] = in.train[i].pcpn;
     for (int j = 0; j < 4; j++) {
-      bpu_input.in_tage_tags[i][j] = in.tage_tag[i][j];
-      bpu_input.in_tage_idxs[i][j] = in.tage_idx[i][j];
+      bpu_input.in_tage_tags[i][j] = in.train[i].tage_tag[j];
+      bpu_input.in_tage_idxs[i][j] = in.train[i].tage_idx[j];
     }
   }
 
   req.bpu_seq_txn.valid = true;
-  req.bpu_seq_txn.reset = in.reset;
-  if (in.reset) {
+  req.bpu_seq_txn.reset = in.ctrl.reset;
+  if (in.ctrl.reset) {
     bpu_output.fetch_address = RESET_PC;
   } else {
     bpu_pipe.comb_cycle(bpu_input, pipe_dec, bpu_output);
@@ -421,8 +421,8 @@ void FrontComb::write_fetch_addr() {
 void FrontComb::run_icache() {
   ic_in.reset = global_reset;
   ic_in.refetch = global_refetch;
-  ic_in.itlb_flush = in.itlb_flush;
-  ic_in.fence_i = in.fence_i;
+  ic_in.itlb_flush = in.ctrl.itlb_flush;
+  ic_in.fence_i = in.ctrl.fence_i;
   ic_in.invalidate_req = false;
   ic_in.csr_status = in.csr_status;
   ic_in.icache_read_valid = fetch_addr_head.read_valid;
@@ -603,7 +603,7 @@ void FrontComb::finish() {
     bool nv = lh_updated ? lh_new_valid : rd.q.lh_valid;
     // a back-end redirect (or reset) drops the carry; a predecode flush drops it unless the flushed group itself set it (sequential continuation),
     // and the refetch cycle that follows a predecode flush keeps it
-    if (global_reset || in.refetch) nv = false;
+    if (global_reset || in.redirect.valid) nv = false;
     else if (predecode_flush && !(lh_updated && lh_new_valid)) nv = false;
     req.front_state.d.lh_valid = nv; req.front_state.d.lh_pc = lh_updated ? lh_new_pc : rd.q.lh_pc; req.front_state.d.lh_data = lh_updated ? lh_new_data : rd.q.lh_data;
   }
@@ -628,7 +628,7 @@ void FrontComb::finish() {
     const uint64_t last_refetch = global_refetch ? cyc : rd.q.pmu_last_refetch;
     req.front_state.d.pmu_last_refetch = last_refetch;
     PmuFrontSignals &pf = g_pmu_front;
-    pf.feo_ready = in.FIFO_read_enable;
+    pf.feo_ready = in.ctrl.fifo_read_enable;
     pf.feo_n = 0;
     pf.feo_cause = 0;
     if (pf.feo_ready) {
