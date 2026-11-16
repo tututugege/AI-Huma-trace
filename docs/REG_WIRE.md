@@ -144,3 +144,26 @@ the latch-overflow assert (it could not fire) are gone.
 
 Result of step 2 (A..G): back-end phases 69 -> 52, module-to-module wire edges 44 -> 35, LSU 19 -> 15, mem 29 -> 26,
 top 201 -> 155; model 30,481 -> 30,095 lines; cycles identical at every commit.
+
+## Step 2b: phases by dependency, not by function (b89fa57, b341369)
+
+A-G removed wire pairs and copies, but most phases came from splitting each module's code by function (alloc,
+rename, fire, pipeline, ...). `scripts/comb/comb_order.py` computes what the same-cycle dependencies require:
+
+* ordering constraints between phases i < j: W_i & R_j, W_i & W_j, R_i & W_j over the Wires; a module's own phases keep
+  their order (they also communicate through the module's private state, which the scan does not see); a phase that
+  touches another module's object (`idu->`, `pre->`, `ftq->`, `csr->`) keeps its order against that module's phases;
+  the trace-bridge users (`tbhook::`) keep their order;
+* `--schedule`: a topological order that keeps one module running while it has a ready phase (random tie-breaking,
+  best of 4000 trials). 51 phases -> 23 runs.
+
+Without the hidden-dependency pins the count looked like 18-20, and one schedule even put the LSU's DCache requests
+before their address translation; the pins are what make it safe. The first commit (b89fa57) only reordered the calls
+(gates, FPR, TB_TRACE_COMMIT and LSU_PIPE_EVT identical), the second (b341369) made each run one method named for its
+role (`lsu.comb_outputs / comb_writeback / comb_translate / comb_requests`, `rob.comb_commit / comb_update`, ...; the
+old phases are private helpers). `BackTop::comb()` is 23 calls. The checker now also scans BackTop's own phases
+(unqualified Wires fields; they had been empty) and counts a read with an earlier write in the cycle as staged.
+
+What is left is the real same-cycle structure: LSU 4 runs (registered outputs | responses and write-back | AGU ->
+translate | requests), ROB 2 (commit at the start, completion / recovery at the end), ISU / EXU / IDU / CSR / rename /
+dis / pre 2-3 each. Fewer would need registers on same-cycle paths that the RTL has, i.e. different cycles.
