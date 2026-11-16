@@ -43,7 +43,7 @@ void BackTop::init() {
   rob->ftq = pre;
   csr->wires = this;
   lsu->wires = this;
-  idu_br_latch = &idu->br_latch;
+  idu_br_latch = &idu->q().br_latch;
 
   pre->init();
   idu->init();
@@ -104,13 +104,13 @@ void BackTop::comb_outputs() {
   if (!rob_bcast.flush) {
     out.mispred = dec_bcast.mispred;
     out.stall = !pre2front.ready;
-    out.redirect_pc = idu->br_latch.redirect_pc;
+    out.redirect_pc = idu->q().br_latch.redirect_pc;
     out.rf_valid = dec_bcast.mispred;
     if (out.rf_valid) {
-      const uint32_t fi = idu->br_latch.ftq_idx;
-      out.rf_slot = idu->br_latch.ftq_off;
+      const uint32_t fi = idu->q().br_latch.ftq_idx;
+      out.rf_slot = idu->q().br_latch.ftq_off;
       out.rf_blk = pre->ftq_blk_id(fi, out.rf_slot);
-      out.rf_type = idu->br_latch.br_type;
+      out.rf_type = idu->q().br_latch.br_type;
       out.rf_pc = pre->ftq_slot_pc(fi, out.rf_slot);
       out.rf_is_rvc = pre->ftq_slot_rvc(fi, out.rf_slot);
     }

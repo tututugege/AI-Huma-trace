@@ -14,6 +14,7 @@
 // As in Intel's top-down method, once a valid slot is blocked all slots from it on are backend-bound (even the empty
 // ones: the frontend could not have been used), and the cause is the first resource that stopped it.
 void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, int &be_slots) const {
+  const Regs &q = q_;
   const Wires &w = *wires;
   for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch)
     e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q), GLOBAL_IQ_CONFIG[q].size - w.iss2dis.ready_num[q]);
@@ -28,19 +29,19 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
     if (w.dis2rob.dis_fire[i]) {
       e.add(PMU_SLOT_FIRE);
       fired_before = true;
-      if (is_eliminated_move(inst_r[i])) e.add(PMU_MOVE_ELIMINATED);
+      if (is_eliminated_move(q.inst_r[i])) e.add(PMU_MOVE_ELIMINATED);
       continue;
     }
-    if (!blocked && inst_valid[i] && kill) { e.add(PMU_SLOT_KILLED); continue; }
-    if (!blocked && inst_valid[i]) {  // first slot the backend did not take: find out why
+    if (!blocked && q.inst_valid[i] && kill) { e.add(PMU_SLOT_KILLED); continue; }
+    if (!blocked && q.inst_valid[i]) {  // first slot the backend did not take: find out why
       blocked = true;
-      const InstType type = decode_inst_type(inst_r[i]->type);
+      const InstType type = decode_inst_type(q.inst_r[i]->type);
       const bool serial = (is_CSR(type) || type == AMO) && (!w.rob2dis.empty || fired_before);
       if (w.rob2dis.stall) cause = PMU_SLOT_BE_FLUSH_WAIT;
       else if (!w.rob2dis.ready) cause = PMU_SLOT_BE_ROB_FULL;
       else if (serial) cause = PMU_SLOT_BE_SERIAL;
-      else if (!w.dis2rob.valid[i] && is_load(inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
-      else if (!w.dis2rob.valid[i] && is_store(inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
+      else if (!w.dis2rob.valid[i] && is_load(q.inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
+      else if (!w.dis2rob.valid[i] && is_store(q.inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
       else if (!dispatch_success_flags[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
       else cause = PMU_SLOT_BE_SERIAL;  // behind an exclusive instruction (AMO/WFI) that fired this cycle
       if (cause == PMU_SLOT_BE_IQ_FULL && iq_blk[i] >= 0)
@@ -125,7 +126,7 @@ void BackTop::pmu_sample() {
   if (p.recovering) e.add(PMU_CYC_RECOVERING);
   // recovery state for the next cycle: a redirect starts it, the first valid instruction in the dispatch stage ends it
   bool any_valid = false;
-  for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->inst_valid[i]);
+  for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->q().inst_valid[i]);
   if (rob_bcast.flush || dec_bcast.mispred) {
     p.recovering = true;
     p.recov_by_flush = rob_bcast.flush;

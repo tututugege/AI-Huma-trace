@@ -14,23 +14,24 @@ static wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH];
 
 void Idu::init() {
   for (int i = 0; i < MAX_BR_NUM; i++) {
-    tag_vec[i] = tag_vec_1[i] = true;
-    br_mask_cp[i] = br_mask_cp_1[i] = 0;
+    q_.tag_vec[i] = d.tag_vec[i] = true;
+    q_.br_mask_cp[i] = d.br_mask_cp[i] = 0;
   }
-  tag_vec[0] = tag_vec_1[0] = false;  // tag 0 is "no branch"
-  now_br_mask = now_br_mask_1 = 0;
-  br_latch = br_latch_1 = {};
+  q_.tag_vec[0] = d.tag_vec[0] = false;  // tag 0 is "no branch"
+  q_.now_br_mask = d.now_br_mask = 0;
+  q_.br_latch = d.br_latch = {};
 }
 
 // Decode the instructions of the pre-decode queue and give every branch a tag/mask. A younger instruction depends on all
 // older unresolved branches (its br_mask); a branch itself does not depend on its own bit. When the free tags run out
 // the group is cut at that branch.
 void Idu::decode() {
+  const Regs &q = q_;
   Wires &w = *wires;
   bool alloc_valid[DECODE_WIDTH];
   int tags = 0;
   for (int i = 0; i < MAX_BR_NUM && tags < max_br_per_cycle; i++)
-    if (tag_vec[i]) {
+    if (q.tag_vec[i]) {
       alloc_tag[tags] = i;
       alloc_valid[tags++] = true;
     }
@@ -67,8 +68,8 @@ void Idu::decode() {
     u.ftq_is_last = e.ftq_is_last;
   }
 
-  // branches resolved last cycle (br_latch) are already gone from the mask the new instructions see
-  wire<BR_MASK_WIDTH> running = now_br_mask & ~br_latch.clear_mask;
+  // branches resolved last cycle (q.br_latch) are already gone from the mask the new instructions see
+  wire<BR_MASK_WIDTH> running = q.now_br_mask & ~q.br_latch.clear_mask;
   int br_num = 0, i = 0;
   bool stall = false;
   for (; i < DECODE_WIDTH; i++) {
@@ -92,43 +93,45 @@ void Idu::decode() {
 
 // Broadcast last cycle's branch resolution (mispredict, tag, clear bits) to everyone; only comb_fire updates local state.
 void Idu::branch() {
+  const Regs &q = q_;
   DecBroadcastIO &b = wires->dec_bcast;
-  b.mispred = br_latch.mispred;
-  b.br_id = br_latch.mispred ? br_latch.br_id : 0;
-  b.br_mask = br_latch.mispred ? wire<BR_MASK_WIDTH>(1) << br_latch.br_id : 0;
-  if (br_latch.mispred) b.redirect_rob_idx = br_latch.redirect_rob_idx;
-  b.clear_mask = br_latch.clear_mask;  // includes the mispredicted branch's own bit; receivers flush first, then clear
+  b.mispred = q.br_latch.mispred;
+  b.br_id = q.br_latch.mispred ? q.br_latch.br_id : 0;
+  b.br_mask = q.br_latch.mispred ? wire<BR_MASK_WIDTH>(1) << q.br_latch.br_id : 0;
+  if (q.br_latch.mispred) b.redirect_rob_idx = q.br_latch.redirect_rob_idx;
+  b.clear_mask = q.br_latch.clear_mask;  // includes the mispredicted branch's own bit; receivers flush first, then clear
 }
 
 // Branch tag bookkeeping and the consume handshake with the pre-decode queue.
 // Flush resets everything; resolved branches return their tags; a mispredict frees the tags younger than the branch
 // (and allocates nothing this cycle); otherwise fired branches take their tag and checkpoint the mask.
 void Idu::comb_fire() {
+  const Regs &q = q_;
   Wires &w = *wires;
   for (int i = 0; i < DECODE_WIDTH; i++) w.idu_consume.fire[i] = false;
 
-  br_latch_1 = w.rob_bcast.flush ? ExuIdIO{} : w.exu2id;
+  d.br_latch = w.rob_bcast.flush ? ExuIdIO{} : w.exu2id;
   if (w.rob_bcast.flush) {
-    for (int i = 1; i < MAX_BR_NUM; i++) tag_vec_1[i] = true;
-    tag_vec_1[0] = false;
-    now_br_mask_1 = 0;
+    for (int i = 1; i < MAX_BR_NUM; i++) d.tag_vec[i] = true;
+    d.tag_vec[0] = false;
+    d.now_br_mask = 0;
     return;
   }
 
-  const wire<BR_MASK_WIDTH> clear = br_latch.clear_mask;
+  const wire<BR_MASK_WIDTH> clear = q.br_latch.clear_mask;
   for (int i = 1; i < MAX_BR_NUM; i++)
     if ((clear >> i) & 1) {
-      tag_vec_1[i] = true;
-      now_br_mask_1 &= ~(wire<BR_MASK_WIDTH>(1) << i);
+      d.tag_vec[i] = true;
+      d.now_br_mask &= ~(wire<BR_MASK_WIDTH>(1) << i);
     }
   if (clear != 0)  // checkpoints must not keep bits of resolved branches (tags get reused)
-    for (int i = 1; i < MAX_BR_NUM; i++) br_mask_cp_1[i] &= ~clear;
+    for (int i = 1; i < MAX_BR_NUM; i++) d.br_mask_cp[i] &= ~clear;
 
-  if (br_latch.mispred) {
-    const wire<BR_MASK_WIDTH> younger = now_br_mask & ~br_mask_cp[br_latch.br_id];
-    now_br_mask_1 &= ~younger;
+  if (q.br_latch.mispred) {
+    const wire<BR_MASK_WIDTH> younger = q.now_br_mask & ~q.br_mask_cp[q.br_latch.br_id];
+    d.now_br_mask &= ~younger;
     for (int i = 1; i < MAX_BR_NUM; i++)
-      if ((younger >> i) & 1) tag_vec_1[i] = true;
+      if ((younger >> i) & 1) d.tag_vec[i] = true;
     return;
   }
 
@@ -138,20 +141,15 @@ void Idu::comb_fire() {
     w.idu_consume.fire[i] = fire;
     if (fire && is_branch(w.dec2ren.uop[i]->type)) {
       const auto tag = alloc_tag[br_num++];
-      tag_vec_1[tag] = false;
-      now_br_mask_1 |= wire<BR_MASK_WIDTH>(1) << tag;
-      br_mask_cp_1[tag] = now_br_mask_1;
+      d.tag_vec[tag] = false;
+      d.now_br_mask |= wire<BR_MASK_WIDTH>(1) << tag;
+      d.br_mask_cp[tag] = d.now_br_mask;
     }
   }
 }
 
 void Idu::seq() {
-  now_br_mask = now_br_mask_1;
-  for (int i = 0; i < MAX_BR_NUM; i++) {
-    tag_vec[i] = tag_vec_1[i];
-    br_mask_cp[i] = br_mask_cp_1[i];
-  }
-  br_latch = br_latch_1;
+  q_ = d;
 }
 
 namespace {

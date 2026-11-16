@@ -45,6 +45,16 @@ private:
   DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:
+  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
+  // d == q at the start of every cycle). seq: q = d.
+  struct Regs {
+    Uop inst_r[DECODE_WIDTH];
+    reg<1> inst_valid[DECODE_WIDTH];
+    reg<1> busy_table[TAG_NUM];
+  };
+  Regs d;
+  const Regs &q() const { return q_; }
+  Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_dispatch();  // wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register
   friend struct DisDigestAccess;  // lockstep test hook
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
@@ -56,10 +66,7 @@ public:
   void seq();
   // PMU (EXP-013): classify this cycle's DECODE_WIDTH dispatch slots into the event vector (read-only, after comb_fire)
   void pmu_slots(struct PmuVec &ev, bool recovering, bool recovering_by_flush, int &be_slots) const;
-  Uop inst_r[DECODE_WIDTH];
-  Uop inst_r_1[DECODE_WIDTH];
-  reg<1> inst_valid[DECODE_WIDTH];
-  wire<1> inst_valid_1[DECODE_WIDTH];
-  reg<1> busy_table[TAG_NUM];   // integer tags, then (FP=1) the FP tags
-  wire<1> busy_table_1[TAG_NUM];
+
+private:
+  Regs q_;
 };

@@ -6,6 +6,17 @@ class SimContext;
 
 class Idu {
 public:
+  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
+  // d == q at the start of every cycle). seq: q = d.
+  struct Regs {
+    reg<BR_MASK_WIDTH> now_br_mask;
+    reg<BR_MASK_WIDTH> br_mask_cp[MAX_BR_NUM];
+    reg<1> tag_vec[MAX_BR_NUM];
+    ExuIdIO br_latch;
+  };
+  Regs d;
+  const Regs &q() const { return q_; }
+  Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_decode();  // branch resolution (mispredict broadcast), then decode
   Idu(SimContext *ctx, int max_br = 1) {
     this->ctx = ctx;
@@ -21,19 +32,14 @@ public:
   void seq();              // 时钟跳变，状态更新
 
   // 状态
-  reg<BR_MASK_WIDTH> now_br_mask;
-  reg<BR_MASK_WIDTH> br_mask_cp[MAX_BR_NUM];
-  reg<1> tag_vec[MAX_BR_NUM];
-  ExuIdIO br_latch;
 
   // 下一周期状态
-  wire<BR_MASK_WIDTH> now_br_mask_1;
-  wire<BR_MASK_WIDTH> br_mask_cp_1[MAX_BR_NUM];
-  wire<1> tag_vec_1[MAX_BR_NUM];
-  ExuIdIO br_latch_1;
 
 private:
   // phases of one cycle, run in the order of the methods above
   void branch();
   void decode();
+
+private:
+  Regs q_;
 };
