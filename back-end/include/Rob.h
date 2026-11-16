@@ -23,6 +23,11 @@ struct RobStoredEntry {
   Uop uop;
 };
 
+// Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the Wires
+// each phase reads (in) and writes (out), and the outputs only this module drives.
+//   CONTRACT comb_commit  in: csr2rob dec_bcast in lsu2rob  out: rob2csr rob2dis rob_bcast rob_commit
+//   CONTRACT comb_update  in: dec_bcast dis2rob exu2rob    out: -
+//   CONTRACT owns: rob2csr rob2dis rob_bcast rob_commit
 class Rob {
 public:
   void comb_commit();  // the head: commit and its broadcasts
@@ -38,11 +43,21 @@ public:
   const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
   RobOut out;
 
-  // 状态
-  RobStoredEntry entry[ROB_BANK_NUM][ROB_LINE_NUM];
-
-  RobStoredEntry entry_1[ROB_BANK_NUM][ROB_LINE_NUM];
-  // Slots of entry_1 written this cycle; seq() copies only these back (entry_1 == entry at the start of a cycle).
+  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
+  // d == q at the start of every cycle). seq copies d to q (the entries only where written).
+  struct Regs {
+    RobStoredEntry entry[ROB_BANK_NUM][ROB_LINE_NUM];
+    // head entry, number of valid entries, wrap flag of the head
+    int c_head = 0, c_count = 0; bool c_hflag = false;
+    // control-flow instructions / fetch-block ends committed last cycle (still on their way to the BPU queues)
+    int c_prev_ctl = 0, c_prev_blk = 0;
+    int stall_cycle = 0;   // cycles without a commit (deadlock watchdog)
+    RobStoredEntry &cent(int idx) { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
+    const RobStoredEntry &cent(int idx) const { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
+  };
+  Regs d;
+  const Regs &q() const { return q_; }
+  // Slots of d.entry written this cycle; seq() copies only these (d == q at the start of a cycle).
   static constexpr int kDirtyWords = (ROB_BANK_NUM * ROB_LINE_NUM + 63) / 64;
   uint64_t dirty_[kDirtyWords] = {};
   bool dirty_all_ = false;
@@ -52,13 +67,6 @@ public:
   }
   void touch_all() { dirty_all_ = true; }
 
-  // head entry, number of valid entries, wrap flag of the head
-  int c_head = 0, c_count = 0; bool c_hflag = false;
-  int c_head_1 = 0, c_count_1 = 0; bool c_hflag_1 = false;
-  // control-flow instructions / fetch-block ends committed last cycle (still on their way to the BPU queues)
-  int c_prev_ctl = 0, c_prev_blk = 0, c_prev_ctl_1 = 0, c_prev_blk_1 = 0;
-  RobStoredEntry &cent(int idx) { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
-  RobStoredEntry &cent_1(int idx) { return entry_1[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
   void ctouch(int idx) { touch(idx % ROB_BANK_NUM, idx / ROB_BANK_NUM); }
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
@@ -72,7 +80,7 @@ private:
   void flush();
   void begin_cycle();   // called by ready(), the first phase of the cycle
   FtqPc head_pc_{};   // the FTQ read of the head (comb_commit)
-  int stall_cycle = 0;
-  bool is_empty() const { return c_count == 0; }
-  bool is_full() const { return c_count == ROB_NUM; }
+  Regs q_;
+  bool is_empty() const { return q_.c_count == 0; }
+  bool is_full() const { return q_.c_count == ROB_NUM; }
 };

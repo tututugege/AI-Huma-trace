@@ -139,7 +139,6 @@ void BackTop::comb_outputs() {
     if (out.commit_entry[i].valid && out.flush) {
       // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)
       out.commit_entry[i].uop.diag_val = out.redirect_pc;
-      rob_commit.commit_entry[i].uop.diag_val = out.redirect_pc;
     }
   }
 }
