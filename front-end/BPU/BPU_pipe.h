@@ -167,7 +167,6 @@ struct BlkB {                    // second block of a fetch group (FE_PAIR)
   S0Guess g;
   Ckpt ck;
   Tage::Idx tix[FW];
-  MainRaw raw;
 };
 
 struct Blk {
@@ -178,7 +177,6 @@ struct Blk {
   S0Guess g;
   Ckpt ck;
   Tage::Idx tix[FW];
-  MainRaw raw;
 };
 
 struct Decision {                // outcome of the last stage, computed from registers only
@@ -226,6 +224,7 @@ class BpuPipe {
     uint16_t blk_seq = 0;              // BPA_REPAIR: next block sequence number
     uint8_t epoch = 0;                 // BPA_REPAIR: bumped whenever spec is overwritten by arch (the history ring is re-based: older checkpoints no longer index it)
     Blk R[MAIN_LAT];                   // R[0] = S1, R[1] = S2
+    MainRaw raw, raw_b;                // S1 array read data of the block in S2 (and of its second block); valid with R[1]
     HistRing spec, arch;
     RasQ sras;
     RasC aras;
@@ -631,13 +630,13 @@ class BpuPipe {
     d.out = MainOut{}; d.outB = MainOut{}; d.oout = MainOut{}; d.ock = Ckpt{}; d.obase = 0; d.og = S0Guess{};
     d.valid = true;
     d.blk = &b;
-    main_select(b, b.raw, d.out);
+    main_select(b, (*stp_).raw, d.out);
     int why;
     d.ovr = disagree(d.out, b.g, why);
     d.ock = b.ck; d.oout = d.out; d.obase = b.base; d.og = b.g;
     if (!d.ovr && b.pair) {   // FE_PAIR: the first block is confirmed, so the second one is checked as well
       d.pair = true;
-      main_select(b.b2, b.b2.raw, d.outB);
+      main_select(b.b2, (*stp_).raw_b, d.outB);
       S0Guess g2 = b.b2.g;
       const int lenA = d.out.slot + 1, lenB = d.outB.taken ? d.outB.slot + 1 : int((b.b2.bnd - b.b2.base) >> SLOT_SHIFT);
       if (!d.out.taken || lenA != b.g.slot + 1 || lenA + lenB > FW) {   // the final prediction does not fit the fetched group: back to one block, the second one is fetched again as a normal block
@@ -669,14 +668,13 @@ class BpuPipe {
     return true;
   }
 
-  // n = s except R and pq (the caller rebuilds R; only pq[0..pq_n) are live)
+  // n = s except R, raw and pq (the caller rebuilds R and raw; only pq[0..pq_n) are live)
   static void copy_state_but_R(State &n, const State &s) {
     static_assert(std::is_trivially_copyable_v<State>);
     char *dp = reinterpret_cast<char *>(&n);
     const char *sp = reinterpret_cast<const char *>(&s);
     const size_t a1 = reinterpret_cast<char *>(&n.pq) - dp, b1 = a1 + sizeof(n.pq);
-    const size_t a2 = reinterpret_cast<char *>(&n.R) - dp, b2 = a2 + sizeof(n.R);
-    static_assert(offsetof(State, pq) < offsetof(State, R), "State layout");
+    const size_t a2 = reinterpret_cast<char *>(&n.R) - dp, b2 = reinterpret_cast<char *>(&n.raw_b) - dp + sizeof(n.raw_b);   // R, raw, raw_b are adjacent
     std::memcpy(dp, sp, a1);
     std::memcpy(dp + a1, sp + a1, size_t(s.pq_n) * sizeof(Ckpt));
     std::memcpy(dp + b1, sp + b1, a2 - b1);
@@ -781,8 +779,8 @@ class BpuPipe {
     if ((*stp_).R[0].valid) {
       count_reads((*stp_).R[0], t);
       bb_reads((*stp_).R[0], t);
-      main_read((*stp_).R[0], n.R[1].raw);
-      if ((*stp_).R[0].pair) main_read((*stp_).R[0].b2, n.R[1].b2.raw);
+      main_read((*stp_).R[0], n.raw);
+      if ((*stp_).R[0].pair) main_read((*stp_).R[0].b2, n.raw_b);
     }
 
     if (refetch) {
