@@ -5,7 +5,6 @@
 
 void Front2Back::init() {
   q_ = {};
-  d = {};
 }
 
 void Front2Back::comb() {
@@ -36,7 +35,9 @@ void Front2Back::comb() {
   o.front_tq_free = fo.commit_tq_free;
 }
 
-void Front2Back::comb_hold() {
+// The clock edge: the hold register.
+void Front2Back::seq() {
+  Regs &d = q_;
   d.hold_valid = false;
   if (in.back_out->mispred || in.back_out->flush || !in.back_out->stall) {
     return;
@@ -50,9 +51,7 @@ void Front2Back::comb_hold() {
   }
 }
 
-void Front2Back::seq() { q_ = d; }
 
 void Front2Back::restart() {
   q_.hold_valid = false;
-  d.hold_valid = false;
 }

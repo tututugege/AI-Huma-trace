@@ -147,8 +147,6 @@ void SimCpu::cycle() {
   back.idu->comb_fire();
   back.lsu->comb_requests();
   back.lsu->comb_commit_store();
-  f2b.comb_hold();
-  b2f.comb();
   mem_subsystem.ptw_block.comb_request();
   mem_subsystem.mem_route_block.comb_request();
   mem_subsystem.dcache_.comb_stage1();

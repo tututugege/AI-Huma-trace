@@ -6,9 +6,7 @@
 void Back2Front::init(CsrStatusIO *csr) {
   csr_status = csr;
   q_ = {};
-  d = {};
   q_.in.csr_status = csr;
-  d.in.csr_status = csr;
 }
 
 void Back2Front::comb_front() {
@@ -23,9 +21,9 @@ void Back2Front::comb_front() {
 }
 
 // The front end's inputs of the next cycle: the redirect and the BPU training of the back end's commit.
-void Back2Front::comb() {
+void Back2Front::seq() {
+  Back2FrontRegs &d = q_;   // updated in place (fields not refreshed keep their value)
   const auto &bo = *in.back_out;
-  d.in = q_.in;
   d.stall = bo.stall;
   d.in.ctrl.fifo_read_enable = false;
   d.in.csr_status = csr_status;
@@ -93,7 +91,5 @@ void Back2Front::comb() {
 void Back2Front::restart_at(pc_t pc) {
   q_.in.redirect.valid = true;
   q_.in.redirect.address = pc;
-  d.in = q_.in;
   q_.stall = false;
-  d.stall = false;
 }

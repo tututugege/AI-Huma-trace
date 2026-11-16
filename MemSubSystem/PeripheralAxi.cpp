@@ -6,7 +6,6 @@
 
 void PeripheralAxi::init() {   // (in / out are the port bindings, set by MemSubsystem::init)
   q_ = {};
-  d = {};
   if (out.resp != nullptr) {
     *out.resp = {};
   }
@@ -109,15 +108,13 @@ void PeripheralAxi::comb_outputs() {
   }
 }
 
-void PeripheralAxi::comb_inputs() {
-    const Regs &q = q_;
-  d = q;
+// The clock edge: the MMIO request taken (a modeled device answers at once), the AXI handshake, the response.
+void PeripheralAxi::seq() {
+  const Regs q = q_;   // the registers of this cycle
+  Regs &d = q_;        // updated in place
 
   if (q.resp_valid) {
     d.resp_valid = false;
-    if (out.resp != nullptr) {
-      out.resp->ready = false;
-    }
     return;
   }
 
@@ -178,14 +175,6 @@ void PeripheralAxi::comb_inputs() {
     d.resp_valid = true;
     d.rdata = extract_read_data(in.read->resp.data[0], q.func3);
   }
-
-  if (out.resp != nullptr) {
-    out.resp->ready = !d.busy && !d.resp_valid;
-  }
-}
-
-void PeripheralAxi::seq() {
-  q_ = d;
 }
 
 void PeripheralAxi::comb_commit_store() {
@@ -197,5 +186,4 @@ void PeripheralAxi::comb_commit_store() {
 
 void PeripheralAxi::comb() {
   comb_outputs();
-  comb_inputs();
 }

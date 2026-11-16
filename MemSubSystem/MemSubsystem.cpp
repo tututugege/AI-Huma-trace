@@ -471,8 +471,8 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
 void MemSubsystem::seq() {
   ptw_block.seq();
   dcache_domain_seq(true);
+  peripheral_axi_.seq();   // (its MMIO load reads the devices before their tick)
   peripheral_model_.tick();
-  peripheral_axi_.seq();
   mem_route_block.seq();
   dtlb_walk_port_inst->reset_seq_input();
   itlb_walk_port_inst->reset_seq_input();

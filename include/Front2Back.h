@@ -9,7 +9,6 @@
 // when the back end stalls without a redirect, the group it saw minus the lanes it took.
 // Comb phases in its own ports (SimCpu::init binds them):
 //   CONTRACT comb  in: in.can_read in.front_out.FIFO_valid in.front_out.commit_stall in.front_out.commit_tq_free in.front_out.commit_upd_free in.front_out.inst_valid in.front_out.instructions in.front_out.is_rvc in.front_out.meta in.front_out.page_fault_inst in.front_out.pc in.front_out.predict_dir in.front_out.predict_next_fetch_address out.to_back.valid  out: out.to_back out.to_back.front_stall out.to_back.front_tq_free out.to_back.front_upd_free out.to_back.inst out.to_back.is_rvc out.to_back.meta out.to_back.page_fault_inst out.to_back.pc out.to_back.predict_dir out.to_back.predict_next_fetch_address out.to_back.valid
-//   CONTRACT comb_hold  in: in.back_out.fire in.back_out.flush in.back_out.mispred in.back_out.stall out.to_back  out: -
 class Front2Back {
 public:
   struct Regs {
@@ -27,10 +26,9 @@ public:
 
   void init();
   void comb();        // the group to the back end
-  void comb_hold();   // after the back end: the hold register's next value
-  void seq();
+  void seq();         // after the back end: the hold register
   void restart();     // between cycles (a switch from fast mode): a held group is dropped
 
 private:
-  Regs q_, d;
+  Regs q_;
 };

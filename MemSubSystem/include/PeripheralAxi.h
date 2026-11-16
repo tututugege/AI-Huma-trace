@@ -48,14 +48,12 @@ public:
 
   PeripheralAxiIn in;
   PeripheralAxiOut out;
-  using Regs = PeripheralAxiState;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
-  Regs d;
+  using Regs = PeripheralAxiState;   // registers: read by comb, updated only by seq / init
   const Regs &q() const { return q_; }
 
 private:
   Regs q_;
   void comb_outputs();
-  void comb_inputs();
   static uint8_t access_size_bytes(uint8_t func3);
   static uint32_t pack_write_data(uint32_t data, uint8_t func3);
   static uint64_t pack_write_strb(uint8_t func3);

@@ -85,7 +85,10 @@ struct MemRouteBlockState {
 class MemRouteBlock {
 public:
   using Regs = MemRouteBlockState;   // registers: q (read in comb through a const reference, written only by seq / init) and d (comb writes it; d == q at the start of every cycle)
-  Regs d;
+  // wires of the cycle (seq records them): the walker's wait for a fill (-1: unchanged), the injected request
+  int wait_walk_ = -1;
+  Owner req_owner_ = Owner::NONE;
+  uint32_t req_addr_ = 0;
   const Regs &q() const { return q_; }
   MemRouteIn in;
   MemRouteOut out;
