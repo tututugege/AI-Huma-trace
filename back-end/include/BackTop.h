@@ -64,8 +64,8 @@ public:
   std::unique_ptr<RealLsu> lsu;
 
   void init();
-  void clear_comb_inputs();
-  // back.in at the start of the cycle: cleared, the MMIO response of the previous cycle (its register)
+  // back.in at the start of the cycle: no fetch group (valid cleared), no D-cache response, the MMIO response of the
+  // previous cycle (its register)
   void comb_in_regs();
   struct InRegs {
     PeripheralRespIO peripheral_resp{};   // the MMIO response (the memory subsystem drives it after BackTop::comb())

@@ -120,10 +120,10 @@ void BackTop::comb_csr_status() {
   out.privilege = csr_status.privilege;
 }
 
-void BackTop::clear_comb_inputs() { in = BackIn{}; }
-
 void BackTop::comb_in_regs() {
-  clear_comb_inputs();
+  // the fetch group: valid only (Front2Back drives the other fields with it); the D-cache response is filled in parts
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) in.valid[i] = false;
+  in.dcache2lsu = {};
   in.peripheral_resp = in_q_.peripheral_resp;
 }
 

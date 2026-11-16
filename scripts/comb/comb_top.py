@@ -152,8 +152,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
     S = {}
     S['back.comb'] = from_rows(back_rows[:back_early], back_key)
     S['back.comb_late'] = from_rows(back_rows[back_early:], back_key)
-    S['back.clear_comb_inputs'] = (set(), {'back.in'})
-    S['back.comb_in_regs'] = ({'back.in_q_'}, {'back.in'})
+    S['back.comb_in_regs'] = ({'back.in_q_'}, {'back.in.valid', 'back.in.dcache2lsu', 'back.in.peripheral_resp'})
     S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.read_core_q'] = (set(), set())
     fr, fw = from_rows(FRONT_ROWS, front_key)
