@@ -20,12 +20,10 @@ struct BackIn;
 // each phase reads (in) and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_commit  in: in.csr2rob in.dec_bcast in.lsu2rob in.top_in.front_stall in.top_in.front_tq_free in.top_in.front_upd_free  out: out.rob2csr out.rob2dis out.rob_bcast out.rob_commit
 //   CONTRACT comb_redirect  in: in.csr2front in.dec_bcast in.ftq_commit_info in.idu_br_latch in.pre2front out.top_out.commit_entry out.top_out.flush out.top_out.redirect_pc out.top_out.rf_slot out.top_out.rf_valid  out: out.top2csr out.top_out.commit_entry out.top_out.commit_extra out.top_out.commit_ftq out.top_out.fence_i out.top_out.fire out.top_out.flush out.top_out.itlb_flush out.top_out.mispred out.top_out.redirect_pc out.top_out.rf_blk out.top_out.rf_is_rvc out.top_out.rf_pc out.top_out.rf_slot out.top_out.rf_type out.top_out.rf_valid out.top_out.stall
-//   CONTRACT comb_update  in: in.dec_bcast in.dis2rob in.exu2rob  out: -
 class Rob {
 public:
   void comb_commit();  // the head: commit and its broadcasts
   void comb_redirect();
-  void comb_update();  // completions, branch recovery, enqueue, flush
   Rob(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   void init();
@@ -57,8 +55,8 @@ public:
   } in;
   const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
 
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq copies d to q (the entries only where written).
+  // Registers (q): read by the comb phases, updated only by seq (the RTL's rob_entry always_ff: enqueue, write-back,
+  // branch clear, commit clear, flush).
   struct Regs {
     RobStoredEntry entry[ROB_BANK_NUM][ROB_LINE_NUM];
     // head entry, number of valid entries, wrap flag of the head
@@ -69,31 +67,23 @@ public:
     RobStoredEntry &cent(int idx) { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
     const RobStoredEntry &cent(int idx) const { return entry[idx % ROB_BANK_NUM][idx / ROB_BANK_NUM]; }
   };
-  Regs d;
   const Regs &q() const { return q_; }
-  // Slots of d.entry written this cycle; seq() copies only these (d == q at the start of a cycle).
-  static constexpr int kDirtyWords = (ROB_BANK_NUM * ROB_LINE_NUM + 63) / 64;
-  uint64_t dirty_[kDirtyWords] = {};
-  bool dirty_all_ = false;
-  void touch(int bank, int line) {
-    const int k = bank * ROB_LINE_NUM + line;
-    dirty_[k >> 6] |= 1ull << (k & 63);
-  }
-  void touch_all() { dirty_all_ = true; }
-
-  void ctouch(int idx) { touch(idx % ROB_BANK_NUM, idx / ROB_BANK_NUM); }
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
 private:
-  // phases of one cycle, run in the order of the methods above
   void ready();
   void commit();
+  // the clock edge (seq), in this order: write-back completion bits, mispredict recovery, enqueue, flush
   void complete();
-  void branch();
-  void fire();
-  void flush();
-  void begin_cycle();   // called by ready(), the first phase of the cycle
+  void branch(int head, int count, int &c_count);
+  void fire(int &c_count);
+  void flush(int &c_head, int &c_count, bool &c_hflag);
   FtqPc head_pc_{};   // the FTQ read of the head (comb_commit)
+  struct CommitWires {   // what comb_commit decided, applied by seq
+    int n = 0;                         // entries retiring from the head
+    int prev_ctl = 0, prev_blk = 0;    // their control-flow instructions / fetch-block ends (the BPU credits)
+    int stall_cycle = 0;               // cycles without a commit, this one included
+  } cw_;
   Regs q_;
   bool is_empty() const { return q_.c_count == 0; }
   bool is_full() const { return q_.c_count == ROB_NUM; }

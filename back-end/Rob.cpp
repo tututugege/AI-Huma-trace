@@ -45,28 +45,15 @@ inline void check_load_alignment(const Uop &u, const char *msg) {
 void Rob::init() {
   q_.stall_cycle = 0;
   for (int i = 0; i < ROB_LINE_NUM; i++)
-    for (int j = 0; j < ROB_BANK_NUM; j++) {
-      q_.entry[j][i].valid = false;
-      d.entry[j][i] = q_.entry[j][i];  // d.entry equals q_.entry at the start of every cycle
-    }
-  std::memset(dirty_, 0, sizeof(dirty_));
-  dirty_all_ = false;
-  q_.c_head = d.c_head = q_.c_count = d.c_count = 0;
-  q_.c_hflag = d.c_hflag = false;
-  d = q_;
-}
-
-// Working pointers start from the registered ones; d.entry already equals q.entry (seq() copies back the touched slots).
-void Rob::begin_cycle() {
-  const Regs &q = q_;
-  d.c_head = q.c_head; d.c_count = q.c_count; d.c_hflag = q.c_hflag;
+    for (int j = 0; j < ROB_BANK_NUM; j++) q_.entry[j][i].valid = false;
+  q_.c_head = q_.c_count = 0;
+  q_.c_hflag = false;
 }
 
 // Dispatch/CSR handshake: ready/empty, stall when a flush-type instruction heads the ROB, and the top-down
 // attribution of the oldest incomplete instruction (core bound vs memory bound vs cache miss).
 void Rob::ready() {
   const Regs &q = q_;
-  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   out.rob2dis.stall = false;
   out.rob2csr.commit = false;
   out.rob2csr.interrupt_resp = false;
@@ -153,12 +140,13 @@ void Rob::commit() {
         ctl += is_ctl ? 1 : 0;
         n++;
       }
-      d.c_prev_ctl = ctl; d.c_prev_blk = blocks;
+      cw_.prev_ctl = ctl; cw_.prev_blk = blocks;
     }
   }
   if (single) n = 1;
-  if (single || n == 0) { d.c_prev_ctl = 0; d.c_prev_blk = 0; }
-  if (single) { const Uop &h = q.cent(q.c_head).uop; const InstType ty = rob_type(h); d.c_prev_ctl = (ty == BR || ty == JAL || ty == JALR); d.c_prev_blk = h.ftq_is_last ? 1 : 0; }
+  if (single || n == 0) { cw_.prev_ctl = 0; cw_.prev_blk = 0; }
+  if (single) { const Uop &h = q.cent(q.c_head).uop; const InstType ty = rob_type(h); cw_.prev_ctl = (ty == BR || ty == JAL || ty == JALR); cw_.prev_blk = h.ftq_is_last ? 1 : 0; }
+  cw_.n = n;
   out.rob2csr.interrupt_resp = single && intr;
   bc.interrupt = single && intr;
 
@@ -166,14 +154,6 @@ void Rob::commit() {
     const int idx = (q.c_head + k) % ROB_NUM;
     check_load_alignment(q.cent(idx).uop, "DUT: Load address misaligned at commit!");
     out.rob_commit.commit_entry[k].valid = true;
-    d.cent(idx).valid = false;
-    ctouch(idx);
-  }
-  if (n > 0) {
-    d.stall_cycle = 0;
-    d.c_head = (q.c_head + n) % ROB_NUM;
-    if (q.c_head + n >= ROB_NUM) d.c_hflag = !q.c_hflag;
-    d.c_count = q.c_count - n;
   }
   if (single) single_actions(q.cent(q.c_head).uop);
 
@@ -184,7 +164,8 @@ void Rob::commit() {
   out.rob2dis.rob_flag = q.c_hflag ^ (q.c_head + q.c_count >= ROB_NUM);
   out.rob2dis.free_cnt = ROB_NUM - q.c_count;
 
-  if (++d.stall_cycle > 50000) {
+  cw_.stall_cycle = (n > 0 ? 0 : q.stall_cycle) + 1;
+  if (cw_.stall_cycle > 50000) {
     std::fprintf(stderr, "ROB deadlock at cycle %llu: count=%d head=%d n=%d single=%d front_stall=%d\n",
                  (unsigned long long)ctx->perf.cycle, q.c_count, q.c_head, n, (int)single, (int)front_stall);
     std::exit(1);   // (the watchdog: no commit for 50000 cycles)
@@ -235,8 +216,7 @@ void Rob::complete() {
     const Uop &wb = in.exu2rob->entry[i].uop;
     const int bank = get_rob_bank(wb.rob_idx), line = get_rob_line(wb.rob_idx);
     const auto bit = rob_cplt_mask_from_issue_port(i);
-    Uop &u = d.entry[bank][line].uop;
-    touch(bank, line);
+    Uop &u = q_.entry[bank][line].uop;
     if (wb.rob_defer) continue;  // speculative load write-back: the completion bit is set by its second write-back
     Assert((u.cplt_mask & bit) == 0 && "ROB: duplicate completion bit set");
     u.cplt_mask |= bit;
@@ -268,69 +248,65 @@ void Rob::complete() {
   }
 }
 
-// Branch mispredict: the tail moves to the entry right after the branch; everything younger is invalidated.
-void Rob::branch() {
-  const Regs &q = q_;
+// Branch mispredict: the tail moves to the entry right after the branch; everything younger is invalidated (head /
+// count: the registered ones).
+void Rob::branch(int head, int count, int &c_count) {
   if (!in.dec_bcast->mispred || out.rob_bcast.flush) return;
-  tbhook::on_mispredict((uint64_t)q.entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)][get_rob_line(in.dec_bcast->redirect_rob_idx)].uop->dbg.inst_idx);
+  tbhook::on_mispredict((uint64_t)q_.entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)][get_rob_line(in.dec_bcast->redirect_rob_idx)].uop->dbg.inst_idx);
   const int bidx = static_cast<int>(in.dec_bcast->redirect_rob_idx);
-  const int keep = (bidx - q.c_head + ROB_NUM) % ROB_NUM + 1;  // entries up to and including the branch
-  Assert(keep <= q.c_count && "ROB: mispredicted branch outside the valid range");
-  d.cent(bidx).uop.ftq_is_last = true;   // everything after the branch in its fetch block is flushed
-  ctouch(bidx);
-  for (int k = keep; k < q.c_count; k++) {
-    const int idx = (q.c_head + k) % ROB_NUM;
-    d.cent(idx).valid = false;
-    ctouch(idx);
-  }
-  d.c_count = keep;  // commit is blocked in a mispredict cycle, so the head does not move
+  const int keep = (bidx - head + ROB_NUM) % ROB_NUM + 1;  // entries up to and including the branch
+  Assert(keep <= count && "ROB: mispredicted branch outside the valid range");
+  q_.cent(bidx).uop.ftq_is_last = true;   // everything after the branch in its fetch block is flushed
+  for (int k = keep; k < count; k++) q_.cent((head + k) % ROB_NUM).valid = false;
+  c_count = keep;  // commit is blocked in a mispredict cycle, so the head does not move
 }
 
 // Dispatch enqueues at the tail: the fired slots are the first m valid slots; Dispatch numbered them tail, tail+1, ...
-void Rob::fire() {
+void Rob::fire(int &c_count) {
   if (!out.rob2dis.ready) return;
   int m = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!in.dis2rob->dis_fire[i]) continue;
     const int idx = (out.rob2dis.enq_idx + m) % ROB_NUM;
     Assert(static_cast<int>(in.dis2rob->uop[i].rob_idx) == idx && "ROB: dispatch numbering mismatch");
-    auto &e = d.cent(idx);
+    auto &e = q_.cent(idx);
     e.valid = true;
     e.uop = in.dis2rob->uop[i];
     e.uop.cplt_mask = 0;
-    ctouch(idx);
     tbhook::on_dispatch((uint64_t)e.uop->dbg.inst_idx, e.uop->dbg.pc, e.uop->dbg.instruction, idx, ilen_of(e.uop->is_rvc));
     m++;
   }
-  d.c_count += m;
-  Assert(d.c_count <= ROB_NUM && "ROB: overflow");
+  c_count += m;
+  Assert(c_count <= ROB_NUM && "ROB: overflow");
 }
 
 // A global flush empties the ROB and resets the pointers (overrides any recovery or enqueue above).
-void Rob::flush() {
+void Rob::flush(int &c_head, int &c_count, bool &c_hflag) {
   if (!out.rob_bcast.flush) return;
   for (int i = 0; i < ROB_BANK_NUM; i++)
-    for (int j = 0; j < ROB_LINE_NUM; j++) d.entry[i][j].valid = false;
-  touch_all();
-  d.c_head = d.c_count = 0;
-  d.c_hflag = false;
+    for (int j = 0; j < ROB_LINE_NUM; j++) q_.entry[i][j].valid = false;
+  c_head = c_count = 0;
+  c_hflag = false;
 }
 
+// The clock edge: the commit decided by comb_commit, then the write-backs, the mispredict recovery, the enqueue and the
+// flush of this cycle (the RTL's rob_entry always_ff and pointer registers).
 void Rob::seq() {
-  if (dirty_all_) {
-    for (int i = 0; i < ROB_BANK_NUM; i++)
-      for (int j = 0; j < ROB_LINE_NUM; j++) q_.entry[i][j] = d.entry[i][j];
-  } else {
-    for (int w = 0; w < kDirtyWords; w++)
-      for (uint64_t m = dirty_[w]; m; m &= m - 1) {
-        const int k = w * 64 + __builtin_ctzll(m);
-        q_.entry[k / ROB_LINE_NUM][k % ROB_LINE_NUM] = d.entry[k / ROB_LINE_NUM][k % ROB_LINE_NUM];
-      }
+  const int head = q_.c_head, count = q_.c_count;
+  int c_head = head, c_count = count;
+  bool c_hflag = q_.c_hflag;
+  for (int k = 0; k < cw_.n; k++) q_.cent((head + k) % ROB_NUM).valid = false;
+  if (cw_.n > 0) {
+    c_head = (head + cw_.n) % ROB_NUM;
+    if (head + cw_.n >= ROB_NUM) c_hflag = !c_hflag;
+    c_count = count - cw_.n;
   }
-  std::memset(dirty_, 0, sizeof(dirty_));
-  dirty_all_ = false;
-  q_.c_head = d.c_head; q_.c_count = d.c_count; q_.c_hflag = d.c_hflag;
-  q_.c_prev_ctl = d.c_prev_ctl; q_.c_prev_blk = d.c_prev_blk; q_.stall_cycle = d.stall_cycle;
+  q_.c_prev_ctl = cw_.prev_ctl; q_.c_prev_blk = cw_.prev_blk; q_.stall_cycle = cw_.stall_cycle;
+  complete();
+  branch(head, count, c_count);
+  fire(c_count);
+  flush(c_head, c_count, c_hflag);
+  q_.c_head = c_head; q_.c_count = c_count; q_.c_hflag = c_hflag;
 }
 
 // PMU (EXP-013): same "oldest incomplete instruction" as ready(); also the number of valid entries.
@@ -414,12 +390,4 @@ void Rob::comb_redirect() {
       out.top_out->commit_entry[i].uop.diag_val = out.top_out->redirect_pc;
     }
   }
-}
-
-// completions, branch recovery, enqueue, flush
-void Rob::comb_update() {
-  complete();
-  branch();
-  fire();
-  flush();
 }

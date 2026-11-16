@@ -150,7 +150,6 @@ void SimCpu::cycle() {
   back.pre->comb_fire();
   back.lsu->comb_requests();
   back.lsu->comb_commit_store();
-  back.rob->comb_update();
   back.exu->comb_pipeline();
   back.isu->comb_enq();
   f2b.comb_hold();
