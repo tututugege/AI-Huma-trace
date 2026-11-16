@@ -32,6 +32,8 @@ TOPS = {
                         'csr_interrupt_inject_io': 'back.csr_interrupt_inject_io'}),
     'front': dict(cls='FrontCore', bind=[('FrontCore', 'FrontCore'), ('FrontCore', 'bind')], prefix='front.core.',
                   call='front.core->{m}.', own='{m}.', alias={'in': 'front.in', 'rd': 'front.read_data', 'out': 'front.out'}),
+    'mem_subsystem': dict(cls='MemSubsystem', bind=[('MemSubsystem', 'init')], prefix='mem_subsystem.',
+                          call='mem_subsystem.{m}.', own='{m}.', alias=None),   # alias: its pointer members (SimCpu::init)
 }
 MODULES = [   # (path, class), in each top's tie-break order
     ('back.pre', 'PreIduQueue'), ('back.rename', 'Ren'), ('back.idu', 'Idu'), ('back.lsu', 'RealLsu'),
@@ -39,13 +41,21 @@ MODULES = [   # (path, class), in each top's tie-break order
     ('front.core.ctrl', 'FrontControl'), ('front.core.bpu_pipe', 'BpuPipe'), ('front.core.fa_port', 'FetchAddrPort'),
     ('front.core.ptab_port', 'PtabPort'), ('front.core.inst_port', 'InstPort'), ('front.core.f2b_port', 'F2bPort'),
     ('front.core.icache', 'ICacheTop'), ('front.core.checker', 'FrontChecker'),
+    ('mem_subsystem.wb_', 'WriteBuffer'), ('mem_subsystem.mshr_', 'MSHR'), ('mem_subsystem.dcache_', 'RealDcache'),
+    ('mem_subsystem.mem_route_block', 'MemRouteBlock'), ('mem_subsystem.ptw_block', 'MemPtwBlock'),
+    ('mem_subsystem.peripheral_axi_', 'PeripheralAxi'), ('mem_subsystem.peripheral_model_', 'PeripheralModel'),
 ]
 TOP_STRUCTS = {'back.in', 'back.out', 'front.in', 'front.out', 'front.read_data'}   # a port at one of them: per field
+FIELD_PORTS = {'mem_subsystem.dcache_mshr_io_', 'mem_subsystem.dcache_wb_io_'}   # written by two phases: per field (also
+#   an AXI master port of the interconnect: per channel field, req.<f> / resp.<f>)
 
 _src = None
 def src():
     global _src
-    if _src is None: _src = Src(ROOT, ['back-end', 'front-end', 'include', 'MemSubSystem'])
+    if _src is None:
+        _src = Src(ROOT, ['back-end', 'front-end', 'include', 'MemSubSystem'])
+        for f in os.listdir(ROOT):   # SimCpu.cpp, AxiSubsystem.cpp, ...
+            if f.endswith('.cpp'): _src.t[os.path.join(ROOT, f)] = open(os.path.join(ROOT, f), errors='ignore').read()
     return _src
 
 
@@ -75,7 +85,7 @@ def ports(cls):
         if not m: continue
         blk = strip_comments(Src.block(body, m.end() - 1)[1:-1])
         for st in blk.split(';'):
-            st = st.split('=')[0].strip()
+            st = re.sub(r'\{[^{}]*\}\s*$', '', st.split('=')[0].strip()).strip()   # (a {} initializer)
             if not st or '(' in st and not re.search(r'\(\s*&', st): continue
             ptr = '*' in st
             for part in split_top(re.sub(r'^.*?(?=[\w*&(]+\s*(?:\[[^\]]*\])*\s*$)', '', st) if ',' not in st else st, ','):
@@ -84,12 +94,28 @@ def ports(cls):
     return res
 
 
+def norm(e):
+    """a C++ access path as a SimCpu path: -> as ., an accessor x() as x, a master index kept ([MASTER_X]), others dropped"""
+    e = re.sub(r'\s+', '', e.strip().lstrip('&')).replace('->', '.')
+    e = re.sub(r'\[(?:\w+::)*(MASTER_\w+)\]', r'<\1>', e)
+    e = re.sub(r'\[[^\]]*\]', '', e).replace('()', '')
+    return re.sub(r'<(MASTER_\w+)>', r'[\1]', e)
+
+
+def sim_bindings():
+    """SimCpu::init's bindings of the tops' pointer members: {'<top>.<member>': path}"""
+    b = src().body('SimCpu', 'init')
+    return {m.group(1): norm(m.group(2)) for m in re.finditer(r'\b(mem_subsystem\.\w+)\s*=\s*&([^;]+);', strip_comments(b[1]))}
+
+
 def resolve(expr, top):
     """a binding's right-hand side as a SimCpu path"""
-    e = expr.strip().lstrip('&').strip()
-    e = re.sub(r'\[[^\]]*\]', '', e).replace('->', '.').replace('q()', 'q')
+    e = norm(expr)
     head = e.split('.')[0]
     al = TOPS[top]['alias']
+    if al is None:   # the top's pointer members bound by SimCpu::init
+        sb = sim_bindings()
+        al = {k.split('.', 1)[1]: v for k, v in sb.items() if k.startswith(TOPS[top]['prefix'])}
     if head in al: return al[head] + e[len(head):]
     return TOPS[top]['prefix'] + e
 
@@ -138,6 +164,23 @@ def member_types(cls):
     return out
 
 
+def callee_fields(fn, idx, cls):
+    """the fields <a>.<b> a function writes through its parameter idx (when it writes only through <param>.<a>.<b> = ...)"""
+    b = src().body(cls, fn) or src().body(None, fn)
+    if not b: return None
+    params = [x for x in split_top(b[0], ',') if x.strip()]
+    if idx >= len(params): return None
+    pn = re.search(r'(\w+)\s*$', params[idx].strip()).group(1)
+    body = strip_comments(b[1])
+    uses = re.findall(r'(?<![\w.>])' + pn + r'\b([^;]*)', body)
+    out = set()
+    for u in uses:
+        m = re.match(r'\.(\w+)\.(\w+)\s*=(?!=)', u)
+        if not m: return None   # another use: not a field-wise write
+        out.add(f'{m.group(1)}.{m.group(2)}')
+    return out
+
+
 def scan(mod, cls, phase, bind):
     """read / write items of one phase, in port names"""
     body = strip_comments(closure(cls, phase))
@@ -146,10 +189,12 @@ def scan(mod, cls, phase, bind):
     pt = ports(cls)
     r, w = set(), set()
     def item(d, port, tail):
-        bp = bind.get((mod, d, port))
-        if bp in TOP_STRUCTS:
-            m = re.match(r'\s*(?:->|\)\s*\.)\s*(\w+)', tail)
-            if m: return f'{d}.{port}.{m.group(1)}'
+        bp = bind.get((mod, d, port)) or ''
+        if bp in TOP_STRUCTS or bp in FIELD_PORTS or bp.startswith('axi.interconnect.'):
+            m = re.match(r'\s*(?:->|\)\s*\.)\s*(\w+)(?:\s*(?:\[[^\]]*\])*\s*\.\s*(\w+))?', tail)
+            if m:
+                two = bp.startswith('axi.interconnect.') and m.group(2)   # an AXI master port: req.<f> / resp.<f>
+                return f'{d}.{port}.{m.group(1)}' + (f'.{m.group(2)}' if two else '')
         return f'{d}.{port}'
     # local reference aliases of a port: auto &x = out.X...; (const: read only)
     aliases = {}
@@ -171,18 +216,23 @@ def scan(mod, cls, phase, bind):
             if call[2]: pw = s.params_written(call[0], types[call[2]]) if call[2] in types else None
             else: pw = s.params_written(call[0], cls) or s.params_written(call[0])
             if pw is not None and call[1] < len(pw) and pw[call[1]] and not re.match(r'\s*->', tail):
-                w.add(k)
+                fine = callee_fields(call[0], call[1], cls) if k.count('.') == 1 and (bind.get((mod, d, port)) or '').startswith('axi.interconnect.') else None
+                w |= {f'{k}.{f}' for f in fine} if fine else {k}   # (a helper that writes some fields of a master port)
                 if pw[call[1]] == 'rw': r.add(k)
                 continue
-            if call[0] in ('memset', 'memcpy', 'swap'): w.add(k); continue
+            if call[0] in ('memset', 'memcpy', 'memmove'):   # the destination is written, the source read
+                (w if call[1] == 0 else r).add(k); continue
+            if call[0] == 'swap': w.add(k); r.add(k); continue
         r.add(k)
     for a, (k, const) in aliases.items():
         for um in re.finditer(r'(?<![\w.>])' + a + r'\b', body):
             tail = body[um.end():um.end() + 200]
             if not const and (re.match(r'(?:\[[^\]]*\]|\.\w+)*' + ASSIGN, tail) or re.match(r'\s*=\s*\{\s*\}', tail)): w.add(k)
             elif not re.match(r'\s*=[^=]', tail): r.add(k)
-    # a read of its own output field is internal (a pointer output, bound to a shared signal, is not)
-    r = {k for k in r if not (k.startswith('out.') and not pt['out'].get(k.split('.')[1], False))}
+    # a read of its own output field is internal (a pointer output, bound to a shared signal, is not; a class whose
+    # Out struct is declared elsewhere has pointer outputs)
+    owned = pt['out'] if pt['out'] else {}
+    r = {k for k in r if not (k.startswith('out.') and k.split('.')[1] in owned and not owned[k.split('.')[1]])}
     return r, w
 
 

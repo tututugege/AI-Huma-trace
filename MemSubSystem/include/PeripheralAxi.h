@@ -32,8 +32,7 @@ struct PeripheralAxiState {
   uint8_t req_id = 0;
 };
 
-// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
-// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
 //   CONTRACT comb  in: in.read in.req in.write out.read out.resp out.write  out: out.read out.resp out.write
 class PeripheralAxi {
 public:

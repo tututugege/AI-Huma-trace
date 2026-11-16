@@ -239,6 +239,7 @@ public:
   void set_comb_output(const PtwWalkPortCombOut &out) { comb_out_ = out; }
 
   void reset_cycle_input() { comb_in_ = {}; }
+  PtwWalkPortCombIn &comb_input() { return comb_in_; }   // (the walker consumes the requests: MemPtwBlock's out)
 
   void reset_seq_input() { seq_in_ = {}; }
 
@@ -340,14 +341,14 @@ void MemSubsystem::init() {
   // Route LSU/PTW/ICache requests through MemRouteBlock and capture raw
   // DCache responses before routing them back to their owners.
   dcache_.in.lsu2dcache = &dcache_req_mux_;
-  dcache_.out.dcache2lsu = &dcache_resp_raw_;
+  dcache_.out.dcache2route = &dcache_resp_route_;
 
   // Internal MSHR ↔ DCache wires: RealDcache reads/writes MSHR IO structs
   // directly via pointers, keeping the connection zero-copy.
   dcache_.in.mshr2dcache = &mshr_dcache_io_;  // MSHR output → DCache input
   dcache_.out.dcache2mshr = &dcache_mshr_io_; // DCache output → MSHR input
   mshr_.in.dcache2mshr = &dcache_mshr_io_;    // DCache output → MSHR comb input
-  mshr_.in.s1_q = &dcache_s1_q_;
+  mshr_.in.s1_q = &dcache_.s1_q();
   mshr_.out.mshr2dcache = &mshr_dcache_io_;   // MSHR output → DCache input
 
   Assert(dcache_axi_r && dcache_axi_w && extra_axi_r && extra_axi_w && "MemSubsystem: AXI master ports not bound");
@@ -360,20 +361,9 @@ void MemSubsystem::init() {
   dcache_.in.wb2dcache = &wb_dcache_io_;  // WB output → DCache input
   dcache_.out.dcache2wb = &dcache_wb_io_; // DCache output → WB input
   wb_.in.dcache2wb = &dcache_wb_io_;      // DCache output → WB comb input
-  wb_.in.s1_q = &dcache_s1_q_;
+  wb_.in.s1_q = &dcache_.s1_q();
   wb_.out.wb2dcache = &wb_dcache_io_;     // WB output → DCache inputs
 
-  for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
-    dcache_.in.dcachelinereadresp[i] = &dcache_line_read_resp_[i]; // DCache line read response → LSU
-    dcache_.out.dcachereadreq[i] = &dcache_line_read_req_[i];      // DCache line read request ← LSU
-    dcache_.out.lru_updates[i] = &lru_updates_[i];                 // DCache line write request ← LSU
-    dcache_.out.pendingwrite[i] = &pending_writes_[i];             // DCache pending write flag ← LSU
-  }
-
-  dcache_.out.fill_write = &fill_writes_; // DCache fill write-back flag ← LSU
-  dcache_.in.fill_store_dirty = &fill_store_dirty_;
-  dcache_.in.fillin = &fill_in_;          // DCache fill input (from MSHR/WB)
-  dcache_.out.fillout = &fill_out_;       // DCache fill output (to MSHR/WB)
 
   mem_route_block.out.dcache_req = &dcache_req_mux_;  // MemRouteBlock output → DCache request multiplexer
   mem_route_block.in.dcache_resp = &dcache_resp_route_; // DCache response → MemRouteBlock input
@@ -390,12 +380,26 @@ void MemSubsystem::init() {
   mem_route_block.out.ptw_grant = &ptw_grant;   // MemRouteBlock output → PTW grant signals
   mem_route_block.out.wakeup = &wakeup;         // MemRouteBlock output → LSU wakeup signals
 
+  // the shared page-table walker: the TLBs' walk ports, the route block's request / grant / response
+  ptw_block.in.dtlb_walk = &dtlb_walk_port_inst->comb_input();
+  ptw_block.in.itlb_walk = &itlb_walk_port_inst->comb_input();
+  ptw_block.in.dtlb_flush = &dtlb_walk_port_inst->seq_input();
+  ptw_block.in.itlb_flush = &itlb_walk_port_inst->seq_input();
+  ptw_block.in.ptw_grant = &ptw_grant;
+  ptw_block.in.ptw_events = &ptw_events;
+  ptw_block.in.wakeup = &wakeup;
+  ptw_block.out.ptw_walk_req = &ptw_walk_req;
+  ptw_block.out.dtlb_walk = &dtlb_walk_port_inst->comb_input();
+  ptw_block.out.itlb_walk = &itlb_walk_port_inst->comb_input();
+
 
   // ── Initialise sub-modules ─────────────────────────────────────────────────
   mshr_.init();
   wb_.init();
   dcache_.init();
-  peripheral_model_.bind(csr_interrupt_inject);
+  peripheral_model_.in.commit_store = commit_store;
+  peripheral_model_.out.csr_interrupt_inject = csr_interrupt_inject;
+  peripheral_model_.reset_devices();
   peripheral_axi_.in.req = peripheral_req;
   peripheral_axi_.out.resp = peripheral_resp;
   peripheral_axi_.peripheral_model = &peripheral_model_;
@@ -414,33 +418,14 @@ void MemSubsystem::init() {
   itlb_walk_port_inst->reset_seq_input();
 
   dcache_req_mux_ = {};
-  dcache_resp_raw_ = {};
   dcache_resp_route_ = {};
   dcache_empty_req_ = LsuDcacheIO{};
-  for (auto &meta : dcache_resp_meta_cur_) {
-    meta = {};
-  }
-  for (auto &meta : dcache_resp_meta_nxt_) {
-    meta = {};
-  }
 
   mshr_dcache_io_ = {};
   dcache_mshr_io_ = {};
   wb_dcache_io_ = {};
   dcache_wb_io_ = {};
 
-  for (auto &r : dcache_line_read_req_) r = {};
-  for (auto &r : dcache_line_read_resp_) r = {};
-  for (auto &entry : lru_updates_) {
-    entry = {};
-  }
-  for (auto &entry : pending_writes_) {
-    entry = {};
-  }
-  fill_writes_ = {};
-  fill_in_ = {};
-  fill_out_ = {};
-  dcache_s1_q_ = {};
 
 
   {
@@ -454,16 +439,6 @@ void MemSubsystem::init() {
   }
 }
 
-void MemSubsystem::on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3) {
-  peripheral_model_.on_commit_store(paddr, data, func3);
-}
-
-void MemSubsystem::comb_commit_store() {
-  const CommitStoreIO &cs = *commit_store;
-  for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (cs.slot[i].valid) on_commit_store(cs.slot[i].paddr, cs.slot[i].data, cs.slot[i].func3);
-  }
-}
 
 void MemSubsystem::configure_interrupt_latency(uint64_t seed,
                                                uint32_t min_cycles,
@@ -475,122 +450,14 @@ void MemSubsystem::configure_interrupt_latency(uint64_t seed,
 void MemSubsystem::sync_mmio_devices_from_backing() {
   peripheral_model_.sync_from_backing();
 }
-
-static bool replay_waits_for_mshr_fill(ReplayType replay) {
-  return replay == ReplayType::MSHR_HIT || replay == ReplayType::MSHR_FULL;
-}
-
-
 // DCache stage 2 of the request that stage 1 issued last cycle: the tag / fill array read, the stage-2 logic, the
 // array writes, the response to the route block.
-void MemSubsystem::dcache_stage2() {
-  Dcache_Read(dcache_.arrays, dcache_s1_q_.line_read_req,
-              dcache_line_read_resp_,
-              dcache_s1_q_.fill_out,
-              fill_in_);
-  dcache_.comb_stage2();
-  Dcache_Write(dcache_.arrays, pending_writes_,
-               lru_updates_,
-               fill_writes_);
-  drive_dcache_response();
-}
-
-void MemSubsystem::record_dcache_stage1_metadata() {
-  for (auto &meta : dcache_resp_meta_nxt_) {
-    meta = {};
-  }
-  const S1S2Reg &stage1 = dcache_.stage1_next_state();
-  for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    const auto &load = stage1.loads[i];
-    if (!load.valid) {
-      continue;
-    }
-    dcache_resp_meta_nxt_[i].valid = true;
-    dcache_resp_meta_nxt_[i].is_store = false;
-    dcache_resp_meta_nxt_[i].addr = load.addr;
-  }
-  for (int i = 0; i < LSU_STA_COUNT; i++) {
-    const auto &store = stage1.stores[i];
-    if (!store.valid) {
-      continue;
-    }
-    const int idx = LSU_LDU_COUNT + i;
-    dcache_resp_meta_nxt_[idx].valid = true;
-    dcache_resp_meta_nxt_[idx].is_store = true;
-    dcache_resp_meta_nxt_[idx].addr = store.addr;
-  }
-}
-
-// This cycle's DCache response as the route block sees it (and through it the LSU, the I-cache probe, the PTW): the
-// valid stage-2 responses, a response that waits for an MSHR fill arriving now turned into a hit (matched through the
-// stage-1 metadata register), and the hidden bank-retry busy bits.
-void MemSubsystem::drive_dcache_response() {
-  dcache_resp_route_ = {};
-  fill_store_dirty_ = false;
-  for (int i = 0; i < LSU_LDU_COUNT; i++)
-    if (dcache_resp_raw_.resp_ports.load_resps[i].valid) dcache_resp_route_.resp_ports.load_resps[i] = dcache_resp_raw_.resp_ports.load_resps[i];
-  for (int i = 0; i < LSU_STA_COUNT; i++)
-    if (dcache_resp_raw_.resp_ports.store_resps[i].valid) dcache_resp_route_.resp_ports.store_resps[i] = dcache_resp_raw_.resp_ports.store_resps[i];
-  if (dcache_resp_raw_.mshr_fill) {
-    dcache_resp_route_.mshr_fill = true;
-    dcache_resp_route_.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
-  }
-
-  const MSHRFillReq &fill = mshr_dcache_io_.fill_req;
-  if (fill.valid) {
-    for (int i = 0; i < LSU_LDU_COUNT; i++) {
-      const LoadResp &resp = dcache_resp_route_.resp_ports.load_resps[i];
-      const DcacheRespMeta &meta = dcache_resp_meta_cur_[i];
-      if (!resp.valid || !meta.valid || meta.is_store || !replay_waits_for_mshr_fill(resp.replay) ||
-          !cache_line_match(meta.addr, fill.addr))
-        continue;
-      dcache_resp_route_.resp_ports.load_resps[i].replay = ReplayType::HIT;
-    }
-    for (int i = 0; i < LSU_STA_COUNT; i++) {
-      const StoreResp &resp = dcache_resp_route_.resp_ports.store_resps[i];
-      const DcacheRespMeta &meta = dcache_resp_meta_cur_[LSU_LDU_COUNT + i];
-      if (!resp.valid || !meta.valid || !meta.is_store || !replay_waits_for_mshr_fill(resp.replay) ||
-          !cache_line_match(meta.addr, fill.addr))
-        continue;
-      fill_store_dirty_ = true;
-      dcache_resp_route_.resp_ports.store_resps[i].replay = ReplayType::HIT;
-    }
-  }
-
-  for (int i = 0; i < LSU_LDU_COUNT; i++) dcache_resp_route_.load_retry_busy[i] = dcache_.load_retry_pending(i);
-  for (int i = 0; i < LSU_STA_COUNT; i++) dcache_resp_route_.store_retry_busy[i] = dcache_.store_retry_pending(i);
-}
-
 // DCache stage 1 of this cycle's requests (a port whose response is still held is blocked), and its metadata for the
 // response next cycle.
-void MemSubsystem::dcache_stage1() {
-  bool load_resp_blocked[LSU_LDU_COUNT] = {};
-  bool store_resp_blocked[LSU_STA_COUNT] = {};
-  for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    load_resp_blocked[i] =
-        dcache_resp_route_.resp_ports.load_resps[i].valid;
-  }
-  for (int i = 0; i < LSU_STA_COUNT; i++) {
-    store_resp_blocked[i] =
-        dcache_resp_route_.resp_ports.store_resps[i].valid;
-  }
-  dcache_.set_hidden_bank_retry_blocked(load_resp_blocked,
-                                        store_resp_blocked);
 
-  dcache_.comb_stage1();
-  record_dcache_stage1_metadata();
-}
 
 void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
-  dcache_.seq();
-  std::memcpy(dcache_s1_q_.find_req, dcache_mshr_io_.find_req, sizeof(dcache_s1_q_.find_req));
-  std::memcpy(dcache_s1_q_.bypass_req, dcache_wb_io_.bypass_req, sizeof(dcache_s1_q_.bypass_req));
-  std::memcpy(dcache_s1_q_.merge_req, dcache_wb_io_.merge_req, sizeof(dcache_s1_q_.merge_req));
-  std::memcpy(dcache_s1_q_.line_read_req, dcache_line_read_req_, sizeof(dcache_s1_q_.line_read_req));
-  dcache_s1_q_.fill_out = fill_out_;
-  for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
-    dcache_resp_meta_cur_[i] = dcache_resp_meta_nxt_[i];
-  }
+  dcache_.seq();   // (also its stage-1 request / response metadata registers)
   mshr_.seq(sample_mshr_perf);
   wb_.seq();
 }
@@ -598,55 +465,61 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
 // The responses (before the back end: the AXI responses first, so a line that returns or a write-back that retires now is
 // visible to the DCache this cycle) and the requests (after it: newly allocated MSHR / write-buffer entries start their
 // AXI transaction in the same cycle); both from the contracts in MemSubsystem.h.
-
-
-// The shared page-table walker: the TLBs' walk requests in, its memory read request to the route block.
-void MemSubsystem::ptw_request() {
-  MemPtwBlock::PortIn ptw_port_in{};
-  {
-    const auto &dtlb_walk_in = dtlb_walk_port_inst->comb_input();
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::DTLB)].req_valid =
-        dtlb_walk_in.req_valid;
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::DTLB)].req =
-        dtlb_walk_in.req;
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::DTLB)]
-        .resp_consumed = dtlb_walk_in.resp_consumed;
-
-    const auto &itlb_walk_in = itlb_walk_port_inst->comb_input();
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::ITLB)].req_valid =
-        itlb_walk_in.req_valid;
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::ITLB)].req =
-        itlb_walk_in.req;
-    ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::ITLB)]
-        .resp_consumed = itlb_walk_in.resp_consumed;
-  }
-  ptw_block.comb_begin(ptw_port_in);
-  const auto &ptw_out = ptw_block.comb_outputs();
-
-  ptw_walk_req.valid = ptw_out.issue_walk_read;
-  ptw_walk_req.addr = ptw_out.walk_read_addr;
+// The walk-port outputs (req_ready / resp of the shared PTW) are registers: set here, at the clock edge, from the PTW
+// block's state and read by the TLBs during the next cycle.
+void MemSubsystem::seq() {
+  ptw_block.seq();
+  dcache_domain_seq(true);
+  peripheral_model_.tick();
+  peripheral_axi_.seq();
+  mem_route_block.seq();
+  dtlb_walk_port_inst->reset_seq_input();
+  itlb_walk_port_inst->reset_seq_input();
+  sync_ptw_port_outputs();
 }
 
-// The shared page-table walker: the route block's grant / response back; the TLBs' request inputs of this cycle are
-// consumed.
-void MemSubsystem::ptw_feedback() {
-  MemPtwBlock::FeedbackIn ptw_feedback{};
+// ---- the shared page-table walker's comb phases (MemPtwBlock.h) ----
 
-  ptw_feedback.wakeup_walk = wakeup.walk;
+// The TLBs' walk requests in, the walker's memory read request to the route block.
+void MemPtwBlock::comb_request() {
+  PortIn ptw_port_in{};
+  {
+    const PtwWalkPortCombIn &dtlb_walk_in = *in.dtlb_walk;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::DTLB)].req_valid = dtlb_walk_in.req_valid;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::DTLB)].req = dtlb_walk_in.req;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::DTLB)].resp_consumed = dtlb_walk_in.resp_consumed;
+
+    const PtwWalkPortCombIn &itlb_walk_in = *in.itlb_walk;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::ITLB)].req_valid = itlb_walk_in.req_valid;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::ITLB)].req = itlb_walk_in.req;
+    ptw_port_in.walk_clients[static_cast<size_t>(Client::ITLB)].resp_consumed = itlb_walk_in.resp_consumed;
+  }
+  comb_begin(ptw_port_in);
+  const auto &ptw_out = comb_outputs();
+
+  out.ptw_walk_req->valid = ptw_out.issue_walk_read;
+  out.ptw_walk_req->addr = ptw_out.walk_read_addr;
+}
+
+// The route block's grant / response back; the TLBs' request inputs of this cycle are consumed.
+void MemPtwBlock::comb_feedback() {
+  FeedbackIn ptw_feedback{};
+
+  ptw_feedback.wakeup_walk = in.wakeup->walk;
 
   // the grant
-  if (ptw_grant.valid) {
+  if (in.ptw_grant->valid) {
     ptw_feedback.grant_valid = true;
-    ptw_feedback.grant_req_id = ptw_grant.req_id;
+    ptw_feedback.grant_req_id = in.ptw_grant->req_id;
 
-    if (ptw_grant.owner != Owner::PTW_WALK) ptw_feedback.grant_valid = false;
+    if (in.ptw_grant->owner != Owner::PTW_WALK) ptw_feedback.grant_valid = false;
   }
 
   // the walker read response (one event)
-  if (ptw_events.valid) {
-    const auto &evt = ptw_events;
+  if (in.ptw_events->valid) {
+    const PtwEvent &evt = *in.ptw_events;
 
-    MemPtwBlock::RoutedEvent mapped{};
+    RoutedEvent mapped{};
     mapped.valid = true;
     mapped.data = evt.data;
     mapped.replay = evt.replay;
@@ -661,22 +534,9 @@ void MemSubsystem::ptw_feedback() {
     }
   }
 
-  ptw_feedback.walk_client_flush[static_cast<size_t>(PtwClient::DTLB)] = dtlb_walk_port_inst->seq_input().flush;
-  ptw_feedback.walk_client_flush[static_cast<size_t>(PtwClient::ITLB)] = itlb_walk_port_inst->seq_input().flush;
-  ptw_block.comb_finish(ptw_feedback);
-  dtlb_walk_port_inst->reset_cycle_input();
-  itlb_walk_port_inst->reset_cycle_input();
-}
-
-// The walk-port outputs (req_ready / resp of the shared PTW) are registers: set here, at the clock edge, from the PTW
-// block's state and read by the TLBs during the next cycle.
-void MemSubsystem::seq() {
-  ptw_block.seq();
-  dcache_domain_seq(true);
-  peripheral_model_.tick();
-  peripheral_axi_.seq();
-  mem_route_block.seq();
-  dtlb_walk_port_inst->reset_seq_input();
-  itlb_walk_port_inst->reset_seq_input();
-  sync_ptw_port_outputs();
+  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::DTLB)] = in.dtlb_flush->flush;
+  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::ITLB)] = in.itlb_flush->flush;
+  comb_finish(ptw_feedback);
+  *out.dtlb_walk = {};
+  *out.itlb_walk = {};
 }

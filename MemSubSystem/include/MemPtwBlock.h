@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MemRouteBlock.h"
 #include "PtwWalkPort.h"
 #include "ref.h"
 #include "types.h"
@@ -11,8 +12,24 @@ class SimContext;
 
 // Shared PTW submodule. Port-side requests are latched in comb_begin(), memory
 // feedback is applied in comb_finish(), and seq() is the only state commit.
+//   CONTRACT comb_request  in: in.dtlb_walk in.itlb_walk  out: out.ptw_walk_req
+//   CONTRACT comb_feedback  in: in.dtlb_flush in.itlb_flush in.ptw_events in.ptw_grant in.wakeup  out: out.dtlb_walk out.itlb_walk
 class MemPtwBlock {
 public:
+  struct In {
+    const PtwWalkPortCombIn *dtlb_walk = nullptr, *itlb_walk = nullptr;   // the TLBs' walk requests of the cycle
+    const PtwWalkPortSeqIn *dtlb_flush = nullptr, *itlb_flush = nullptr;  // their flushes
+    const PtwGrant *ptw_grant = nullptr;     // the route block's grant / response / wake-up
+    const PtwEvent *ptw_events = nullptr;
+    const ReplayWakeup *wakeup = nullptr;
+  } in;
+  struct Out {
+    PtwReq *ptw_walk_req = nullptr;                                       // the walker's memory read request
+    PtwWalkPortCombIn *dtlb_walk = nullptr, *itlb_walk = nullptr;          // consumed at the end of the cycle
+  } out;
+  void comb_request();    // the TLBs' walk requests in, the walker's memory read request out
+  void comb_feedback();   // the route block's grant / response back; the TLBs' requests of this cycle consumed
+
   enum class Client : uint8_t {
     DTLB = 0,
     ITLB = 1,

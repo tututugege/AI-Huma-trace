@@ -40,9 +40,8 @@ struct WBOut {
         clear_master_fields(*axi);
     }
 };
-// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
-// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
-//   CONTRACT comb_axi_to_dcache  in: in.axi in.s1_q out.clear  out: out.wb2dcache
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
+//   CONTRACT comb_axi_to_dcache  in: in.axi in.s1_q  out: out.wb2dcache
 //   CONTRACT comb_dcache_to_axi  in: in.dcache2wb out.axi  out: out.axi
 class WriteBuffer {
 public:

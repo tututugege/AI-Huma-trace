@@ -29,8 +29,8 @@
 //   PORT csr_inject         = back.csr_interrupt_inject_io
 //   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)
 //   PORT back2front         = back.out.{commit_entry,commit_extra,commit_ftq,fence_i,fire,flush,itlb_flush,mispred,redirect_pc,rf_blk,rf_is_rvc,rf_pc,rf_slot,rf_type,rf_valid,stall}
-//   PORT dtlb_walk          = mem_subsystem.dtlb_walk
-//   PORT itlb_walk          = mem_subsystem.itlb_walk
+//   PORT dtlb_walk          = mem_subsystem.dtlb_walk_port_inst.comb_input mem_subsystem.dtlb_walk_port_inst.seq_input   (the TLBs' walk requests / flushes)
+//   PORT itlb_walk          = mem_subsystem.itlb_walk_port_inst.comb_input mem_subsystem.itlb_walk_port_inst.seq_input
 //   PORT icache_probe       = icache_req
 //   PORT axi_ic_req         = axi.interconnect.read_ports.req.{valid,addr,total_size,id,bypass}
 //   PORT axi_mem_req        = axi.interconnect.{read_ports,write_ports}.req.{valid,addr,total_size,id,bypass,wdata,wstrb}

@@ -14,6 +14,8 @@
 
 extern long long sim_time;
 
+// The peripheral model's comb phase, in its own ports (MemSubsystem::init binds them):
+//   CONTRACT comb_commit_store  in: in.commit_store out.csr_interrupt_inject  out: out.csr_interrupt_inject
 class PeripheralModel {
 public:
   static constexpr uint32_t kUartRegRxTxDll = 0x0u;
@@ -28,7 +30,19 @@ public:
   static constexpr uint8_t kUartIirThre = 0x02u;
   static constexpr uint8_t kUartIirFifoEnabled = 0xc0u;
 
-  CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
+  struct In {
+    const CommitStoreIO *commit_store = nullptr;   // the back end's device stores of this cycle's commit
+  } in;
+  struct Out {
+    CsrInterruptInjectIO *csr_interrupt_inject = nullptr;   // the interrupt lines into the CSR
+  } out;
+  // the device stores of this cycle's commit (each valid slot, in slot order)
+  void comb_commit_store() {
+    const CommitStoreIO &cs = *in.commit_store;
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      if (cs.slot[i].valid) on_commit_store(cs.slot[i].paddr, cs.slot[i].data, cs.slot[i].func3);
+    }
+  }
   uint64_t timer_offset_ = 0;
   uint64_t timer_cmp_ = UINT64_MAX;
 
@@ -42,8 +56,7 @@ public:
     external_irq_delay_ = {};
   }
 
-  void bind(CsrInterruptInjectIO *csr_interrupt_inject_ptr) {
-    csr_interrupt_inject = csr_interrupt_inject_ptr;
+  void reset_devices() {   // (after its ports are bound)
     timer_reset();
     xps_intc_reset();
   }
@@ -138,7 +151,7 @@ public:
   }
 
   void on_commit_store(uint32_t paddr, uint64_t data64, uint8_t func3) {
-    if (csr_interrupt_inject == nullptr || !is_modeled_mmio(paddr)) {
+    if (out.csr_interrupt_inject == nullptr || !is_modeled_mmio(paddr)) {
       return;
     }
     // rv64 sd: the devices have 32-bit registers, an 8-byte store is two aligned word stores (OpenSBI writes mtimecmp with one)
@@ -288,17 +301,17 @@ private:
   }
 
   void update_timer_irq() {
-    if (csr_interrupt_inject == nullptr) {
+    if (out.csr_interrupt_inject == nullptr) {
       return;
     }
     update_delayed_irq(timer_irq_delay_,
                        effective_timer_value() >= timer_cmp_);
-    csr_interrupt_inject->timer_irq_pending_valid = true;
-    csr_interrupt_inject->timer_irq_pending = timer_irq_delay_.delivered;
+    out.csr_interrupt_inject->timer_irq_pending_valid = true;
+    out.csr_interrupt_inject->timer_irq_pending = timer_irq_delay_.delivered;
   }
 
   void update_external_irq() {
-    if (csr_interrupt_inject == nullptr) {
+    if (out.csr_interrupt_inject == nullptr) {
       return;
     }
     const bool xps_global_enable =
@@ -307,10 +320,10 @@ private:
     const bool xps_pending =
         xps_global_enable && ((xps_intc_isr_ & xps_intc_ier_) != 0);
     update_delayed_irq(external_irq_delay_, xps_pending);
-    csr_interrupt_inject->external_irq_pending_valid = true;
-    csr_interrupt_inject->external_irq_pending = false;
-    csr_interrupt_inject->supervisor_external_irq_pending_valid = true;
-    csr_interrupt_inject->supervisor_external_irq_pending =
+    out.csr_interrupt_inject->external_irq_pending_valid = true;
+    out.csr_interrupt_inject->external_irq_pending = false;
+    out.csr_interrupt_inject->supervisor_external_irq_pending_valid = true;
+    out.csr_interrupt_inject->supervisor_external_irq_pending =
         external_irq_delay_.delivered;
   }
 

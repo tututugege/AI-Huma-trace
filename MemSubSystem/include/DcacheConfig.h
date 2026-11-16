@@ -172,20 +172,12 @@ struct DcacheINIO {
     LsuDcacheIO  *lsu2dcache  = nullptr;  // LSU → DCache requests
     MSHRDcacheIO *mshr2dcache = nullptr;  // MSHR fill/free → DCache
     WBDcacheIO   *wb2dcache   = nullptr;  // WB bypass/merge resp → DCache
-    DcacheLineReadResp *dcachelinereadresp[LSU_LDU_COUNT + LSU_STA_COUNT]; // For BSD: output the chosen victim for debugging
-    FillIn *fillin; 
-    const bool *fill_store_dirty = nullptr;   // a store that waited for this cycle's fill completes into it: the line is dirty
 };
 
 struct DcacheOUTIO {
-    DcacheLsuIO  *dcache2lsu  = nullptr;  // DCache → LSU responses
+    DcacheLsuIO  *dcache2route = nullptr; // DCache → the route block: this cycle's responses
     DcacheMSHRIO *dcache2mshr = nullptr;  // DCache miss alloc → MSHR
     DcacheWBIO   *dcache2wb   = nullptr;  // DCache bypass/merge req → WB
-    PendingWrite *pendingwrite[LSU_LDU_COUNT + LSU_STA_COUNT]; // For tracking pending misses for the store queue and load queue
-    LruUpdate *lru_updates[LSU_LDU_COUNT + LSU_STA_COUNT]; // For tracking PLRU updates for the store queue and load queue
-    FillWrite *fill_write; // For tracking MSHR fill responses for the store queue and load queue
-    DcacheLineReadReq *dcachereadreq[LSU_LDU_COUNT + LSU_STA_COUNT] ; // For BSD: output the chosen victim for debugging
-    FillOut *fillout; 
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -27,18 +27,8 @@ struct AXI_LLCConfig;
 struct AXI_LLC_LookupIn_t;
 struct AXI_LLC_TableOut_t;
 }
-// SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_commit_store  in: commit_store  out: csr_inject periph
-// Inside: the blocks declare their comb methods in their own headers (their own ports); MemSubsystem's own comb functions
-// that drive a block are declared here, in MemSubsystem's signal names, with the block. scripts/comb/gen_mem_order.py
-// checks both against the code (a block's phases in order; a writer before
-// the readers; the outputs / inputs split derived from dcache2lsu and the back end's / front end's requests; ties by
-// the priority):
-//   CONTRACT priority: wb_ mshr_ dcache_ mem_route_block ptw_block peripheral_axi_
-//   CONTRACT dcache_stage2 (dcache_)  in: dcache_line_read_resp_ dcache_mshr_io_.mshr_req dcache_resp_meta_cur_ dcache_resp_raw_ dcache_resp_route_ dcache_s1_q_ fill_in_ fill_writes_ lru_updates_ mshr_dcache_io_ pending_writes_ wb_dcache_io_  out: dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_raw_ dcache_resp_route_ dcache_wb_io_.dirty_info fill_in_ fill_store_dirty_ fill_writes_ lru_updates_ pending_writes_
-//   CONTRACT ptw_request (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst  out: ptw_walk_req
-//   CONTRACT dcache_stage1 (dcache_)  in: dcache_mshr_io_.find_req dcache_req_mux_ dcache_resp_meta_nxt_ dcache_resp_route_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_store_dirty_ fill_writes_ mshr_dcache_io_  out: dcache_line_read_req_ dcache_mshr_io_.find_req dcache_resp_meta_nxt_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_
-//   CONTRACT ptw_feedback (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst ptw_events ptw_grant wakeup  out: -
+// The memory subsystem's modules (the blocks below) declare their comb phases above their classes, in their own port
+// names; MemSubsystem::init binds their ports (scripts/comb/modules.py, gen_top_order.py).
 class MemSubsystem {
 public:
   enum class PtwClient : uint8_t {
@@ -78,10 +68,6 @@ public:
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
   bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line) { return dcache_.arrays.warm_access(paddr, is_store, wb_line); }   // fast-warmup replay
-  void on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3);
-  // the device stores of this cycle's commit into the peripheral model (each valid slot, in slot order), which drives
-  // the CSR's interrupt lines (read by back.comb_late) and answers the MMIO loads of comb_inputs
-  void comb_commit_store();
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);
@@ -95,8 +81,8 @@ public:
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }
   const PeripheralAxi &get_peripheral_axi() const { return peripheral_axi_; }
 
-  // Sub-modules: their comb phases (the CONTRACT lines above their classes) and the phase functions below are
-  // SimCpu-level phases (scripts/comb/gen_top_order.py schedules them with the other modules')
+  // Modules: their comb phases (the CONTRACT lines above their classes) are SimCpu-level phases
+  // (scripts/comb/gen_top_order.py schedules them with the other modules')
   RealDcache  dcache_;
   MSHR          mshr_;
   WriteBuffer   wb_;
@@ -104,24 +90,12 @@ public:
   PeripheralModel peripheral_model_;
   MemPtwBlock   ptw_block;
   MemRouteBlock mem_route_block;
-  void dcache_stage2();
-  void dcache_stage1();
-  void ptw_request();
-  void ptw_feedback();
 
 private:
   LsuDcacheIO dcache_req_mux_{};
-  DcacheLsuIO dcache_resp_raw_{};
   DcacheLsuIO dcache_resp_route_{};
   LsuDcacheIO dcache_empty_req_{};
 
-  struct DcacheRespMeta {
-    bool valid = false;
-    bool is_store = false;
-    uint32_t addr = 0;
-  };
-  DcacheRespMeta dcache_resp_meta_cur_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  DcacheRespMeta dcache_resp_meta_nxt_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
 
   MSHRDcacheIO mshr_dcache_io_{};
   DcacheMSHRIO dcache_mshr_io_{};
@@ -129,15 +103,6 @@ private:
   WBDcacheIO wb_dcache_io_{};
   DcacheWBIO dcache_wb_io_{};
 
-  DcacheLineReadResp dcache_line_read_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  DcacheLineReadReq dcache_line_read_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  PendingWrite pending_writes_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  LruUpdate lru_updates_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  FillWrite fill_writes_{};
-  FillIn fill_in_{};
-  FillOut fill_out_{};
-  bool fill_store_dirty_ = false;   // drive_dcache_response -> DCache stage 1: a store merged into the arriving fill
-  DcacheS1Reg dcache_s1_q_{};   // register: stage-1 requests (find / bypass / merge, line reads, fill read) of the last cycle
 
   PtwReq ptw_walk_req;
 
@@ -150,8 +115,6 @@ private:
 
   void sync_ptw_port_outputs();
   void dcache_domain_seq(bool sample_mshr_perf);
-  void record_dcache_stage1_metadata();
-  void drive_dcache_response();
 
   friend class MemSubsystemPtwWalkPortAdapter;
 

@@ -126,7 +126,7 @@ void SimCpu::cycle() {
   back.idu->comb_decode();
   mem_subsystem.wb_.comb_axi_to_dcache();
   mem_subsystem.mshr_.comb_axi_to_dcache();
-  mem_subsystem.dcache_stage2();
+  mem_subsystem.dcache_.comb_stage2();
   mem_subsystem.mem_route_block.comb_response();
   back.lsu->comb_outputs();
   back.rob->comb_commit();
@@ -149,13 +149,13 @@ void SimCpu::cycle() {
   back.isu->comb_enq();
   f2b.comb_hold();
   b2f.comb();
-  mem_subsystem.comb_commit_store();
-  mem_subsystem.ptw_request();
+  mem_subsystem.ptw_block.comb_request();
   mem_subsystem.mem_route_block.comb_request();
-  mem_subsystem.dcache_stage1();
+  mem_subsystem.dcache_.comb_stage1();
   mem_subsystem.wb_.comb_dcache_to_axi();
   mem_subsystem.mshr_.comb_dcache_to_axi();
-  mem_subsystem.ptw_feedback();
+  mem_subsystem.ptw_block.comb_feedback();
+  mem_subsystem.peripheral_model_.comb_commit_store();
   mem_subsystem.peripheral_axi_.comb();
   back.csr->comb_interrupt_inject();
   axi.comb_inputs();

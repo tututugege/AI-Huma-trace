@@ -15,7 +15,7 @@ A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by Me
 <port>.out (the response the TLB reads, written by sync_ptw_port_outputs in comb_inputs and in MemSubsystem::seq).
 """
 import re, os
-from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS
+from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure
 import modules
 
 ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'icache_req',
@@ -120,11 +120,6 @@ def top_domain(root, ASSIGN):
     sim = strip_comments(src.t[os.path.join(root, 'SimCpu.cpp')])
     init = src.body('SimCpu', 'init')[1]
 
-    # pointer members of MemSubsystem bound in SimCpu::init(): mem member -> top path
-    membind = {m.group(1): norm_path(re.sub(r'\[\w+::(MASTER_\w+)\]', r'[\1]', m.group(2)))
-               for m in re.finditer(r'\bmem_subsystem\.(\w+)\s*=\s*&\s*([\w.\[\]:>-]+)\s*;', init)}
-    WALK = {'dtlb_walk_port_inst': 'mem_subsystem.dtlb_walk', 'itlb_walk_port_inst': 'mem_subsystem.itlb_walk'}
-
     # ---- summaries of the sub-object calls ---------------------------------------------------------------------------
     def from_rows(rows, mapk):
         r, w = set(), set()
@@ -136,12 +131,6 @@ def top_domain(root, ASSIGN):
                 mk = mapk(k, True)
                 if mk: w |= mk if isinstance(mk, set) else {mk}
         return r, w
-
-    def mem_key(k, write=False):
-        head = k.split('.')[0]
-        if head in WALK: return None                                   # the walk ports: added explicitly below
-        if head in membind: return membind[head] + k[len(head):]
-        return 'mem_subsystem.' + k
 
     S = {}
     S['front.read_core_q'] = (set(), set())
@@ -167,32 +156,13 @@ def top_domain(root, ASSIGN):
     for name, mod, mcls, _, _ in modules.phases():
         r, w = modules.scan(mod, mcls, name[len(mod) + 1:], mbind)
         S[name] = ({norm_path(modules.path_of(mod, k, mbind)) for k in r}, {norm_path(modules.path_of(mod, k, mbind)) for k in w})
-    S['front.core.icache.comb_fetch'][0].update(ir | {'mem_subsystem.itlb_walk.out', 'back.csr_status'})
-    S['front.core.icache.comb_fetch'][1].update(iw | {'mem_subsystem.itlb_walk.in'})
-    S['back.lsu.comb_translate'][0].add('mem_subsystem.dtlb_walk.out')
-    S['back.lsu.comb_translate'][1].add('mem_subsystem.dtlb_walk.in')
-
-    # ---- the same calls phase by phase (global_graph.py): each domain's rows as SimCpu paths, with their source text ----
-    SUB = {}
-    def mapped(rows, mapk, prefix):
-        out = []
-        for n, rr, ww in rows:
-            r, w = set(), set()
-            for k in rr:
-                mk = mapk(k)
-                if mk: r |= mk if isinstance(mk, set) else {mk}
-            for k in ww:
-                mk = mapk(k, True)
-                if mk: w |= mk if isinstance(mk, set) else {mk}
-            out.append([prefix + n, r, w, ''])
-        return out
-    for row in mapped(MEM_GROUPS['all'], mem_key, 'mem_subsystem.'):   # one SimCpu-level phase each
-        if row[0] == 'mem_subsystem.peripheral_axi_.comb': row[1].add('mem_subsystem.peripheral_model_')
-        if row[0] == 'mem_subsystem.ptw_request': row[1] |= {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'}
-        S[row[0]] = (set(row[1]), set(row[2]))
-        SUB[row[0]] = [row]
-    S['mem_subsystem.comb_commit_store'] = ({'back.out.commit_store', 'mem_subsystem.peripheral_model_'},
-                                            {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
+    # a TLB's walk port: its requests / flushes (comb_input / seq_input, read by the PTW), the PTW's response
+    # (comb_out_: set at the clock edge, a register)
+    S['front.core.icache.comb_fetch'][0].update(ir | {'back.csr_status'})
+    S['front.core.icache.comb_fetch'][1].update(iw | {'mem_subsystem.itlb_walk_port_inst.comb_input', 'mem_subsystem.itlb_walk_port_inst.seq_input'})
+    S['back.lsu.comb_translate'][1].update({'mem_subsystem.dtlb_walk_port_inst.comb_input', 'mem_subsystem.dtlb_walk_port_inst.seq_input'})
+    S['mem_subsystem.peripheral_model_.comb_commit_store'][1].add('mem_subsystem.peripheral_model_')   # its device state
+    S['mem_subsystem.peripheral_axi_.comb'][0].add('mem_subsystem.peripheral_model_')                  # (MMIO loads)
 
     def class_summary(obj, cls, meth, members):
         b = closure(src, cls, meth)
@@ -266,7 +236,7 @@ def top_domain(root, ASSIGN):
                 if key in S:
                     r, w = S[key]
                     ra, wa = scan_paths(cm.group(3), ASSIGN, src, notes, key)   # arguments
-                    emit(key, r | ra, w | wa, SUB.get(key)); continue
+                    emit(key, r | ra, w | wa); continue
                 notes.add(f'no summary for {key}()')
                 emit(key, *scan_paths(st, ASSIGN, src, notes, key)); continue
             fm = re.match(r'(\w+)\s*\(([^;]*)\)\s*;$', st)

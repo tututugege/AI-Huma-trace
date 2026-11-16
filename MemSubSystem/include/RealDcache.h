@@ -41,10 +41,9 @@ struct S1S2Reg {
         reg<1>     perf_replay = false;
     } stores[LSU_STA_COUNT];
 };
-// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
-// against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
-//   CONTRACT comb_stage2  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
-//   CONTRACT comb_stage1  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
+// Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
+//   CONTRACT comb_stage2  in: in.mshr2dcache in.wb2dcache out.dcache2mshr out.dcache2route  out: out.dcache2mshr out.dcache2route out.dcache2wb
+//   CONTRACT comb_stage1  in: in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2route  out: out.dcache2mshr out.dcache2wb
 class RealDcache {
 public:
     void init();
@@ -54,9 +53,9 @@ public:
     DcacheOUTIO out;
     DcacheArrays arrays;   // the tag / valid / dirty / prefetched / PLRU arrays
 
+    void comb_stage2();   // the array read, stage 2, the array writes, the response to the route block
     void comb_stage1();
-    void comb_stage2();
-    const S1S2Reg &stage1_next_state() const { return d.s1s2; }
+    const DcacheS1Reg &s1_q() const { return s1_q_; }   // register: the stage-1 requests of the last cycle (MSHR / WB read it)
     void set_hidden_bank_retry_blocked(
         const bool load_blocked[LSU_LDU_COUNT],
         const bool store_blocked[LSU_STA_COUNT]) {
@@ -102,6 +101,29 @@ private:
     BankRetryState bank_retry_issue_wires = {};
     bool bank_retry_load_blocked[LSU_LDU_COUNT] = {};
     bool bank_retry_store_blocked[LSU_STA_COUNT] = {};
+    // the D-cache's own wires of the cycle (stage 1 -> the array read, stage 2 -> the array write and the response)
+    // and its registers (the stage-1 requests, the response metadata), loaded by seq
+    struct RespMeta {
+        bool valid = false;
+        bool is_store = false;
+        uint32_t addr = 0;
+    };
+    DcacheLsuIO resp_raw_{};                                        // stage 2's response, before drive_response
+    DcacheLineReadReq line_read_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+    DcacheLineReadResp line_read_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+    PendingWrite pending_writes_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+    LruUpdate lru_updates_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+    FillWrite fill_write_{};
+    FillIn fill_in_{};
+    FillOut fill_out_{};
+    bool fill_store_dirty_ = false;   // drive_response -> stage 1: a store merged into the arriving fill
+    RespMeta resp_meta_cur_[LSU_LDU_COUNT + LSU_STA_COUNT]{};   // register
+    RespMeta resp_meta_nxt_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+    DcacheS1Reg s1_q_{};                                        // register
+    void stage1();
+    void stage2();
+    void drive_response();
+    void record_metadata();
 public:
     DataPrefetcher pf; // L1D data prefetcher (EXP-009)
 };

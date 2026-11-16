@@ -2,7 +2,6 @@
 """The comb checks of the whole CPU.
 
   * modules.py: every module's contracts against its code (its ports' reads / writes per phase);
-  * the memory subsystem's own phase functions (comb_domains.mem_domain, gen_mem_order.py --check);
   * SimCpu::cycle() as it runs (comb_top.py): each phase's reads / writes as SimCpu paths, and no phase reads a signal a
     later phase writes (a hidden register), except the reviewed cases below;
   * gen_top_order.py --check: the generated order is the code's, the tops' exports match their code.
@@ -30,13 +29,6 @@ print(f'modules: {len(modules.MODULES)} modules, {len(modules.phases())} phases,
 for e in merr: print('  contract: ' + e)
 all_hazards += merr
 
-from comb_domains import mem_domain
-drows, dhaz, notes = mem_domain(ROOT, ASSIGN, overlap)
-print(f'\n== mem: phases: {len(drows)}, read-before-later-write hazards: {len(dhaz)}')
-for n, r, w in drows: print(f'{n:40s} R: {" ".join(sorted(r))} | W: {" ".join(sorted(w))}')
-for h in dhaz: print('  %s reads %s, written later by %s' % h)
-for x in notes: print('  note: ' + x)
-all_hazards += dhaz
 # top level: SimCpu::cycle() (see comb_top.py)
 from comb_top import top_domain
 trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN)
@@ -72,8 +64,4 @@ if '--check' in sys.argv:
                        capture_output=True, text=True)
     print(p.stdout.rstrip())
     if p.returncode != 0: all_hazards.append('top exports')
-    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gen_mem_order.py'), '--check'],
-                       capture_output=True, text=True)
-    print(p.stdout.rstrip())
-    if p.returncode != 0: all_hazards.append('mem contracts')
 if '--check' in sys.argv and all_hazards: sys.exit(1)
