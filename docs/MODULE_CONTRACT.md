@@ -332,3 +332,15 @@ front.run_icache / write_instruction_fifo / finish, mem_route_block.comb_respons
 event bus (g_pmu_front: front -> back.pmu_sample; g_pmu_back: rename / idu -> pmu_sample). It prints the current runs per
 top module (14), a greedy schedule's runs (13), every cross-module data edge (161) and the side-effect users. No code
 changed; the schedule is still generated per level.
+
+## Global schedule, step 2: the splits derived from the global graph (exp/global-sched)
+
+`global_graph.derive_cuts()` schedules the global graph with each top module's phases in their current order (one chain
+per module) and stays in a module while it can; a module is cut where another module has to run in between. What a
+schedule may move: a phase of an expanded domain (back.comb's 24, the front core's 9, the memory groups' 11) on its own;
+any other top-level call of cycle() (SimCpu / FrontTop / AxiSubsystem glue, the AXI objects) as a whole. Result: the
+derived schedule is the order of cycle() row for row (11 runs: SimCpu glue | back csr_status | AXI begin | front |
+AXI outputs | mem outputs | back | SimCpu hold | front from_back | mem inputs | AXI inputs). Every exported split that was
+chosen by hand (front comb / comb_from_back, back comb_csr_status / comb, AXI begin / outputs / inputs) and the derived
+one (mem comb_outputs / comb_inputs) is where the global graph needs a cut, and nowhere else. `comb_graph.py --check`
+fails when the derived schedule and cycle() differ (a new cross-module dependency, or a split no longer needed).

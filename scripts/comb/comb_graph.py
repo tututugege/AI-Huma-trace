@@ -264,7 +264,9 @@ all_hazards += thaz
 # all levels in one dependence graph (global_graph.py)
 from comb_top import TOP_DETAIL
 import global_graph
-print(global_graph.report(TOP_DETAIL, toverlap)[0])
+gtext, gsame = global_graph.report(TOP_DETAIL, toverlap)
+print(gtext)
+if not gsame: all_hazards.append('global schedule')
 # SimCpu::cycle() must be the order generated from the tops' EXPORT declarations, and the declarations must match the code
 if '--check' in sys.argv:
     p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gen_top_order.py'), '--check'],
