@@ -13,7 +13,7 @@ struct UopPacket {
 // Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_alloc  in: in.dec_bcast in.lsu2dis in.rob2dis  out: out.dis2lsu out.dis2rob
-//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.prf_awake in.ren2dis in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
+//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.prf_awake in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
 class Dispatch {
 private:
   // phases of one cycle, run in the order of the methods above

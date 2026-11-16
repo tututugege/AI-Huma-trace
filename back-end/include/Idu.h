@@ -7,7 +7,7 @@ class SimContext;
 // Decode. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_decode  in: in.pre_issue  out: out.dec2ren out.dec_bcast
-//   CONTRACT comb_fire  in: in.exu2id in.ren2dec in.rob_bcast  out: out.idu_consume
+//   CONTRACT comb_fire  in: in.ren2dec in.rob_bcast  out: out.idu_consume
 class Idu {
 public:
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).

@@ -136,10 +136,10 @@ void SimCpu::cycle() {
   back.rob->comb_commit();
   back.pre->comb_commit_info();
   back.lsu->comb_writeback();
+  back.csr->comb_commit();
   back.dis->comb_alloc();
   back.exu->comb_exec();
   back.lsu->comb_translate();
-  back.csr->comb_commit();
   back.rob->comb_redirect();
   back.isu->comb_issue();
   back.dis->comb_dispatch();

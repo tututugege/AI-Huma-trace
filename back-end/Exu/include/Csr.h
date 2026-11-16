@@ -125,7 +125,7 @@ inline int cvt_number_to_csr(int csr_idx) {
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_csr_status  in: -  out: out.csr_status
 //   CONTRACT comb_interrupt  in: -  out: out.csr2rob
-//   CONTRACT comb_commit  in: in.exe2csr in.rob2csr in.rob_bcast  out: out.csr2front
+//   CONTRACT comb_commit  in: in.rob2csr in.rob_bcast  out: out.csr2front
 class Csr {
 public:
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
