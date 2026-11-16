@@ -27,6 +27,9 @@ struct AXI_LLCConfig;
 struct AXI_LLC_LookupIn_t;
 struct AXI_LLC_TableOut_t;
 }
+// SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
+//   EXPORT comb_outputs  in: axi_slave  out: dcache2lsu
+//   EXPORT comb_inputs   in: lsu2dcache mmio_req icache_probe itlb_walk dtlb_walk axi_slave  out: axi_mem_req axi_mem_resp_ready mmio_resp
 class MemSubsystem {
 public:
   enum class PtwClient : uint8_t {

@@ -12,6 +12,37 @@ using AxiMmioImpl = mmio::MMIO_Bus_AXI4;
 #include "axi_mmio_map.h"
 #include "front_IO.h"
 
+// SimCpu wires the tops together. Each top exports its comb phases with the ports they read and write (the lines above
+// the class: FrontTop, BackTop, MemSubsystem; the AXI and SimCpu glue phases below); scripts/comb/gen_top_order.py checks
+// them against the code and generates the comb part of SimCpu::cycle() from them (docs/MODULE_CONTRACT.md).
+//   in:      read after this cycle's writer of the port
+//   pre:     read before it (the value of the clock edge or the default driver), so it runs before that writer
+//   out:     written (one writer per port; an alias names one master's part of a field the scan sees per port array)
+//   default: driven first, every cycle, to a default the other writers override (an always_comb default assignment)
+// The ports (fields as SimCpu paths; {a,b} lists alternatives):
+//   PORT csr_status         = back.csr_status
+//   PORT back_in            = back.in
+//   PORT fetch_group        = back.in.{inst,pc,is_rvc,valid,front_stall,front_upd_free,front_tq_free,predict_dir,meta,predict_next_fetch_address,page_fault_inst}
+//   PORT dcache2lsu         = back.in.dcache2lsu
+//   PORT lsu2dcache         = back.out.lsu2dcache
+//   PORT mmio_req           = back.out.peripheral_req
+//   PORT mmio_resp          = peripheral_resp_hold_1
+//   PORT back2front         = back.out.{commit_entry,commit_extra,commit_ftq,fence_i,fire,flush,itlb_flush,mispred,redirect_pc,rf_blk,rf_is_rvc,rf_pc,rf_slot,rf_type,rf_valid,stall}
+//   PORT dtlb_walk          = mem_subsystem.dtlb_walk
+//   PORT itlb_walk          = mem_subsystem.itlb_walk
+//   PORT icache_probe       = icache_req
+//   PORT axi_ic_req         = axi_interconnect.read_ports.req.{valid,addr,total_size,id,bypass}
+//   PORT axi_mem_req        = axi_interconnect.{read_ports,write_ports}.req.{valid,addr,total_size,id,bypass,wdata,wstrb}
+//   PORT axi_ic_resp_ready  = axi_interconnect.read_ports.resp.ready        (sampled by the interconnect at the edge)
+//   PORT axi_mem_resp_ready = axi_interconnect.{read_ports,write_ports}.resp.ready
+//   PORT axi_slave          = axi_interconnect.{read_ports,write_ports}.req.{ready,accepted,accepted_id} axi_interconnect.{read_ports,write_ports}.resp.{valid,data,id,resp}
+//   PORT axi_ready_next     = axi_interconnect.{read_ports,write_ports}.req.ready   (the I-cache's port register samples it)
+// The glue phases (axi_*: the interconnect and its slaves; the others: SimCpu's registers):
+//   EXPORT back_in_from_regs     default: back_in
+//   EXPORT axi_comb_begin        default: axi_ic_req axi_mem_req
+//   EXPORT axi_comb_outputs      in: axi_ic_req  pre: axi_mem_req  out: axi_slave
+//   EXPORT axi_comb_inputs       in: axi_ic_req axi_mem_req  out: axi_ready_next
+//   EXPORT front2back_hold_comb  in: fetch_group back2front
 class SimCpu {
   // 性能计数器
 public:
@@ -56,7 +87,6 @@ public:
   void axi_comb_outputs();
   void axi_comb_inputs();
   void front2back_hold_seq();
-  void peripheral_resp_hold_comb();
   void peripheral_resp_hold_seq();
   uint32_t get_reg(uint8_t arch_idx) { return back.get_reg(arch_idx); }
   // 由 SimContext 在提交路径调用的本地辅助逻辑。

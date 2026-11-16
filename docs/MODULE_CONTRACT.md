@@ -79,3 +79,44 @@ TB_TRACE_COMMIT and LSU_PIPE_EVT are identical with it, i.e. the declarations ho
 The block in BackTop::comb() is between BEGIN / END GENERATED markers; `comb_graph.py --check` fails when it differs from
 the declarations (a hand swap of two lines is reported). To add or change a phase: edit the module and its CONTRACT
 line, run `scripts/comb/gen_comb_order.py --write`.
+
+## SimCpu level: the tops export their phases
+
+The same idea one level up, for hierarchical development (front end, back end, memory subsystem, AXI as separately
+developed tops inside SimCpu). Each top lists its SimCpu-level comb phases above its class with the ports they use;
+SimCpu (include/SimCpu.h) holds the port table, i.e. the wires between the tops, as paths in SimCpu:
+```
+//   PORT dcache2lsu = back.in.dcache2lsu
+//   EXPORT comb  in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk   (BackTop.h)
+```
+Kinds: `in` (read after this cycle's writer), `pre` (read before it: the value of the clock edge or of the default
+driver), `out` (one writer per port), `default` (driven first every cycle, the other writers override it: an
+always_comb default; SimCpu's back_in_from_regs and axi_comb_begin). `scripts/comb/gen_top_order.py` generates the
+comb block of `SimCpu::cycle()` from them: a top's phases in header order, a default driver first, a writer before its
+`in` readers, a `pre` reader before the writer, the trace-bridge users (the I-cache fetch, the memory route block's PTW /
+probe data, the back end's commit, all reading the functional memory that the commit updates) in that order; ties by a
+fixed top priority. Its check (part of `comb_graph.py --check`) compares the exports with the scanned top domain: every
+field of a port a phase reads or writes is declared, a read inside a port another phase writes names that port, every
+declared port is used, a field two tops share is part of a port, one writer per port. Mutations (an input dropped, a
+`pre` dropped, two generated lines swapped) are reported.
+
+A cycle between two tops shows up as a cycle in the exports; the fix is to split a phase where the RTL has two
+independent cones, as the memory subsystem's comb_outputs (responses, before the back end) / comb_inputs (requests,
+after it) and the AXI's comb_outputs / comb_inputs do. A cycle that cannot be split is a combinational loop in the
+design.
+
+Changes the exports needed (cycles identical):
+* the MMIO response went from the memory subsystem into `back.in.peripheral_resp` after the back end had read it, and
+  SimCpu copied it from there into its hold register: PeripheralAxi now writes the hold register's d directly (its
+  request / response pointers are in its `in` / `out`, so the scan sees them), the copy phase is gone;
+* `back.out.fire` was a pointer into the pre-decode queue's wires: a value driven by BackTop::comb_outputs;
+* the I-cache cleared the interconnect's `accepted` / `accepted_id` on reset, which the interconnect overwrites every
+  cycle and never reads: removed (one writer per port);
+* the comment that `resp.ready` is read in the interconnect's comb was wrong: it is sampled at the clock edge.
+The generated order differs from the hand-made one (the front end's next-cycle inputs and the front-to-back hold run
+before the memory subsystem's requests); gates RVC=0 62/62, RVC=1 67/67 and FPR are identical.
+
+Known: the AXI ports' fields are scanned without the master index, so the I-cache's and the memory subsystem's parts of
+the read port array are two port names over the same fields (aliases; the one-writer rule is per name). The interconnect
+reads the memory-side masters' requests in comb_outputs only as their default (cleared) values (`pre`), part of the AXI
+kit's internal registers listed in docs/REG_WIRE.md. TB_ORDER at this level is declared, not scanned.

@@ -395,8 +395,8 @@ void MemSubsystem::init() {
   wb_.init();
   dcache_.init();
   peripheral_model_.bind(csr_interrupt_inject);
-  peripheral_axi_.peripheral_req = peripheral_req;
-  peripheral_axi_.peripheral_resp = peripheral_resp;
+  peripheral_axi_.in.req = peripheral_req;
+  peripheral_axi_.out.resp = peripheral_resp;
   peripheral_axi_.peripheral_model = &peripheral_model_;
   peripheral_axi_.in.read = extra_axi_r;   // MMIO <-> the EXTRA_R / EXTRA_W master ports
   peripheral_axi_.out.read = extra_axi_r;

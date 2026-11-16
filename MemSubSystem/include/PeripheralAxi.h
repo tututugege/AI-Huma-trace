@@ -9,11 +9,13 @@
 class PeripheralModel;
 
 struct PeripheralAxiIn {
+  const PeripheralReqIO *req = nullptr;                          // the LSU's MMIO request
   const axi_interconnect::ReadMasterPort_t *read = nullptr;    // the EXTRA_R / EXTRA_W ports, interconnect side
   const axi_interconnect::WriteMasterPort_t *write = nullptr;
 };
 
 struct PeripheralAxiOut {
+  PeripheralRespIO *resp = nullptr;                              // the MMIO response to the LSU (SimCpu's register d)
   axi_interconnect::ReadMasterPort_t *read = nullptr;          // the same ports, the request side (bypass: MMIO)
   axi_interconnect::WriteMasterPort_t *write = nullptr;
 };
@@ -32,8 +34,6 @@ struct PeripheralAxiState {
 
 class PeripheralAxi {
 public:
-  PeripheralReqIO *peripheral_req = nullptr;
-  PeripheralRespIO *peripheral_resp = nullptr;
   PeripheralModel *peripheral_model = nullptr;
 
   void init();

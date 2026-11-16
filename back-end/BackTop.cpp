@@ -29,8 +29,6 @@ void BackTop::init() {
       std::make_unique<TlbMmu>(ctx, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
   lsu->dtlb = dtlb_mmu.get();
 
-  out.fire = pre2front.fire;
-
   pre->wires = this;
   idu->wires = this;
   rename->wires = this;
@@ -84,6 +82,7 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 // Working copies and default outputs of every module.
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_outputs() {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.fire[i] = pre2front.fire[i];
   // 用于调试
   // 修正pc_next 以及difftest对应的pc_next
   out.flush = rob_bcast.flush;

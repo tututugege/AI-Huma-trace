@@ -32,8 +32,11 @@ class MemSubsystem;
 
 // The back end's own phase: its outputs to the front end and the memory side (redirect, commit, stall) and the CSR's
 // FS-dirty request. Contract (checked by scripts/comb/comb_graph.py against the code):
-//   CONTRACT comb_outputs  in: csr2front dec_bcast ftq_commit_info pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
-//   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+//   CONTRACT comb_outputs  in: csr2front dec_bcast ftq_commit_info pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+//   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+// SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
+//   EXPORT comb_csr_status  out: csr_status
+//   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk
 class BackTop : public Wires {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
@@ -70,7 +73,6 @@ public:
   BackTop(SimContext *ctx) {
     this->ctx = ctx;
     pre = nullptr;
-    out.fire = nullptr;
   };
   ~BackTop() {
     delete pre;

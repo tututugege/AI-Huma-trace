@@ -19,7 +19,7 @@ struct Back_out {
   bool flush;
   bool fence_i;
   bool itlb_flush;
-  wire<1> *fire;
+  wire<1> fire[BACKEND_FETCH_WIDTH] = {};   // the fetch-group slots the back end took this cycle
   wire<XLEN> redirect_pc;
   bool rf_valid = false;               // BPA_REPAIR: the redirect is a branch mispredict; the block / slot / type of the branch
   uint16_t rf_blk = 0;
@@ -41,7 +41,7 @@ struct Back_out {
 
   Back_out()
       : mispred(false), stall(false), flush(false), fence_i(false),
-        itlb_flush(false), fire(nullptr), redirect_pc(0), commit_entry{},
+        itlb_flush(false), redirect_pc(0), commit_entry{},
         sstatus{}, mstatus{}, satp{}, privilege{}, peripheral_req{},
         lsu2dcache{} {}
 };

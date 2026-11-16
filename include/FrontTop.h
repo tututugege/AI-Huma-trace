@@ -25,6 +25,9 @@ struct ICacheMemPortResp{
   uint32_t resp_data;
 };
 
+// SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
+//   EXPORT comb            in: csr_status  pre: fetch_group  out: fetch_group axi_ic_req axi_ic_resp_ready icache_probe itlb_walk
+//   EXPORT comb_from_back  in: csr_status back2front
 class FrontTop {
 public:
   front_top_in in;

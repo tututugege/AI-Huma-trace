@@ -175,7 +175,7 @@ void comb(icache_in *in, icache_out *out) {
   out->fetch_single_word = false;
   auto *rp = g_bind.read;
   if (in->reset) {   // (the module itself is reset at the edge: icache_seq)
-    if (rp) { rp->req.valid = false; rp->req.addr = 0; rp->req.total_size = 0; rp->req.id = 0; rp->req.bypass = false; rp->req.accepted = false; rp->req.accepted_id = 0; rp->resp.ready = false; }
+    if (rp) { rp->req.valid = false; rp->req.addr = 0; rp->req.total_size = 0; rp->req.id = 0; rp->req.bypass = false; rp->resp.ready = false; }
     if (g_bind.probe_req) { g_bind.probe_req->req_valid = false; g_bind.probe_req->req_addr = 0; }
     if (TlbMmu *m = g_bind.mmu()) m->flush();
     out->icache_read_ready = true;
