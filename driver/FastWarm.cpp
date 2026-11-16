@@ -144,7 +144,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
   RefCpuContext *rc = refcore_ctx();
   g_warm = std::make_unique<Warm>();
   Warm &W = *g_warm;
-  W.llc.init(cpu.axi_interconnect.get_llc_config());
+  W.llc.init(cpu.axi.interconnect.get_llc_config());
   refcpu_set_sim_time(rc, static_cast<uint64_t>(sim_time));
 
   RefCpuStepInfo info{};
@@ -246,6 +246,6 @@ void fast_warm_install(SimCpu &cpu) {
       const size_t b = size_t(set) * W.llc.ways;
       cpu.mem_subsystem.llc_warm_set(set, &W.llc.tag[b], &W.llc.valid[b], &W.llc.dirty[b], W.llc.repl[set]);
     }
-    cpu.axi_interconnect.warm_set_llc_dirty_lines(uint32_t(W.llc.dirty_lines));
+    cpu.axi.interconnect.warm_set_llc_dirty_lines(uint32_t(W.llc.dirty_lines));
   }
 }

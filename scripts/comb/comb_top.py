@@ -1,6 +1,6 @@
 """Top domain of comb_graph.py: SimCpu::cycle() up to the first seq call.
 
-Every access is a path from SimCpu (`back.out.lsu2dcache`, `axi_interconnect.read_ports[MASTER_ICACHE].req.ready`,
+Every access is a path from SimCpu (`back.out.lsu2dcache`, `axi.interconnect.read_ports[MASTER_ICACHE].req.ready`,
 `mem_subsystem.mshr_axi_in.req_ready`); an index that is a constant (MASTER_*) is kept, any other index is the
 wildcard `[]`.  SimCpu methods and free functions called from cycle() are inlined statement by statement (parameters
 and local `auto &` aliases substituted).  A call into a sub-object is one phase whose read / write set is a summary:
@@ -9,19 +9,24 @@ and local `auto &` aliases substituted).  A call into a sub-object is one phase 
                                    (icache_top.cpp: bind_.read -> the AXI ICACHE read port, probe_req / probe_resp ->
                                    SimCpu::icache_req / icache_resp) + the ITLB walk port
   mem_subsystem.comb_outputs / comb_inputs   the mem rows of that function, pointer members through SimCpu::init()
-  axi_interconnect.* / axi_ddr.* / axi_mmio.* / mem_subsystem.llc_*   a scan of that class's member function closure
+  axi.interconnect.* / axi.ddr.* / axi.mmio.* / mem_subsystem.llc_*   a scan of that class's member function closure
+FrontTop's comb / comb_from_back and AxiSubsystem's comb phases are inlined like SimCpu's methods (members -> front.* / axi.*).
 A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by MemSubsystem::comb_inputs) and
 <port>.out (the response the TLB reads, written by sync_ptw_port_outputs in comb_inputs and in MemSubsystem::seq).
 """
 import re, os
 from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS, FRONT_ROWS
 
-ROOTS = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio', 'axi_uart', 'icache_req',
-         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'front2back_hold_q', 'front2back_hold_d', 'front2back_hold_q_live', 'front2back_hold_d_live',
-         'peripheral_resp_hold_q', 'peripheral_resp_hold_d', 'oracle_pending_valid', 'oracle_pending_out', 'ctx')
-SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio')
+ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'icache_req',
+         'icache_resp', 'icache_resp_q', 'icache_axi_q', 'q_', 'd', 'ctx')
+SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
 SEQ_CALLS = ('front.seq_core',)
-FRONT_INLINE = ('front.comb', 'front.comb_from_back')   # FrontTop methods inlined like SimCpu's        # cycle() is scanned up to the first of these
+# methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
+INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out'),
+          'front.comb_from_back': ('FrontTop', r'back2front_stall_1|back2front_stall|back2front_1|back2front|in|out'),
+          'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
+          'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
+          'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 DEPTH = 4                                   # path components kept below the root
 
@@ -153,7 +158,7 @@ def top_domain(root, ASSIGN, back_rows):
     ic = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|bind_\.\w+)\s*\)', 'if (1)', ic)          # null tests of the port pointers
     ic = re.sub(r'\b(?:rp|rq|pr|bind_\.\w+)\s*\?', '1 ?', ic)
     ic = re.sub(r'\bbind_\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), ic)
-    ic = re.sub(r'\bbind_\.read\b|\brp\b', 'axi_interconnect.read_ports[MASTER_ICACHE]', ic)
+    ic = re.sub(r'\bbind_\.read\b|\brp\b', 'axi.interconnect.read_ports[MASTER_ICACHE]', ic)
     ic = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), ic)
     ic = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), ic)
     ir, iw = scan_paths(ic, ASSIGN, src, notes, 'icache')
@@ -178,8 +183,8 @@ def top_domain(root, ASSIGN, back_rows):
 
     ax_members = ('read_ports', 'write_ports', 'axi_ddr_io', 'axi_mmio_io', 'llc_lookup_in_', 'llc_lookup_in')
     for meth in ('comb_outputs', 'comb_inputs', 'set_llc_lookup_in'):
-        S['axi_interconnect.' + meth] = class_summary('axi_interconnect', 'AXI_Interconnect', meth, ax_members)
-    for obj, cls in (('axi_ddr', 'SimDDR'), ('axi_mmio', 'MMIO_Bus_AXI4')):
+        S['axi.interconnect.' + meth] = class_summary('axi.interconnect', 'AXI_Interconnect', meth, ax_members)
+    for obj, cls in (('axi.ddr', 'SimDDR'), ('axi.mmio', 'MMIO_Bus_AXI4')):
         for meth in ('comb_outputs', 'comb_inputs'):
             S[obj + '.' + meth] = class_summary(obj, cls, meth, ('io',))
     S['mem_subsystem.llc_comb_outputs'] = class_summary('mem_subsystem', 'MemSubsystem', 'llc_comb_outputs', ('axi_kit_runtime',))
@@ -221,13 +226,16 @@ def top_domain(root, ASSIGN, back_rows):
             if cm and norm_path(cm.group(1)) in SUBOBJ:
                 key = norm_path(cm.group(1)) + '.' + cm.group(2)
                 if key in SEQ_CALLS: stop[0] = True; return
-                if key in FRONT_INLINE:   # a FrontTop method: inlined, its members are front.*
-                    fb = src.body('FrontTop', cm.group(2))
+                if key in INLINE:   # a FrontTop / AxiSubsystem method: inlined, its members prefixed with the object
+                    cls, members = INLINE[key]
+                    obj = norm_path(cm.group(1))
+                    fb = src.body(cls, cm.group(2))
                     params = [re.search(r'(\w+)\s*$', p.strip()).group(1) for p in split_top(fb[0], ',') if p.strip()]
                     args = [a.strip() for a in split_top(cm.group(3), ',') if a.strip()]
                     body = strip_comments(fb[1])
-                    body = re.sub(r'(?<![\w.>])(back2front_stall_1|back2front_stall|back2front_1|back2front|in|out)\b(?!\s*\()', r'front.\1', body)
+                    body = re.sub(r'(?<![\w.>])(' + members + r')\b(?!\s*\()', obj + r'.\1', body)
                     body = re.sub(r'(?<![\w.>])(read_core_q|comb_core)\s*\(\)', r'front.\1()', body)
+                    body = re.sub(r'(?<![\w.>:])(connect_slave_outputs|connect_master_outputs)\s*\(', r'\1(', body)
                     mp2 = dict(mp)
                     for p, a in zip(params, args): mp2[p] = a
                     walk_body(body, key, mp2); continue
@@ -243,8 +251,8 @@ def top_domain(root, ASSIGN, back_rows):
                 if src.body('SimCpu', fn):
                     if fn.endswith('_seq'): continue        # a clock edge (register load), not a comb phase
                     walk_body(src.body('SimCpu', fn)[1], fn, dict(mp)); continue
-                fb = src.body(None, fn)
-                if fb and fb[1] in src.t[os.path.join(root, 'SimCpu.cpp')]:
+                fb = src.body('AxiSubsystem', fn) or src.body(None, fn)
+                if fb and (fb[1] in src.t[os.path.join(root, 'SimCpu.cpp')] or fb[1] in src.t[os.path.join(root, 'AxiSubsystem.cpp')]):
                     params = [re.search(r'(\w+)\s*$', p.strip()).group(1) for p in split_top(fb[0], ',') if p.strip()]
                     mp2 = dict(mp)
                     for p, a in zip(params, args):

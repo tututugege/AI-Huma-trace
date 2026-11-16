@@ -13,8 +13,9 @@ The rules the model follows (exp/style, 2026-11-16). Module structure, contracts
 * A module's comb phase methods: `comb_<what>` (`comb_outputs`, `comb_stage1`); its clock edge: `seq`; reading its
   registers' q (a snapshot for the cycle): `read_q`. Helper functions are named after what they compute (`predecode`,
   `predecode_check`, `front_output`), without a `_comb` suffix.
-* Registers: `Regs q_` / `Regs d` (MODULE_CONTRACT.md); a pair of single registers outside a module: `x_q` / `x_d`
-  (`front2back_hold_q` / `front2back_hold_d`). No `_1` suffix for next-state values.
+* Registers: `Regs q_` / `Regs d` (MODULE_CONTRACT.md), SimCpu's own registers too (the fetch-group and MMIO-response
+  holds). Exception: the I-cache port registers `icache_axi_q` / `icache_resp_q`, loaded at the start of the cycle from
+  the interconnect's port (REG_WIRE.md). No `_1` suffix for next-state values.
 
 ## Types
 

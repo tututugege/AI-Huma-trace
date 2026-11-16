@@ -243,9 +243,9 @@ trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows)
 # reviewed: the AXI interconnect keeps some of its own last-cycle outputs in the shared port structs (the downstream
 # AR / AW / W valid it drove, the write-port req.ready) and reads them in comb_outputs: registers inside the AXI kit,
 # to become explicit when the AXI kit is reworked (docs/REG_WIRE.md)
-TOP_KNOWN = {('axi_interconnect.comb_outputs', f'axi_interconnect.{io}.{ch}.{ch}valid', 'axi_interconnect.comb_inputs'): 'AXI kit'
+TOP_KNOWN = {('axi.interconnect.comb_outputs', f'axi.interconnect.{io}.{ch}.{ch}valid', 'axi.interconnect.comb_inputs'): 'AXI kit'
              for io in ('axi_ddr_io', 'axi_mmio_io') for ch in ('ar', 'aw', 'w')}
-TOP_KNOWN[('axi_interconnect.comb_outputs', 'axi_interconnect.write_ports[].req.ready', 'axi_interconnect.comb_inputs')] = 'AXI kit'
+TOP_KNOWN[('axi.interconnect.comb_outputs', 'axi.interconnect.write_ports[].req.ready', 'axi.interconnect.comb_inputs')] = 'AXI kit'
 thaz, tstaged = [], 0
 for i, (n, r, w) in enumerate(trows):
     for j in range(i + 1, len(trows)):
