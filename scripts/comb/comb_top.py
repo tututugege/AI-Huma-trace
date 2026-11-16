@@ -4,10 +4,10 @@ Every access is a path from SimCpu (`back.out.lsu2dcache`, `axi.interconnect.rea
 `mem_subsystem.mshr_axi_in.req_ready`); an index that is a constant (MASTER_*) is kept, any other index is the
 wildcard `[]`.  SimCpu methods and free functions called from cycle() are inlined statement by statement (parameters
 and local `auto &` aliases substituted).  A call into a sub-object is one phase whose read / write set is a summary:
-  back.comb                        the back-end rows (Wires field F -> back.F; BackTop is the Wires)
-  front.comb_core                   the front rows (in.F -> front.in.F, out.F -> front.out.F) + the I-cache ports
-                                   (icache_top.cpp: bind_.read -> the AXI ICACHE read port, probe_req / probe_resp ->
-                                   SimCpu::icache_req / icache_resp) + the ITLB walk port
+  <module>.<phase>                  a module's phase (modules.py): its scanned ports as SimCpu paths (its parent's
+                                   bindings); the I-cache's fetch also its AXI / probe ports (icache_top.cpp:
+                                   bind_.read -> the AXI ICACHE read port, probe_req / probe_resp -> SimCpu::icache_req
+                                   / icache_resp) and the ITLB walk port
   mem_subsystem.comb_outputs / comb_inputs   the mem rows of that function, pointer members through SimCpu::init()
   axi.interconnect.* / axi.ddr.* / axi.mmio.* / mem_subsystem.llc_*   a scan of that class's member function closure
 FrontTop's comb / comb_from_back and AxiSubsystem's comb phases are inlined like SimCpu's methods (members -> front.* / axi.*).
@@ -15,13 +15,14 @@ A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by Me
 <port>.out (the response the TLB reads, written by sync_ptw_port_outputs in comb_inputs and in MemSubsystem::seq).
 """
 import re, os
-from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS, FRONT_ROWS
+from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure, MEM_GROUPS
+import modules
 
 ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'icache_req',
          'icache_resp', 'icache_resp_q', 'icache_axi_q', 'ctx')
 SUBOBJ = ('mem_subsystem.wb_', 'mem_subsystem.mshr_', 'mem_subsystem.mem_route_block', 'mem_subsystem.peripheral_axi_',
-          'mem_subsystem.ptw_block', 'mem_subsystem.dcache_', 'back', 'back.pre', 'back.idu', 'back.rename', 'back.dis', 'back.isu', 'back.exu', 'back.csr', 'back.rob',
-          'back.lsu', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
+          'mem_subsystem.ptw_block', 'mem_subsystem.dcache_', 'back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f',
+          'axi.interconnect', 'axi.ddr', 'axi.mmio') + tuple(m for m, _ in modules.MODULES)
 SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
 INLINE = {'front.comb_begin': ('FrontTop', r'in|out|can_read'),
@@ -111,7 +112,7 @@ def scan_paths(body, ASSIGN, src, notes, owner, roots=ROOTS, prefix='', types=No
     return r, w
 
 
-def top_domain(root, ASSIGN, back_rows, back_cls=None):
+def top_domain(root, ASSIGN):
     src = Src(root, ['back-end', 'front-end', 'MemSubSystem', 'axi-interconnect-kit', 'include'])
     for fn in os.listdir(root):
         if fn.endswith('.cpp'): src.t[os.path.join(root, fn)] = open(os.path.join(root, fn), errors='ignore').read()
@@ -136,14 +137,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
                 if mk: w |= mk if isinstance(mk, set) else {mk}
         return r, w
 
-    def back_key(k, write=False): return 'back.' + k
-    def front_key(k, write=False):
-        head = k.split('.')[0]
-        if head == 'in':
-            if k.startswith('in.csr_status'): return None if write else 'back.csr_status'   # a pointer to back.csr_status (read)
-            return 'front.' + k
-        if head == 'out': return 'front.' + k
-        return None                                                    # the front end's wires / internal state
     def mem_key(k, write=False):
         head = k.split('.')[0]
         if head in WALK: return None                                   # the walk ports: added explicitly below
@@ -152,7 +145,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
 
     S = {}
     S['front.read_core_q'] = (set(), set())
-    fr, fw = from_rows(FRONT_ROWS, front_key)
     # the I-cache ports (icache_top.cpp, ICacheTop's methods over bind_)
     ict = src.t[os.path.join(root, 'front-end', 'icache', 'icache_top.cpp')]
     ic = ''
@@ -170,9 +162,15 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
     ic = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), ic)
     ic = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), ic)
     ir, iw = scan_paths(ic, ASSIGN, src, notes, 'icache')
-    fr |= ir | {'mem_subsystem.itlb_walk.out'}
-    fw |= iw | {'mem_subsystem.itlb_walk.in'}
-    S['front.comb_core'] = (fr, fw)
+    # the modules' phases: their ports as SimCpu paths
+    mbind = modules.bindings()
+    for name, mod, mcls, _, _ in modules.phases():
+        r, w = modules.scan(mod, mcls, name[len(mod) + 1:], mbind)
+        S[name] = ({norm_path(modules.path_of(mod, k, mbind)) for k in r}, {norm_path(modules.path_of(mod, k, mbind)) for k in w})
+    S['front.core.icache.comb_fetch'][0].update(ir | {'mem_subsystem.itlb_walk.out', 'back.csr_status'})
+    S['front.core.icache.comb_fetch'][1].update(iw | {'mem_subsystem.itlb_walk.in'})
+    S['back.lsu.comb_translate'][0].add('mem_subsystem.dtlb_walk.out')
+    S['back.lsu.comb_translate'][1].add('mem_subsystem.dtlb_walk.in')
 
     # ---- the same calls phase by phase (global_graph.py): each domain's rows as SimCpu paths, with their source text ----
     SUB = {}
@@ -188,57 +186,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
                 if mk: w |= mk if isinstance(mk, set) else {mk}
             out.append([prefix + n, r, w, ''])
         return out
-    # the back-end phases: one SimCpu-level phase each (back.<module>.<phase>, BackTop's own: back.<phase>)
-    for row in mapped(back_rows, back_key, ''):
-        obj, fn = row[0].split('.')
-        key = 'back.' + fn if obj == 'top' else f'back.{obj}.{fn}'
-        txt = (closure(src, back_cls[obj], fn) or '') if back_cls and obj in back_cls else ''
-        for o2, f2 in set(re.findall(r'\b(\w+)->(\w+)\s*\(', txt)):
-            if back_cls and o2 in back_cls: txt += closure(src, back_cls[o2], f2) or ''
-        if key == 'back.lsu.comb_translate':
-            row[1].add('mem_subsystem.dtlb_walk.out'); row[2].add('mem_subsystem.dtlb_walk.in')
-        S[key] = (set(row[1]), set(row[2]))
-        SUB[key] = [[key, set(row[1]), set(row[2]), txt]]
-    def front_key2(k, write=False):   # the front end's wires: front.c.*
-        if k.split('.')[0] in ('in', 'out'): return front_key(k, write)
-        return 'front.c.' + k
-    SUB['front.comb_core'] = mapped(FRONT_ROWS, front_key2, 'front.')
-    IC_PHASE = {'comb': 'run_icache', 'step': 'run_icache', 'comb_calc': 'run_icache', 'clear_outputs': 'run_icache',
-                'invalidate_step': 'finish', 'read_ready': 'read_fifos'}
-    def ic_ports(t1):
-        t1 = re.sub(r'(?:const\s+)?auto\s*\*\s*\w+\s*=\s*bind_\.\w+\s*;', '', t1)
-        t1 = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|bind_\.\w+)\s*\)', 'if (1)', t1)
-        t1 = re.sub(r'\b(?:rp|rq|pr|bind_\.\w+)\s*\?', '1 ?', t1)
-        t1 = re.sub(r'\bbind_\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), t1)
-        t1 = re.sub(r'\bbind_\.read\b|\brp\b', 'axi.interconnect.read_ports[MASTER_ICACHE]', t1)
-        t1 = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), t1)
-        t1 = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), t1)
-        return scan_paths(t1, ASSIGN, src, notes, 'icache')
-    for row in SUB['front.comb_core']:
-        ph = row[0].split('.', 1)[1]
-        txt = closure(src, 'FrontCore', ph) or ''
-        for cm2 in set(re.findall(r'\bicache\.(\w+)\s*\(', txt)): txt += closure(src, 'ICacheTop', cm2) or ''
-        row[3] = txt
-        for fn, phx in IC_PHASE.items():
-            if phx != ph: continue
-            mm = re.search(r'\n[\w:<>&*\s]*?\b' + fn + r'\s*\([^)]*\)\s*(?:const\s*)?\{', ict)
-            if not mm: continue
-            r1, w1 = ic_ports(Src.block(ict, mm.end() - 1))
-            row[1] |= r1; row[2] |= w1
-        if ph == 'run_icache':
-            row[1].add('mem_subsystem.itlb_walk.out'); row[2].add('mem_subsystem.itlb_walk.in')
-    for row in SUB['front.comb_core']:   # each front phase: a SimCpu-level phase
-        S[row[0]] = (set(row[1]), set(row[2]))
-        SUB[row[0]] = [row]
-    memh = src.t.get(os.path.join(root, 'MemSubSystem', 'include', 'MemSubsystem.h'), '')
-    def mem_text(n):
-        if '.' in n:
-            obj, meth = n.split('.', 1)
-            tm = re.search(r'([\w:<>]+)\s+' + re.escape(obj) + r'\s*[;{=]', memh)
-            return (closure(src, tm.group(1).split('::')[-1], meth) or '') if tm else ''
-        return closure(src, 'MemSubsystem', n) or ''
     for row in mapped(MEM_GROUPS['all'], mem_key, 'mem_subsystem.'):   # one SimCpu-level phase each
-        row[3] = mem_text(row[0].split('.', 1)[1])
         if row[0] == 'mem_subsystem.peripheral_axi_.comb': row[1].add('mem_subsystem.peripheral_model_')
         if row[0] == 'mem_subsystem.ptw_request': row[1] |= {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'}
         S[row[0]] = (set(row[1]), set(row[2]))
@@ -287,7 +235,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
         for st in statements(body):
             if stop[0]: return
             if top:   # a statement of cycle(): one SimCpu-level phase
-                cm0 = re.match(r'([\w.]+?)\s*(?:\.|->)\s*(\w+)\s*\(', st) or re.match(r'(\w+)\s*\(', st)
+                cm0 = re.match(r'([\w.>-]+?)\s*(?:\.|->)\s*(\w+)\s*\(', st) or re.match(r'(\w+)\s*\(', st)
                 cur_group[0] = (norm_path(cm0.group(1)) + '.' + cm0.group(2)) if cm0 and cm0.lastindex == 2 else (cm0.group(1) if cm0 else 'cycle')
             st = subst(st, mp)
             st = re.sub(r'\bcpu\s*\.\s*', '', st)              # free functions: cpu.X -> X
@@ -297,7 +245,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
             if am and re.match(PATH % '|'.join(ROOTS), am.group(2).strip()):
                 mp[am.group(1)] = '(' + am.group(2).strip() + ')' if '(' in am.group(2) else am.group(2).strip()
                 continue
-            cm = re.match(r'([\w.]+?)\s*(?:\.|->)\s*(\w+)\s*\(([^;]*)\)\s*;$', st)
+            cm = re.match(r'([\w.>-]+?)\s*(?:\.|->)\s*(\w+)\s*\(([^;]*)\)\s*;$', st)
             if cm and norm_path(cm.group(1)) in SUBOBJ:
                 key = norm_path(cm.group(1)) + '.' + cm.group(2)
                 if key in SEQ_CALLS: stop[0] = True; return

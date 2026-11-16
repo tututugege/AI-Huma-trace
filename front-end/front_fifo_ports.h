@@ -10,6 +10,8 @@
 // Each module's first phase of the cycle starts its port state anew (in cleared, read data from the registers, the
 // request's enables cleared).
 
+//   CONTRACT comb_read  in: in.fetch_addr_read_enable in.global_refetch in.global_reset in.pipe_dec in.rd.fetch_addr_fifo_rd_snapshot  out: out.fetch_addr_fifo_req out.fetch_addr_head out.fetch_addr_in out.fetch_addr_rd out.ipf
+//   CONTRACT comb_write  in: in.bpu_can_run in.bpu_output in.global_reset  out: out.fetch_addr_fifo_req out.fetch_addr_in out.fetch_addr_rd out.ipf
 class FetchAddrPort {
 public:
   struct In {
@@ -30,6 +32,8 @@ public:
   void comb_write();   // the predicted fetch address enters the FIFO (the I-cache reads it next cycle)
 };
 
+//   CONTRACT comb_read  in: in.fifo_read_enable in.global_refetch in.global_reset in.ptab_head in.rd.fifo_rd_snapshot in.rd.q  out: out.carry_low out.fifo_head out.fifo_in out.fifo_rd out.fifo_req out.grp_in_range out.grp_ptab out.grp_seg_first out.multi out.rvc_n out.rvc_straddle
+//   CONTRACT comb_write  in: in.fetch_addr_head in.global_refetch in.global_reset in.ic_out in.rd.q  out: out.fifo_in out.fifo_rd out.fifo_req
 class InstPort {
 public:
   struct In {
@@ -38,8 +42,8 @@ public:
     const FrontReadData *rd = nullptr;
     const ICacheOut *ic_out = nullptr;
     const FetchAddrFifoOut *fetch_addr_head = nullptr;
-    ICacheTop *icache = nullptr;   // FE_PAIR: the second block's words (fetch_second)
   } in;
+  ICacheTop *icache = nullptr;   // FE_PAIR: the second block's words (fetch_second, the I-cache's arrays)
   struct Out {
     InstFifoIn fifo_in{};
     InstFifoReadData fifo_rd{};
@@ -60,6 +64,7 @@ private:
   void fix_head();
 };
 
+//   CONTRACT comb_read  in: in.bpu_output in.fifo_read_enable in.global_refetch in.global_reset in.ptab_bypass in.ptab_can_write in.rd.ptab_rd_snapshot  out: out.ptab_head out.ptab_in out.ptab_rd out.ptab_req
 class PtabPort {
 public:
   struct In {
@@ -78,6 +83,8 @@ public:
   void comb_read();   // the BPU's block in (written before the read when it bypasses to the checker), the head out
 };
 
+//   CONTRACT comb_read  in: in.f2b_read_enable in.global_reset in.in.redirect in.rd.front2back_fifo_rd_snapshot  out: out.f2b_bypass out.f2b_head out.f2b_in out.f2b_rd out.front2back_fifo_req out.use_f2b_bypass
+//   CONTRACT comb_write  in: in.checker_out in.f2b_read_enable in.fifo_head in.fifo_read_enable in.global_reset in.grp_ptab in.rd.q  out: out.f2b_bypass out.f2b_in out.f2b_rd out.front2back_fifo_req out.use_f2b_bypass
 class F2bPort {
 public:
   struct In {

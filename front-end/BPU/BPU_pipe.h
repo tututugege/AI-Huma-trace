@@ -214,8 +214,8 @@ struct RecP {   // BPA_REPAIR: checkpoint record of one fetch block, written whe
   Ckpt ck; pc_t base = 0; uint8_t ptype[FW] = {}; uint16_t id = 0; uint8_t epoch = 0; bool valid = false;
 };
 
-// The front end's BPU phase (ports named after the front end's wires):
-//   CONTRACT comb_front  in: in.global_reset in.global_refetch in.in in.rd in.pipe_dec  out: out.bpu_output out.bpu_can_run out.bpu_seq_txn
+// The front end's BPU phase (ports named after the front end's wires).
+//   CONTRACT comb_front  in: in.global_refetch in.global_reset in.in.ctrl in.in.redirect in.in.train in.pipe_dec in.rd.ptab_rd_snapshot in.rd.q  out: out.bpu_can_run out.bpu_output out.bpu_seq_txn out.pmu_l1_ovr out.pmu_ptab_stall
 class BpuPipe {
  public:
   struct In {
@@ -223,14 +223,16 @@ class BpuPipe {
     const bool *global_refetch = nullptr;
     const FrontTopIn *in = nullptr;          // the front end's inputs (redirect, training, reset)
     const FrontReadData *rd = nullptr;       // the front end's registers (q)
-    const Decision *pipe_dec = nullptr;      // the last stage's decision of the cycle (FrontComb::control)
-    SimContext *ctx = nullptr;
+    const Decision *pipe_dec = nullptr;      // the last stage's decision of the cycle (FrontControl::control)
   } in;
+  SimContext *ctx = nullptr;
   struct SeqTxn { bool valid = false, reset = false; };   // the clock edge's transaction: seq() or reset()
   struct Out {
     OutputPayload bpu_output{};
     bool bpu_can_run = false;
     SeqTxn bpu_seq_txn{};
+    bool pmu_l1_ovr = false;       // this cycle's transaction (txn(), PMU attribution)
+    bool pmu_ptab_stall = false;
   } out;
   void comb_front();   // the next fetch group, unless the fetch-address FIFO is full (a flush always runs it)
   struct Trk {                         // commit-side block tracker + uBTB train queue

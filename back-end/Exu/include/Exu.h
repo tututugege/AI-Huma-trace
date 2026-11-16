@@ -45,9 +45,8 @@ struct FuUnit {
 
 // Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_exec      in: dec_bcast lsu2exe rob_bcast  out: exe2csr exe2iss exe2lsu exe2prf exu2id exu2rob prf_awake
-//   CONTRACT comb_pipeline  in: dec_bcast iss2prf rob_bcast  out: -
-//   CONTRACT owns: exe2csr exe2iss exe2lsu exe2prf exu2id exu2rob prf_awake
+//   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2csr out.exe2iss out.exe2lsu out.exe2prf out.exu2id out.exu2rob out.prf_awake
+//   CONTRACT comb_pipeline  in: in.dec_bcast in.iss2prf in.rob_bcast  out: -
 class Exu {
 public:
   void comb_exec();  // late load wakeup, the FUs, the port readiness for issue

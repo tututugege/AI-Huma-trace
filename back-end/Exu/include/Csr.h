@@ -123,11 +123,10 @@ inline int cvt_number_to_csr(int csr_idx) {
 
 // CSR file. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_csr_status        in: -                          out: csr_status
-//   CONTRACT comb_interrupt         in: -                          out: csr2rob
-//   CONTRACT comb_commit            in: exe2csr rob2csr rob_bcast  out: csr2front
-//   CONTRACT comb_interrupt_inject  in: csr_interrupt_inject_io top2csr    out: -
-//   CONTRACT owns: csr2rob csr2front
+//   CONTRACT comb_csr_status  in: -  out: out.csr_status
+//   CONTRACT comb_interrupt  in: -  out: out.csr2rob
+//   CONTRACT comb_commit  in: in.exe2csr in.rob2csr in.rob_bcast  out: out.csr2front
+//   CONTRACT comb_interrupt_inject  in: in.csr_interrupt_inject_io in.top2csr  out: -
 class Csr {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

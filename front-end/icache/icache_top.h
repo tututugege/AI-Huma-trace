@@ -19,7 +19,8 @@ struct ICacheMemPortReq;
 struct ICacheMemPortResp;
 
 // The front end's fetch step is a phase of the I-cache (ports named after the front end's wires):
-//   CONTRACT comb_fetch  in: in.global_reset in.global_refetch in.in in.fetch_addr_head  out: out.ic_in out.ic_out
+//   CONTRACT comb_fetch  in: in.fetch_addr_head in.global_refetch in.global_reset in.in.csr_status in.in.ctrl  out: out.ic_in out.ic_out
+//   CONTRACT comb_invalidate  in: in.in.csr_status in.predecode_flush  out: out.ic_k
 class ICacheTop {
 public:
   struct In {

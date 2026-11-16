@@ -1,5 +1,6 @@
 // SimCpu: the tops (front end, back end, memory subsystem, AXI) wired together, and one cycle of the whole core.
 #include "SimCpu.h"
+#include "front_core.h"   // the front end's modules (SimCpu::cycle() calls their phases)
 #include "Csr.h"
 #include "PhysMemory.h"
 #include "RealLsu.h"
@@ -105,20 +106,20 @@ void SimCpu::cycle() {
   back.csr->comb_interrupt();
   axi.comb_begin();
   front.comb_begin(&back.csr_status);
-  front.control();
-  front.run_bpu();
-  front.enables();
-  front.read_fetch_addr();
-  front.read_ptab();
-  front.read_instruction();
-  front.read_f2b();
-  front.write_fetch_addr();
-  front.run_icache();
-  front.write_instruction_fifo();
-  front.check_group();
-  front.write_front2back();
-  front.invalidate_icache();
-  front.finish();
+  front.core->ctrl.control();
+  front.core->bpu_pipe.comb_front();
+  front.core->ctrl.enables();
+  front.core->fa_port.comb_read();
+  front.core->ptab_port.comb_read();
+  front.core->inst_port.comb_read();
+  front.core->f2b_port.comb_read();
+  front.core->fa_port.comb_write();
+  front.core->icache.comb_fetch();
+  front.core->inst_port.comb_write();
+  front.core->checker.comb();
+  front.core->f2b_port.comb_write();
+  front.core->icache.comb_invalidate();
+  front.core->ctrl.finish();
   axi.comb_outputs();
   f2b.comb();
   back.pre->comb_accept_front();

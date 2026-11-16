@@ -13,10 +13,9 @@ struct BackIn;
 
 // Pre-IDU queue (instruction buffer and FTQ). Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_accept_front  in: idu_br_latch in.inst in.is_rvc in.meta in.page_fault_inst in.pc in.predict_dir in.predict_next_fetch_address in.valid  out: pre2front pre_issue
-//   CONTRACT comb_commit_info   in: rob_commit                                     out: ftq_commit_info
-//   CONTRACT comb_fire          in: idu_br_latch idu_consume rob_bcast rob_commit  out: -
-//   CONTRACT owns: pre2front pre_issue ftq_commit_info
+//   CONTRACT comb_accept_front  in: in.idu_br_latch in.top_in.inst in.top_in.is_rvc in.top_in.meta in.top_in.page_fault_inst in.top_in.pc in.top_in.predict_dir in.top_in.predict_next_fetch_address in.top_in.valid  out: out.pre2front out.pre_issue
+//   CONTRACT comb_commit_info  in: in.rob_commit  out: out.ftq_commit_info
+//   CONTRACT comb_fire  in: in.idu_br_latch in.idu_consume in.rob_bcast in.rob_commit  out: -
 class PreIduQueue {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

@@ -6,9 +6,8 @@ class BackTop;
 
 // Rename. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in) and writes
 // (out), and the outputs only this module drives.
-//   CONTRACT comb_rename  in: -                                               out: ren2dis
-//   CONTRACT comb_fire    in: dec2ren dis2ren dec_bcast rob_bcast rob_commit  out: ren2dec
-//   CONTRACT owns: ren2dis ren2dec
+//   CONTRACT comb_rename  in: -  out: out.ren2dis
+//   CONTRACT comb_fire  in: in.dec2ren in.dec_bcast in.dis2ren in.rob_bcast in.rob_commit  out: out.ren2dec
 class Ren {
 public:
   void comb_rename();  // allocate the destination registers and rename the group of q.inst_r -> ren2dis

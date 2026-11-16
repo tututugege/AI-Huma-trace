@@ -17,6 +17,7 @@
 // The ports (fields as SimCpu paths; {a,b} lists alternatives):
 //   PORT csr_status         = back.csr_status
 //   PORT back_in            = back.in
+//   PORT front_in           = front.in front.read_data   (the front end's inputs and registers of the cycle)
 //   PORT front_out          = front.out front.can_read
 //   PORT b2f_reg            = b2f.q_                 (Back2Front's register: the front end's inputs of the cycle)
 //   PORT fetch_group        = back.in.{inst,pc,is_rvc,valid,front_stall,front_upd_free,front_tq_free,predict_dir,meta,predict_next_fetch_address,page_fault_inst}

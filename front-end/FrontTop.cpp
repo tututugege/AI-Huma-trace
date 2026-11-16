@@ -10,7 +10,7 @@
 #include <memory>
 
 FrontTop::FrontTop()
-    : core_(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()) {}
+    : core(std::make_unique<FrontCore>()), read_data_(std::make_unique<FrontReadData>()) {}
 
 // the I-cache's ports (SimCpu binds them on FrontTop; they take effect at the I-cache's next step)
 void FrontTop::bind_ports() {
@@ -20,7 +20,7 @@ void FrontTop::bind_ports() {
   p.probe_resp = icache_mem_resp_port;
   p.read = icache_mem_read_port;
   p.read_q = icache_mem_read_q;
-  core_->icache.set_ports(p);
+  core->icache.set_ports(p);
 }
 
 FrontTop::~FrontTop() = default;
@@ -28,8 +28,8 @@ FrontTop::~FrontTop() = default;
 void FrontTop::init() {
   CsrStatusIO *bound_csr = in.csr_status;
   bind_ports();
-  core_->bind(&in, read_data_.get(), &out, ctx);
-  core_->icache.set_context(ctx);
+  core->bind(&in, read_data_.get(), &out, ctx);
+  core->icache.set_context(ctx);
   in = {};
   out = {};
   in.csr_status = bound_csr;
@@ -43,23 +43,23 @@ void FrontTop::init() {
 
 void FrontTop::read_core_q() {
   bind_ports();
-  core_->read_q(*read_data_);
+  core->read_q(*read_data_);
 }
 
 void FrontTop::comb_core() {
-  core_->comb();
+  core->comb();
 }
 
-void FrontTop::seq_core() { core_->seq(in); }
+void FrontTop::seq_core() { core->seq(in); }
 
 void FrontTop::warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {
-  core_->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
+  core->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
 }
-void FrontTop::warm_finish() { core_->bpu_pipe.warm_finish(); }
+void FrontTop::warm_finish() { core->bpu_pipe.warm_finish(); }
 void FrontTop::warm_icache(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]) {
-  core_->icache.warm_install(tag, valid);
+  core->icache.warm_install(tag, valid);
 }
-void FrontTop::warm_itlb(const void *entries, int count, int repl_ptr) { core_->icache.warm_install_itlb(entries, count, repl_ptr); }
+void FrontTop::warm_itlb(const void *entries, int count, int repl_ptr) { core->icache.warm_install_itlb(entries, count, repl_ptr); }
 
 void FrontTop::restart_at(pc_t pc) {
   in.ctrl.reset = false;
@@ -87,18 +87,4 @@ void FrontTop::comb_begin(CsrStatusIO *csr_status) {
   if (!can_read) in.redirect.valid = false;
   read_core_q();
 }
-void FrontTop::control() { core_->control(); }
-void FrontTop::run_bpu() { core_->run_bpu(); }
-void FrontTop::enables() { core_->enables(); }
-void FrontTop::read_fetch_addr() { core_->read_fetch_addr(); }
-void FrontTop::read_ptab() { core_->read_ptab(); }
-void FrontTop::read_instruction() { core_->read_instruction(); }
-void FrontTop::read_f2b() { core_->read_f2b(); }
-void FrontTop::write_fetch_addr() { core_->write_fetch_addr(); }
-void FrontTop::run_icache() { core_->run_icache(); }
-void FrontTop::write_instruction_fifo() { core_->write_instruction_fifo(); }
-void FrontTop::check_group() { core_->check_group(); }
-void FrontTop::write_front2back() { core_->write_front2back(); }
-void FrontTop::invalidate_icache() { core_->invalidate_icache(); }
-void FrontTop::finish() { core_->finish(); }
 

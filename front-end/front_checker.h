@@ -6,6 +6,7 @@
 // The predecode check of the group at the instruction FIFO head against its PTAB entry (the RTL's predecode_checker):
 // the corrected direction / next fetch address, a refetch when the prediction was wrong, the RVC=1 carry of a straddling
 // last instruction, and the check's report to the BPU for the next cycle.
+//   CONTRACT comb  in: in.carry_low in.fifo_head in.fifo_read_enable in.grp_in_range in.grp_ptab in.grp_seg_first in.multi in.rvc_n in.rvc_straddle  out: out.checker_out out.flush_address out.lh_new_data out.lh_new_pc out.lh_new_valid out.lh_updated out.pd_next out.predecode_flush
 class FrontChecker {
 public:
   struct In {   // (the field names are the front end's wire names)

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""The comb part of SimCpu::cycle() from the tops' exported phases.
+"""The comb part of SimCpu::cycle() from the modules' contracts and the tops' exported phases.
 
-Each top declares its SimCpu-level comb phases above its class (FrontTop, BackTop, MemSubsystem; the AXI and SimCpu glue
+Every module (modules.py: the back end's, the front end's) declares its comb phases above its class in its own port
+names; its ports resolve to SimCpu paths through its parent's bindings (@<path> ports here). Each top declares its SimCpu-level comb phases above its class (FrontTop, BackTop, MemSubsystem; the AXI and SimCpu glue
 phases in include/SimCpu.h, which also holds the port table):
     //   PORT <name> = <SimCpu paths>                        ({a,b} lists alternatives)
     //   EXPORT <phase>  in: <ports>  pre: <ports>  out: <ports>  default: <ports>
-The order follows from the declarations, as gen_comb_order.py does for BackTop::comb() one level down:
-  * a top's phases run in the order its header lists them;
+The order follows from the declarations:
+  * a module's phases (a top's exported phases) run in the order its header lists them;
   * a default driver of a port runs before every other phase that uses a field of it;
   * a writer (out) runs before every reader (in) of the port, a pre reader before every writer;
   * the phases that use the trace bridge keep the order of TB_ORDER (tbhook:: reads of the functional memory, which the
@@ -19,15 +20,14 @@ writes that is part of a port is declared (by a port of the right direction), ev
 two tops share is part of a port, and a port has one writer (aliases name one master's part of a port array).
 
 usage: gen_top_order.py          print the generated order
-       gen_top_order.py --write  rewrite the generated block of SimCpu::cycle() (SimCpu.cpp)
+       gen_top_order.py --write  rewrite the generated blocks of SimCpu::cycle() (SimCpu.cpp) and FrontCore::comb()
        gen_top_order.py --check  exit 1 if the declarations and the code or the block differ
 """
 import os, re, sys, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from contract_lib import topo, scan
-import gen_comb_order as backc
 import gen_mem_order as memc
-import gen_front_order as frontc
+import modules
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -37,14 +37,22 @@ HEADERS = [('include/SimCpu.h', 'SimCpu', ''), ('include/FrontTop.h', 'FrontTop'
            ('back-end/include/BackTop.h', 'BackTop', 'back.'),
            ('MemSubSystem/include/MemSubsystem.h', 'MemSubsystem', 'mem_subsystem.')]
 TOP_PRIORITY = ['cpu', 'back', 'axi', 'front', 'f2b', 'b2f', 'mem_subsystem']
-def back_name(n):   # a back-end contract phase (gen_comb_order: <module>.<phase>) as a SimCpu-level phase
-    o, ph = n.split('.')
-    return 'back.' + ph if o == 'top' else f'back.{o}.{ph}'
-TB_ORDER = ['front.run_icache', 'front.write_instruction_fifo', 'front.finish', 'mem_subsystem.mem_route_block.comb_response'] + [back_name(n) for n in backc.TB_ORDER]
+# the trace-bridge users, in the order their side effects must happen (the I-cache's fetch, the memory route block's PTW
+# / probe data, the back end's fact lookups of in-flight uops, its commit / flush updating the bridge); the back-end
+# ones must be exactly the module phases the scan finds (modules.tb_users)
+TB_FRONT_MEM = ['front.core.icache.comb_fetch', 'front.core.inst_port.comb_write', 'front.core.ctrl.finish',
+                'mem_subsystem.mem_route_block.comb_response']
+TB_ORDER = TB_FRONT_MEM + ['back.lsu.comb_outputs', 'back.lsu.comb_writeback', 'back.exu.comb_exec', 'back.lsu.comb_translate',
+                           'back.rob.comb_redirect', 'back.rob.comb_update']
+# what a module reaches outside its ports (to become ports): the TLBs' walk ports, the I-cache's AXI / probe ports and
+# its csr_status (through the front end's inputs), the peripheral model's state
 BACK_EXTRA = {'back.lsu.comb_translate': {'out': ['dtlb_walk']},
-              'front.run_icache': {'in': ['csr_status'], 'out': ['axi_ic_req', 'axi_ic_resp_ready', 'icache_probe', 'itlb_walk']},
-              'front.finish': {'out': ['front_out']},
+              'front.core.icache.comb_fetch': {'in': ['csr_status'], 'out': ['axi_ic_req', 'axi_ic_resp_ready', 'icache_probe', 'itlb_walk']},
               'mem_subsystem.peripheral_axi_.comb': {'in': ['periph']}}   # (the peripheral model's state: MMIO loads)
+FRONT_RANK = ['ctrl.control', 'bpu_pipe.comb_front', 'ctrl.enables', 'fa_port.comb_read', 'ptab_port.comb_read',
+              'inst_port.comb_read', 'f2b_port.comb_read', 'fa_port.comb_write', 'icache.comb_fetch', 'inst_port.comb_write',
+              'checker.comb', 'f2b_port.comb_write', 'icache.comb_invalidate', 'ctrl.finish']   # the front end's tie-break
+MOD = {}   # a module phase -> its module path
 MEM_WALK = {'dtlb_walk_port_inst': 'mem_subsystem.dtlb_walk', 'itlb_walk_port_inst': 'mem_subsystem.itlb_walk'}
 CHAIN = {}   # a memory phase function -> its block (gen_mem_order)   # the D-TLB's walk port (TlbMmu, inside the LSU)
 CALLS = {'front.comb_begin': 'front.comb_begin(&back.csr_status)'}
@@ -58,9 +66,10 @@ def owner(ph):
     return 'axi' if ph.startswith('axi_') else 'cpu'
 
 
-def chain(ph):   # the object whose phases keep their header order: a back-end module / memory block, else the top
+def chain(ph):   # the object whose phases keep their header order: a module / memory block, else the top
     q = ph.split('.')
-    if q[0] in ('back', 'mem_subsystem') and len(q) == 3: return '.'.join(q[:2])
+    if ph in MOD: return MOD[ph]
+    if q[0] == 'mem_subsystem' and len(q) == 3: return '.'.join(q[:2])
     if ph in CHAIN: return CHAIN[ph]
     return owner(ph)
 
@@ -92,12 +101,20 @@ def declarations():
                 if k not in d: sys.exit(f'{rel}: EXPORT {e.group(1)}: unknown kind {k}')
                 d[k] = v.split()
             phases.append((prefix + e.group(1), d))
-        if cls == 'FrontTop':   # the front end's phases, in their contracts' order (a chain: front)
-            fph, ffifos = frontc.declarations()
-            for n in frontc.generate(fph, ffifos):
+        if cls in ('FrontTop', 'BackTop'):   # the top's modules
+            mph = [x for x in modules.phases() if x[0].startswith(prefix)]
+            if cls == 'FrontTop': mph.sort(key=lambda x: FRONT_RANK.index(x[0][len('front.core.'):]))
+            bind = modules.bindings()
+            for name, mod, mcls, i, o in mph:
+                MOD[name] = mod
                 d = {k: [] for k in KINDS}
-                for k, v in BACK_EXTRA.get('front.' + n, {}).items(): d[k] += v
-                phases.append(('front.' + n, d))
+                for kind, items in (('in', i), ('out', o)):
+                    for it in sorted(items):
+                        pth = modules.path_of(mod, it, bind)
+                        ports.setdefault('@' + pth, [pth])
+                        d[kind].append('@' + pth)
+                for k, v in BACK_EXTRA.get(name, {}).items(): d[k] += v
+                phases.append((name, d))
         if cls == 'MemSubsystem':
             sim = open(os.path.join(ROOT, 'SimCpu.cpp')).read()
             membind = {m.group(1): re.sub(r'->', '.', m.group(2)) for m in
@@ -117,17 +134,6 @@ def declarations():
                         d[k].append('@' + pth)
                 for k, v in BACK_EXTRA.get(name, {}).items(): d[k] += v
                 phases.append((name, d))
-        if cls == 'BackTop':
-            c = backc.contracts()
-            for o in backc.MODULE_PRIORITY:
-                for ph, i, w in c[o]:
-                    for f in i | w: ports.setdefault('@back.' + f, ['back.' + f])
-                    n = back_name(f'{o}.{ph}')
-                    d = {k: [] for k in KINDS}
-                    d['in'] = ['@back.' + f for f in sorted(i)]
-                    d['out'] = ['@back.' + f for f in sorted(w)]
-                    for k, v in BACK_EXTRA.get(n, {}).items(): d[k] += v
-                    phases.append((n, d))
     for ph, d in phases:
         for k in KINDS:
             for p in d[k]:
@@ -221,7 +227,7 @@ def check(ports, phases):
     for p, ws in writers.items():
         if len(ws) > 1: errs.append(f'port {p}: written by {" ".join(sorted(ws))}')
     for ph, d in phases:
-        if ph not in S or (ph.split('.')[0] in ('back', 'mem_subsystem') and '@' in ''.join(d['in'] + d['out'])): continue
+        if ph not in S or ph in MOD or (ph.split('.')[0] == 'mem_subsystem' and '@' in ''.join(d['in'] + d['out'])): continue
         r, w = S[ph]
         fin = [f for k in KINDS for p in d[k] for f in ports[p]]
         fout = [f for k in ('out', 'default') for p in d[k] for f in ports[p]]
@@ -242,16 +248,25 @@ def check(ports, phases):
             for p in d[k]:
                 if not fov(ports[p], w if k in ('out', 'default') else r):
                     errs.append(f'{ph}: {k} {p} declared, not {"written" if k in ("out", "default") else "read"}')
+    errs += modules.check()   # the modules' contracts against their code
+    tb = modules.tb_users()
+    if tb != set(TB_ORDER) - set(TB_FRONT_MEM): errs.append(f'trace-bridge users {sorted(tb)} != TB_ORDER {sorted(set(TB_ORDER) - set(TB_FRONT_MEM))}')
     return errs
 
 
+def call_of(n):
+    if n in MOD: return modules.call(MOD[n], n[len(MOD[n]) + 1:])[0]
+    return CALLS.get(n, n + '()')
+
+
 def block(order):
-    lines = []
-    for n in order:
-        q = n.split('.')
-        call = CALLS.get(n, f'back.{q[1]}->{q[2]}()' if q[0] == 'back' and len(q) == 3 else n + '()')
-        lines.append(f'  {call};\n')
-    return BEGIN + ''.join(lines) + END
+    return BEGIN + ''.join(f'  {call_of(n)};\n' for n in order) + END
+
+
+FBEGIN = '  // BEGIN GENERATED by scripts/comb/gen_top_order.py from the module contracts: do not edit\n'
+def front_block(order):   # FrontCore::comb() (init / step_bpu): the front end's module phases in the global order
+    return FBEGIN + ''.join(f'  {modules.call(MOD[n], n[len(MOD[n]) + 1:])[1]};\n' for n in order
+                            if n in MOD and n.startswith('front.')) + END
 
 
 def main():
@@ -260,6 +275,10 @@ def main():
     path = os.path.join(ROOT, 'SimCpu.cpp')
     src = open(path).read()
     new = block(order)
+    fpath = os.path.join(ROOT, 'front-end', 'front_top.cpp')
+    fsrc = open(fpath).read()
+    fa = fsrc.find(FBEGIN); fb = fsrc.index(END, fa) + len(END)
+    fnew = front_block(order)
     if '--write' in sys.argv or '--check' in sys.argv:
         a = src.find(BEGIN)
         if a < 0: sys.exit('SimCpu.cpp: no generated block in SimCpu::cycle()')
@@ -268,10 +287,12 @@ def main():
             errs = check(ports, phases)
             for e in errs: print('  ' + e)
             if src[a:b] != new: errs.append('block'); print('SimCpu::cycle() differs from the exports: run scripts/comb/gen_top_order.py --write')
+            if fsrc[fa:fb] != fnew: errs.append('front block'); print('FrontCore::comb() differs: run scripts/comb/gen_top_order.py --write')
             if errs: sys.exit(1)
             print(f'top order: {len(order)} phases, {len(ports)} ports, as generated from the exports')
             return
         open(path, 'w').write(src[:a] + new + src[b:])
+        open(fpath, 'w').write(fsrc[:fa] + fnew + fsrc[fb:])
         print(f'wrote {len(order)} phases')
         return
     print('\n'.join(order))

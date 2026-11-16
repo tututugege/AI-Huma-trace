@@ -18,10 +18,9 @@ struct BackIn;
 
 // Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the signals
 // each phase reads (in) and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_commit  in: csr2rob dec_bcast lsu2rob in.front_stall in.front_tq_free in.front_upd_free  out: rob2csr rob2dis rob_bcast rob_commit
-//   CONTRACT comb_redirect  in: csr2front dec_bcast ftq_commit_info idu_br_latch pre2front  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
-//   CONTRACT comb_update  in: dec_bcast dis2rob exu2rob    out: -
-//   CONTRACT owns: rob2csr rob2dis rob_bcast rob_commit top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+//   CONTRACT comb_commit  in: in.csr2rob in.dec_bcast in.lsu2rob in.top_in.front_stall in.top_in.front_tq_free in.top_in.front_upd_free  out: out.rob2csr out.rob2dis out.rob_bcast out.rob_commit
+//   CONTRACT comb_redirect  in: in.csr2front in.dec_bcast in.ftq_commit_info in.idu_br_latch in.pre2front out.top_out.commit_entry out.top_out.flush out.top_out.redirect_pc out.top_out.rf_slot out.top_out.rf_valid  out: out.top2csr out.top_out.commit_entry out.top_out.commit_extra out.top_out.commit_ftq out.top_out.fence_i out.top_out.fire out.top_out.flush out.top_out.itlb_flush out.top_out.mispred out.top_out.redirect_pc out.top_out.rf_blk out.top_out.rf_is_rvc out.top_out.rf_pc out.top_out.rf_slot out.top_out.rf_type out.top_out.rf_valid out.top_out.stall
+//   CONTRACT comb_update  in: in.dec_bcast in.dis2rob in.exu2rob  out: -
 class Rob {
 public:
   void comb_commit();  // the head: commit and its broadcasts

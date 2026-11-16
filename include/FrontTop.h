@@ -27,8 +27,8 @@ struct ICacheMemPortResp{
 };
 
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_begin      in: csr_status b2f_reg  out: front_out
-// The phases (FrontCore's: each a module's, front-end/front_core.h) follow it, in the order of their contracts (gen_front_order.py).
+//   EXPORT comb_begin      in: csr_status b2f_reg  out: front_in front_out
+// The front end's modules (core->...) have their own CONTRACT lines; SimCpu::cycle() calls their phases.
 class FrontTop {
 public:
   FrontTopIn in;
@@ -48,21 +48,7 @@ public:
   void read_core_q();
   void comb_core();
   void seq_core();
-  void comb_begin(CsrStatusIO *csr_status);   // the start of a cycle; the phases (FrontCore's) follow
-  void control();
-  void run_bpu();
-  void enables();
-  void read_fetch_addr();
-  void read_ptab();
-  void read_instruction();
-  void read_f2b();
-  void write_fetch_addr();
-  void run_icache();
-  void write_instruction_fifo();
-  void check_group();
-  void write_front2back();
-  void invalidate_icache();
-  void finish();
+  void comb_begin(CsrStatusIO *csr_status);   // the start of a cycle; the front end's modules' phases follow
   // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
   void restart_at(pc_t pc);
   void step_bpu();
@@ -72,8 +58,9 @@ public:
   void warm_icache(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
   void warm_itlb(const void *entries, int count, int repl_ptr);
 
+  std::unique_ptr<FrontCore> core;   // all state of the front end, its modules (front-end/front_core.h)
+
 private:
-  std::unique_ptr<FrontCore> core_;   // all state of the front end (front-end/front_core.h)
   std::unique_ptr<FrontReadData> read_data_;
   void bind_ports();
 };
