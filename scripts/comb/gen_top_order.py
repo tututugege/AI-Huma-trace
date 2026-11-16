@@ -11,7 +11,7 @@ The order follows from the declarations, as gen_comb_order.py does for BackTop::
   * a writer (out) runs before every reader (in) of the port, a pre reader before every writer;
   * the phases that use the trace bridge keep the order of TB_ORDER (tbhook:: reads of the functional memory, which the
     back end's commit updates: the I-cache's fetch, the memory route block's PTW / probe data, then the commit).
-Ties follow TOP_PRIORITY. A cycle in the declarations is reported: the fix is a split of a phase (as the memory subsystem's
+Ties: the top of the previous phase if it has a ready phase (fewest runs per top), else TOP_PRIORITY. A cycle in the declarations is reported: the fix is a split of a phase (as the memory subsystem's
 comb_outputs / comb_inputs around the back end), never a hand-made order.
 
 The check compares the declarations with the scanned top domain (comb_top.TOP_PHASES): every field a phase reads or
@@ -29,6 +29,7 @@ from contract_lib import topo, scan
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 HEADERS = [('include/SimCpu.h', 'SimCpu', ''), ('include/FrontTop.h', 'FrontTop', 'front.'),
+           ('include/AxiSubsystem.h', 'AxiSubsystem', 'axi.'),
            ('back-end/include/BackTop.h', 'BackTop', 'back.'),
            ('MemSubSystem/include/MemSubsystem.h', 'MemSubsystem', 'mem_subsystem.')]
 TOP_PRIORITY = ['cpu', 'back', 'axi', 'front', 'mem_subsystem']
@@ -97,7 +98,22 @@ def generate(ports, phases):
             if set(D[a]['pre']) & set(D[b]['out']): succ[a].add(b)     # pre reader before writer
     for a, b in zip(TB_ORDER, TB_ORDER[1:]): succ[a].add(b)
     rank = {n: (TOP_PRIORITY.index(owner(n)), i) for i, n in enumerate(names)}
-    order = topo(names, succ, rank, 'the exports')
+    topo(names, succ, rank, 'the exports')   # (reports a cycle)
+    # stay with the top of the previous phase while it has a ready phase (fewest runs per top, the rule of
+    # global_graph.derive_cuts); otherwise the first ready phase by TOP_PRIORITY
+    indeg = {n: 0 for n in names}
+    for a in names:
+        for b in succ[a]: indeg[b] += 1
+    ready = {n for n in names if indeg[n] == 0}
+    order, cur = [], None
+    while ready:
+        same = [n for n in ready if owner(n) == cur]
+        n = min(same or ready, key=rank.get)
+        cur = owner(n)
+        ready.discard(n); order.append(n)
+        for b in succ[n]:
+            indeg[b] -= 1
+            if indeg[b] == 0: ready.add(b)
     return order
 
 

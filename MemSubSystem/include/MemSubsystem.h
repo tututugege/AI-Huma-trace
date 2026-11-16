@@ -28,7 +28,8 @@ struct AXI_LLC_LookupIn_t;
 struct AXI_LLC_TableOut_t;
 }
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_outputs  in: axi_slave  out: dcache2lsu
+//   EXPORT comb_outputs       in: axi_slave  out: dcache2lsu
+//   EXPORT comb_commit_store  in: commit_store  out: csr_inject periph
 //   EXPORT comb_inputs   in: lsu2dcache mmio_req icache_probe itlb_walk dtlb_walk axi_slave periph  out: axi_mem_req axi_mem_resp_ready mmio_resp
 // Inside: the blocks declare their comb methods in their own headers (their own ports); MemSubsystem's own comb functions
 // that drive a block are declared here, in MemSubsystem's signal names, with the block. scripts/comb/gen_mem_order.py
@@ -72,6 +73,7 @@ public:
   PeripheralReqIO *peripheral_req = nullptr;
   PeripheralRespIO *peripheral_resp = nullptr;
   CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
+  const CommitStoreIO *commit_store = nullptr;   // the back end's device stores of this cycle's commit
 
   void init();
   void comb_outputs();
@@ -81,7 +83,9 @@ public:
                                    uint32_t max_cycles);
   bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line) { return dcache_.arrays.warm_access(paddr, is_store, wb_line); }   // fast-warmup replay
   void on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3);
-  void commit_stores(const CommitStoreIO &cs);   // each valid slot, in slot order
+  // the device stores of this cycle's commit into the peripheral model (each valid slot, in slot order), which drives
+  // the CSR's interrupt lines (read by back.comb_late) and answers the MMIO loads of comb_inputs
+  void comb_commit_store();
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);

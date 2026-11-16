@@ -46,7 +46,7 @@ def unit_of(label, group, inner_of):
     if base in ('front.read_core_q', 'front.comb_core'): return 'front.core'
     if base.startswith(('axi.interconnect', 'axi.ddr', 'axi.mmio')): return '.'.join(p[:2])
     if base.startswith('mem_subsystem.llc'): return 'mem_subsystem.llc'
-    if base == 'mem_subsystem.commit_stores': return 'mem_subsystem.peripheral'
+    if base == 'mem_subsystem.comb_commit_store': return 'mem_subsystem.peripheral'
     return 'group:' + group                          # SimCpu / FrontTop / AxiSubsystem glue: its statements in order
 
 

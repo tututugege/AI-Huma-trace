@@ -27,6 +27,7 @@ INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2
           'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
+BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')]}   # pointer members of an inlined class -> the object bound
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 TOP_DETAIL = []   # filled by top_domain: per row of cycle() (label, R, W, group, tag, inner); inner: for a sub-object call
                   # summarised from a domain, that domain's phases [label, R, W, source text] as SimCpu paths, else None
@@ -240,8 +241,8 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
     for grp in ('comb_outputs', 'comb_inputs'):
         SUB['mem_subsystem.' + grp] = mapped(MEM_GROUPS[grp], mem_key, 'mem_subsystem.')
         for row in SUB['mem_subsystem.' + grp]: row[3] = mem_text(row[0].split('.', 1)[1])
-    S['mem_subsystem.commit_stores'] = ({'mem_subsystem.peripheral_model_'},
-                                        {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
+    S['mem_subsystem.comb_commit_store'] = ({'back.out.commit_store', 'mem_subsystem.peripheral_model_'},
+                                            {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
     mr2, mw2 = S['mem_subsystem.comb_inputs']
     S['mem_subsystem.comb_inputs'] = (mr2 | {'mem_subsystem.peripheral_model_'}, mw2)
     for row in SUB['mem_subsystem.comb_inputs']:
@@ -310,6 +311,7 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None, back_early=None):
                     params = [re.search(r'(\w+)\s*$', p.strip()).group(1) for p in split_top(fb[0], ',') if p.strip()]
                     args = [a.strip() for a in split_top(cm.group(3), ',') if a.strip()]
                     body = strip_comments(fb[1])
+                    for pat, rep in BOUND.get(cls, []): body = re.sub(pat, rep, body)
                     body = re.sub(r'(?<![\w.>])(' + members + r')\b(?!\s*\()', obj + r'.\1', body)
                     body = re.sub(r'(?<![\w.>])(read_core_q|comb_core)\s*\(\)', r'front.\1()', body)
                     body = re.sub(r'(?<![\w.>:])(connect_slave_outputs|connect_master_outputs)\s*\(', r'\1(', body)

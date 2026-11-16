@@ -1,5 +1,6 @@
 // The AXI side of the SoC (include/AxiSubsystem.h).
 #include "AxiSubsystem.h"
+#include "MemSubsystem.h"
 #include "PhysMemory.h"
 #include "config.h"
 
@@ -58,8 +59,9 @@ void AxiSubsystem::comb_begin() {
   }
 }
 
-void AxiSubsystem::comb_outputs(const axi_interconnect::AXI_LLC_LookupIn_t &llc_lookup) {
-  interconnect.set_llc_lookup_in(llc_lookup);
+void AxiSubsystem::comb_outputs() {
+  llc->llc_comb_outputs();
+  interconnect.set_llc_lookup_in(llc->llc_lookup_in());
   ddr.comb_outputs();
   mmio.comb_outputs();
   connect_slave_outputs(interconnect.axi_ddr_io, ddr.io);
@@ -76,6 +78,7 @@ void AxiSubsystem::comb_inputs() {
 }
 
 void AxiSubsystem::seq() {
+  llc->llc_seq(interconnect.get_llc_table_out());
   interconnect.seq();
   ddr.seq();
   mmio.seq();

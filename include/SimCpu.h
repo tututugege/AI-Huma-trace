@@ -35,11 +35,7 @@
 //   PORT axi_ready_next     = axi.interconnect.{read_ports,write_ports}.req.ready   (the I-cache's port register samples it)
 // The glue phases (axi_*: the interconnect and its slaves; the others: SimCpu's registers):
 //   EXPORT back_in_from_regs     default: back_in
-//   EXPORT axi_comb_begin        default: axi_ic_req axi_mem_req
-//   EXPORT axi_comb_outputs      in: axi_ic_req  pre: axi_mem_req  out: axi_slave
-//   EXPORT axi_comb_inputs       in: axi_ic_req axi_mem_req  out: axi_ready_next
 //   EXPORT comb_front2back_hold  in: fetch_group back2front
-//   EXPORT comb_commit_store     in: commit_store  out: csr_inject periph
 class SimCpu {
 public:
   ICacheMemPortReq icache_req{}; // the I-cache probe request (FrontTop drives it; the memory subsystem reads it)
@@ -71,9 +67,5 @@ public:
   void cycle();
   void comb_front2back_hold();
   void back_in_from_regs();
-  void axi_comb_begin();
-  void axi_comb_outputs();
-  void axi_comb_inputs();
   void regs_seq();
-  void comb_commit_store();
 };

@@ -374,3 +374,14 @@ csr.comb_interrupt_inject. None of it was in a contract. Now:
   equals cycle().
 Gates RVC=0 62/62, RVC=1 67/67 identical, FPR (4) identical, TB_TRACE_COMMIT and LSU_PIPE_EVT identical, the rv64
 Linux checkpoint (40M instructions, 3M run, 2,126,672 cycles) identical.
+
+## Top-level glue, part 1: the memory subsystem's and the AXI side's own phases (exp/global-sched)
+
+SimCpu loses the glue of two tops: the commit's device stores are `MemSubsystem::comb_commit_store` (EXPORT in:
+commit_store, out: csr_inject periph; `mem_subsystem.commit_store` bound to back.out.commit_store), and the AXI side
+exports its phases itself (`axi.comb_begin / comb_outputs / comb_inputs`, EXPORT lines above class AxiSubsystem).
+The LLC's lookup table stays in MemSubsystem; AxiSubsystem reaches it through `llc` (bound by SimCpu::init):
+comb_outputs runs the lookup first, seq the table update (comb_top.py maps `llc->` to mem_subsystem.). gen_top_order.py
+breaks ties as global_graph.derive_cuts does (the previous phase's top while it has a ready phase), so the two agree:
+back.comb_late now runs after mem_subsystem.comb_inputs (12 runs). Identical: gates, FPR (4), TB_TRACE_COMMIT,
+LSU_PIPE_EVT, the Linux checkpoint.
