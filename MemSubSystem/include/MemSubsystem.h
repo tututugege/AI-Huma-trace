@@ -74,7 +74,6 @@ public:
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
   void on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3);
-  bool consume_dma_write(uint32_t &paddr, size_t &size);
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);

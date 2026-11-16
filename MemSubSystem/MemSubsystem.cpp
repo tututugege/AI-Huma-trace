@@ -551,9 +551,6 @@ void MemSubsystem::configure_interrupt_latency(uint64_t seed,
   peripheral_model_.configure_interrupt_latency(seed, min_cycles, max_cycles);
 }
 
-bool MemSubsystem::consume_dma_write(uint32_t &paddr, size_t &size) {
-  return peripheral_model_.consume_dma_write(paddr, size);
-}
 
 void MemSubsystem::sync_mmio_devices_from_backing() {
   peripheral_model_.sync_from_backing();

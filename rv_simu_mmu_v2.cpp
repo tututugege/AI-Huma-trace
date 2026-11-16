@@ -231,10 +231,6 @@ void SimCpu::commit_sync(InstInfo *inst, int commit_slot) {
                                   e.rob_flag == inst->rob_flag;
     if (!store_suppressed && e.paddr_valid && e.data_valid) {
       mem_subsystem.on_commit_store(e.paddr, e.data, e.func3);
-      uint32_t dma_paddr = 0;
-      size_t dma_size = 0;
-      while (mem_subsystem.consume_dma_write(dma_paddr, dma_size)) {
-      }
     }
   }
 }
