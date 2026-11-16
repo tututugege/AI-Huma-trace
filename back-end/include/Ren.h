@@ -11,7 +11,7 @@ class BackTop;
 class Ren {
 public:
   void comb_rename();  // allocate the destination registers and rename the group of q.inst_r -> ren2dis
-  void comb_fire();    // dispatch handshake: commit the rename, take the next group from decode (d.inst_r) -> ren2dec
+  void comb_fire();    // dispatch handshake -> ren2dec
   Ren(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   // Outputs: the signals this module drives (it alone).
@@ -31,8 +31,7 @@ public:
   void init();
   void seq();
 
-  // Registers: q (read in comb through a const reference, written only by seq) and d (their next value; comb writes
-  // it, d == q at the start of every cycle). seq copies d to q.
+  // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
     Uop inst_r[DECODE_WIDTH];                                 // the group waiting for dispatch
     reg<1> inst_valid[DECODE_WIDTH];
@@ -53,10 +52,6 @@ public:
     reg<PRF_IDX_WIDTH> fp_free_head, fp_free_head_commit, fp_free_tail;
     reg<PRF_IDX_WIDTH> fp_alloc_checkpoint_head[MAX_BR_NUM];
   };
-  Regs d;
-  static_assert(MAX_BR_NUM <= 64, "ckpt_dirty is a 64-bit row mask");
-  uint64_t ckpt_dirty = 0, ckpt_dirty_fp = 0;   // checkpoint rows of d written this cycle (seq copies only those)
-  bool cnt_dirty = false;                        // d.arch_cnt changed this cycle
   bool elim_refs_ok(int i) const;
 
 private:
@@ -65,5 +60,4 @@ private:
   void alloc();
   void rename();
   void handshake();
-  void pipeline();
 };

@@ -52,9 +52,6 @@ void Ren::init() {
   r.fp_free_tail = fp_free_count;
   for (int i = 0; i < MAX_BR_NUM; i++) r.fp_alloc_checkpoint_head[i] = r.fp_free_head;
   fp_freelist_sanity(r.fp_free_head, r.fp_free_head_commit, r.fp_free_tail);
-  d = q_;
-  ckpt_dirty = ckpt_dirty_fp = 0;
-  cnt_dirty = false;
 }
 
 
@@ -187,52 +184,72 @@ void count_commit(SimContext *ctx, const Uop &u) {
 }
 }  // namespace
 
-// Rename state updates: fired instructions take their register and checkpoint q.spec_RAT at branches, commits free old
-// registers and update q.arch_RAT, then flush (restore from q.arch_RAT) or mispredict (restore a checkpoint) override
-// the next-cycle spec state.
+// The dispatch handshake (comb): the fired slots and ren2dec.ready; the commit's instruction count and its interrupt
+// report to the trace bridge.
 void Ren::handshake() {
   const Regs &q = q_;
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) fire[i] = out.ren2dis.valid[i] && in.dis2ren->ready;
+  out.ren2dec.ready = !flush && !mispred;
+  for (int i = 0; i < DECODE_WIDTH; i++) out.ren2dec.ready &= fire[i] || !q.inst_valid[i];
+
+  const bool interrupt = in.rob_bcast->interrupt;
+  for (int i = 0; i < COMMIT_WIDTH; i++)
+    if (in.rob_commit->commit_entry[i].valid && !interrupt) count_commit(ctx, in.rob_commit->commit_entry[i].uop);
+  if (interrupt) ctx->run_interrupt_hook();
+}
+
+// The clock edge. Fired instructions take their register and checkpoint the speculative RAT at branches, commits free
+// old registers and update the architectural RAT, then flush (restore from the architectural RAT) or mispredict
+// (restore a checkpoint) override the speculative state. The pipeline register: emptied by flush/mispredict, reloaded
+// from decode when ready, else keeps the unfired instructions; bits of branches resolved this cycle are cleared from
+// every mask that stays.
+void Ren::seq() {
+  Regs &d = q_;   // updated in place
+  const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
+  const int free_tail0 = d.free_tail, fp_free_tail0 = d.fp_free_tail;   // (registered values for the mispredict restore)
+  const int br = mispred ? int(in.dec_bcast->br_id) : 0;
+  int ckpt_head = 0, fp_ckpt_head = 0;
+  decltype(d.spec_RAT) mis_rat_;          // the registered checkpoint of the mispredicted branch
+  decltype(d.fp_spec_RAT) mis_fp_rat_;
+  if (mispred) {
+    Assert(br < MAX_BR_NUM && br != 0 && "Ren: mispred br_id out of range");
+    memcpy(mis_rat_, d.RAT_checkpoint[br], sizeof(mis_rat_));
+    memcpy(mis_fp_rat_, d.fp_RAT_checkpoint[br], sizeof(mis_fp_rat_));
+    ckpt_head = d.alloc_checkpoint_head[br];
+    fp_ckpt_head = d.fp_alloc_checkpoint_head[br];
+  }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!fire[i]) continue;
     if (out.ren2dis.uop[i].dest_en) {
-      if (q.inst_r[i]->dest_fp) {
-        d.fp_spec_RAT[q.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
+      if (d.inst_r[i]->dest_fp) {
+        d.fp_spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
         Assert(d.fp_free_head != d.fp_free_tail && "Ren: allocate when the FP free list is empty");
         LOOP_INC(d.fp_free_head, FPRF_NUM);
       } else
       {
-        d.spec_RAT[q.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
+        d.spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
         if (!elim[i]) {
           Assert(d.free_head != d.free_tail && "Ren: allocate when free list is empty");
           LOOP_INC(d.free_head, PRF_NUM);
         }
       }
     }
-    if (is_branch(q.inst_r[i]->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
-      const auto br_id = q.inst_r[i]->br_id;
+    if (is_branch(d.inst_r[i]->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
+      const auto br_id = d.inst_r[i]->br_id;
       Assert(br_id < MAX_BR_NUM && "Ren: branch id out of range");
       memcpy(d.RAT_checkpoint[br_id], d.spec_RAT, sizeof(d.spec_RAT));
-      ckpt_dirty |= uint64_t(1) << br_id;
       d.alloc_checkpoint_head[br_id] = d.free_head;
-      ckpt_dirty_fp |= uint64_t(1) << br_id;
       memcpy(d.fp_RAT_checkpoint[br_id], d.fp_spec_RAT, sizeof(d.fp_spec_RAT));
       d.fp_alloc_checkpoint_head[br_id] = d.fp_free_head;
     }
   }
 
-  out.ren2dec.ready = !flush && !mispred;
-  for (int i = 0; i < DECODE_WIDTH; i++) out.ren2dec.ready &= fire[i] || !q.inst_valid[i];
-
   const bool interrupt = in.rob_bcast->interrupt;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     if (!in.rob_commit->commit_entry[i].valid) continue;
-    const auto &commit_uop = in.rob_commit->commit_entry[i].uop;
-    if (!interrupt) count_commit(ctx, commit_uop);
-
-    InstEntry commit_entry = commit_uop.to_inst_entry(in.rob_commit->commit_entry[i].valid);
+    InstEntry commit_entry = in.rob_commit->commit_entry[i].uop.to_inst_entry(true);
     InstInfo *inst = &commit_entry.uop;
     // An exception instruction does not free its old destination: it looks as if it never committed.
     if (inst->dest_en && !is_exception(*inst) && !interrupt && (*inst)->dest_fp) {  // FP destination: no move elimination
@@ -250,7 +267,7 @@ void Ren::handshake() {
         Assert(d.free_head_commit != d.free_head && "Ren: commit reclaim when no pending spec allocation");
         LOOP_INC(d.free_head_commit, PRF_NUM);
       }
-      d.arch_cnt[inst->dest_preg]++, cnt_dirty = true;
+      d.arch_cnt[inst->dest_preg]++;
       const auto old = (*inst)->old_dest_preg;
       if (--d.arch_cnt[old] == 0) {
         d.free_list[d.free_tail] = old;
@@ -259,7 +276,6 @@ void Ren::handshake() {
       d.arch_RAT[(*inst)->dest_areg] = inst->dest_preg;
     }
   }
-  if (interrupt) ctx->run_interrupt_hook();
 
   if (flush) {
     memcpy(d.spec_RAT, d.arch_RAT, sizeof(d.spec_RAT));
@@ -267,24 +283,17 @@ void Ren::handshake() {
     memcpy(d.fp_spec_RAT, d.fp_arch_RAT, sizeof(d.fp_spec_RAT));
     d.fp_free_head = d.fp_free_head_commit;
   } else if (mispred) {  // never together with flush
-    const auto br = in.dec_bcast->br_id;
-    Assert(br < MAX_BR_NUM && br != 0 && "Ren: mispred br_id out of range");
-    memcpy(d.spec_RAT, q.RAT_checkpoint[br], sizeof(d.spec_RAT));
-    d.free_head = q.alloc_checkpoint_head[br];
-    d.free_tail = q.free_tail;  // reclaims of this cycle are dropped, as in the original
-    memcpy(d.fp_spec_RAT, q.fp_RAT_checkpoint[br], sizeof(d.fp_spec_RAT));
-    d.fp_free_head = q.fp_alloc_checkpoint_head[br];
-    d.fp_free_tail = q.fp_free_tail;
+    memcpy(d.spec_RAT, mis_rat_, sizeof(d.spec_RAT));
+    d.free_head = ckpt_head;
+    d.free_tail = free_tail0;  // reclaims of this cycle are dropped, as in the original
+    memcpy(d.fp_spec_RAT, mis_fp_rat_, sizeof(d.fp_spec_RAT));
+    d.fp_free_head = fp_ckpt_head;
+    d.fp_free_tail = fp_free_tail0;
   }
   fp_freelist_sanity(d.fp_free_head, d.fp_free_head_commit, d.fp_free_tail);
-}
 
-// Pipeline register: emptied by flush/mispredict, reloaded from decode when ready, else keeps unfired instructions.
-// Bits of branches resolved this cycle are cleared from every mask that stays.
-void Ren::pipeline() {
-  const Regs &q = q_;
   const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
-  const bool drain = in.rob_bcast->flush || in.dec_bcast->mispred;
+  const bool drain = flush || mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (drain) {
       d.inst_valid[i] = false;
@@ -293,44 +302,10 @@ void Ren::pipeline() {
       d.inst_r[i] = in.dec2ren->uop[i];
       d.inst_r[i].br_mask &= ~clear;
     } else {
-      d.inst_valid[i] = q.inst_valid[i] && !fire[i];
+      d.inst_valid[i] = d.inst_valid[i] && !fire[i];
       if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
     }
   }
-}
-
-// The clock edge: q = d. The checkpoint rows and the reference counts change rarely: only the dirty ones are copied
-// (d == q holds again afterwards).
-void Ren::seq() {
-  Regs &q = q_;
-  memcpy(q.inst_r, d.inst_r, sizeof(q.inst_r));
-  memcpy(q.inst_valid, d.inst_valid, sizeof(q.inst_valid));
-  memcpy(q.spec_RAT, d.spec_RAT, sizeof(q.spec_RAT));
-  memcpy(q.arch_RAT, d.arch_RAT, sizeof(q.arch_RAT));
-  memcpy(q.free_list, d.free_list, sizeof(q.free_list));
-  q.free_head = d.free_head;
-  q.free_head_commit = d.free_head_commit;
-  q.free_tail = d.free_tail;
-  for (uint64_t m = ckpt_dirty; m != 0; m &= m - 1) {
-    const int row = __builtin_ctzll(m);
-    memcpy(q.RAT_checkpoint[row], d.RAT_checkpoint[row], sizeof(q.RAT_checkpoint[row]));
-  }
-  ckpt_dirty = 0;
-  if (cnt_dirty) memcpy(q.arch_cnt, d.arch_cnt, sizeof(q.arch_cnt));
-  cnt_dirty = false;
-  memcpy(q.alloc_checkpoint_head, d.alloc_checkpoint_head, sizeof(q.alloc_checkpoint_head));
-  memcpy(q.fp_spec_RAT, d.fp_spec_RAT, sizeof(q.fp_spec_RAT));
-  memcpy(q.fp_arch_RAT, d.fp_arch_RAT, sizeof(q.fp_arch_RAT));
-  memcpy(q.fp_free_list, d.fp_free_list, sizeof(q.fp_free_list));
-  q.fp_free_head = d.fp_free_head;
-  q.fp_free_head_commit = d.fp_free_head_commit;
-  q.fp_free_tail = d.fp_free_tail;
-  for (uint64_t m = ckpt_dirty_fp; m != 0; m &= m - 1) {
-    const int row = __builtin_ctzll(m);
-    memcpy(q.fp_RAT_checkpoint[row], d.fp_RAT_checkpoint[row], sizeof(q.fp_RAT_checkpoint[row]));
-  }
-  ckpt_dirty_fp = 0;
-  memcpy(q.fp_alloc_checkpoint_head, d.fp_alloc_checkpoint_head, sizeof(q.fp_alloc_checkpoint_head));
 }
 
 // allocate the destination registers and rename the decoded group
@@ -339,8 +314,7 @@ void Ren::comb_rename() {
   rename();
 }
 
-// dispatch handshake: commit the rename, the next pipeline register
+// dispatch handshake
 void Ren::comb_fire() {
   handshake();
-  pipeline();
 }

@@ -145,7 +145,6 @@ void SimCpu::cycle() {
   back.dis->comb_dispatch();
   back.rename->comb_fire();
   back.idu->comb_fire();
-  back.pre->comb_fire();
   back.lsu->comb_requests();
   back.lsu->comb_commit_store();
   f2b.comb_hold();

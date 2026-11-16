@@ -21,59 +21,44 @@ FtqPc PreIduQueue::ftq_pc(uint32_t idx, uint32_t off) const {
 }
 
 // FTQ: ring of fetch blocks, allocated at the tail when a block is accepted, freed at the head when its last
-// instruction commits, trimmed at the tail on a mispredict. All of it works on the *_1 copies.
-int PreIduQueue::ftq_alloc() {
-  if (d.ftq_count >= FTQ_SIZE) return -1;
-  const int idx = d.ftq_tail;
-  d.ftq_tail = (d.ftq_tail + 1) % FTQ_SIZE;
-  d.ftq_count++;
-  return idx;
-}
+// instruction commits, trimmed at the tail on a mispredict (the clock edge: the registers in place).
 
 void PreIduQueue::ftq_pop(int pop_cnt) {
-  for (int i = 0; i < pop_cnt && d.ftq_count > 0; i++) {
-    d.ftq_valid[d.ftq_head] = false;
-    d.ftq_head = (d.ftq_head + 1) % FTQ_SIZE;
-    d.ftq_count--;
-    ftq_dirty = true;
+  for (int i = 0; i < pop_cnt && q_.ftq_count > 0; i++) {
+    q_.ftq_valid[q_.ftq_head] = false;
+    q_.ftq_head = (q_.ftq_head + 1) % FTQ_SIZE;
+    q_.ftq_count--;
   }
 }
 
 // Drop every block younger than the one holding the mispredicted branch.
 void PreIduQueue::ftq_recover(int new_tail) {
   const int tail = ((new_tail % FTQ_SIZE) + FTQ_SIZE) % FTQ_SIZE;
-  const int discarded = (d.ftq_tail - tail + FTQ_SIZE) % FTQ_SIZE;
-  for (int i = 0; i < discarded; i++) d.ftq_valid[(tail + i) % FTQ_SIZE] = false;
-  if (discarded > 0) ftq_dirty = true;
-  d.ftq_tail = tail;
-  d.ftq_count -= discarded;
+  const int discarded = (q_.ftq_tail - tail + FTQ_SIZE) % FTQ_SIZE;
+  for (int i = 0; i < discarded; i++) q_.ftq_valid[(tail + i) % FTQ_SIZE] = false;
+  q_.ftq_tail = tail;
+  q_.ftq_count -= discarded;
 }
 
 void PreIduQueue::ftq_flush() {
-  d.ftq_head = d.ftq_tail = d.ftq_count = 0;
-  for (int i = 0; i < FTQ_SIZE; i++) d.ftq_valid[i] = false;
-  ftq_dirty = true;
+  q_.ftq_head = q_.ftq_tail = q_.ftq_count = 0;
+  for (int i = 0; i < FTQ_SIZE; i++) q_.ftq_valid[i] = false;
 }
 
 void PreIduQueue::init() {
   q_.ibuf.init();
-  d.ibuf.init();
   q_.ftq_head = q_.ftq_tail = q_.ftq_count = 0;
-  d.ftq_head = d.ftq_tail = d.ftq_count = 0;
   push_count = 0;
   for (int i = 0; i < FTQ_SIZE; i++) {
-    q_.ftq_lookup_entries[i] = d.ftq_lookup_entries[i] = FTQEntry();
-    q_.ftq_train_meta_fifo[i] = d.ftq_train_meta_fifo[i] = FTQTrainMetaEntry();
-    q_.ftq_valid[i] = d.ftq_valid[i] = false;
+    q_.ftq_lookup_entries[i] = FTQEntry();
+    q_.ftq_train_meta_fifo[i] = FTQTrainMetaEntry();
+    q_.ftq_valid[i] = false;
   }
 }
 
 // Publish the oldest DECODE_WIDTH buffered instructions to decode.
 void PreIduQueue::begin_cycle() {
   const Regs &q = q_;
-  d.ftq_head = q.ftq_head;
-  d.ftq_tail = q.ftq_tail;
-  d.ftq_count = q.ftq_count;
 
   const int n = q.ibuf.count() < DECODE_WIDTH ? q.ibuf.count() : DECODE_WIDTH;
   for (int i = 0; i < DECODE_WIDTH; i++) out.pre_issue.entries[i] = i < n ? q.ibuf.peek(i) : InstructionBufferEntry{};
@@ -82,13 +67,14 @@ void PreIduQueue::begin_cycle() {
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.pre2front.fire[i] = false;
   push_count = 0;
   push_bypass = false;
+  accept_ = false;
 }
 
 // Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
 // gets an FTQ entry and each instruction a buffer entry (and a uop-pool block).
 void PreIduQueue::comb_accept_front() {
   const Regs &q = q_;
-  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
+  begin_cycle();   // the first phase of the cycle: default outputs
   if (in.idu_br_latch->mispred || q.flush_q) return;  // the cycle after a mispredict / flush: ready stays false
 
   int incoming = 0;
@@ -97,9 +83,9 @@ void PreIduQueue::comb_accept_front() {
   out.pre2front.ready = q.ftq_count < FTQ_SIZE && q.ibuf.can_accept(incoming);
   if (!out.pre2front.ready || incoming == 0) return;
 
-  const int ftq_idx = ftq_alloc();
-  Assert(ftq_idx >= 0 && "PreIduQueue: ready with a full FTQ");  // ready required a free slot and nothing allocated yet
-  FTQEntry &block = d.ftq_lookup_entries[ftq_idx];
+  const int ftq_idx = q.ftq_tail;   // the block's FTQ entry (written at the edge)
+  accept_ = true;
+  FTQEntry &block = accept_block_;
   block = FTQEntry();
   block.next_pc = in.top_in->predict_next_fetch_address[0];
   block.nslots = 0;
@@ -109,11 +95,7 @@ void PreIduQueue::comb_accept_front() {
     block.pred_taken_mask[i] = in.top_in->predict_dir[i];
     if (in.top_in->valid[i]) block.nslots = i + 1;
   }
-  d.ftq_train_meta_fifo[ftq_idx] = FTQTrainMetaEntry();
-  d.ftq_train_meta_fifo[ftq_idx].meta = in.top_in->meta;
-  d.ftq_valid[ftq_idx] = true;
-  ftq_alloc_mask |= 1ull << ftq_idx;
-  ftq_dirty = true;
+  accept_meta_ = in.top_in->meta;
 
   int last = -1;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
@@ -139,12 +121,21 @@ void PreIduQueue::comb_accept_front() {
   }
 }
 
-// Instruction buffer: decode consumes from the front (a leading run of fired slots), the accepted block is appended;
-// flush and mispredict empty it (and the FTQ: everything, or what is younger than the branch's block). Committed blocks
-// leave the FTQ head.
-void PreIduQueue::comb_fire() {
+// The clock edge. The accepted block takes the FTQ tail. Instruction buffer: decode consumes from the front (a leading
+// run of fired slots), the accepted block is appended; flush and mispredict empty it (and the FTQ: everything, or what
+// is younger than the branch's block). Committed blocks leave the FTQ head.
+void PreIduQueue::seq() {
+  if (accept_) {
+    const int idx = q_.ftq_tail;
+    q_.ftq_tail = (q_.ftq_tail + 1) % FTQ_SIZE;
+    q_.ftq_count++;
+    q_.ftq_lookup_entries[idx] = accept_block_;
+    q_.ftq_train_meta_fifo[idx] = FTQTrainMetaEntry();
+    q_.ftq_train_meta_fifo[idx].meta = accept_meta_;
+    q_.ftq_valid[idx] = true;
+  }
   const bool flush = in.rob_bcast->flush, mispred = in.idu_br_latch->mispred;
-  d.flush_q = flush;   // the next cycle sees this cycle's ROB flush (accept_front stays closed)
+  q_.flush_q = flush;   // the next cycle sees this cycle's ROB flush (accept_front stays closed)
   if (flush) {
     ftq_flush();
   } else if (mispred) {
@@ -152,8 +143,7 @@ void PreIduQueue::comb_fire() {
   }
 
   if (flush || mispred) {
-    d.ibuf.clear();
-    ibuf_dirty = true;
+    q_.ibuf.clear();
     return;
   }
 
@@ -165,9 +155,8 @@ void PreIduQueue::comb_fire() {
     pop_count = 0;
     push_bypass = false;
   }
-  if (pop_count > 0) d.ibuf.pop_front(pop_count);
-  for (int i = first_push; i < push_count; i++) d.ibuf.push_back(push_entries[i]);
-  if (pop_count > 0 || push_count > first_push) ibuf_dirty = true;
+  if (pop_count > 0) q_.ibuf.pop_front(pop_count);
+  for (int i = first_push; i < push_count; i++) q_.ibuf.push_back(push_entries[i]);
 
   int committed_blocks = 0;
   for (int i = 0; i < COMMIT_WIDTH; i++)
@@ -218,24 +207,3 @@ void PreIduQueue::comb_commit_info() {
   }
 }
 
-void PreIduQueue::seq() {
-  q_.flush_q = d.flush_q;
-  if (ibuf_dirty) {
-    q_.ibuf.sync_from(d.ibuf);
-    ibuf_dirty = false;
-  }
-  q_.ftq_head = d.ftq_head;
-  q_.ftq_tail = d.ftq_tail;
-  q_.ftq_count = d.ftq_count;
-  if (ftq_dirty) {
-    // Entry payloads only change at the allocated slot; valid bits are tiny.
-    for (uint64_t m = ftq_alloc_mask; m; m &= m - 1) {
-      const int i = __builtin_ctzll(m);
-      q_.ftq_lookup_entries[i] = d.ftq_lookup_entries[i];
-      q_.ftq_train_meta_fifo[i] = d.ftq_train_meta_fifo[i];
-    }
-    ftq_alloc_mask = 0;
-    std::memcpy(q_.ftq_valid, d.ftq_valid, sizeof(q_.ftq_valid));
-    ftq_dirty = false;
-  }
-}

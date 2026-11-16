@@ -7,7 +7,7 @@
 
 class SimContext;
 
-static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
+static_assert(FTQ_SIZE <= 64, "FTQ indices fit the 64-bit masks of the PMU / recovery");
 
 struct BackIn;
 
@@ -15,11 +15,9 @@ struct BackIn;
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_accept_front  in: in.idu_br_latch in.top_in.inst in.top_in.is_rvc in.top_in.meta in.top_in.page_fault_inst in.top_in.pc in.top_in.predict_dir in.top_in.predict_next_fetch_address in.top_in.valid  out: out.pre2front out.pre_issue
 //   CONTRACT comb_commit_info  in: in.rob_commit  out: out.ftq_commit_info
-//   CONTRACT comb_fire  in: in.idu_br_latch in.idu_consume in.rob_bcast in.rob_commit  out: -
 class PreIduQueue {
 public:
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq: q = d.
+  // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
     bool flush_q  = false;
     InstructionBuffer ibuf;
@@ -30,7 +28,6 @@ public:
     reg<FTQ_IDX_WIDTH> ftq_tail  = 0;
     reg<bit_width_for_count(FTQ_SIZE + 1)> ftq_count  = 0;
   };
-  Regs d;
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
   explicit PreIduQueue(SimContext * = nullptr) {}
@@ -51,7 +48,6 @@ public:
 
   void init();
   void comb_accept_front();
-  void comb_fire();
   void comb_commit_info();
   void seq();
 
@@ -64,17 +60,15 @@ public:
 private:
   void begin_cycle();   // called by comb_accept_front(), the first phase of the cycle
 
-  int ftq_alloc();
   void ftq_pop(int pop_cnt);
   void ftq_recover(int new_tail);
   void ftq_flush();
 
-  // q == d at the start of the cycle; seq copies only dirty parts.
-  bool ibuf_dirty = false;
-  bool ftq_dirty = false;
-  uint64_t ftq_alloc_mask = 0; // slots allocated this cycle (FTQ_SIZE <= 64)
-  // wires of the cycle: the instructions accepted from the front end (comb_accept_front), pushed into the buffer in
-  // comb_fire; with an empty buffer the accepted block goes straight to decode (push_bypass)
+  // wires of the cycle: the block accepted from the front end (comb_accept_front: its FTQ entry and instructions), written
+  // into the FTQ and the buffer at seq; with an empty buffer the accepted block goes straight to decode (push_bypass)
+  bool accept_ = false;
+  FTQEntry accept_block_{};
+  decltype(FTQTrainMetaEntry::meta) accept_meta_{};
   InstructionBufferEntry push_entries[BACKEND_FETCH_WIDTH] = {};
   int push_count = 0;
   bool push_bypass = false;
