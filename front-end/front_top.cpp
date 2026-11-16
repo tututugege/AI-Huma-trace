@@ -243,44 +243,6 @@ static void front_output_comb(const front2back_FIFO_out &saved, const front2back
   out.predict_next_fetch_address = src->predict_next_fetch_address_corrected;
 }
 
-// Each FIFO is read at most once and written at most once per cycle; the per-step requests merge here.
-static void accumulate_fetch_addr_req(FetchAddrCombOut &acc,
-                                      const FetchAddrCombOut &step) {
-    acc.clear_fifo |= step.clear_fifo;
-    acc.drop_tail_n |= step.drop_tail_n;
-    if (step.pop_en) {
-        if (acc.pop_en) {
-            std::printf("[front_top] ERROR: fetch_address_FIFO pop requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.pop_en = true;
-    }
-    if (step.push_en) {
-        if (acc.push_en) {
-            std::printf("[front_top] ERROR: fetch_address_FIFO push requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.push_en = true;
-        acc.push_data = step.push_data;
-        acc.push_pair = step.push_pair;
-    }
-}
-
-// (instruction FIFO, PTAB, front-to-back FIFO: the same request layout)
-template <class C>
-static void accumulate_fifo_req(C &acc, const C &step) {
-    acc.clear_fifo |= step.clear_fifo;
-    if (step.pop_en) {
-        if (acc.pop_en) { std::printf("[front_top] ERROR: FIFO pop requested multiple times in one cycle\n"); std::exit(1); }
-        acc.pop_en = true;
-    }
-    if (step.push_en) {
-        if (acc.push_en) { std::printf("[front_top] ERROR: FIFO push requested multiple times in one cycle\n"); std::exit(1); }
-        acc.push_en = true;
-        acc.push_entry = step.push_entry;
-    }
-}
-
 // ============================================================================
 // One front-end cycle
 // ============================================================================
@@ -397,21 +359,11 @@ void FrontComb::read_fifos() {
   f2b_in.refetch = in.refetch;
   f2b_in.read_enable = f2b_read_enable;
 
-  FetchAddrCombOut fetch_addr_step{};
-  fetch_address_FIFO_comb_calc(&fetch_addr_in, &fetch_addr_rd, &fetch_addr_head, &fetch_addr_rd, &fetch_addr_step);
-  accumulate_fetch_addr_req(req.fetch_addr_fifo_req, fetch_addr_step);
-
-  InstructionCombOut fifo_step{};
-  instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_head, &fifo_rd, &fifo_step);
-  accumulate_fifo_req(req.fifo_req, fifo_step);
-
-  PtabCombOut ptab_step{};
-  PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_head, &ptab_rd, &ptab_step);
-  accumulate_fifo_req(req.ptab_req, ptab_step);
-
-  Front2BackCombOut f2b_step{};
-  front2back_FIFO_comb_calc(&f2b_in, &f2b_rd, &f2b_head, &f2b_rd, &f2b_step);
-  accumulate_fifo_req(req.front2back_fifo_req, f2b_step);
+  // the read ports: each FIFO's request of the cycle starts here
+  fetch_address_FIFO_read(&fetch_addr_in, &fetch_addr_rd, &fetch_addr_head, &req.fetch_addr_fifo_req);
+  instruction_FIFO_read(&fifo_in, &fifo_rd, &fifo_head, &req.fifo_req);
+  PTAB_read(&ptab_in, &ptab_rd, &ptab_head, &req.ptab_req);
+  front2back_FIFO_read(&f2b_in, &f2b_rd, &f2b_head, &req.front2back_fifo_req);
 }
 
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
@@ -460,21 +412,13 @@ void FrontComb::run_bpu() {
 // The predicted fetch address enters the fetch-address FIFO (the ICache reads it next cycle).
 void FrontComb::write_fetch_addr() {
   if (!(bpu_output.icache_read_valid && bpu_can_run && !global_reset)) return;
-  fetch_addr_in.reset = false;
-  fetch_addr_in.refetch = false;
-  fetch_addr_in.read_enable = false;
-  fetch_addr_in.drop_tail_n = 0;
-  fetch_addr_in.write_enable = true;
   fetch_addr_in.fetch_address = bpu_output.fetch_address;
   req.front_state.ipf_ncand = 0;
   req.front_state.ipf_cand[req.front_state.ipf_ncand++] = bpu_output.fetch_address;
   if (bpu_output.pair_valid) req.front_state.ipf_cand[req.front_state.ipf_ncand++] = bpu_output.pair_addr2;
   fetch_addr_in.pair = FetchPair{};
   if (bpu_output.pair_valid) { fetch_addr_in.pair.valid = true; fetch_addr_in.pair.addr2 = bpu_output.pair_addr2; fetch_addr_in.pair.a_len = bpu_output.pair_a_len; fetch_addr_in.pair.b_len = bpu_output.pair_b_len; }
-  fetch_address_FIFO_out unused_out{};
-  FetchAddrCombOut step{};
-  fetch_address_FIFO_comb_calc(&fetch_addr_in, &fetch_addr_rd, &unused_out, &fetch_addr_rd, &step);
-  accumulate_fetch_addr_req(req.fetch_addr_fifo_req, step);
+  fetch_address_FIFO_write(&fetch_addr_in, &fetch_addr_rd, &req.fetch_addr_fifo_req);
 }
 
 // The ICache takes the address popped from the fetch-address FIFO.
@@ -497,11 +441,7 @@ void FrontComb::run_icache() {
 
 // A completed ICache read is predecoded and written to the instruction FIFO.
 void FrontComb::write_instruction_fifo() {
-  fifo_in.read_enable = false;
-  fifo_in.write_enable = false;
   if (rd.q.fifo_full || !ic_out.icache_read_complete || global_reset || global_refetch) return;
-
-  fifo_in.write_enable = true;
   // FE_PAIR: the second block of the request that completes now (if the entry had one and its line can be read in the same cycle)
   FetchPair pr{};
   if (fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc) pr = fetch_addr_head.pair;
@@ -584,10 +524,7 @@ void FrontComb::write_instruction_fifo() {
   } else
   fifo_in.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
 
-  instruction_FIFO_out unused_out{};
-  InstructionCombOut step{};
-  instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &unused_out, &fifo_rd, &step);
-  accumulate_fifo_req(req.fifo_req, step);
+  instruction_FIFO_write(&fifo_in, &fifo_rd, &req.fifo_req);
 }
 
 // The BPU's prediction enters the PTAB; the predecode checker compares the FIFO head against the PTAB head and may ask
@@ -598,10 +535,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
   if (ptab_can_write && !ptab_written) {
     front_ptab_write_comb(bpu_output, global_reset, global_refetch, ptab_in);
     fpr_ptab(ptab_in);
-    PTAB_out unused_out{};
-    PtabCombOut step{};
-    PTAB_comb_calc(&ptab_in, &ptab_rd, &unused_out, &ptab_rd, &step);
-    accumulate_fifo_req(req.ptab_req, step);
+    PTAB_write(&ptab_in, &ptab_rd, &req.ptab_req);
   }
 
   if (!fifo_read_enable) return;
@@ -697,17 +631,10 @@ void FrontComb::write_front2back() {
   const bool can_write = fifo_read_enable && !rd.q.f2b_full && !global_reset;
   use_f2b_bypass = f2b_read_enable && rd.q.f2b_empty &&
                    !f2b_head.front2back_FIFO_valid && can_write;
-  f2b_in.read_enable = false;
-  f2b_in.write_enable = can_write && !use_f2b_bypass;
   if (!can_write) return;
 
   front_front2back_write_comb(fifo_head, ptab_head, checker_out, use_f2b_bypass, f2b_in, f2b_bypass);
-  if (f2b_in.write_enable) {
-    front2back_FIFO_out unused_out{};
-    Front2BackCombOut step{};
-    front2back_FIFO_comb_calc(&f2b_in, &f2b_rd, &unused_out, &f2b_rd, &step);
-    accumulate_fifo_req(req.front2back_fifo_req, step);
-  }
+  if (!use_f2b_bypass) front2back_FIFO_write(&f2b_in, &f2b_rd, &req.front2back_fifo_req);
 }
 
 // Latches for the next cycle, the predecode-flush request, and the output toward the back end.

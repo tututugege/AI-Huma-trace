@@ -93,17 +93,17 @@ void front_set_context(SimContext *ctx);
 
 void instruction_FIFO_seq_read(struct instruction_FIFO_in *in,
                                struct instruction_FIFO_read_data *rd);
-void instruction_FIFO_comb_calc(struct instruction_FIFO_in *in,
-                                const struct instruction_FIFO_read_data *rd,
-                                struct instruction_FIFO_out *out,
-                                struct instruction_FIFO_read_data *next_rd,
-                                InstructionCombOut *step_req);
+// FIFO ports of one cycle: read (first: clear / pop, the head out) then write (push). Each fills the cycle's request
+// and advances the read data rd past it; seq_write applies the request at the clock edge.
+void instruction_FIFO_read(const struct instruction_FIFO_in *in, struct instruction_FIFO_read_data *rd,
+                           struct instruction_FIFO_out *out, InstructionCombOut *req);
+void instruction_FIFO_write(const struct instruction_FIFO_in *in, struct instruction_FIFO_read_data *rd,
+                            InstructionCombOut *req);
 void instruction_FIFO_seq_write(const InstructionCombOut *req);
 
 void PTAB_seq_read(struct PTAB_in *in, struct PTAB_read_data *rd);
-void PTAB_comb_calc(struct PTAB_in *in, const struct PTAB_read_data *rd,
-                    struct PTAB_out *out, struct PTAB_read_data *next_rd,
-                    PtabCombOut *step_req);
+void PTAB_read(const struct PTAB_in *in, struct PTAB_read_data *rd, struct PTAB_out *out, PtabCombOut *req);
+void PTAB_write(const struct PTAB_in *in, struct PTAB_read_data *rd, PtabCombOut *req);
 void PTAB_seq_write(const PtabCombOut *req);
 
 void front_top_seq_read(const struct front_top_in &in, FrontReadData &rd);
@@ -114,20 +114,18 @@ void front_top_seq_write(const struct front_top_in &in,
 
 void front2back_FIFO_seq_read(struct front2back_FIFO_in *in,
                               struct front2back_FIFO_read_data *rd);
-void front2back_FIFO_comb_calc(struct front2back_FIFO_in *in,
-                               const struct front2back_FIFO_read_data *rd,
-                               struct front2back_FIFO_out *out,
-                               struct front2back_FIFO_read_data *next_rd,
-                               Front2BackCombOut *step_req);
+void front2back_FIFO_read(const struct front2back_FIFO_in *in, struct front2back_FIFO_read_data *rd,
+                          struct front2back_FIFO_out *out, Front2BackCombOut *req);
+void front2back_FIFO_write(const struct front2back_FIFO_in *in, struct front2back_FIFO_read_data *rd,
+                           Front2BackCombOut *req);
 void front2back_FIFO_seq_write(const Front2BackCombOut *req);
 
 void fetch_address_FIFO_seq_read(struct fetch_address_FIFO_in *in,
                                  struct fetch_address_FIFO_read_data *rd);
-void fetch_address_FIFO_comb_calc(struct fetch_address_FIFO_in *in,
-                                  const struct fetch_address_FIFO_read_data *rd,
-                                  struct fetch_address_FIFO_out *out,
-                                  struct fetch_address_FIFO_read_data *next_rd,
-                                  FetchAddrCombOut *step_req);
+void fetch_address_FIFO_read(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
+                             struct fetch_address_FIFO_out *out, FetchAddrCombOut *req);
+void fetch_address_FIFO_write(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
+                              FetchAddrCombOut *req);
 void fetch_address_FIFO_seq_write(const FetchAddrCombOut *req);
 
 #endif // FRONT_MODULE_H

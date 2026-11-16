@@ -1,6 +1,7 @@
 // The three entry FIFOs of the front end (instruction FIFO, PTAB, front-to-back FIFO): one registered ring of N entries, one push
 // and one pop per cycle; a read of an empty FIFO in the cycle of a write returns the written entry (bypass); reset / refetch empty it.
-// comb_calc() computes the outputs and the update request from the registered read data; seq_write() applies the request.
+// read() (first: clear / pop, the head out) and write() (push) fill the cycle's request from the registered read data and
+// advance it; seq_write() applies the request.
 #include "front_fifo.h"
 #include "../train_IO.h"
 
@@ -96,10 +97,10 @@ class FrontFifo {
     if (rd.head_valid) rd.head_entry = entries_[head_];
   }
 
-  // outputs and update request from the registered read data; next_rd = the read data after the request (for a second
-  // pass in the same cycle; may alias rd)
-  void comb_calc(const typename F::In &in, const typename F::Rd &rd, typename F::Out &out, typename F::Rd &next_rd,
-                 typename F::Comb &c) const {
+  // Read port, the first use of the FIFO in the cycle: reset / refetch clear it, a read pops the head (from an empty FIFO
+  // the entry written in the same cycle, if any: bypass). Fills the cycle's request c (fresh at this point) and advances
+  // the read data rd past it.
+  void read(const typename F::In &in, typename F::Rd &rd, typename F::Out &out, typename F::Comb &c) const {
     std::memset(&c, 0, sizeof(c));
     c.out_regs.empty = true;
     if (in.reset) {
@@ -124,20 +125,34 @@ class FrontFifo {
       c.out_regs.full = size >= F::FULL_AT;
     }
     out = c.out_regs;
-    // the read data after this request
-    if (&next_rd != &rd) next_rd = rd;
-    if (c.clear_fifo) next_rd = {};
-    const int size_before = next_rd.size;
+    advance(rd, c);
+  }
+
+  // Write port, after the read: the entry of `in` is pushed (one push per cycle).
+  void write(const typename F::In &in, typename F::Rd &rd, typename F::Comb &req) const {
+    if (req.push_en) fifo_die(F::name, "two pushes in one cycle");
+    req.push_en = true;
+    F::load(in, req.push_entry);
+    typename F::Comb c{};
+    c.push_en = true;
+    c.push_entry = req.push_entry;
+    advance(rd, c);
+  }
+
+  // the read data after the request c
+  static void advance(typename F::Rd &rd, const typename F::Comb &c) {
+    if (c.clear_fifo) rd = {};
+    const int size_before = rd.size;
     if (c.push_en) {
-      if (next_rd.size >= F::N) fifo_die(F::name, "overflow");
-      if (next_rd.size == 0) { next_rd.head_entry = c.push_entry; next_rd.head_valid = true; }
-      ++next_rd.size;
+      if (rd.size >= F::N) fifo_die(F::name, "overflow");
+      if (rd.size == 0) { rd.head_entry = c.push_entry; rd.head_valid = true; }
+      ++rd.size;
     }
     if (c.pop_en) {
-      if (next_rd.size == 0) fifo_die(F::name, "underflow");
-      --next_rd.size;
-      if (next_rd.size == 0 || size_before > 1) { next_rd.head_entry = Entry{}; next_rd.head_valid = false; }
-      else if (c.push_en) { next_rd.head_entry = c.push_entry; next_rd.head_valid = true; }
+      if (rd.size == 0) fifo_die(F::name, "underflow");
+      --rd.size;
+      if (rd.size == 0 || size_before > 1) { rd.head_entry = Entry{}; rd.head_valid = false; }
+      else if (c.push_en) { rd.head_entry = c.push_entry; rd.head_valid = true; }
     }
   }
 
@@ -163,17 +178,22 @@ FrontFifo<F2bFifo> g_f2b_fifo;
 }  // namespace
 
 void instruction_FIFO_seq_read(instruction_FIFO_in *, instruction_FIFO_read_data *rd) { g_inst_fifo.seq_read(*rd); }
-void instruction_FIFO_comb_calc(instruction_FIFO_in *in, const instruction_FIFO_read_data *rd, instruction_FIFO_out *out,
-                                instruction_FIFO_read_data *next_rd, InstructionCombOut *c) { g_inst_fifo.comb_calc(*in, *rd, *out, *next_rd, *c); }
+void instruction_FIFO_read(const instruction_FIFO_in *in, instruction_FIFO_read_data *rd, instruction_FIFO_out *out,
+                           InstructionCombOut *req) { g_inst_fifo.read(*in, *rd, *out, *req); }
+void instruction_FIFO_write(const instruction_FIFO_in *in, instruction_FIFO_read_data *rd, InstructionCombOut *req) {
+  g_inst_fifo.write(*in, *rd, *req);
+}
 void instruction_FIFO_seq_write(const InstructionCombOut *c) { g_inst_fifo.seq_write(*c); }
 
 void PTAB_seq_read(PTAB_in *, PTAB_read_data *rd) { g_ptab.seq_read(*rd); }
-void PTAB_comb_calc(PTAB_in *in, const PTAB_read_data *rd, PTAB_out *out, PTAB_read_data *next_rd, PtabCombOut *c) {
-  g_ptab.comb_calc(*in, *rd, *out, *next_rd, *c);
-}
+void PTAB_read(const PTAB_in *in, PTAB_read_data *rd, PTAB_out *out, PtabCombOut *req) { g_ptab.read(*in, *rd, *out, *req); }
+void PTAB_write(const PTAB_in *in, PTAB_read_data *rd, PtabCombOut *req) { g_ptab.write(*in, *rd, *req); }
 void PTAB_seq_write(const PtabCombOut *c) { g_ptab.seq_write(*c); }
 
 void front2back_FIFO_seq_read(front2back_FIFO_in *, front2back_FIFO_read_data *rd) { g_f2b_fifo.seq_read(*rd); }
-void front2back_FIFO_comb_calc(front2back_FIFO_in *in, const front2back_FIFO_read_data *rd, front2back_FIFO_out *out,
-                               front2back_FIFO_read_data *next_rd, Front2BackCombOut *c) { g_f2b_fifo.comb_calc(*in, *rd, *out, *next_rd, *c); }
+void front2back_FIFO_read(const front2back_FIFO_in *in, front2back_FIFO_read_data *rd, front2back_FIFO_out *out,
+                          Front2BackCombOut *req) { g_f2b_fifo.read(*in, *rd, *out, *req); }
+void front2back_FIFO_write(const front2back_FIFO_in *in, front2back_FIFO_read_data *rd, Front2BackCombOut *req) {
+  g_f2b_fifo.write(*in, *rd, *req);
+}
 void front2back_FIFO_seq_write(const Front2BackCombOut *c) { g_f2b_fifo.seq_write(*c); }

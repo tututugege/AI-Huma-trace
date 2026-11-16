@@ -122,14 +122,28 @@ public:
     }
   }
 
-  void comb_calc(const fetch_address_FIFO_in &inp,
-                 const fetch_address_FIFO_read_data &rd,
-                 fetch_address_FIFO_out &out,
-                 fetch_address_FIFO_read_data &next_rd,
-                 FetchAddrCombOut &step_req) const {
-    fetch_address_FIFO_comb_impl(inp, rd, step_req);
-    out = step_req.out_regs;
-    build_next_read_data(rd, step_req, next_rd);
+  // read port (first use in the cycle): clear / drop the youngest entries / pop, the cycle's request req (fresh here)
+  void read(const fetch_address_FIFO_in &inp, fetch_address_FIFO_read_data &rd, fetch_address_FIFO_out &out,
+            FetchAddrCombOut &req) const {
+    fetch_address_FIFO_comb_impl(inp, rd, req);
+    out = req.out_regs;
+    build_next_read_data(rd, req, rd);
+  }
+
+  // write port (after the read): push the address (and its FE_PAIR second block)
+  void write(const fetch_address_FIFO_in &inp, fetch_address_FIFO_read_data &rd, FetchAddrCombOut &req) const {
+    if (req.push_en) {
+      std::printf("[fetch_address_FIFO] ERROR: two pushes in one cycle\n");
+      std::exit(1);
+    }
+    req.push_en = true;
+    req.push_data = inp.fetch_address;
+    req.push_pair = inp.pair;
+    FetchAddrCombOut c{};
+    c.push_en = true;
+    c.push_data = inp.fetch_address;
+    c.push_pair = inp.pair;
+    build_next_read_data(rd, c, rd);
   }
 
   void seq_write(const FetchAddrCombOut &req) {
@@ -189,17 +203,14 @@ void fetch_address_FIFO_seq_read(struct fetch_address_FIFO_in *in,
   g_fetch_addr_fifo_model.seq_read(*in, *rd);
 }
 
-void fetch_address_FIFO_comb_calc(struct fetch_address_FIFO_in *in,
-                                  const struct fetch_address_FIFO_read_data *rd,
-                                  struct fetch_address_FIFO_out *out,
-                                  struct fetch_address_FIFO_read_data *next_rd,
-                                  FetchAddrCombOut *step_req) {
-  assert(in);
-  assert(rd);
-  assert(out);
-  assert(next_rd);
-  assert(step_req);
-  g_fetch_addr_fifo_model.comb_calc(*in, *rd, *out, *next_rd, *step_req);
+void fetch_address_FIFO_read(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
+                             struct fetch_address_FIFO_out *out, FetchAddrCombOut *req) {
+  g_fetch_addr_fifo_model.read(*in, *rd, *out, *req);
+}
+
+void fetch_address_FIFO_write(const struct fetch_address_FIFO_in *in, struct fetch_address_FIFO_read_data *rd,
+                              FetchAddrCombOut *req) {
+  g_fetch_addr_fifo_model.write(*in, *rd, *req);
 }
 
 void fetch_address_FIFO_seq_write(const FetchAddrCombOut *req) {
