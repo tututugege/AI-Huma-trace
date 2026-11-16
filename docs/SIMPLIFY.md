@@ -61,7 +61,42 @@ The I-cache stack was 2,961 lines (icache.cpp, ICacheTop.cpp / .h, icache_module
   the glue structs (TrueGlueInput / Output, MMU / memory "views") only copied fields; the ports and the ITLB are bound in one struct.
 * the always-empty second fetch port (`*_2` fields of icache_in / icache_out), icache_seq_read / seq_write, the miss-penalty / AXI-read
   latency bookkeeping nothing read, the focus-address traces and the deadlock dump are gone.
-Gates identical at every step; FPR fingerprints identical on rvc-mem / rvc-flow; rv64gc Linux after 099143b: see below.
+Gates identical at every step; FPR fingerprints identical on rvc-mem / rvc-flow; rv64gc Linux after 099143b identical.
+
+## TLB / memory glue, IO fields, front end registers (2026-11-16, 0d60378..4dbe61b)
+
+* TLB: every TLB walks through the shared page-table walker of the memory subsystem (MemPtwBlock); the local walker in the
+  TLB (PtwWalker, its memory port, the retry reasons and walk traces) is gone. The route block has two owners left (I-cache, PTW walk).
+* Memory subsystem: the LLC counters that were never incremented and their snapshot path, SimContext members nobody used, null
+  checks around the always-present LLC tables.
+* IO structs: fields that are written but never read (FTQ, TMA, STQ entry, PTW, I-cache perf outputs, BPU, Wires::front2pre, ...) and
+  the code that only wrote them (scripts/write_only.py style check).
+* front_top.cpp: the front end's own registers (predecode refetch, PdInfo, FIFO full / empty latches, RVC carry, FE_PAIR pending
+  request) are one `FrontRegs` struct: `q` is read at seq_read, the comb builds `d`, seq_write copies `d` to `q`; 16 statics and their
+  `*_snapshot` / `next_*` copies are gone.
+* RTL coupling kept: `include/config.h` ends with an RTL-only parameter block (XLEN_BITS, ROB_COMPACT, MOVE_ELIM, LSU_MEMSPEC, FE_BFAST,
+  BPU meta widths, IQ sizes, LSU window widths): the model does not read them, but `rtl/harness/tools/gen_cfg_pkg.py` exports them and
+  the RTL uses them. The generated `ttg_cfg_pkg.sv` has the same 170 names and values as from main. The RTL kill switches
+  (`gen_cfg.sh -DCFG_LSU_MEMSPEC=0` etc.) still build, but the model only implements the default, so there is no model reference
+  for them any more (`rtl/scripts/ref_cycles_nomemspec.txt` cannot be regenerated).
+* Restored after a check of the RTL scripts: `TB_TRACE_COMMIT` (rtl/scripts/first_diff.sh) and `LSU_PIPE_EVT` (same format as the RTL
+  tb's `SOC_TB_LSUEVT`); their output is byte-identical to the base.
+
+Checks: gates identical after every commit; FPR identical on rvc-alu / rvc-mem / fd-rvc-mem / rvc-flow; rv64gc Linux console
+identical to the base at 595e4a7, 7b249c1, 099143b (I-cache), 13166f4 (TLB / memory) and b94f881 (final model).
+
+## Final state (4dbe61b)
+
+| | base 75c8141 | now |
+| --- | --- | --- |
+| model C/C++ lines | 37,269 | 30,452 (-18.3%) |
+| environment variables read | 77 | 16 |
+| rvc-alu / rvc-mem / fd-rvc-mem cycles/s | 271.9k / 206.1k / 218.6k | 338k / 254k / 272k (1.24x) |
+| back-end comb order hazards | 1 real | 0 |
+| gates run_gate.sh / run_gate_c.sh | 62 / 67 | 62 / 67 identical |
+
+Still open: the AXI interconnect / LLC generality, the comb checker for the front end and memory subsystem, the table-driven scheduler
+(declared reads / writes per phase, generated order) and the Reg / Wire write rules.
 
 ## Log
 See `git log 75c8141..` (one commit per step, each with its gate result).
