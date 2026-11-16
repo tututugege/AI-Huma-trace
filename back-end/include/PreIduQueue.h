@@ -35,6 +35,7 @@ private:
   void ftq_recover(int new_tail);
   void ftq_flush();
 
+  bool flush_q = false;   // register: the ROB flushed in the previous cycle
   InstructionBuffer ibuf;
   InstructionBuffer ibuf_1;
   // committed (x) == working (x_1) at comb_begin; seq copies only dirty parts.

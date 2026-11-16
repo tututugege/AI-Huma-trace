@@ -91,7 +91,7 @@ void PreIduQueue::comb_begin() {
 // Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
 // gets an FTQ entry and each instruction a buffer entry (and a uop-pool block).
 void PreIduQueue::comb_accept_front() {
-  if (wires->idu_br_latch->mispred || wires->rob_bcast.flush) return;  // ready stays false
+  if (wires->idu_br_latch->mispred || flush_q) return;  // the cycle after a mispredict / flush: ready stays false
 
   int incoming = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) incoming += wires->in.valid[i] ? 1 : 0;
@@ -233,6 +233,7 @@ void PreIduQueue::comb_commit_info() {
 }
 
 void PreIduQueue::seq() {
+  flush_q = wires->rob_bcast.flush;
   if (ibuf_dirty) {
     ibuf.sync_from(ibuf_1);
     ibuf_dirty = false;
