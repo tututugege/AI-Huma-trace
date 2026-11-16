@@ -48,7 +48,7 @@ void FrontTop::read_core_q() {
 }
 
 void FrontTop::comb_core() {
-  *update_req_ = {};
+  update_req_->clear_valid();
   core_->comb(in, *read_data_, out, *update_req_);
 }
 

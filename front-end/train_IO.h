@@ -93,6 +93,18 @@ struct FrontUpdateRequest {
   InstructionCombOut fifo_req{};
   PtabCombOut ptab_req{};
   Front2BackCombOut front2back_fifo_req{};
+
+  // The start of a cycle: only the enables and counts (the rest is read under them, or written before it is read).
+  void clear_valid() {
+    bpu_seq_txn.valid = false;
+    front_state.valid = false;
+    ipf.ncand = 0;
+    fetch_addr_fifo_req.clear_fifo = fetch_addr_fifo_req.push_en = fetch_addr_fifo_req.pop_en = false;
+    fetch_addr_fifo_req.drop_tail_n = 0;
+    fifo_req.clear_fifo = fifo_req.push_en = fifo_req.pop_en = false;
+    ptab_req.clear_fifo = ptab_req.push_en = ptab_req.pop_en = false;
+    front2back_fifo_req.clear_fifo = front2back_fifo_req.push_en = front2back_fifo_req.pop_en = false;
+  }
 };
 
 #endif
