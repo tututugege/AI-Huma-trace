@@ -143,8 +143,8 @@ void FrontTop::comb_from_back(BackTop &back) {
   back2front_1.fence_i = back.out.fence_i;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     InstInfo *inst = &back.out.commit_entry[i].uop;
-    const auto &commit_extra = back.rob->out.commit_extra[i];
-    const auto &ftq_info = back.ftq_commit_info.resp[i];
+    const auto &commit_extra = back.out.commit_extra[i];
+    const auto &ftq_info = back.out.commit_ftq[i];
     back2front_1.back2front_valid[i] = back.out.commit_entry[i].valid;
     for (int j = 0; j < 4; j++) {
       back2front_1.tage_tag[i][j] = 0;

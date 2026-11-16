@@ -22,6 +22,7 @@ ROOTS = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_m
 SUBOBJ = ('back', 'front', 'mem_subsystem', 'axi_interconnect', 'axi_ddr', 'axi_mmio')
 SEQ_CALLS = ('front.seq_write_bpu',)
 FRONT_INLINE = ('front.comb', 'front.comb_from_back')   # FrontTop methods inlined like SimCpu's        # cycle() is scanned up to the first of these
+TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 DEPTH = 4                                   # path components kept below the root
 
 
@@ -79,6 +80,8 @@ def scan_paths(body, ASSIGN, src, notes, owner, roots=ROOTS, prefix='', types=No
            re.match(r'\s*\.\s*(?:clear|fill|reset|assign)\s*\(', tail) or re.search(r'memset\s*\(\s*&?\s*$', body[max(0, m.start() - 12):m.start()]):
             w.add(k); continue
         call = enclosing_call(body, m.start())
+        if call and re.search(r'&\s*$', body[max(0, m.start() - 3):m.start()]):
+            r.add(k); continue      # an address passed: a binding (what the callee does is in its own summary)
         if call:
             if call[2]:
                 cls = (types or {}).get(call[2]); pw = src.params_written(call[0], cls) if cls else None
@@ -121,7 +124,7 @@ def top_domain(root, ASSIGN, back_rows):
     def front_key(k, write=False):
         head = k.split('.')[0]
         if head == 'in':
-            if k.startswith('in.csr_status'): return 'back.csr_status'   # front.in.csr_status points at back.csr_status
+            if k.startswith('in.csr_status'): return None if write else 'back.csr_status'   # a pointer to back.csr_status (read)
             return 'front.' + k
         if head == 'out': return 'front.' + k
         return None                                                    # FrontComb locals / front-internal state
@@ -190,16 +193,22 @@ def top_domain(root, ASSIGN, back_rows):
     cur_tag = []
     n_if = [0]
 
+    groups = []        # per row: the top-level call of cycle() it belongs to (a SimCpu-level phase)
+    cur_group = ['']
+
     def emit(label, r, w):
-        rows.append((label, r, w)); tags.append(tuple(cur_tag))
+        rows.append((label, r, w)); tags.append(tuple(cur_tag)); groups.append(cur_group[0])
 
     def subst(text, mp):
         for a, e in mp.items(): text = re.sub(r'(?<![\w.>])' + a + r'\b', e, text)
         return text
 
-    def walk_body(body, where, mp):
+    def walk_body(body, where, mp, top=False):
         for st in statements(body):
             if stop[0]: return
+            if top:   # a statement of cycle(): one SimCpu-level phase
+                cm0 = re.match(r'([\w.]+?)\s*(?:\.|->)\s*(\w+)\s*\(', st) or re.match(r'(\w+)\s*\(', st)
+                cur_group[0] = (norm_path(cm0.group(1)) + '.' + cm0.group(2)) if cm0 and cm0.lastindex == 2 else (cm0.group(1) if cm0 else 'cycle')
             st = subst(st, mp)
             st = re.sub(r'\bcpu\s*\.\s*', '', st)              # free functions: cpu.X -> X
             st = re.sub(r'\b(?:std|axi_interconnect|sim_ddr|mmio)::(?=\w)', '', st)   # namespace qualifiers
@@ -280,7 +289,7 @@ def top_domain(root, ASSIGN, back_rows):
             if not re.search(PATH % '|'.join(ROOTS), st): continue
             emit(f'{where}:glue', *scan_paths(st, ASSIGN, src, notes, where))
 
-    walk_body(src.body('SimCpu', 'cycle')[1], 'cycle', {})
+    walk_body(src.body('SimCpu', 'cycle')[1], 'cycle', {}, top=True)
     # number repeated labels
     seen = {}
     out = []
@@ -296,4 +305,8 @@ def top_domain(root, ASSIGN, back_rows):
     def exclusive(i, j):
         di = dict(tags[i]); dj = dict(tags[j])
         return any(k in dj and dj[k] != b for k, b in di.items())
+    TOP_PHASES[:] = []   # (phase, R, W) per SimCpu-level phase, in the order of cycle()
+    for g, (n, r, w) in zip(groups, rows):
+        if not TOP_PHASES or TOP_PHASES[-1][0] != g: TOP_PHASES.append((g, set(), set()))
+        TOP_PHASES[-1][1].update(r); TOP_PHASES[-1][2].update(w)
     return out, notes, overlap, exclusive, prior_write

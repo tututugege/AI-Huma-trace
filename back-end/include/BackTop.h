@@ -32,8 +32,8 @@ class MemSubsystem;
 
 // The back end's own phase: its outputs to the front end and the memory side (redirect, commit, stall) and the CSR's
 // FS-dirty request. Contract (checked by scripts/comb/comb_graph.py against the code):
-//   CONTRACT comb_outputs  in: csr2front dec_bcast pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
-//   CONTRACT owns: top2csr out.commit_entry out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+//   CONTRACT comb_outputs  in: csr2front dec_bcast ftq_commit_info pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
+//   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 class BackTop : public Wires {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;

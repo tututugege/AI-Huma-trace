@@ -130,6 +130,8 @@ void BackTop::comb_outputs() {
     out.commit_entry[i] =
         rob_commit.commit_entry[i].uop.to_inst_entry(
             rob_commit.commit_entry[i].valid);
+    out.commit_extra[i] = rob_commit.commit_extra[i];
+    out.commit_ftq[i] = ftq_commit_info.resp[i];
     if (rob_commit.commit_entry[i].valid &&
         !rob_bcast.interrupt) {
       if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) top2csr.fs_dirty = true;

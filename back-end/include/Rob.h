@@ -3,16 +3,6 @@
 #include "config.h"
 #include <cstdlib>
 
-struct RobCommitExtra {
-  wire<AREG_IDX_WIDTH> src1_areg;
-  wire<32> imm;
-
-  RobCommitExtra() { std::memset(this, 0, sizeof(RobCommitExtra)); }
-};
-
-struct RobOut {
-  RobCommitExtra commit_extra[COMMIT_WIDTH];
-};
 
 // Compact ROB (EXP-028): entries are allocated one after another (rob_idx = ring position, stored at bank = rob_idx % 8,
 // line = rob_idx / 8), commit takes the longest completed prefix from the head (max COMMIT_WIDTH, cut by the BPU commit
@@ -41,7 +31,6 @@ public:
 
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
-  RobOut out;
 
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
   // d == q at the start of every cycle). seq copies d to q (the entries only where written).

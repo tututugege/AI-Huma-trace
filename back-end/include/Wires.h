@@ -27,6 +27,8 @@ struct Back_out {
   wire<XLEN> rf_pc = 0;
   wire<1> rf_is_rvc = 0;
   InstEntry commit_entry[COMMIT_WIDTH];
+  RobCommitExtra commit_extra[COMMIT_WIDTH];   // BPU training of the committing instructions (from the ROB, the FTQ)
+  FtqCommitInfoResp commit_ftq[COMMIT_WIDTH];
 
   wire<32> sstatus;
   wire<32> mstatus;

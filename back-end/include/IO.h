@@ -72,6 +72,14 @@ struct FtqPc {
   wire<XLEN> next_pc = {};
 };
 
+// what the BPU training needs of a committing instruction besides its uop (the return / call classification)
+struct RobCommitExtra {
+  wire<AREG_IDX_WIDTH> src1_areg;
+  wire<32> imm;
+
+  RobCommitExtra() { std::memset(this, 0, sizeof(RobCommitExtra)); }
+};
+
 struct FtqCommitInfoResp {
   wire<XLEN> pc;
   wire<1> is_rvc;
@@ -109,6 +117,7 @@ struct RobCommitIO {
   };
 
   RobCommitEntry commit_entry[COMMIT_WIDTH] = {};
+  RobCommitExtra commit_extra[COMMIT_WIDTH] = {};   // per committing slot: what the BPU training needs besides the uop
 };
 
 struct RobDisIO {

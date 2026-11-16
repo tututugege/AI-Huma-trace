@@ -271,35 +271,37 @@ void SimCpu::icache_port_regs_seq() {
   icache_resp_q = icache_resp;
 }
 
-void SimCpu::cycle() {
-  icache_port_regs_seq();
-  ctx.perf.cycle++;
-  // BackTop inputs are combinational wires. Re-drive the only intentionally
-  // retained payload from an explicit top-level register before producers run.
+// The back end's inputs that come from SimCpu's registers: everything cleared, then the held fetch group (the back end
+// stalled last cycle) and the held peripheral response.
+void SimCpu::back_in_from_regs() {
   back.clear_comb_inputs();
   if (front2back_hold_live) static_cast<FrontPreIO &>(back.in) = front2back_hold;
   back.in.peripheral_resp = peripheral_resp_hold;
-  // 统一在此处刷新 CSR 状态，供本拍 front/back 组合逻辑共同使用。
-  back.comb_csr_status();
+}
 
-  clear_axi_master_inputs(axi_interconnect);
+// AXI: the master-side request fields are driven anew every cycle (resp.ready stays: it is read before the masters
+// drive it again).
+void SimCpu::axi_comb_begin() { clear_axi_master_inputs(axi_interconnect); }
+// AXI phase 1: slave outputs -> interconnect outputs (req.ready / accepted / resp on the master ports).
+void SimCpu::axi_comb_outputs() { axi_subsystem_comb_outputs(*this); }
+// AXI phase 2: master requests -> interconnect -> slave inputs.
+void SimCpu::axi_comb_inputs() { axi_subsystem_comb_inputs(*this); }
 
+void SimCpu::cycle() {
+  // clock edge at the start of the cycle: the I-cache port registers, the cycle counter
+  icache_port_regs_seq();
+  ctx.perf.cycle++;
+
+  back_in_from_regs();
+  back.comb_csr_status();                  // the CSR status of this cycle, for the front end and the back end
+  axi_comb_begin();
   front.comb(&back.csr_status, back.in);   // the front end, and the fetch group for the back end
-
-  // AXI phase 1: slave outputs -> interconnect outputs (req.ready / accepted / resp on the master ports, which the
-  // MSHR, the write buffer and the MMIO path read directly in the memory subsystem's comb).
-  axi_subsystem_comb_outputs(*this);
-
+  axi_comb_outputs();
   mem_subsystem.comb_outputs();
-
   back.comb();
-
   mem_subsystem.comb_inputs();
   peripheral_resp_hold_comb();
-
-  // AXI phase-2: master requests -> interconnect -> slave inputs.
-  axi_subsystem_comb_inputs(*this);
-
+  axi_comb_inputs();
   front.comb_from_back(back);              // the front end's next-cycle inputs from the back end's commit / redirect
   front2back_hold_comb();
 

@@ -122,8 +122,8 @@ void Rob::commit() {
   for (int k = 0; k < COMMIT_WIDTH; k++) {
     const int idx = (q.c_head + k) % ROB_NUM;
     w.rob_commit.commit_entry[k].uop = q.cent(idx).uop;
-    out.commit_extra[k].src1_areg = q.cent(idx).uop->src1_areg;
-    out.commit_extra[k].imm = q.cent(idx).uop->imm;
+    wires->rob_commit.commit_extra[k].src1_areg = q.cent(idx).uop->src1_areg;
+    wires->rob_commit.commit_extra[k].imm = q.cent(idx).uop->imm;
     w.rob_commit.commit_entry[k].valid = false;
   }
 

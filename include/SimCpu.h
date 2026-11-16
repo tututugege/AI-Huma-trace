@@ -51,6 +51,10 @@ public:
   void restore_pc(pc_t pc);
   void cycle();
   void front2back_hold_comb();
+  void back_in_from_regs();
+  void axi_comb_begin();
+  void axi_comb_outputs();
+  void axi_comb_inputs();
   void front2back_hold_seq();
   void peripheral_resp_hold_comb();
   void peripheral_resp_hold_seq();
