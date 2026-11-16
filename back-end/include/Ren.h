@@ -4,10 +4,15 @@
 
 class BackTop;
 
+// Rename. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in) and writes
+// (out), and the outputs only this module drives.
+//   CONTRACT comb_rename  in: -                                               out: ren2dis
+//   CONTRACT comb_fire    in: dec2ren dis2ren dec_bcast rob_bcast rob_commit  out: ren2dec
+//   CONTRACT owns: ren2dis ren2dec
 class Ren {
 public:
-  void comb_rename();  // allocate the destination registers and rename the decoded group
-  void comb_fire();  // dispatch handshake: commit the rename, the next pipeline register
+  void comb_rename();  // allocate the destination registers and rename the group of q.inst_r -> ren2dis
+  void comb_fire();    // dispatch handshake: commit the rename, take the next group from decode (d.inst_r) -> ren2dec
   Ren(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules

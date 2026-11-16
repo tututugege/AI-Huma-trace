@@ -135,6 +135,42 @@ for h in hazards: out.append('  %s reads %s, written later by %s' % h)
 print('\n'.join(out))
 all_hazards = list(hazards)
 
+# Module contracts: "// CONTRACT <phase> in: <fields|-> out: <fields|->" and "// CONTRACT owns: <fields>" in a back-end header.
+# A phase's declared in / out must equal the Wires fields it reads / writes (reads of the module's own outputs are not
+# inputs); an owned field is written by no other module.
+contract_errors = []
+hdr_text = {}
+for d0, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
+    for f0 in fs:
+        if f0.endswith('.h'): hdr_text[os.path.join(d0, f0)] = open(os.path.join(d0, f0), errors='ignore').read()
+cls_of = {o: c for o, c in member_cls.items()}
+row_of = {n: (r, w) for n, r, w in rows}
+writers = collections.defaultdict(set)
+for n, r, w in rows:
+    for k in w: writers[k.split('.')[0]].add(n.split('.')[0])
+n_contract = 0
+for obj, cls in cls_of.items():
+    t = next((t for t in hdr_text.values() if re.search(r'\bclass ' + cls + r'\b', t) and 'CONTRACT' in t), None)
+    if not t: continue
+    owns = set()
+    for m in re.finditer(r'CONTRACT owns:([^\n]*)', t): owns |= set(m.group(1).split())
+    for m in re.finditer(r'CONTRACT (\w+)\s+in:(.*?)\s+out:([^\n]*)', t):
+        ph, din, dout = m.group(1), set(m.group(2).split()) - {'-'}, set(m.group(3).split()) - {'-'}
+        name = f'{obj}.{ph}'
+        if name not in row_of: contract_errors.append(f'{name}: declared but not a phase'); continue
+        r, w = row_of[name]
+        sin = {k.split('.')[0] for k in r} - owns
+        sout = {k.split('.')[0] for k in w}
+        if sin != din: contract_errors.append(f'{name}: reads {sorted(sin)}, declared in {sorted(din)}')
+        if sout != dout: contract_errors.append(f'{name}: writes {sorted(sout)}, declared out {sorted(dout)}')
+        n_contract += 1
+    for f0 in owns:
+        other = writers[f0] - {obj}
+        if other: contract_errors.append(f'{obj} owns {f0}, also written by {sorted(other)}')
+print(f'contracts: {n_contract} phases declared, {len(contract_errors)} mismatches')
+for e in contract_errors: print('  contract: ' + e)
+all_hazards += contract_errors
+
 # =====================================================================================================================
 # Front end and memory subsystem.  Their phases are member functions of one class (FrontComb) or the statements of
 # MemSubsystem::comb_outputs / comb_inputs; their signals are that class's data members (accessed unqualified).
