@@ -265,3 +265,15 @@ the get / set round trip, the visible mip / sip latched), only the trap path sti
 come from a free list. The bridge's share went to about 4%. The Makefile takes the API header from REFCPU_INC (the
 same checkout as REFCPU_LIB; default the function-model symlink).
 Gates RVC=0 62/62, RVC=1 67/67 identical, FPR identical, TB_TRACE_COMMIT identical.
+
+## One instruction decoder (exp/bridge-fast)
+
+IDU and the trace bridge decoded each instruction separately (IDU into a uop, the bridge again to find which
+function-model fields an instruction writes and whether it loads or stores). Both now call `decode_inst(inst)`
+(bridge/InstDecode.cpp, a pure function returning `DecodedInst`): the operand fields, enables, type, immediate, CSR
+legality, and the function-model view (writes_fpr, touches_fcsr, writes_xreg, mem_load / mem_store, is_lr).
+Idu::decode copies it into the uop and keeps only the timing rules (AMO dest, x0 dest, TMA flags) and branch tags
+(alloc_tag is now an Idu member, not file scope). The function model still executes at ROB dispatch (its undo log
+and sim time), so cycles do not change.
+Gates RVC=0 62/62, RVC=1 67/67 identical, FPR (4 programs) identical, TB_TRACE_COMMIT and LSU_PIPE_EVT identical
+with the previous binary.

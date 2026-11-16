@@ -6,11 +6,9 @@
 #include "config.h"
 #include "ref.h"
 #include "util.h"
+#include "InstDecode.h"
 #include <cstdint>
 #include <cstdlib>
-
-// Branch tags picked in comb_decode and committed in comb_fire when the instruction actually moves on.
-static wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH];
 
 void Idu::init() {
   for (int i = 0; i < MAX_BR_NUM; i++) {
@@ -150,196 +148,40 @@ void Idu::seq() {
   q_ = d;
 }
 
-namespace {
-// CSRs the core implements; accessing any other one raises an illegal-instruction exception (like the function model:
-// OpenSBI probes menvcfg / mcounteren / stimecmp / ... by trapping, and must see them absent). F/D: fflags / frm / fcsr
-// are real CSR instructions (serialised like the others: the RTL keeps fflags in the CSR file, accrued at commit).
-bool is_known_csr(uint32_t c) {
-  switch (c) {
-  case number_mtvec: case number_mepc: case number_mcause: case number_mie: case number_mip: case number_mtval:
-  case number_mscratch: case number_mstatus: case number_mideleg: case number_medeleg: case number_sepc:
-  case number_stvec: case number_scause: case number_sscratch: case number_stval: case number_sstatus:
-  case number_sie: case number_sip: case number_satp: case number_mhartid: case number_misa:
-    return true;
-  case number_fflags: case number_frm: case number_fcsr:
-    return true;
-  default:
-    return false;
-  }
-}
-}  // namespace
 
-// RISC-V decode into a Uop: operand enables, instruction class, immediate, and the top-down-analysis flags.
+// One instruction into a Uop: the ISA view from the shared decoder (decode_inst, bridge/InstDecode.h), then the decode
+// stage's own rules (the top-down-analysis flags, the AMO destination, x0).
 void Idu::decode(Uop &uop, uint32_t inst) {
-  const uint32_t opcode = BITS(inst, 6, 0), f3 = BITS(inst, 14, 12), f7 = BITS(inst, 31, 25);
-  const uint32_t rd = BITS(inst, 11, 7), ra = BITS(inst, 19, 15), rb = BITS(inst, 24, 20), csr = inst >> 20;
-
+  const DecodedInst r = decode_inst(inst);
   uop->dbg.instruction = inst;
   uop.diag_val = inst;
-  uop->dest_areg = rd;
-  uop->src1_areg = ra;
-  uop->src2_areg = rb;
-  uop->src1_is_pc = false;
-  uop->src2_is_imm = true;
-  uop->func3 = f3;
-  uop->func7 = f7;
-  uop->is_word = false;
-  uop->dest_fp = uop->src1_fp = uop->src2_fp = uop->src3_fp = false;
-  uop->src3_en = false;
-  uop->src3_areg = 0;
-  uop->fp_cls = FP_NONE;
-  uop->csr_idx = csr;
+  uop->type = encode_inst_type(r.type);
+  uop.illegal_inst = r.illegal;
   uop.page_fault_inst = false;
-  uop.illegal_inst = false;
-  uop->type = encode_inst_type(NOP);
+  uop->dest_areg = r.rd;
+  uop->src1_areg = r.rs1;
+  uop->src2_areg = r.rs2;
+  uop->src3_areg = r.rs3;
+  uop.dest_en = r.dest_en;
+  uop->src1_en = r.src1_en;
+  uop->src2_en = r.src2_en;
+  uop->src3_en = r.src3_en;
+  uop->dest_fp = r.dest_fp;
+  uop->src1_fp = r.src1_fp;
+  uop->src2_fp = r.src2_fp;
+  uop->src3_fp = r.src3_fp;
+  uop->src1_is_pc = r.src1_is_pc;
+  uop->src2_is_imm = r.src2_is_imm;
+  uop->is_word = r.is_word;
+  uop->is_atomic = r.is_atomic;
+  uop->fp_cls = r.fp_cls;
+  uop->func3 = r.f3;
+  uop->func7 = r.f7;
+  uop->csr_idx = r.csr;
+  uop->imm = r.imm;
   uop.tma.is_ret = uop.tma.mem_commit_is_load = uop.tma.mem_commit_is_store = false;
-  static uint64_t global_inst_idx = 0;
+  static uint64_t global_inst_idx = 0;   // the instruction's identity in the trace bridge
   uop->dbg.inst_idx = global_inst_idx++;
-
-  // destination written / source 1 read / source 2 read, and the instruction class
-  auto set = [&](bool dest, bool s1, bool s2, InstType type) {
-    uop.dest_en = dest;
-    uop->src1_en = s1;
-    uop->src2_en = s2;
-    uop->type = encode_inst_type(type);
-  };
-
-  switch (opcode) {
-  case number_0_opcode_lui:  // reads x0
-    set(true, true, false, ADD);
-    uop->src1_areg = 0;
-    uop->func3 = 0;
-    uop->imm = immU(inst);
-    break;
-  case number_1_opcode_auipc:
-    set(true, false, false, ADD);
-    uop->src1_is_pc = true;
-    uop->func3 = 0;
-    uop->imm = immU(inst);
-    break;
-  case number_2_opcode_jal:
-    set(true, false, false, JAL);
-    uop->src1_is_pc = true;
-    uop->func3 = 0;
-    uop->imm = immJ(inst);
-    break;
-  case number_3_opcode_jalr:
-    set(true, true, false, JALR);
-    uop->src1_is_pc = true;
-    uop->func3 = 0;
-    uop->imm = immI(inst);
-    break;
-  case number_4_opcode_beq:  // beq, bne, blt, bge, bltu, bgeu
-    set(false, true, true, BR);
-    uop->imm = immB(inst);
-    break;
-  case number_5_opcode_lb:  // lb, lh, lw, lbu, lhu
-    set(true, true, false, LOAD);
-    uop->imm = immI(inst);
-    break;
-  case number_6_opcode_sb:  // sb, sh, sw
-    set(false, true, true, STORE);
-    uop->imm = immS(inst);
-    break;
-  case number_7_opcode_addi:  // register-immediate ALU ops, including the Zbb/Zbs immediate forms
-    set(true, true, false, ADD);
-    uop->imm = immI(inst);
-    break;
-  case number_8_opcode_add:  // register-register ALU ops (Zba/Zbb/Zbc/Zbs too); funct7 == 1 is M: mul/div
-    set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
-    uop->src2_is_imm = false;
-    break;
-  case 0b0011011:  // OP-IMM-32: addiw, slliw, srliw, sraiw, slli.uw, clzw, ctzw, cpopw, roriw (rv64)
-    set(true, true, false, ADD);
-    uop->imm = immI(inst);
-    uop->is_word = true;
-    break;
-  case 0b0111011:  // OP-32: addw, subw, sllw, srlw, sraw, add.uw, shNadd.uw, rolw, rorw, zext.h; funct7 == 1 is mulw/divw/divuw/remw/remuw
-    set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
-    uop->src2_is_imm = false;
-    uop->is_word = true;
-    break;
-  case number_9_opcode_fence:  // funct3 001 is fence.i
-    set(false, false, false, f3 == 0b001 ? FENCE_I : FENCE);
-    break;
-  case number_10_opcode_ecall: {  // csrr*, ecall, ebreak, mret, sret, wfi, sfence.vma
-    uop->src2_is_imm = (f3 & 0b100) && ((f3 & 0b001) || (f3 & 0b010));
-    if ((f3 & 0b001) || (f3 & 0b010)) {
-      if (!is_known_csr(csr)) {
-        set(false, false, false, NOP);
-        uop.illegal_inst = true;
-      } else {
-        set(true, true, !uop->src2_is_imm, CSR);
-        uop->imm = ra;  // zimm for the immediate forms
-      }
-    } else if (inst == INST_ECALL) set(false, false, false, ECALL);
-    else if (inst == INST_EBREAK) set(false, false, false, EBREAK);
-    else if (inst == INST_MRET) set(false, false, false, MRET);
-    else if (inst == INST_WFI) set(false, false, false, WFI);
-    else if (inst == INST_SRET) set(false, false, false, SRET);
-    else if (f7 == 0b0001001 && f3 == 0 && rd == 0) set(false, true, true, SFENCE_VMA);
-    else set(false, false, false, NOP);
-    break;
-  }
-  case number_11_opcode_lrw:  // atomics; LR has no second source
-    set(true, true, (f7 >> 2) != AmoOp::LR, AMO);
-    uop->imm = 0;
-    uop->is_atomic = true;
-    break;
-  // F/D (rv64): the function model decides what traps (reserved rounding modes, mstatus.FS = Off): an executed FP uop whose fact
-  // says "trapped with illegal instruction" becomes the exception in Fu::compute.  Statically reserved encodings trap here.
-  case 0x07:  // flw / fld
-    if (f3 != 2 && f3 != 3) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
-    set(true, true, false, LOAD);
-    uop->dest_fp = true;
-    uop->imm = immI(inst);
-    break;
-  case 0x27:  // fsw / fsd
-    if (f3 != 2 && f3 != 3) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
-    set(false, true, true, STORE);
-    uop->src2_fp = true;
-    uop->imm = immS(inst);
-    break;
-  case 0x43: case 0x47: case 0x4b: case 0x4f:  // fmadd / fmsub / fnmsub / fnmadd: three FP sources
-    if ((f7 & 3) > 1) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
-    set(true, true, true, FPOP);
-    uop->src2_is_imm = false;
-    uop->dest_fp = uop->src1_fp = uop->src2_fp = uop->src3_fp = true;
-    uop->src3_en = true;
-    uop->src3_areg = BITS(inst, 31, 27);
-    uop->fp_cls = FP_C_FMA;
-    break;
-  case 0x53: {  // OP-FP: fmt (funct7[1:0]) 0 = S, 1 = D; the class comes from funct5
-    const uint32_t f5 = f7 >> 2;
-    if ((f7 & 3) > 1) { set(false, false, false, NOP); uop.illegal_inst = true; break; }
-    uop->src2_is_imm = false;
-    switch (f5) {
-    case 0: case 1: case 2:  // fadd fsub fmul
-      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_FMA; break;
-    case 3:                  // fdiv
-      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_FDIV; break;
-    case 0x0b:               // fsqrt
-      set(true, true, false, FPOP); uop->dest_fp = uop->src1_fp = true; uop->fp_cls = FP_C_FDIV; break;
-    case 4: case 5:          // fsgnj*, fmin / fmax
-      set(true, true, true, FPOP); uop->dest_fp = uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_MISC; break;
-    case 8:                  // fcvt.s.d / fcvt.d.s
-      set(true, true, false, FPOP); uop->dest_fp = uop->src1_fp = true; uop->fp_cls = FP_C_MISC; break;
-    case 0x14:               // feq / flt / fle: integer result
-      set(true, true, true, FPOP); uop->src1_fp = uop->src2_fp = true; uop->fp_cls = FP_C_MISC; break;
-    case 0x18: case 0x1c:    // fcvt.{w,wu,l,lu}.fmt, fmv.x.w / fmv.x.d / fclass: integer result
-      set(true, true, false, FPOP); uop->src1_fp = true; uop->fp_cls = FP_C_MISC; break;
-    case 0x1a: case 0x1e:    // fcvt.fmt.{w,wu,l,lu}, fmv.w.x / fmv.d.x: integer source
-      set(true, true, false, FPOP); uop->dest_fp = true; uop->fp_cls = FP_C_I2F; break;
-    default:
-      set(false, false, false, NOP); uop.illegal_inst = true; break;
-    }
-    break;
-  }
-  default:
-    set(false, false, false, NOP);
-    uop.illegal_inst = true;
-    break;
-  }
 
   const InstType type = decode_inst_type(uop->type);
   const uint32_t amo = uop->func7 >> 2;

@@ -58,5 +58,6 @@ private:
   void decode();
 
 private:
+  wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH] = {};   // branch tags picked in comb_decode, committed in comb_fire
   Regs q_;
 };

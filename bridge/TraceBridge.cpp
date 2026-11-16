@@ -1,4 +1,5 @@
 #include "TraceBridge.h"
+#include "InstDecode.h"
 #include "refcpu_api.h"
 #include <cstdlib>
 #include <cstring>
@@ -70,15 +71,6 @@ void undo_into(RefCpuState &st, const xlen_t *trap_csr, bool full_csr,
 }
 // F/D: does the instruction write an FP register?  LOAD-FP, the four fused multiply-adds, and OP-FP except the compares
 // (funct5 0x14), the conversions to integer (0x18) and fmv.x / fclass (0x1c).
-inline bool writes_fpr(uint32_t inst) {
-  const uint32_t op = inst & 0x7f, f5 = inst >> 27;
-  if (op == 0x07 || op == 0x43 || op == 0x47 || op == 0x4b || op == 0x4f) return true;
-  return op == 0x53 && f5 != 0x14 && f5 != 0x18 && f5 != 0x1c;
-}
-inline bool touches_fcsr(uint32_t inst) {
-  const uint32_t op = inst & 0x7f;
-  return op == 0x53 || op == 0x43 || op == 0x47 || op == 0x4b || op == 0x4f || op == 0x73;
-}
 } // namespace
 
 // Control-flow outcome computed from the register file, independent of the core's execution
@@ -171,9 +163,8 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   const uint32_t opcode = bits(inst, 6, 0);
   const uint32_t rd = bits(inst, 11, 7), rs1 = bits(inst, 19, 15), rs2 = bits(inst, 24, 20);
   const uint32_t funct3 = bits(inst, 14, 12);
+  const DecodedInst di = decode_inst(inst);   // the shared decoder (InstDecode.h)
   e->f.is_br = (opcode == 0x63);
-  const bool is_amo = (opcode == 0x2f);
-  const bool is_lr = is_amo && bits(inst, 31, 27) == 2;
   e->f.rs2_value = gpr[rs2];
   e->f.rs1_value = gpr[rs1];
   if (opcode == 0x73) {  // SYSTEM: save the whole CSR file
@@ -183,14 +174,14 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     e->f.csr_wdata = (funct3 & 4) ? rs1 : gpr[rs1];  // csrr*i: zimm in the rs1 field
   }
   // Destination register undo (x0 never changes)
-  const bool fp_dest = writes_fpr(inst);
+  const bool fp_dest = di.writes_fpr;
   if (fp_dest) {
     e->fp_rd = true;
     e->frd = (uint8_t)rd;
     e->frd_old = fpr[rd];
   }
-  if (touches_fcsr(inst)) { e->fcsr_saved = true; e->fcsr_old = refcpu_fcsr(ctx_); }
-  const bool writes_rd = opcode != 0x63 && opcode != 0x23 && opcode != 0x27 && opcode != 0x0f && !fp_dest;
+  if (di.touches_fcsr) { e->fcsr_saved = true; e->fcsr_old = refcpu_fcsr(ctx_); }
+  const bool writes_rd = di.writes_xreg;
   if (writes_rd && rd != 0) {
     e->rd = (uint8_t)rd;
     e->rd_old = gpr[rd];
@@ -198,11 +189,11 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
 
   const bool fp_ld = opcode == 0x07, fp_st = opcode == 0x27;   // flw/fld, fsw/fsd: funct3 2 / 3 as lw / ld
   if (fp_st) e->f.rs2_value = fpr[rs2];
-  if (opcode == 0x03 || fp_ld || is_lr) {
+  if (di.mem_load) {
     e->f.is_load = true;
     e->f.vaddr = (opcode == 0x03 || fp_ld) ? gpr[rs1] + immI(inst) : gpr[rs1];
     e->f.size = (opcode == 0x03 || fp_ld) ? access_bytes(funct3 & 3) : amo_bytes(funct3);
-  } else if (opcode == 0x23 || fp_st || is_amo) {
+  } else if (di.mem_store) {
     e->f.is_store = true;
     e->f.vaddr = (opcode == 0x23 || fp_st) ? gpr[rs1] + immS(inst) : gpr[rs1];
     e->f.size = (opcode == 0x23 || fp_st) ? (funct3 <= 3 ? access_bytes(funct3) : 4) : amo_bytes(funct3);
