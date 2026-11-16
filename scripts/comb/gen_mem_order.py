@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MemSubsystem::comb_outputs() / comb_inputs() from the memory blocks' contracts.
+"""The memory blocks' contracts (scripts/comb/gen_top_order.py schedules their phases with the other modules').
 
 Each memory block declares its comb methods above its class, in its own port names (MemSubsystem::init binds the
 block's in / out pointers to MemSubsystem's signals):
@@ -55,7 +55,25 @@ def norm_set(keys, owner):
 
 def scanned():
     _, comb_domains = scan()
-    return [(n, grp, r, w) for grp in GROUPS for n, r, w in comb_domains.MEM_GROUPS[grp]]
+    return [(n, 'all', r, w) for n, r, w in comb_domains.MEM_GROUPS['all']]
+
+
+def decl_phases():
+    """every declared memory phase, in priority / header order: (name, block, in, out) in MemSubsystem's signal names"""
+    glue, blocks, priority = declarations()
+    import comb_domains
+    if not comb_domains.MEM_BIND: scan()
+    out = [(g[0], g[1], set(g[2]), set(g[3]), [x[0] for x in glue if x[1] == g[1]].index(g[0])) for g in glue]
+    cpp = open(CPP).read()
+    inner = ''
+    for g in glue:   # block methods a phase function calls are part of that phase, not phases of their own
+        m = re.search(r'void MemSubsystem::' + g[0] + r'\s*\(\)\s*\{', cpp)
+        if m: inner += cpp[m.end():cpp.index('\n}\n', m.end())]
+    for n, (obj, i, o, k) in blocks.items():
+        if re.search(r'\b' + re.escape(n) + r'\s*\(', inner): continue
+        out.append((n, obj, bound(obj, i), bound(obj, o), k))
+    pr = {o: i for i, o in enumerate(priority)}
+    return sorted(out, key=lambda p: (pr.get(p[1], len(pr)), p[4], p[0]))
 
 
 def owner_of(phase, block=None):
@@ -190,46 +208,16 @@ def check(glue, blocks, priority, rows):
     return errs
 
 
-def body(fn, src):
-    a = src.index(f'void MemSubsystem::{fn}() {{')
-    b = src.index(BEGIN, a)
-    e = src.index(END, b) + len(END)
-    return b, e
-
-
 def main():
     rows = scanned()
-    if '--emit' in sys.argv:
-        import comb_domains
-        for n, (cls, rr, rw) in comb_domains.MEM_BLOCKS.items():
-            if rr or rw: print(f'{cls}:  //   CONTRACT {n.split(".", 1)[1]}  in: {" ".join(sorted(rr)) or "-"}  out: {" ".join(sorted(rw)) or "-"}')
-        for n, grp, r, w in rows:
-            if '.' in n: continue
-            o = owner_of(n)
-            print(f'MemSubsystem:  //   CONTRACT {n} ({o})  in: {" ".join(sorted(norm_set(r, o))) or "-"}  out: {" ".join(sorted(norm_set(w, o))) or "-"}')
-        return
     glue, blocks, priority = declarations()
-    order = generate(phases(glue, blocks, rows), priority)
-    src = open(CPP).read()
-    new = {g: BEGIN + ''.join(f'  {n}();\n' for n in order[g]) + END for g in GROUPS}
-    if '--write' in sys.argv or '--check' in sys.argv:
-        if '--check' in sys.argv:
-            errs = check(glue, blocks, priority, rows)
-            for g in GROUPS:
-                b, e = body(g, src)
-                if src[b:e] != new[g]: errs.append(f'MemSubsystem::{g}() differs from the contracts: run gen_mem_order.py --write')
-            for x in errs: print('  ' + x)
-            if errs: sys.exit(1)
-            print(f'mem order: {sum(len(v) for v in order.values())} phases ({len(order["comb_outputs"])} in comb_outputs), '
-                  f'{len(blocks)} block methods declared, as generated from the contracts')
-            return
-        for g in GROUPS:
-            b, e = body(g, src)
-            src = src[:b] + new[g] + src[e:]
-        open(CPP, 'w').write(src)
-        print(f'wrote {sum(len(v) for v in order.values())} phases')
+    if '--check' in sys.argv:
+        errs = check(glue, blocks, priority, rows)
+        for x in errs: print('  ' + x)
+        if errs: sys.exit(1)
+        print(f'mem contracts: {len(rows)} phases, {len(blocks)} block methods declared, as the code')
         return
-    for g in GROUPS: print(g + ': ' + ' '.join(order[g]))
+    for p in decl_phases(): print(p[0], p[1], sorted(p[2]), sorted(p[3]))
 
 
 if __name__ == '__main__':

@@ -19,7 +19,8 @@ from comb_domains import Src, strip_comments, statements, split_top, enclosing_c
 
 ROOTS = ('back', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'icache_req',
          'icache_resp', 'icache_resp_q', 'icache_axi_q', 'ctx')
-SUBOBJ = ('back', 'back.pre', 'back.idu', 'back.rename', 'back.dis', 'back.isu', 'back.exu', 'back.csr', 'back.rob',
+SUBOBJ = ('mem_subsystem.wb_', 'mem_subsystem.mshr_', 'mem_subsystem.mem_route_block', 'mem_subsystem.peripheral_axi_',
+          'mem_subsystem.ptw_block', 'mem_subsystem.dcache_', 'back', 'back.pre', 'back.idu', 'back.rename', 'back.dis', 'back.isu', 'back.exu', 'back.csr', 'back.rob',
           'back.lsu', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
 SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
@@ -172,11 +173,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
     fr |= ir | {'mem_subsystem.itlb_walk.out'}
     fw |= iw | {'mem_subsystem.itlb_walk.in'}
     S['front.comb_core'] = (fr, fw)
-    S['mem_subsystem.comb_outputs'] = from_rows(MEM_GROUPS['comb_outputs'], mem_key)
-    mr, mw = from_rows(MEM_GROUPS['comb_inputs'], mem_key)
-    syncs = any(n == 'sync_ptw_port_outputs' for n, _, _ in MEM_GROUPS['comb_inputs'])   # (else only MemSubsystem::seq sets it)
-    S['mem_subsystem.comb_inputs'] = (mr | {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'},
-                                      mw | ({'mem_subsystem.dtlb_walk.out', 'mem_subsystem.itlb_walk.out'} if syncs else set()))
 
     # ---- the same calls phase by phase (global_graph.py): each domain's rows as SimCpu paths, with their source text ----
     SUB = {}
@@ -238,16 +234,14 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
             tm = re.search(r'([\w:<>]+)\s+' + re.escape(obj) + r'\s*[;{=]', memh)
             return (closure(src, tm.group(1).split('::')[-1], meth) or '') if tm else ''
         return closure(src, 'MemSubsystem', n) or ''
-    for grp in ('comb_outputs', 'comb_inputs'):
-        SUB['mem_subsystem.' + grp] = mapped(MEM_GROUPS[grp], mem_key, 'mem_subsystem.')
-        for row in SUB['mem_subsystem.' + grp]: row[3] = mem_text(row[0].split('.', 1)[1])
-    S['mem_subsystem.comb_commit_store'] = ({'back.out.commit_store', 'mem_subsystem.peripheral_model_'},
-                                            {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
-    mr2, mw2 = S['mem_subsystem.comb_inputs']
-    S['mem_subsystem.comb_inputs'] = (mr2 | {'mem_subsystem.peripheral_model_'}, mw2)
-    for row in SUB['mem_subsystem.comb_inputs']:
+    for row in mapped(MEM_GROUPS['all'], mem_key, 'mem_subsystem.'):   # one SimCpu-level phase each
+        row[3] = mem_text(row[0].split('.', 1)[1])
         if row[0] == 'mem_subsystem.peripheral_axi_.comb': row[1].add('mem_subsystem.peripheral_model_')
         if row[0] == 'mem_subsystem.ptw_request': row[1] |= {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'}
+        S[row[0]] = (set(row[1]), set(row[2]))
+        SUB[row[0]] = [row]
+    S['mem_subsystem.comb_commit_store'] = ({'back.out.commit_store', 'mem_subsystem.peripheral_model_'},
+                                            {'back.csr_interrupt_inject_io', 'mem_subsystem.peripheral_model_'})
 
     def class_summary(obj, cls, meth, members):
         b = closure(src, cls, meth)

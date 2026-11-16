@@ -253,7 +253,8 @@ TOP_KNOWN[('back.lsu.comb_outputs', 'back.lsu_awake.wake', 'back.lsu.comb_writeb
 # reviewed: comb_outputs reads a write port's addr / total_size only under its req.valid, which axi.comb_begin has
 # cleared at that point (the memory subsystem drives the request later): the stale value is never used
 for f in ('addr', 'total_size'):
-    TOP_KNOWN[('axi.interconnect.comb_outputs', f'axi.interconnect.write_ports[].req.{f}', 'mem_subsystem.comb_inputs')] = 'under valid'
+    for wr in ('mem_subsystem.wb_.comb_dcache_to_axi', 'mem_subsystem.peripheral_axi_.comb'):
+        TOP_KNOWN[('axi.interconnect.comb_outputs', f'axi.interconnect.write_ports[].req.{f}', wr)] = 'under valid'
 thaz, tstaged = [], 0
 for i, (n, r, w) in enumerate(trows):
     for j in range(i + 1, len(trows)):

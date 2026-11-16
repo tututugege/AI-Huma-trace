@@ -28,12 +28,10 @@ struct AXI_LLC_LookupIn_t;
 struct AXI_LLC_TableOut_t;
 }
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_outputs       in: axi_slave  out: dcache2lsu
 //   EXPORT comb_commit_store  in: commit_store  out: csr_inject periph
-//   EXPORT comb_inputs   in: lsu2dcache mmio_req icache_probe itlb_walk dtlb_walk axi_slave periph  out: axi_mem_req axi_mem_resp_ready mmio_resp
 // Inside: the blocks declare their comb methods in their own headers (their own ports); MemSubsystem's own comb functions
 // that drive a block are declared here, in MemSubsystem's signal names, with the block. scripts/comb/gen_mem_order.py
-// checks both against the code and generates comb_outputs / comb_inputs (a block's phases in order; a writer before
+// checks both against the code (a block's phases in order; a writer before
 // the readers; the outputs / inputs split derived from dcache2lsu and the back end's / front end's requests; ties by
 // the priority):
 //   CONTRACT priority: wb_ mshr_ dcache_ mem_route_block ptw_block peripheral_axi_
@@ -76,8 +74,6 @@ public:
   const CommitStoreIO *commit_store = nullptr;   // the back end's device stores of this cycle's commit
 
   void init();
-  void comb_outputs();
-  void comb_inputs();
   void seq();
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
@@ -99,8 +95,8 @@ public:
   PeripheralAxi &get_peripheral_axi() { return peripheral_axi_; }
   const PeripheralAxi &get_peripheral_axi() const { return peripheral_axi_; }
 
-private:
-  // Sub-modules
+  // Sub-modules: their comb phases (the CONTRACT lines above their classes) and the phase functions below are
+  // SimCpu-level phases (scripts/comb/gen_top_order.py schedules them with the other modules')
   RealDcache  dcache_;
   MSHR          mshr_;
   WriteBuffer   wb_;
@@ -108,6 +104,12 @@ private:
   PeripheralModel peripheral_model_;
   MemPtwBlock   ptw_block;
   MemRouteBlock mem_route_block;
+  void dcache_stage2();
+  void dcache_stage1();
+  void ptw_request();
+  void ptw_feedback();
+
+private:
   LsuDcacheIO dcache_req_mux_{};
   DcacheLsuIO dcache_resp_raw_{};
   DcacheLsuIO dcache_resp_route_{};
@@ -147,10 +149,6 @@ private:
   std::unique_ptr<AxiKitRuntime> axi_kit_runtime;
 
   void sync_ptw_port_outputs();
-  void dcache_stage2();
-  void dcache_stage1();
-  void ptw_request();
-  void ptw_feedback();
   void dcache_domain_seq(bool sample_mshr_perf);
   void record_dcache_stage1_metadata();
   void drive_dcache_response();
