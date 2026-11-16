@@ -148,7 +148,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
   delete g_warm;
   g_warm = new Warm();
   Warm &W = *g_warm;
-  if (cpu.axi_interconnect.llc_enabled()) W.llc.init(cpu.axi_interconnect.get_llc_config());
+  W.llc.init(cpu.axi_interconnect.get_llc_config());
   refcpu_set_sim_time(rc, static_cast<uint64_t>(sim_time));
 
   RefCpuStepInfo info{};

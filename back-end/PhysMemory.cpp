@@ -16,13 +16,6 @@ RefCpuContext *g_core = nullptr;
 uint32_t *g_sdram_memory = nullptr;
 std::unordered_map<uint32_t, uint32_t> g_io_words;
 
-[[noreturn]] void pmem_fatal(const char *op, uint32_t addr, uint64_t size) {
-  std::fprintf(stderr,
-               "[PhysMemory] %s failed: addr=0x%08x size=%llu\n", op, addr,
-               static_cast<unsigned long long>(size));
-  std::abort();
-}
-
 inline void pmem_require_ready(const char *op) {
   if (p_memory != nullptr && g_sdram_memory != nullptr) {
     return;
@@ -138,26 +131,6 @@ void pmem_write(uint32_t paddr, uint32_t data) {
   } else {
     g_io_words[word_addr] = data;
   }
-}
-
-void pmem_memcpy_to_ram(uint32_t ram_paddr, const void *src, size_t len) {
-  pmem_require_ready("memcpy_to_ram");
-  if (len == 0) {
-    return;
-  }
-  if (len > UINT32_MAX) {
-    pmem_fatal("memcpy_to_ram", ram_paddr, len);
-  }
-  if (!pmem_is_ram_addr(ram_paddr, static_cast<uint32_t>(len))) {
-    pmem_fatal("memcpy_to_ram", ram_paddr, len);
-  }
-  if (pmem_is_sdram_addr(ram_paddr, static_cast<uint32_t>(len))) {
-    const size_t off = static_cast<size_t>(ram_paddr - PMEM_SDRAM_BASE);
-    std::memcpy(reinterpret_cast<uint8_t *>(g_sdram_memory) + off, src, len);
-    return;
-  }
-  const size_t off = static_cast<size_t>(ram_paddr - PMEM_RAM_BASE);
-  std::memcpy(reinterpret_cast<uint8_t *>(p_memory) + off, src, len);
 }
 
 uint32_t *pmem_ram_ptr() {

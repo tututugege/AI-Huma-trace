@@ -351,9 +351,6 @@ AXI_LLC_WriteReqIn_t to_llc_write_req(const LlcUpstreamWriteReqLatch &w) {
   return o;
 }
 
-inline bool write_size_supported(uint8_t total_size) {
-  return (static_cast<uint16_t>(total_size) + 1u) <= MAX_WRITE_TRANSACTION_BYTES;
-}
 constexpr uint8_t kInvalidAxiWriteId = 0xFF;
 
 } // namespace
@@ -361,9 +358,6 @@ constexpr uint8_t kInvalidAxiWriteId = 0xFF;
 // ============================================================================
 // Initialization
 // ============================================================================
-bool AXI_Interconnect::llc_enabled() const {
-  return llc_config.enable && llc_config.valid();
-}
 
 // Per-port state: DDR is index 0, MMIO index 1.
 sim_ddr::SimDDR_IO_t &AXI_Interconnect::downstream_io(DownstreamPort port) {
@@ -634,17 +628,7 @@ uint8_t AXI_Interconnect::count_total_read_inflight() const {
   return static_cast<uint8_t>(r_pending.size() + (ar_latched.valid ? 1 : 0) + (ar_latched_mmio.valid ? 1 : 0));
 }
 
-uint8_t AXI_Interconnect::alloc_write_axi_id() const {
-  bool used[kIdSpace] = {false};
-  for (const auto &txn : w_pending) used[txn.axi_id & (kIdSpace - 1u)] = true;
-  if (w_active) used[w_current.axi_id & (kIdSpace - 1u)] = true;
-  if (w_active_mmio) used[w_current_mmio.axi_id & (kIdSpace - 1u)] = true;
-  if (aw_latched.valid) used[aw_latched.id & (kIdSpace - 1u)] = true;
-  if (aw_latched_mmio.valid) used[aw_latched_mmio.id & (kIdSpace - 1u)] = true;
-  return first_free_id(used, kInvalidAxiWriteId);
-}
-
-// Same, among the transactions of one downstream port.
+// A free AXI write id among the transactions of one downstream port.
 uint8_t AXI_Interconnect::alloc_write_axi_id(DownstreamPort port) const {
   bool used[kIdSpace] = {false};
   for (const auto &txn : w_pending)
@@ -652,12 +636,6 @@ uint8_t AXI_Interconnect::alloc_write_axi_id(DownstreamPort port) const {
   if (w_active_ref(port)) used[w_current_ref(port).axi_id & (kIdSpace - 1u)] = true;
   if (aw_latch(port).valid) used[aw_latch(port).id & (kIdSpace - 1u)] = true;
   return first_free_id(used, kInvalidAxiWriteId);
-}
-
-bool AXI_Interconnect::can_accept_write_now() const {
-  return !llc_enabled() &&
-         w_pending.size() < MAX_WRITE_OUTSTANDING &&
-         alloc_write_axi_id() != kInvalidAxiWriteId;
 }
 
 uint32_t AXI_Interconnect::count_llc_write_pending() const {
@@ -672,7 +650,6 @@ uint32_t AXI_Interconnect::count_llc_write_pending() const {
 
 
 bool AXI_Interconnect::has_same_line_write_hazard(uint32_t line_addr) const {
-  if (!llc_enabled()) return false;
   const auto hits = [&](uint32_t a) { return AXI_LLC::line_addr(llc_config, a) == line_addr; };
   for (int m = 0; m < NUM_WRITE_MASTERS; ++m) {
     if (llc_upstream_write_req[m].valid && hits(llc_upstream_write_req[m].addr)) return true;
@@ -701,7 +678,6 @@ bool AXI_Interconnect::has_same_line_write_hazard(uint32_t line_addr) const {
 
 // A read of `line_addr` through the LLC is in flight (request stage, LLC lookup/MSHR, memory read).
 bool AXI_Interconnect::has_same_line_read_hazard(uint32_t line_addr) const {
-  if (!llc_enabled()) return false;
   const auto request_hits_line = [&](uint32_t addr, uint8_t total_size) {
     return AXI_LLC::line_addr(llc_config, addr) == line_addr;
   };
@@ -790,65 +766,12 @@ bool AXI_Interconnect::can_issue_external_write(uint32_t addr) const {
   return gate.axi_awvalid;
 }
 
-int AXI_Interconnect::find_write_pending_by_axi_id(DownstreamPort port, uint8_t axi_id) const {
-  for (size_t i = 0; i < w_pending.size(); ++i)
-    if (w_pending[i].port == port && w_pending[i].axi_id == axi_id) return static_cast<int>(i);
-  return -1;
-}
-
-int AXI_Interconnect::find_next_aw_pending(DownstreamPort port) const {
-  for (size_t i = 0; i < w_pending.size(); ++i)
-    if (!w_pending[i].aw_done && w_pending[i].port == port) return static_cast<int>(i);
-  return -1;
-}
-
-int AXI_Interconnect::find_next_w_pending(DownstreamPort port) const {
-  for (size_t i = 0; i < w_pending.size(); ++i)
-    if (w_pending[i].port == port && w_pending[i].aw_done && !w_pending[i].w_done) return static_cast<int>(i);
-  return -1;
-}
-
-void AXI_Interconnect::refresh_non_llc_w_active(DownstreamPort port) {
-  if (llc_enabled()) {
-    return;
-  }
-  bool &active = w_active_ref(port);
-  auto &current = w_current_ref(port);
-  int &current_master = w_current_master_ref(port);
-  if (active) {
-    return;
-  }
-  const int idx = find_next_w_pending(port);
-  if (idx < 0) {
-    current = {};
-    current_master = -1;
-    return;
-  }
-  current = w_pending[static_cast<size_t>(idx)];
-  active = true;
-  current_master = current.master_id;
-}
-
-bool AXI_Interconnect::can_accept_read_master(uint8_t master_id) const {
-  if (master_id >= NUM_READ_MASTERS) {
-    return false;
-  }
-  if (count_total_read_inflight() >= MAX_OUTSTANDING) {
-    return false;
-  }
-  if (count_master_read_pending(master_id) >= MAX_READ_OUTSTANDING_PER_MASTER) {
-    return false;
-  }
-  return alloc_read_axi_id() != kInvalidAxiReadId;
-}
-
 // The same (master, id) is already in flight: responses are matched by id, so it must wait.
 bool AXI_Interconnect::has_read_id_conflict(uint8_t master_id, uint8_t orig_id) const {
   for (const auto *latch : {&ar_latched, &ar_latched_mmio})
     if (latch->valid && !latch->to_llc && latch->master_id == master_id && latch->orig_id == orig_id) return true;
   for (const auto &txn : r_pending)
     if (txn.master_id == master_id && txn.orig_id == orig_id) return true;
-  if (!llc_enabled()) return false;
   const auto &regs = llc.io.regs;
   if (llc_core_req_stage_.valid && !llc_core_req_stage_.is_write && llc_core_req_stage_.master == master_id &&
       llc_core_req_stage_.read.id == orig_id)
@@ -871,7 +794,6 @@ bool AXI_Interconnect::can_issue_llc_read_req() const {
 
 // Nothing of the LLC path is in flight (a line invalidate waits for it).
 bool AXI_Interconnect::llc_path_quiescent() const {
-  if (!llc_enabled()) return true;
   if (any_ar_latched() || !r_pending.empty() || any_w_active() || any_aw_latched() || llc_mem_write_resp_valid_ ||
       llc_mem_ignored_b_count_ != 0 || !w_pending.empty() || llc_core_req_stage_.valid)
     return false;
@@ -897,9 +819,6 @@ bool AXI_Interconnect::llc_path_quiescent() const {
 void AXI_Interconnect::prepare_llc_inputs(bool sample_upstream_ready) {
   llc.io.ext_in = {};
 
-  if (!llc_enabled()) {
-    return;
-  }
 
   const uint32_t invalidate_line_addr =
       AXI_LLC::line_addr(llc_config, llc_invalidate_line_addr_);
@@ -1050,14 +969,13 @@ void AXI_Interconnect::comb_outputs() {
   // This ensures ICache sees req.ready in the same cycle as it transitions
   for (int i = 0; i < NUM_READ_MASTERS; i++) {
     const bool llc_slot_busy =
-        llc_enabled() &&
         (llc_upstream_req[i].valid ||
          (llc_core_req_stage_.valid && !llc_core_req_stage_.is_write &&
           llc_core_req_stage_.master == i)) &&
         !any_ar_latched();
     read_ports[i].req.ready =
         req_ready_r[i] && !llc_slot_busy &&
-        !(llc_enabled() && invalidate_all_requested());
+        !invalidate_all_requested();
     read_ports[i].req.accepted = read_req_accepted[i];
     read_ports[i].req.accepted_id = read_req_accepted_id[i];
   }
@@ -1073,51 +991,45 @@ void AXI_Interconnect::comb_outputs() {
   // Registered write req.ready (two-phase timing)
   for (int i = 0; i < NUM_WRITE_MASTERS; i++) {
     write_ports[i].req.accepted = write_req_accepted[i];
-    if (llc_enabled()) {
-      const uint32_t req_addr =
-          static_cast<uint32_t>(write_ports[i].req.addr);
-      const uint8_t req_total_size =
-          static_cast<uint8_t>(write_ports[i].req.total_size);
-      const uint32_t req_line = AXI_LLC::line_addr(
-          llc_config, req_addr);
-      const bool blocked_by_line_invalidate =
-          llc_invalidate_line_valid_ && write_ports[i].req.valid &&
-          req_line ==
-              AXI_LLC::line_addr(llc_config, llc_invalidate_line_addr_);
-      const bool request_goes_through_llc =
-          write_ports[i].req.valid &&
-          !request_uses_mmio_port(req_addr, req_total_size);
-      const bool blocked_by_pending_read =
-          write_ports[i].req.valid &&
-          (has_external_pending_read_hazard(req_addr) ||
-           (request_goes_through_llc && has_same_line_read_hazard(req_line)));
-      write_ports[i].req.ready =
-          !invalidate_all_requested() &&
-          !blocked_by_line_invalidate &&
-          !blocked_by_pending_read &&
-          w_req_ready_r[i];
-    } else {
-      write_ports[i].req.ready = w_req_ready_r[i];
+    const uint32_t req_addr =
+        static_cast<uint32_t>(write_ports[i].req.addr);
+    const uint8_t req_total_size =
+        static_cast<uint8_t>(write_ports[i].req.total_size);
+    const uint32_t req_line = AXI_LLC::line_addr(
+        llc_config, req_addr);
+    const bool blocked_by_line_invalidate =
+        llc_invalidate_line_valid_ && write_ports[i].req.valid &&
+        req_line ==
+            AXI_LLC::line_addr(llc_config, llc_invalidate_line_addr_);
+    const bool request_goes_through_llc =
+        write_ports[i].req.valid &&
+        !request_uses_mmio_port(req_addr, req_total_size);
+    const bool blocked_by_pending_read =
+        write_ports[i].req.valid &&
+        (has_external_pending_read_hazard(req_addr) ||
+         (request_goes_through_llc && has_same_line_read_hazard(req_line)));
+    write_ports[i].req.ready =
+        !invalidate_all_requested() &&
+        !blocked_by_line_invalidate &&
+        !blocked_by_pending_read &&
+        w_req_ready_r[i];
+  }
+  for (int i = 0; i < NUM_READ_MASTERS; ++i) {
+    if (!read_ports[i].resp.valid) {
+      read_ports[i].resp.valid = llc_read_resp_valid_[i];
+      read_ports[i].resp.data = llc_read_resp_data_[i];
+      read_ports[i].resp.id = llc_read_resp_id_[i];
     }
   }
-  if (llc_enabled()) {
-    for (int i = 0; i < NUM_READ_MASTERS; ++i) {
-      if (!read_ports[i].resp.valid) {
-        read_ports[i].resp.valid = llc_read_resp_valid_[i];
-        read_ports[i].resp.data = llc_read_resp_data_[i];
-        read_ports[i].resp.id = llc_read_resp_id_[i];
-      }
-    }
-    for (int i = 0; i < NUM_WRITE_MASTERS; ++i) {
-      if (w_resp_valid[i]) {
-        write_ports[i].resp.valid = true;
-        write_ports[i].resp.id = w_resp_id[i];
-        write_ports[i].resp.resp = w_resp_resp[i];
-      } else {
-        write_ports[i].resp.valid = false;
-        write_ports[i].resp.id = 0;
-        write_ports[i].resp.resp = 0;
-      }
+  for (int i = 0; i < NUM_WRITE_MASTERS; ++i) {
+    if (w_resp_valid[i]) {
+      write_ports[i].resp.valid = true;
+      write_ports[i].resp.id = w_resp_id[i];
+      write_ports[i].resp.resp = w_resp_resp[i];
+    } else {
+      write_ports[i].resp.valid = false;
+      write_ports[i].resp.id = 0;
+      write_ports[i].resp.resp = 0;
     }
   }
 }
@@ -1127,10 +1039,8 @@ void AXI_Interconnect::comb_outputs() {
 void AXI_Interconnect::comb_inputs() {
   comb_read_arbiter();
   comb_write_request();
-  if (llc_enabled()) {
-    prepare_llc_inputs(true);
-    llc.comb();
-  }
+  prepare_llc_inputs(true);
+  llc.comb();
 }
 
 // ============================================================================
@@ -1326,74 +1236,11 @@ void AXI_Interconnect::read_route_masters_llc() {
   }
 }
 
-// LLC disabled: a master that saw ready last cycle completes its handshake and issues the held request.
-void AXI_Interconnect::read_complete_ready_handshakes() {
-  for (int i = 0; i < NUM_READ_MASTERS; i++) {
-    if (!read_comb_.ready_curr[i] || !read_ports[i].req.valid) continue;
-    ReadReqHoldLatch cap = read_req_snapshot(i);
-    const ReadReqHoldLatch &hold = read_req_hold[i];
-    if (hold.valid) {
-      const bool hold_matches_current = cap.addr == hold.addr && cap.total_size == hold.total_size &&
-                                        cap.id == hold.id && cap.bypass == hold.bypass;
-      if (hold_matches_current) cap = hold;
-      else read_req_hold[i] = cap;
-    }
-    if (has_read_id_conflict(static_cast<uint8_t>(i), cap.id) || !can_issue_external_read(cap.addr)) continue;
-    const auto cap_port = classify_downstream_port(cap.addr, cap.total_size);
-    if (!downstream_request_supported(cap_port, cap.total_size) || read_comb_.port_busy[port_index(cap_port)] ||
-        !can_accept_read_master_comb(static_cast<uint8_t>(i))) {
-      continue;
-    }
-    const uint8_t axi_id = alloc_comb_read_axi_id(cap_port);
-    if (axi_id == kInvalidAxiReadId) continue;
-    issue_master_read(i, cap_port, cap.addr, cap.total_size, cap.id, axi_id);
-    read_ports[i].req.ready = true;
-    read_comb_.master_count[i]++;
-  }
-}
-
-// LLC disabled: round-robin over the masters with a new request. Data-side masters may issue in the cycle the request
-// appears; the others raise ready first and issue next cycle (the ICache relies on that two-cycle contract).
-void AXI_Interconnect::read_arbitrate_new() {
-  for (int i = 0; i < NUM_READ_MASTERS; i++) {
-    const int idx = (r_arb_rr_idx + i) % NUM_READ_MASTERS;
-    if (!read_ports[idx].req.valid) continue;
-    if (!can_accept_read_master(static_cast<uint8_t>(idx))) continue;
-    if (has_read_id_conflict(static_cast<uint8_t>(idx), static_cast<uint8_t>(read_ports[idx].req.id))) continue;
-    const uint32_t req_addr = static_cast<uint32_t>(read_ports[idx].req.addr);
-    if (!can_issue_external_read(req_addr)) continue;
-    const uint8_t req_total_size = static_cast<uint8_t>(read_ports[idx].req.total_size);
-    const auto req_port = classify_downstream_port(req_addr, req_total_size);
-    if (!downstream_request_supported(req_port, req_total_size) || read_comb_.port_busy[port_index(req_port)] ||
-        !can_accept_read_master_comb(static_cast<uint8_t>(idx))) {
-      continue;
-    }
-    const uint8_t axi_id = alloc_comb_read_axi_id(req_port);
-    if (axi_id == kInvalidAxiReadId) continue;
-
-    if (idx != MASTER_DCACHE_R && !read_comb_.ready_curr[idx]) {
-      req_ready_r[idx] = true;
-      read_ports[idx].req.ready = true;
-      read_req_hold[idx] = read_req_snapshot(idx);
-      continue;
-    }
-    issue_master_read(idx, req_port, req_addr, req_total_size, static_cast<uint8_t>(read_ports[idx].req.id), axi_id);
-    read_ports[idx].req.ready = true;
-    read_comb_.master_count[idx]++;
-    if (read_comb_.port_busy[0] && read_comb_.port_busy[1]) break;
-  }
-}
-
 void AXI_Interconnect::comb_read_arbiter() {
   read_comb_begin();
   read_replay_latched_ar();
-  if (llc_enabled()) {
-    read_issue_llc_mem_read();
-    read_route_masters_llc();
-    return;
-  }
-  read_complete_ready_handshakes();
-  read_arbitrate_new();
+  read_issue_llc_mem_read();
+  read_route_masters_llc();
 }
 
 void AXI_Interconnect::comb_read_response() {
@@ -1543,38 +1390,6 @@ void AXI_Interconnect::write_route_llc() {
   }
 }
 
-// LLC disabled: pending AWs go out (a latched AW first, else the next pending transaction unless a response is
-// buffered).
-void AXI_Interconnect::write_issue_pending_aw(bool any_w_resp_valid) {
-  for (DownstreamPort port : {DownstreamPort::DDR, DownstreamPort::MMIO}) {
-    if (aw_latch(port).valid) {
-      drive_aw_latch(port);
-      continue;
-    }
-    if (any_w_resp_valid) continue;
-    const int aw_idx = find_next_aw_pending(port);
-    if (aw_idx < 0) continue;
-    const auto &txn = w_pending[static_cast<size_t>(aw_idx)];
-    if (can_issue_external_write(txn.addr)) {
-      drive_aw(txn.port, txn.addr, txn.total_beats - 1, txn.port == DownstreamPort::MMIO ? kMmioAxiSize : kDownstreamAxiSize,
-               sim_ddr::AXI_BURST_INCR, txn.axi_id);
-    }
-  }
-}
-
-// LLC disabled: the first supported write (round-robin) gets ready-first acceptance.
-void AXI_Interconnect::write_accept_direct() {
-  for (int k = 0; k < NUM_WRITE_MASTERS; k++) {
-    const int idx = (w_arb_rr_idx + k) % NUM_WRITE_MASTERS;
-    if (!write_ports[idx].req.valid || !write_size_supported(write_ports[idx].req.total_size)) continue;
-    const uint8_t req_total_size = static_cast<uint8_t>(write_ports[idx].req.total_size);
-    const DownstreamPort req_port = classify_downstream_port(static_cast<uint32_t>(write_ports[idx].req.addr), req_total_size);
-    if (!downstream_request_supported(req_port, req_total_size)) continue;
-    write_ready_first(idx, true);
-    return;
-  }
-}
-
 void AXI_Interconnect::comb_write_request() {
   const bool any_w_resp_valid = any_write_resp_buffered();
   for (int i = 0; i < NUM_WRITE_MASTERS; i++) {
@@ -1589,93 +1404,43 @@ void AXI_Interconnect::comb_write_request() {
   axi_ddr_io.w.wvalid = false;
   axi_mmio_io.w.wvalid = false;
 
-  if (llc_enabled()) {
-    drive_aw_latch(DownstreamPort::DDR);
-    drive_aw_latch(DownstreamPort::MMIO);
-    write_issue_llc_mem_write();
-    bool direct_write_selected = false;
-    if (!any_w_resp_valid && !llc_mem_write_resp_valid_ && !invalidate_all_requested()) {
-      direct_write_selected = write_route_direct_mmio();
-    }
-    if (!direct_write_selected && count_llc_write_pending() < MAX_WRITE_OUTSTANDING && !invalidate_all_requested()) {
-      write_route_llc();
-    }
-  } else {
-    write_issue_pending_aw(any_w_resp_valid);
-    if (can_accept_write_now() && !any_w_resp_valid) write_accept_direct();
+  drive_aw_latch(DownstreamPort::DDR);
+  drive_aw_latch(DownstreamPort::MMIO);
+  write_issue_llc_mem_write();
+  bool direct_write_selected = false;
+  if (!any_w_resp_valid && !llc_mem_write_resp_valid_ && !invalidate_all_requested()) {
+    direct_write_selected = write_route_direct_mmio();
+  }
+  if (!direct_write_selected && count_llc_write_pending() < MAX_WRITE_OUTSTANDING && !invalidate_all_requested()) {
+    write_route_llc();
   }
   drive_w_current(DownstreamPort::DDR);
   drive_w_current(DownstreamPort::MMIO);
 }
 
 void AXI_Interconnect::comb_write_response() {
-  if (llc_enabled()) {
-    auto bready_for_port = [&](DownstreamPort port,
-                               const sim_ddr::SimDDR_IO_t &io) {
-      const auto &current = w_current_ref(port);
-      const bool active = w_active_ref(port);
-      const bool current_matches =
-          active && current.w_done &&
-          current.axi_id == static_cast<uint8_t>(io.b.bid & kAxiIdMask);
-      if (current_matches) {
-        if (current.to_llc_mem) {
-          return !llc_mem_write_resp_valid_;
-        }
-        return current.master_id < NUM_WRITE_MASTERS &&
-               write_resp_buffer_has_space(current.master_id);
+  auto bready_for_port = [&](DownstreamPort port,
+                             const sim_ddr::SimDDR_IO_t &io) {
+    const auto &current = w_current_ref(port);
+    const bool active = w_active_ref(port);
+    const bool current_matches =
+        active && current.w_done &&
+        current.axi_id == static_cast<uint8_t>(io.b.bid & kAxiIdMask);
+    if (current_matches) {
+      if (current.to_llc_mem) {
+        return !llc_mem_write_resp_valid_;
       }
-      const bool can_ignore_victim_b =
-          !active && llc_mem_ignored_b_count_ > 0;
-      return can_ignore_victim_b;
-    };
-    axi_ddr_io.b.bready =
-        bready_for_port(DownstreamPort::DDR, axi_ddr_io);
-    axi_mmio_io.b.bready =
-        bready_for_port(DownstreamPort::MMIO, axi_mmio_io);
-    return;
-  }
-
-  for (int i = 0; i < NUM_WRITE_MASTERS; i++) {
-    write_ports[i].req.accepted = write_req_accepted[i];
-    write_ports[i].resp.valid = w_resp_valid[i];
-    write_ports[i].resp.id = w_resp_id[i];
-    write_ports[i].resp.resp = w_resp_resp[i];
-  }
-
-  auto b_target_master = [&](DownstreamPort port,
-                             const sim_ddr::SimDDR_IO_t &io) -> int {
-    if (!io.b.bvalid) {
-      return -2;
+      return current.master_id < NUM_WRITE_MASTERS &&
+             write_resp_buffer_has_space(current.master_id);
     }
-    const uint8_t bid = static_cast<uint8_t>(io.b.bid & kAxiIdMask);
-    for (const auto &txn : w_pending) {
-      if (txn.port == port && txn.axi_id == bid && txn.w_done &&
-          txn.master_id < NUM_WRITE_MASTERS) {
-        return txn.master_id;
-      }
-    }
-    return -1;
+    const bool can_ignore_victim_b =
+        !active && llc_mem_ignored_b_count_ > 0;
+    return can_ignore_victim_b;
   };
-  auto can_accept_b_for_master = [&](int master) -> bool {
-    if (master == -2) {
-      return true;
-    }
-    if (master < 0 || master >= NUM_WRITE_MASTERS) {
-      return false;
-    }
-    return write_resp_buffer_has_space(static_cast<uint8_t>(master));
-  };
-
-  const int ddr_b_master = b_target_master(DownstreamPort::DDR, axi_ddr_io);
-  const int mmio_b_master = b_target_master(DownstreamPort::MMIO, axi_mmio_io);
-  bool ddr_bready = can_accept_b_for_master(ddr_b_master);
-  bool mmio_bready = can_accept_b_for_master(mmio_b_master);
-  if (ddr_b_master >= 0 && ddr_b_master == mmio_b_master &&
-      ddr_bready && mmio_bready) {
-    mmio_bready = false;
-  }
-  axi_ddr_io.b.bready = ddr_bready;
-  axi_mmio_io.b.bready = mmio_bready;
+  axi_ddr_io.b.bready =
+      bready_for_port(DownstreamPort::DDR, axi_ddr_io);
+  axi_mmio_io.b.bready =
+      bready_for_port(DownstreamPort::MMIO, axi_mmio_io);
 }
 
 // ============================================================================
@@ -1690,19 +1455,14 @@ void AXI_Interconnect::seq() {
   for (int i = 0; i < NUM_WRITE_MASTERS; i++) write_req_accepted[i] = false;
 
   seq_read_ar();
-  if (llc_enabled()) seq_llc_dispatch(prev);
+  seq_llc_dispatch(prev);
   seq_read_data(prev);
-  if (llc_enabled()) seq_llc_write(prev);
-  else seq_direct_write();
+  seq_llc_write(prev);
   seq_finish(prev);
 }
 
 // Self-check: a read the LLC consumed from the request stage must still be owned by some LLC structure.
 void AXI_Interconnect::check_llc_consumed_reads(const SeqPrev &prev) {
-  if (!llc_enabled()) return;
-  if (!llc_enabled()) {
-    return;
-  }
   auto read_resp_queue_has_id = [&](int master, uint8_t id) {
     const uint8_t count = llc.io.regs.read_resp_q_count_r[master];
     const uint8_t head = llc.io.regs.read_resp_q_head_r[master];
@@ -2014,7 +1774,7 @@ void AXI_Interconnect::seq_read_data(const SeqPrev &prev) {
       }
     }
   }
-  if (llc_enabled() && !prev.synth_read_resp_valid &&
+  if (!prev.synth_read_resp_valid &&
       llc.io.ext_in.mem.read_resp_valid && llc.io.ext_out.mem.read_resp_ready) {
     const uint8_t mem_id = llc.io.ext_in.mem.read_resp_id;
     auto it = std::find_if(r_pending.begin(), r_pending.end(),
@@ -2270,137 +2030,6 @@ void AXI_Interconnect::start_downstream_write(DownstreamPort port, uint32_t addr
   latch.size = port == DownstreamPort::MMIO ? kMmioAxiSize : kDownstreamAxiSize;
   latch.burst = sim_ddr::AXI_BURST_INCR;
   latch.id = axi_id;
-}
-
-// Write path without the LLC: pending queue, AW/W/B handshakes.
-void AXI_Interconnect::seq_direct_write() {
-  for (int k = 0; k < NUM_WRITE_MASTERS; k++) {
-    int idx = (w_arb_rr_idx + k) % NUM_WRITE_MASTERS;
-    if (!write_ports[idx].req.valid || !write_req_fire_c[idx] ||
-        !can_accept_write_now()) {
-      continue;
-    }
-    WritePendingTxn txn{};
-    txn.master_id = idx;
-    txn.orig_id = write_ports[idx].req.id;
-    const uint32_t req_addr = static_cast<uint32_t>(write_ports[idx].req.addr);
-    const uint8_t req_total_size =
-        static_cast<uint8_t>(write_ports[idx].req.total_size);
-    const DownstreamPort req_port =
-        classify_downstream_port(req_addr, req_total_size);
-    if (!downstream_request_supported(req_port, req_total_size)) {
-      continue;
-    }
-    txn.axi_id = alloc_write_axi_id(req_port);
-    if (txn.axi_id == kInvalidAxiWriteId) {
-      break;
-    }
-    const auto issue = make_downstream_write_issue(
-        req_port, req_addr, req_total_size, write_ports[idx].req.wdata,
-        write_ports[idx].req.wstrb,
-        llc_config.line_bytes);
-    txn.port = issue.port;
-    txn.addr = issue.addr;
-    txn.wdata = issue.wdata;
-    txn.wstrb = issue.wstrb;
-    txn.total_beats = calc_burst_len(issue.total_size) + 1;
-    txn.beats_sent = 0;
-    txn.aw_done = false;
-    txn.w_done = false;
-    w_pending.push_back(txn);
-    write_req_accepted[idx] = true;
-    w_arb_rr_idx = (idx + 1) % NUM_WRITE_MASTERS;
-    break;
-  }
-
-  for (DownstreamPort port : {DownstreamPort::DDR, DownstreamPort::MMIO}) {
-    auto &seq_aw_io = downstream_io(port);
-    auto &latch = aw_latch(port);
-    if (seq_aw_io.aw.awvalid && seq_aw_io.aw.awready) {
-      const uint8_t axi_id = latch.valid ? latch.id : seq_aw_io.aw.awid;
-      const int pending_idx = find_write_pending_by_axi_id(port, axi_id);
-      if (pending_idx >= 0) {
-        w_pending[static_cast<size_t>(pending_idx)].aw_done = true;
-      }
-      latch.valid = false;
-      latch.port = port;
-    }
-
-    auto &seq_w_io = downstream_io(port);
-    auto &current = w_current_ref(port);
-    bool &active = w_active_ref(port);
-    if (active && seq_w_io.w.wvalid && seq_w_io.w.wready) {
-      const int pending_idx =
-          find_write_pending_by_axi_id(port, current.axi_id);
-      if (pending_idx >= 0) {
-        auto &txn = w_pending[static_cast<size_t>(pending_idx)];
-        txn.beats_sent++;
-        current.beats_sent = txn.beats_sent;
-      }
-      if (seq_w_io.w.wlast) {
-        if (const int idx =
-                find_write_pending_by_axi_id(port, current.axi_id);
-            idx >= 0) {
-          w_pending[static_cast<size_t>(idx)].w_done = true;
-        }
-        current.w_done = true;
-        active = false;
-        current = {};
-        w_current_master_ref(port) = -1;
-      }
-    }
-  }
-
-  // B handshake
-  auto handle_b_handshake = [&](DownstreamPort port, sim_ddr::SimDDR_IO_t &io) {
-    if (!io.b.bvalid || !io.b.bready) {
-      return;
-    }
-    const int pending_idx = find_write_pending_by_axi_id(
-        port, static_cast<uint8_t>(io.b.bid & kAxiIdMask));
-    if (pending_idx >= 0) {
-      const auto txn = w_pending[static_cast<size_t>(pending_idx)];
-      if (txn.master_id < NUM_WRITE_MASTERS) {
-        enqueue_write_resp(txn.master_id, txn.orig_id, io.b.bresp);
-      }
-      w_pending.erase(w_pending.begin() + pending_idx);
-    }
-  };
-  handle_b_handshake(DownstreamPort::DDR, axi_ddr_io);
-  handle_b_handshake(DownstreamPort::MMIO, axi_mmio_io);
-
-  // Upstream response handshake.
-  for (int master = 0; master < NUM_WRITE_MASTERS; ++master) {
-    if (write_ports[master].resp.valid && write_ports[master].resp.ready) {
-      w_resp_valid[master] = false;
-      w_resp_id[master] = 0;
-      w_resp_resp[master] = 0;
-    }
-  }
-  promote_write_resp_queue();
-
-  for (DownstreamPort port : {DownstreamPort::DDR, DownstreamPort::MMIO}) {
-    auto &latch = aw_latch(port);
-    if (!latch.valid) {
-      const int next_aw_idx = find_next_aw_pending(port);
-      if (next_aw_idx >= 0) {
-        const auto &txn = w_pending[static_cast<size_t>(next_aw_idx)];
-        if (can_issue_external_write(txn.addr)) {
-          latch.valid = true;
-          latch.port = port;
-          latch.addr = txn.addr;
-          latch.len = txn.total_beats - 1;
-          latch.size =
-              port == DownstreamPort::MMIO ? kMmioAxiSize : kDownstreamAxiSize;
-          latch.burst = sim_ddr::AXI_BURST_INCR;
-          latch.id = txn.axi_id;
-        }
-      }
-    }
-  }
-
-  refresh_non_llc_w_active(DownstreamPort::DDR);
-  refresh_non_llc_w_active(DownstreamPort::MMIO);
 }
 
 // Clock the LLC.

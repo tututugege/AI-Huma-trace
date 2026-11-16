@@ -171,7 +171,6 @@ public:
     llc.set_config(llc_config);
   }
   const AXI_LLCConfig &get_llc_config() const { return llc_config; }
-  bool llc_enabled() const;
   void set_llc_lookup_in(const AXI_LLC_LookupIn_t &lookup_in) {
     llc.io.lookup_in = lookup_in;
   }
@@ -214,18 +213,11 @@ public:
 private:
   uint8_t count_master_read_pending(uint8_t master_id) const;
   uint8_t count_total_read_inflight() const;
-  bool can_accept_read_master(uint8_t master_id) const;
   bool has_read_id_conflict(uint8_t master_id, uint8_t orig_id) const;
-  uint8_t alloc_write_axi_id() const;
   uint8_t alloc_write_axi_id(DownstreamPort port) const;
-  bool can_accept_write_now() const;
   bool can_issue_external_read(uint32_t addr) const;
   bool can_issue_external_write(uint32_t addr) const;
   uint32_t count_llc_write_pending() const;
-  int find_write_pending_by_axi_id(DownstreamPort port, uint8_t axi_id) const;
-  int find_next_aw_pending(DownstreamPort port) const;
-  int find_next_w_pending(DownstreamPort port) const;
-  void refresh_non_llc_w_active(DownstreamPort port);
   ARLatch_t &ar_latch(DownstreamPort port);
   const ARLatch_t &ar_latch(DownstreamPort port) const;
   AWLatch_t &aw_latch(DownstreamPort port);
@@ -291,7 +283,6 @@ private:
   void seq_llc_dispatch(const SeqPrev &prev);
   void seq_read_data(const SeqPrev &prev);
   void seq_llc_write(const SeqPrev &prev);
-  void seq_direct_write();
   void start_downstream_write(DownstreamPort port, uint32_t addr, uint8_t issue_size, const WideWriteData_t &wdata,
                               const WideWriteStrb_t &wstrb, uint8_t axi_id, uint8_t master_id, uint8_t orig_id,
                               bool to_llc_mem, bool victim_write, int current_master);
@@ -303,8 +294,6 @@ private:
   void read_replay_latched_ar();
   void read_issue_llc_mem_read();
   void read_route_masters_llc();
-  void read_complete_ready_handshakes();
-  void read_arbitrate_new();
   uint8_t alloc_comb_read_axi_id(DownstreamPort port);
   bool can_accept_read_master_comb(uint8_t master_id) const;
   void drive_read_ar(DownstreamPort port, uint32_t addr, uint8_t total_size, uint8_t axi_id,
@@ -321,8 +310,6 @@ private:
   void write_issue_llc_mem_write();
   bool write_route_direct_mmio();
   void write_route_llc();
-  void write_issue_pending_aw(bool any_w_resp_valid);
-  void write_accept_direct();
   void comb_write_response();
   void prepare_llc_inputs(bool sample_upstream_ready);
   sim_ddr::SimDDR_IO_t &downstream_io(DownstreamPort port);

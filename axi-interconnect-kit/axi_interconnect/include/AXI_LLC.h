@@ -473,7 +473,6 @@ private:
   void release_mshr(uint8_t slot, bool clear_victim_slot);
   void accept_new_requests();
   void accept_maintenance_request();
-  void comb_disabled();
 
   // comb() result cache. While the LLC is idle (nothing live, reg_write == regs) its outputs depend
   // only on ext_in and lookup_in, so a repeat of inputs seen since the last register change skips the

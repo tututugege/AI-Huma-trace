@@ -1285,33 +1285,11 @@ void AXI_LLC::accept_new_requests() {
   start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass);
 }
 
-void AXI_LLC::comb_disabled() {
-  for (uint8_t i = 0; i < NUM_READ_MASTERS; ++i) {
-    io.ext_out.upstream.read_req[i].ready = false;
-    io.ext_out.upstream.read_resp[i].valid = false;
-    io.ext_out.upstream.read_resp[i].id = 0;
-    io.ext_out.upstream.read_resp[i].data.clear();
-  }
-  for (uint8_t i = 0; i < NUM_WRITE_MASTERS; ++i) {
-    io.ext_out.upstream.write_req[i].ready = false;
-    io.ext_out.upstream.write_resp[i].valid = false;
-    io.ext_out.upstream.write_resp[i].id = 0;
-    io.ext_out.upstream.write_resp[i].resp = 0;
-  }
-  io.ext_out.mem = {};
-}
-
 void AXI_LLC::comb_full() {
   io.ext_out = {};
   io.table_out.clear();
   if (!rw_is_regs_) copy_regs_live(io.reg_write, io.regs);
 
-  if (!config_.enable || !config_.valid()) {
-    comb_disabled();
-    io.reg_write.enable_r = false;
-    io.reg_write.state = AXI_LLCState::kDisabled;
-    return;
-  }
 
   io.reg_write.enable_r = true;
   if (io.regs.state == AXI_LLCState::kDisabled) io.reg_write.state = AXI_LLCState::kIdle;
