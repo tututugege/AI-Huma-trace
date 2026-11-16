@@ -10,8 +10,6 @@
 // Each module's first phase of the cycle starts its port state anew (in cleared, read data from the registers, the
 // request's enables cleared).
 
-//   CONTRACT comb_read   in: in.global_reset in.global_refetch in.pipe_dec in.fetch_addr_read_enable in.rd  out: out.fetch_addr_in out.fetch_addr_rd out.fetch_addr_head out.fetch_addr_fifo_req out.ipf
-//   CONTRACT comb_write  in: in.bpu_output in.bpu_can_run in.global_reset  out: out.fetch_addr_in out.fetch_addr_rd out.fetch_addr_fifo_req out.ipf
 class FetchAddrPort {
 public:
   struct In {
@@ -32,8 +30,6 @@ public:
   void comb_write();   // the predicted fetch address enters the FIFO (the I-cache reads it next cycle)
 };
 
-//   CONTRACT comb_read   in: in.global_reset in.global_refetch in.fifo_read_enable in.ptab_head in.rd  out: out.fifo_in out.fifo_rd out.fifo_head out.fifo_req out.multi out.grp_in_range out.grp_seg_first out.rvc_n out.rvc_straddle out.carry_low out.grp_ptab
-//   CONTRACT comb_write  in: in.global_reset in.global_refetch in.ic_out in.fetch_addr_head in.rd  out: out.fifo_in out.fifo_rd out.fifo_req
 class InstPort {
 public:
   struct In {
@@ -64,7 +60,6 @@ private:
   void fix_head();
 };
 
-//   CONTRACT comb_read  in: in.global_reset in.global_refetch in.fifo_read_enable in.ptab_bypass in.ptab_can_write in.bpu_output in.rd  out: out.ptab_in out.ptab_rd out.ptab_head out.ptab_req
 class PtabPort {
 public:
   struct In {
@@ -83,8 +78,6 @@ public:
   void comb_read();   // the BPU's block in (written before the read when it bypasses to the checker), the head out
 };
 
-//   CONTRACT comb_read   in: in.global_reset in.f2b_read_enable in.in in.rd  out: out.f2b_in out.f2b_rd out.f2b_head out.front2back_fifo_req out.f2b_bypass out.use_f2b_bypass
-//   CONTRACT comb_write  in: in.global_reset in.f2b_read_enable in.fifo_read_enable in.fifo_head in.grp_ptab in.checker_out in.rd  out: out.f2b_in out.f2b_rd out.front2back_fifo_req out.f2b_bypass out.use_f2b_bypass
 class F2bPort {
 public:
   struct In {

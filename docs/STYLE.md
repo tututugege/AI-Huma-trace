@@ -43,10 +43,12 @@ The rules the model follows (exp/style, 2026-11-16). Module structure, contracts
   Plain integer arrays may be cleared with memset; the LSU's 0xA5 poison fill (a debug aid) and memory pages keep it.
 * A per-cycle default (the start of a comb phase, a port nobody drives this cycle) clears the valid / enable bits, not
   the whole struct: the other fields are read only under them (the RTL's always_comb default). Done where the struct
-  is large: FrontUpdateRequest::clear_valid (3.1 KB a cycle), BackTop::comb_in_regs (back.in's fetch group),
+  is large: the front modules' first phases, BackTop::comb_in_regs (back.in's fetch group),
   axi.comb_begin (the masters' req.valid); the small output-port clears in the memory subsystem and the LSU stay.
+  A writer that sets valid drives the whole entry (no field left over from an earlier cycle); stand-alone control
+  signals (retry, miss, busy) are cleared every cycle.
 * Module ports: `struct In` (const pointers to what the module reads) and `struct Out` (what it drives), bound by the
-  parent's init (BackTop::init, MemSubsystem::init); no module reaches a shared struct of all signals.
+  parent (BackTop::init, MemSubsystem::init, the FrontCore constructor); no module reaches a shared struct of all signals.
 
 ## Comments and docs
 

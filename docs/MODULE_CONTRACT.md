@@ -191,7 +191,7 @@ I-cache module's own steps (icache_top.cpp, written per the RTL), Exu's FU state
   reads / writes. A memory block: its own ports (`in.axi`, `out.mshr2dcache`); gen_mem_order.py maps them through the
   bindings of MemSubsystem::init. MemSubsystem's own comb functions (the D-cache stages, the PTW request / feedback):
   in MemSubsystem.h, in its signal names, with the block they drive and the tie-break priority. The front end's phases:
-  above struct FrontComb. A top's SimCpu-level phases: EXPORT lines above the top's class, ports from include/SimCpu.h.
+  above class FrontCore (front_core.h), in wire names. A top's SimCpu-level phases: EXPORT lines above the top's class, ports from include/SimCpu.h.
 * Generators: gen_comb_order.py (BackTop::comb), gen_mem_order.py, gen_front_order.py, gen_top_order.py share
   scripts/comb/contract_lib.py (the scan, the topological order with a fixed tie-break); `comb_graph.py --check` runs
   all four checks. `--emit` (mem, front) prints the lines of the scanned code; `--write` rewrites the generated block.
@@ -424,13 +424,12 @@ scheduler); no top keeps a comb schedule of its own:
   Front2Back's fetch-group valid);
 * memory subsystem: the blocks' CONTRACT phases and MemSubsystem's phase functions (`mem_subsystem.<block>.<phase>()`,
   `mem_subsystem.dcache_stage1()` ...); MemSubsystem::comb_outputs / comb_inputs are gone;
-* front end: FrontTop::comb_begin, then FrontComb's nine phases (`front.<phase>()`, the working state in a per-cycle
-  slot of FrontCore);
+* front end: FrontTop::comb_begin, then FrontCore's phases (`front.<phase>()`, each one module's phase; docs/FRONT_MODULES.md);
 * AXI, Front2Back, Back2Front, the commit's device stores: their EXPORT phases.
 gen_comb_order.py, gen_mem_order.py and gen_front_order.py read and check their domain's contracts; gen_top_order.py
 links the phases: a module's phases in their header / contract order, a writer before a reader of the same signal
 (back-end fields and memory signals by their SimCpu paths, @<path> ports; the AXI master ports and the tops' ports by
 name), the trace-bridge users in order. global_graph.py's derivation equals the generated order. Identical: gates,
 FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT, the Linux and dhrystone checkpoints, FE_PAIR / FE_IPF, Linux from reset.
-Not done: the front end's phases are FrontComb's methods (its wires are FrontComb's members), not methods of the
-BPU / FIFO / I-cache classes; BackTop and MemSubsystem still own their modules and bind their ports.
+The front end's phases are its modules' methods since fm6 (docs/FRONT_MODULES.md). BackTop, MemSubsystem and FrontCore
+still own their modules and bind their ports.
