@@ -450,7 +450,12 @@ void RealLsu::comb_mmio_out() {
 // L2: DCache response + STLF confirm + hit/forward select. Reads the L1/L2 registers and the registered STQ state.
 // A load that cannot complete is parked in the LDQ entry (cause + wake condition), nothing is queued anywhere.
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_dcache2lsu_ldq() {
+void RealLsu::comb_dcache2lsu() {
+  dcache2lsu_ldq();
+  dcache2lsu_stq();
+}
+
+void RealLsu::dcache2lsu_ldq() {
   const DcacheLsuIO &dc = wires->in.dcache2lsu;
   pw.fill = dc.mshr_fill && LSU_WAIT_MSHR_FILL;
   pw.fill_addr = dc.mshr_fill_addr;
@@ -536,7 +541,7 @@ void RealLsu::comb_dcache2lsu_ldq() {
   }
 }
 
-void RealLsu::comb_dcache2lsu_stq() {
+void RealLsu::dcache2lsu_stq() {
   const DcacheLsuIO &dc = wires->in.dcache2lsu;
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     const auto &r = dc.resp_ports.store_resps[i];
@@ -858,9 +863,23 @@ void RealLsu::comb_exe2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1: DTLB request (new loads, replay registers fill the remaining load ports), STA translation
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_tlb_out() {
-  wires->lsu2mmu_io = {};
-  wires->lsu2mmu_io.csr_status = wires->csr_status;
+// L1 address translation, one phase: the requests of the load / STA pipes, the DTLB lookup (a fence flushes it, a flush
+// or mispredict cancels its pending walk and returns nothing), the responses.
+void RealLsu::comb_tlb() {
+  tlb_out();
+  tlb_resp_ = {};
+  if (dtlb != nullptr) {
+    if (wires->rob_bcast.fence) dtlb->flush();
+    else if (wires->rob_bcast.flush || wires->dec_bcast.mispred) dtlb->cancel_pending_walk();
+    else dtlb->translate_lsu_ports(tlb_req_, tlb_resp_);
+  }
+  tlb_in_ldq();
+  tlb_in_stq();
+}
+
+void RealLsu::tlb_out() {
+  tlb_req_ = {};
+  tlb_req_.csr_status = wires->csr_status;
 
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;
@@ -882,7 +901,7 @@ void RealLsu::comb_tlb_out() {
   }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
-    auto &rq = wires->lsu2mmu_io.ldq_req[k];
+    auto &rq = tlb_req_.ldq_req[k];
     rq.valid = true;
     rq.vaddr = pnxt.ldq[pw.l1[k].ldq].vaddr;
     rq.entry_idx = pw.l1[k].ldq;
@@ -903,7 +922,7 @@ void RealLsu::comb_tlb_out() {
   }
   for (int k = 0; k < STA; k++) {
     if (!pw.s1[k].v) continue;
-    auto &rq = wires->lsu2mmu_io.stq_req[k];
+    auto &rq = tlb_req_.stq_req[k];
     rq.valid = true;
     rq.vaddr = pnxt.stq[pw.s1[k].stq].vaddr;
     rq.entry_idx = pw.s1[k].stq;
@@ -911,7 +930,7 @@ void RealLsu::comb_tlb_out() {
   }
 }
 
-void RealLsu::comb_tlb_in_ldq() {
+void RealLsu::tlb_in_ldq() {
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v) continue;
@@ -922,7 +941,7 @@ void RealLsu::comb_tlb_in_ldq() {
       l.paddr = e.paddr;
       continue;
     }
-    const auto &resp = wires->mmu2lsu_io.ldq_resp[k];
+    const auto &resp = tlb_resp_.ldq_resp[k];
     if (!resp.valid || resp.entry_idx != l.ldq) {
       l.tlb = 1;
     } else if (resp.result == MMUResultType::HIT) {
@@ -943,12 +962,12 @@ void RealLsu::comb_tlb_in_ldq() {
   }
 }
 
-void RealLsu::comb_tlb_in_stq() {
+void RealLsu::tlb_in_stq() {
   for (int k = 0; k < STA; k++) {
     PSta &s1 = pw.s1[k];
     if (!s1.v) continue;
     PStq &s = pnxt.stq[s1.stq];
-    const auto &resp = wires->mmu2lsu_io.stq_resp[k];
+    const auto &resp = tlb_resp_.stq_resp[k];
     if (!resp.valid || resp.entry_idx != s1.stq || resp.result == MMUResultType::MISS) {
       s.trp = 1;  // retry through the STA replay register
       continue;
@@ -1105,7 +1124,12 @@ void RealLsu::comb_flush() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 -> DCache request and the L1/L2 pipeline register
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_lsu2dcache_ldq() {
+void RealLsu::comb_lsu2dcache() {
+  lsu2dcache_ldq();
+  lsu2dcache_stq();
+}
+
+void RealLsu::lsu2dcache_ldq() {
   auto &ports = wires->out.lsu2dcache.req_ports.load_ports;
   for (int i = 0; i < LSU_LDU_COUNT; i++) ports[i].valid = ports[i].replay = false;
   for (int k = 0; k < LD; k++) {
@@ -1144,7 +1168,7 @@ void RealLsu::comb_lsu2dcache_ldq() {
 //      that do not overlap an older entry are sent, one DCache request each, on the store ports without a pending hidden retry
 //      (first lp_drain ports); then the stores committed at the cycle start are inserted (wb_insert).
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_lsu2dcache_stq() {
+void RealLsu::lsu2dcache_stq() {
   auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
@@ -1276,9 +1300,9 @@ void RealLsu::comb_check() {
     }
     std::fprintf(stderr, " mmu:");
     for (int p = 0; p < LD; p++)
-      if (wires->lsu2mmu_io.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)wires->lsu2mmu_io.ldq_req[p].entry_idx);
+      if (tlb_req_.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)tlb_req_.ldq_req[p].entry_idx);
     for (int p = 0; p < STA; p++)
-      if (wires->lsu2mmu_io.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)wires->lsu2mmu_io.stq_req[p].entry_idx);
+      if (tlb_req_.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)tlb_req_.stq_req[p].entry_idx);
     std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)wires->lsu2dis.stq_free, (int)wires->lsu2dis.ldq_free, (int)wires->lsu2dis.stq_tail,
                  (int)wires->lsu2dis.stq_tail_flag, (int)wires->lsu2rob.committed_store_pending);
     {
@@ -1291,9 +1315,9 @@ void RealLsu::comb_check() {
     }
     std::fprintf(stderr, " in:");
     for (int p = 0; p < LD; p++)
-      if (wires->mmu2lsu_io.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)wires->mmu2lsu_io.ldq_resp[p].result, (unsigned)wires->mmu2lsu_io.ldq_resp[p].paddr);
+      if (tlb_resp_.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)tlb_resp_.ldq_resp[p].result, (unsigned)tlb_resp_.ldq_resp[p].paddr);
     for (int p = 0; p < STA; p++)
-      if (wires->mmu2lsu_io.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)wires->mmu2lsu_io.stq_resp[p].result, (unsigned)wires->mmu2lsu_io.stq_resp[p].paddr);
+      if (tlb_resp_.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)tlb_resp_.stq_resp[p].result, (unsigned)tlb_resp_.stq_resp[p].paddr);
     for (int p = 0; p < LD; p++) {
       const auto &r = wires->in.dcache2lsu.resp_ports.load_resps[p];
       if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);

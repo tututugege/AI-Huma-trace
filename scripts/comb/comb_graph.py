@@ -109,7 +109,6 @@ for obj, cls, fn in phases:
 # reviewed false positives of the static scan (reader, field, writer): reason
 KNOWN = {
     ('lsu.comb_cal', 'lsu_awake.wake', 'lsu.comb_lsu2exe'): 'comb_cal clears the wake slots (a write through a range-for alias)',
-    ('lsu.comb_lsu2dcache_ldq', 'out.lsu2dcache.req_ports', 'lsu.comb_lsu2dcache_stq'): 'load_ports / store_ports are disjoint',
 }
 hazards = []
 for i, (n, r, w) in enumerate(rows):

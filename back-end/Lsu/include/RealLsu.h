@@ -41,6 +41,7 @@ public:
   LsuState nxt;
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   SimContext *ctx = nullptr;
+  TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
 
   void init();
   void comb_cal();
@@ -48,15 +49,11 @@ public:
   void comb_lsu2rob();
   void comb_mmio_out();
   void comb_mmio_in();
-  void comb_tlb_out();
-  void comb_tlb_in_ldq();
-  void comb_tlb_in_stq();
+  void comb_tlb();          // L1 address translation: requests, the DTLB lookup, responses (one phase)
   void comb_exe2lsu();
   void comb_dis2lsu();
-  void comb_lsu2dcache_ldq();
-  void comb_dcache2lsu_ldq();
-  void comb_lsu2dcache_stq();
-  void comb_dcache2lsu_stq();
+  void comb_lsu2dcache();   // the DCache requests of the load and store pipes
+  void comb_dcache2lsu();   // the DCache responses of the load and store pipes
   void comb_lsu2exe();
   void comb_stq_commit();
   void comb_flush();
@@ -76,4 +73,13 @@ public:
 
 private:
   void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
+  void tlb_out();
+  void tlb_in_ldq();
+  void tlb_in_stq();
+  void lsu2dcache_ldq();
+  void lsu2dcache_stq();
+  void dcache2lsu_ldq();
+  void dcache2lsu_stq();
+  LsuMMUIO tlb_req_{};    // this cycle's DTLB requests and responses (also printed by LSU_PIPE_EVT)
+  MMULsuIO tlb_resp_{};
 };

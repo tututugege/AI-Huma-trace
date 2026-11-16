@@ -27,6 +27,7 @@ void BackTop::init() {
   lsu = new RealLsu(ctx);
   dtlb_mmu =
       std::make_unique<TlbMmu>(ctx, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
+  lsu->dtlb = dtlb_mmu.get();
 
   out.fire = pre2front.fire;
 
@@ -62,24 +63,6 @@ void BackTop::set_lsu_ptw_walk_port(PtwWalkPort *port) {
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->set_ptw_walk_port(port);
   }
-}
-
-void BackTop::comb_lsu_mmu() {
-  mmu2lsu_io = {};
-  if (dtlb_mmu == nullptr) {
-    return;
-  }
-
-  if (rob_bcast.fence) {
-    dtlb_mmu->flush();
-    return;
-  }
-  if (rob_bcast.flush || dec_bcast.mispred) {
-    dtlb_mmu->cancel_pending_walk();
-    return;
-  }
-
-  dtlb_mmu->translate_lsu_ports(lsu2mmu_io, mmu2lsu_io);
 }
 
 void BackTop::comb_csr_status() {
@@ -131,8 +114,7 @@ void BackTop::comb_stage_commit() {
 void BackTop::comb_stage_memory_responses() {
   dis->comb_alloc();
   lsu->comb_mmio_in();
-  lsu->comb_dcache2lsu_ldq();
-  lsu->comb_dcache2lsu_stq();
+  lsu->comb_dcache2lsu();
   lsu->comb_lsu2exe();
   exu->comb_to_csr();
   csr->comb_csr_read();
@@ -149,10 +131,7 @@ void BackTop::comb_stage_issue_and_translate() {
   exu->comb_ready();
   isu->comb_issue();
   lsu->comb_exe2lsu();
-  lsu->comb_tlb_out();
-  comb_lsu_mmu();
-  lsu->comb_tlb_in_ldq();
-  lsu->comb_tlb_in_stq();
+  lsu->comb_tlb();
   lsu->comb_stlf();
 }
 
@@ -177,8 +156,7 @@ void BackTop::comb_stage_fire_and_recover() {
   idu->comb_fire();
   // Kill flushed LSU work before driving new DCache/MMIO requests.
   lsu->comb_flush();
-  lsu->comb_lsu2dcache_ldq();
-  lsu->comb_lsu2dcache_stq();
+  lsu->comb_lsu2dcache();
   lsu->comb_mmio_out();
   lsu->comb_check();
   isu->comb_enq();

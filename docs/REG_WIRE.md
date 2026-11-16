@@ -85,7 +85,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | --- | --- | --- |
 | A | FTQ PC read ports -> a direct read of the FTQ array | 69 -> 65 (f13f6d2) |
 | B | the PRF module folded into the EXU | 65 -> 63 |
-| C | LSU ldq / stq phase pairs merged | |
+| C | LSU: the DTLB lookup inside the LSU, ldq / stq phase pairs merged | 63 -> 58 |
 | D | CSR read chain (exu.comb_to_csr -> csr.comb_csr_read -> result) | |
 | E | comb_pipeline into seq, comb_begin into the first phase | |
 | F | the cache-line data path (AXI resp.data / wdata, DCache / LLC / DDR line data) | (top level) |
@@ -102,3 +102,10 @@ wakeup. Now `Exu::comb_pipeline` reads `iss2prf` directly (and fills the pc thro
 keeps a write-back register of just what the wakeup uses (`LoadWake`: valid, preg, br_mask; filled in
 `Exu::comb_pipeline`, read by `Exu::comb_load_wake` at the old `Prf::comb_awake` position, copied in `Exu::seq`).
 Removed: `Prf.cpp` / `Prf.h`, `prf2exe` (`PrfExeIO`). Module-to-module wire edges 41 -> 36.
+
+C: `lsu.comb_tlb_out` -> `top.comb_lsu_mmu` (DTLB) -> `lsu.comb_tlb_in_ldq` -> `lsu.comb_tlb_in_stq` was a same-cycle
+request / response pair across the BackTop boundary; it is one phase `RealLsu::comb_tlb()` now, which calls the DTLB
+directly (`TlbMmu *dtlb`; a fence flushes it, a flush / mispredict cancels the pending walk). `lsu2mmu_io` /
+`mmu2lsu_io` left the Wires and are LSU members (`tlb_req_` / `tlb_resp_`, still printed by `LSU_PIPE_EVT`, whose
+output is byte-identical). The adjacent ldq / stq halves are one phase each: `comb_dcache2lsu()`, `comb_lsu2dcache()`
+(the halves stay as private helpers). LSU phases 19 -> 15.

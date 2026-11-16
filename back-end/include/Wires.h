@@ -67,8 +67,6 @@ struct Wires {
   LsuExeIO lsu2exe;
   LsuDisIO lsu2dis;
   LsuRobIO lsu2rob;
-  LsuMMUIO lsu2mmu_io;
-  MMULsuIO mmu2lsu_io;
   RobDisIO rob2dis;
   RobCsrIO rob2csr;
   RobBroadcastIO rob_bcast;
