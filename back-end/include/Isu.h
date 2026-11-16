@@ -30,6 +30,11 @@ constexpr int ISU_DIV_WAKE_SLOT_NUM =
 // the uop to its wake-up; at most FPW_CH of them fire in one cycle, each on its own channel)
 constexpr int ISU_FP_WAKE_SLOT_NUM = 24;
 
+// Issue unit (the issue queues and the wake-up network). Contract (checked by scripts/comb/comb_graph.py against the
+// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives.
+//   CONTRACT comb_issue  in: dec_bcast exe2iss lsu_awake prf_awake rob_bcast  out: iss2dis iss2prf iss_awake
+//   CONTRACT comb_enq    in: dec_bcast dis2iss rob_bcast                      out: -
+//   CONTRACT owns: iss2dis iss2prf iss_awake
 class Isu {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
