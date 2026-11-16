@@ -820,4 +820,39 @@ constexpr uint32_t OCSDC_MMIO_SIZE = 0x00000100;
 constexpr uint32_t SIM_CACHE_ADDR_1_MIN = 0x40000000;
 constexpr uint32_t SIM_CACHE_ADDR_1_MAX = 0x50000000;
 constexpr uint32_t SIM_CACHE_ADDR_2_MIN = 0x80000000;  // up to the end of the 32-bit space
+// ---- RTL-only parameters --------------------------------------------------------------------------------------------
+// Exported to the RTL by rtl/harness/tools/gen_cfg_pkg.py (rtl/common/ttg_cfg_pkg.sv); the model does not read them.
+// The model implements only the default of each variant switch (compact ROB, move elimination, memory speculation,
+// no BFAST); `bash scripts/gen_cfg.sh -DCFG_X=..` in the RTL still builds the other RTL variants, without a model
+// reference.
+constexpr int XLEN_BITS = XLEN;
+#ifndef CFG_ROB_COMPACT
+#define CFG_ROB_COMPACT 1
+#endif
+#ifndef CFG_MOVE_ELIM
+#define CFG_MOVE_ELIM 1
+#endif
+#ifndef CFG_LSU_MEMSPEC
+#define CFG_LSU_MEMSPEC 1
+#endif
+#ifndef CFG_FE_BFAST
+#define CFG_FE_BFAST 0
+#endif
+constexpr int ROB_COMPACT = CFG_ROB_COMPACT;
+constexpr int MOVE_ELIM = CFG_MOVE_ELIM;
+constexpr int LSU_MEMSPEC = CFG_LSU_MEMSPEC;
+constexpr int FE_BFAST = CFG_FE_BFAST;
+constexpr int BPU_SCL_META_NTABLE = 8;
+constexpr int BPU_SCL_META_IDX_BITS = 16;
+constexpr int BPU_LOOP_META_IDX_BITS = 16;
+constexpr int BPU_LOOP_META_TAG_BITS = 16;
+constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
+constexpr int IQ_LD_SIZE = CFG_LD_IQ_SIZE;
+constexpr int IQ_STA_SIZE = CFG_STA_IQ_SIZE;
+constexpr int IQ_STD_SIZE = CFG_STD_IQ_SIZE;
+constexpr int IQ_BR_SIZE = CFG_BR_IQ_SIZE;
+constexpr int LSU_LOAD_WINDOW_WIDTH = LSU_LDU_COUNT * 5;
+constexpr int LSU_STORE_WINDOW_WIDTH = LSU_STA_COUNT * 5;
+constexpr int LSU_REPLAY_WAIT_CYCLES_WIDTH = clog2(LSU_PEPLAY_WAIT_CYCLES + 1);
+
 #include "types.h"
