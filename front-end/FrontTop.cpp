@@ -93,7 +93,11 @@ void FrontTop::comb_begin(CsrStatusIO *csr_status) {
 }
 void FrontTop::control() { core_->control(); }
 void FrontTop::run_bpu() { core_->run_bpu(); }
-void FrontTop::read_fifos() { core_->read_fifos(); }
+void FrontTop::enables() { core_->enables(); }
+void FrontTop::read_fetch_addr() { core_->read_fetch_addr(); }
+void FrontTop::read_ptab() { core_->read_ptab(); }
+void FrontTop::read_instruction() { core_->read_instruction(); }
+void FrontTop::read_f2b() { core_->read_f2b(); }
 void FrontTop::write_fetch_addr() { core_->write_fetch_addr(); }
 void FrontTop::run_icache() { core_->run_icache(); }
 void FrontTop::write_instruction_fifo() { core_->write_instruction_fifo(); }

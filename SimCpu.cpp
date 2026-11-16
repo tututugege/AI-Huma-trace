@@ -107,7 +107,11 @@ void SimCpu::cycle() {
   front.comb_begin(&back.csr_status);
   front.control();
   front.run_bpu();
-  front.read_fifos();
+  front.enables();
+  front.read_fetch_addr();
+  front.read_ptab();
+  front.read_instruction();
+  front.read_f2b();
   front.write_fetch_addr();
   front.run_icache();
   front.write_instruction_fifo();

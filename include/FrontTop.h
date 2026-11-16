@@ -52,7 +52,11 @@ public:
   void comb_begin(CsrStatusIO *csr_status);   // the start of a cycle; the phases (FrontCore's) follow
   void control();
   void run_bpu();
-  void read_fifos();
+  void enables();
+  void read_fetch_addr();
+  void read_ptab();
+  void read_instruction();
+  void read_f2b();
   void write_fetch_addr();
   void run_icache();
   void write_instruction_fifo();

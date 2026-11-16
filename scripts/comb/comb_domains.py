@@ -162,10 +162,11 @@ def struct_members(text, name):
     out = []
     for st in flat.split(';'):
         st = st.strip()
-        if not st or '(' in st.split('=')[0] or st.startswith(('using', 'friend', 'typedef', 'static', 'public', 'private', 'enum')): continue
+        if not st or ('(' in st.split('=')[0] and not re.search(r'\(\s*&\s*\w+\s*\)', st.split('=')[0])) or st.startswith(('using', 'friend', 'typedef', 'static', 'public', 'private', 'enum')): continue
         st = re.sub(r'^(?:public|private|protected)\s*:\s*', '', st)
         for part in split_top(st.split('=')[0], ','):
-            mm = re.search(r'(\w+)\s*(?:\[[^\]]*\])*\s*$', part.strip())
+            mm = re.search(r'\(\s*&\s*(\w+)\s*\)\s*(?:\[[^\]]*\])*\s*$', part.strip()) or \
+                 re.search(r'(\w+)\s*(?:\[[^\]]*\])*\s*$', part.strip())   # (a reference to an array: (&name)[N])
             if mm: out.append(mm.group(1))
     return [x for x in dict.fromkeys(out) if x not in ('const', 'int', 'bool')]
 
@@ -215,6 +216,8 @@ def front_domain(root, ASSIGN, overlap):
             mb = re.sub(r'(?<![\w.>])in\.(\w+)\s*->', r'\1@@.', mb)
             mb = re.sub(r'(?<![\w.>@])(?:in|out)\.(\w+)\b', r'\1', mb).replace('@@', '')
             mb = re.sub(r'(?<![\w.>])out\s*=\s*\{\s*\}\s*;', '', mb)   # (the module's default outputs of the cycle)
+            FIFO_OF = {'FetchAddrPort': 'fetch_addr_fifo', 'InstPort': 'inst_fifo', 'PtabPort': 'ptab', 'F2bPort': 'f2b_fifo'}
+            if types[fw.group(1)] in FIFO_OF: mb = re.sub(r'(?<![\w.>])fifo\s*->', FIFO_OF[types[fw.group(1)]] + '.', mb)   # its FIFO storage
             own = fw.group(1)   # the module's calls of its own methods: as FrontComb made them (<member>.<method>)
             mb = re.sub(r'(?<![\w.>:])(\w+)\s*\(', lambda m: (own + '.' + m.group(1) + '(') if (src.body(types[own], m.group(1)) or src.in_class(types[own], m.group(1))) and m.group(1) != fw.group(2) else m.group(0), mb)
             body = mb

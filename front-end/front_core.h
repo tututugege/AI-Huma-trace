@@ -6,6 +6,7 @@
 #include "env.h"
 #include "fifo/front_fifo.h"
 #include "front_checker.h"
+#include "front_fifo_ports.h"
 #include "icache/icache_top.h"
 #include "train_IO.h"
 #include <cstdlib>
@@ -65,6 +66,10 @@ public:
   FrontFifo<F2bFifo> f2b_fifo;
   ICacheTop icache;
   FrontChecker checker;   // the predecode check
+  FetchAddrPort fa_port;  // the FIFOs' ports (front_fifo_ports.h)
+  InstPort inst_port;
+  PtabPort ptab_port;
+  F2bPort f2b_port;
   FrontIpf ipf;
 
   void read_q(FrontReadData &rd) const;                                    // q and the FIFOs' read data
@@ -73,7 +78,11 @@ public:
   void comb_begin(const FrontTopIn &in, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req);
   void control();
   void run_bpu();
-  void read_fifos();
+  void enables();
+  void read_fetch_addr();
+  void read_ptab();
+  void read_instruction();
+  void read_f2b();
   void write_fetch_addr();
   void run_icache();
   void write_instruction_fifo();
