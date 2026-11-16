@@ -91,7 +91,6 @@ private:
   MemRouteBlock mem_route_block;
   LsuDcacheIO dcache_req_mux_{};
   DcacheLsuIO dcache_resp_raw_{};
-  DcacheLsuIO dcache_resp_pending_{};
   DcacheLsuIO dcache_resp_route_{};
   LsuDcacheIO dcache_empty_req_{};
 
@@ -102,7 +101,6 @@ private:
   };
   DcacheRespMeta dcache_resp_meta_cur_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   DcacheRespMeta dcache_resp_meta_nxt_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
-  DcacheRespMeta dcache_resp_pending_meta_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
 
   MSHRDcacheIO mshr_dcache_io_{};
   DcacheMSHRIO dcache_mshr_io_{};
@@ -133,10 +131,7 @@ private:
   void dcache_domain_comb_inputs();
   void dcache_domain_seq(bool sample_mshr_perf);
   void record_dcache_stage1_metadata();
-  void capture_dcache_raw_response();
-  void forward_pending_response_from_fill();
-  void publish_pending_dcache_response();
-  void clear_pending_dcache_response();
+  void drive_dcache_response();
 
   friend class MemSubsystemPtwWalkPortAdapter;
 

@@ -89,7 +89,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | D | CSR read: a direct read of the CSR file | 58 -> 56 |
 | E | comb_begin into each module's first phase (comb_pipeline stays in comb) | 56 -> 52 |
 | F | the AXI bridges: MSHR / WB / MMIO drive the interconnect ports directly (line data was already gone) | top 201 -> 155 |
-| G | the DCache response buffering (capture / forward / publish) | (mem) |
+| G | the DCache response buffering: one function | mem 28 -> 26 |
 
 A (f13f6d2): `PreIduQueue::ftq_pc(idx, off)` reads the registered `ftq_lookup_entries`; `Prf::comb_read` (ALU pc
 operand, BRU) and `Rob::comb_commit` (the head's redirect pc) call it through `const PreIduQueue *ftq`. Removed:
@@ -134,3 +134,13 @@ owns). Values on the ports are unchanged, with one exception that nothing observ
 copied `req_wdata[0..15]` into a `WideWriteData_t` whose indices all alias one word, so the port carried
 `req_wdata[15]` (always 0); it now carries the value (`req_wdata[0]`). The AXI UART behind the interconnect never
 printed (no NUL bytes in any console log), the gates, FPR and the Linux console are unchanged.
+
+G: `capture_dcache_raw_response` -> `forward_pending_response_from_fill` -> `publish_pending_dcache_response` built
+the route block's input in two copies (`dcache_resp_pending_`, cleared at every seq, so a wire; then
+`dcache_resp_route_`), with `dcache_resp_pending_meta_` a per-cycle copy of the stage-1 metadata register for the
+valid slots. `MemSubsystem::drive_dcache_response()` builds `dcache_resp_route_` directly (valid stage-2 responses,
+the fill forward matched through `dcache_resp_meta_cur_`, the retry-busy bits); the pending copies, their seq clear and
+the latch-overflow assert (it could not fire) are gone.
+
+Result of step 2 (A..G): back-end phases 69 -> 52, module-to-module wire edges 44 -> 35, LSU 19 -> 15, mem 29 -> 26,
+top 201 -> 155; model 30,481 -> 30,095 lines; cycles identical at every commit.

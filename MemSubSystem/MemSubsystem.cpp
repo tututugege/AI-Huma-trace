@@ -414,16 +414,12 @@ void MemSubsystem::init() {
 
   dcache_req_mux_ = {};
   dcache_resp_raw_ = {};
-  dcache_resp_pending_ = {};
   dcache_resp_route_ = {};
   dcache_empty_req_ = LsuDcacheIO{};
   for (auto &meta : dcache_resp_meta_cur_) {
     meta = {};
   }
   for (auto &meta : dcache_resp_meta_nxt_) {
-    meta = {};
-  }
-  for (auto &meta : dcache_resp_pending_meta_) {
     meta = {};
   }
 
@@ -524,78 +520,44 @@ void MemSubsystem::record_dcache_stage1_metadata() {
   }
 }
 
-void MemSubsystem::capture_dcache_raw_response() {
-  for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    if (!dcache_resp_raw_.resp_ports.load_resps[i].valid) {
-      continue;
-    }
-    const DcacheRespMeta &meta = dcache_resp_meta_cur_[i];
-    Assert(!dcache_resp_pending_.resp_ports.load_resps[i].valid &&
-           "DCache load response latch overflow");
-    dcache_resp_pending_.resp_ports.load_resps[i] =
-        dcache_resp_raw_.resp_ports.load_resps[i];
-    dcache_resp_pending_meta_[i] = meta;
-  }
-  for (int i = 0; i < LSU_STA_COUNT; i++) {
-    if (!dcache_resp_raw_.resp_ports.store_resps[i].valid) {
-      continue;
-    }
-    const int meta_idx = LSU_LDU_COUNT + i;
-    const DcacheRespMeta &meta = dcache_resp_meta_cur_[meta_idx];
-    Assert(!dcache_resp_pending_.resp_ports.store_resps[i].valid &&
-           "DCache store response latch overflow");
-    dcache_resp_pending_.resp_ports.store_resps[i] =
-        dcache_resp_raw_.resp_ports.store_resps[i];
-    dcache_resp_pending_meta_[meta_idx] = meta;
-  }
+// This cycle's DCache response as the route block sees it (and through it the LSU, the I-cache probe, the PTW): the
+// valid stage-2 responses, a response that waits for an MSHR fill arriving now turned into a hit (matched through the
+// stage-1 metadata register), and the hidden bank-retry busy bits.
+void MemSubsystem::drive_dcache_response() {
+  DcacheLsuIO &r = dcache_resp_route_;
+  r = {};
+  for (int i = 0; i < LSU_LDU_COUNT; i++)
+    if (dcache_resp_raw_.resp_ports.load_resps[i].valid) r.resp_ports.load_resps[i] = dcache_resp_raw_.resp_ports.load_resps[i];
+  for (int i = 0; i < LSU_STA_COUNT; i++)
+    if (dcache_resp_raw_.resp_ports.store_resps[i].valid) r.resp_ports.store_resps[i] = dcache_resp_raw_.resp_ports.store_resps[i];
   if (dcache_resp_raw_.mshr_fill) {
-    dcache_resp_pending_.mshr_fill = true;
-    dcache_resp_pending_.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
+    r.mshr_fill = true;
+    r.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
   }
-}
 
-void MemSubsystem::forward_pending_response_from_fill() {
   MSHR_FILLReq &fill = mshr_dcache_io_.fill_req;
-  if (!fill.valid) {
-    return;
-  }
-
-  for (int i = 0; i < LSU_LDU_COUNT; i++) {
-    LoadResp &resp = dcache_resp_pending_.resp_ports.load_resps[i];
-    const DcacheRespMeta &meta = dcache_resp_pending_meta_[i];
-    if (!resp.valid || !meta.valid || meta.is_store ||
-        !replay_waits_for_mshr_fill(resp.replay) ||
-        !cache_line_match(meta.addr, fill.addr)) {
-      continue;
+  if (fill.valid) {
+    for (int i = 0; i < LSU_LDU_COUNT; i++) {
+      LoadResp &resp = r.resp_ports.load_resps[i];
+      const DcacheRespMeta &meta = dcache_resp_meta_cur_[i];
+      if (!resp.valid || !meta.valid || meta.is_store || !replay_waits_for_mshr_fill(resp.replay) ||
+          !cache_line_match(meta.addr, fill.addr))
+        continue;
+      resp.replay = ReplayType::HIT;
     }
-    resp.replay = ReplayType::HIT;
-  }
-
-  for (int i = 0; i < LSU_STA_COUNT; i++) {
-    StoreResp &resp = dcache_resp_pending_.resp_ports.store_resps[i];
-    const int meta_idx = LSU_LDU_COUNT + i;
-    const DcacheRespMeta &meta = dcache_resp_pending_meta_[meta_idx];
-    if (!resp.valid || !meta.valid || !meta.is_store ||
-        !replay_waits_for_mshr_fill(resp.replay) ||
-        !cache_line_match(meta.addr, fill.addr)) {
-      continue;
+    for (int i = 0; i < LSU_STA_COUNT; i++) {
+      StoreResp &resp = r.resp_ports.store_resps[i];
+      const DcacheRespMeta &meta = dcache_resp_meta_cur_[LSU_LDU_COUNT + i];
+      if (!resp.valid || !meta.valid || !meta.is_store || !replay_waits_for_mshr_fill(resp.replay) ||
+          !cache_line_match(meta.addr, fill.addr))
+        continue;
+      fill.dirty = true;
+      resp.replay = ReplayType::HIT;
     }
-    fill.dirty = true;
-    resp.replay = ReplayType::HIT;
   }
-}
 
-void MemSubsystem::publish_pending_dcache_response() {
-  dcache_resp_route_ = dcache_resp_pending_;
-  for (int i = 0; i < LSU_LDU_COUNT; i++) dcache_resp_route_.load_retry_busy[i] = dcache_.load_retry_pending(i);
-  for (int i = 0; i < LSU_STA_COUNT; i++) dcache_resp_route_.store_retry_busy[i] = dcache_.store_retry_pending(i);
-}
-
-void MemSubsystem::clear_pending_dcache_response() {
-  dcache_resp_pending_ = {};
-  for (auto &meta : dcache_resp_pending_meta_) {
-    meta = {};
-  }
+  for (int i = 0; i < LSU_LDU_COUNT; i++) r.load_retry_busy[i] = dcache_.load_retry_pending(i);
+  for (int i = 0; i < LSU_STA_COUNT; i++) r.store_retry_busy[i] = dcache_.store_retry_pending(i);
 }
 
 void MemSubsystem::dcache_domain_comb_inputs() {
@@ -603,11 +565,11 @@ void MemSubsystem::dcache_domain_comb_inputs() {
   bool store_resp_blocked[LSU_STA_COUNT] = {};
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
     load_resp_blocked[i] =
-        dcache_resp_pending_.resp_ports.load_resps[i].valid;
+        dcache_resp_route_.resp_ports.load_resps[i].valid;
   }
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     store_resp_blocked[i] =
-        dcache_resp_pending_.resp_ports.store_resps[i].valid;
+        dcache_resp_route_.resp_ports.store_resps[i].valid;
   }
   dcache_.set_hidden_bank_retry_blocked(load_resp_blocked,
                                         store_resp_blocked);
@@ -642,9 +604,7 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
 void MemSubsystem::comb_outputs() {
 
   dcache_domain_comb_outputs();
-  capture_dcache_raw_response();
-  forward_pending_response_from_fill();
-  publish_pending_dcache_response();
+  drive_dcache_response();
 
   mem_route_block.comb_response();
 }
@@ -734,7 +694,6 @@ void MemSubsystem::seq() {
   peripheral_model_.tick();
   peripheral_axi_.seq();
   mem_route_block.seq();
-  clear_pending_dcache_response();
   dtlb_walk_port_inst->reset_seq_input();
   itlb_walk_port_inst->reset_seq_input();
   sync_ptw_port_outputs();
