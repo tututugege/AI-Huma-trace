@@ -5,7 +5,7 @@
 #include "mmio_address_map.h"
 
 void PeripheralAxi::init() {   // (in / out are the port bindings, set by MemSubsystem::init)
-  cur = {};
+  cur_ = {};
   nxt = {};
   if (out.resp != nullptr) {
     *out.resp = {};
@@ -183,7 +183,7 @@ void PeripheralAxi::comb_inputs() {
 }
 
 void PeripheralAxi::seq() {
-  cur = nxt;
+  cur_ = nxt;
   nxt = cur;
 }
 

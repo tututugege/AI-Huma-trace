@@ -56,11 +56,13 @@ public:
     MSHRINIO in;
     MSHROUTIO out;
 
-    MSHR_STATE cur,nxt;
+    MSHR_STATE nxt;   // d; comb updates it in place (d == q at the start of the cycle)
+    const MSHR_STATE &cur = cur_;   // q: written only in seq / init
     bool axi_resp_accepted_this_cycle = false;
     bool nofill_released = false;
 
 private:
+    MSHR_STATE cur_;
     void comb_inputs_axi();
     void comb_outputs_dcache();
     void comb_inputs_dcache();

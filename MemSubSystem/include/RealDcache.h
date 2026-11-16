@@ -86,9 +86,11 @@ private:
         BankRetryStore stores[LSU_STA_COUNT];
     };
 
-    S1S2Reg s1s2_cur; // latched at start of cycle
+    S1S2Reg s1s2_cur_; // latched at start of cycle (q: written only in seq / init)
+    const S1S2Reg &s1s2_cur = s1s2_cur_;
     S1S2Reg s1s2_nxt; // computed by comb(); committed by seq()
-    BankRetryState bank_retry_cur; // per-port hidden retry latches for LSU bank conflicts
+    BankRetryState bank_retry_cur_; // per-port hidden retry latches for LSU bank conflicts (q)
+    const BankRetryState &bank_retry_cur = bank_retry_cur_;
     BankRetryState bank_retry_nxt;
     // Combinational scratch from stage2_comb() to stage1_comb(); not sequenced state.
     FillReqMerge fill_req_merge_wires[LSU_STA_COUNT] = {};

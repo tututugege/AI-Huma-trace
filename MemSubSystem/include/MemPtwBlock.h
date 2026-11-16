@@ -43,11 +43,6 @@ public:
         walk_clients{};
   };
 
-  struct SeqIn {
-    std::array<bool, static_cast<size_t>(Client::NUM_CLIENTS)>
-        walk_client_flush{};
-  };
-
   struct RoutedEvent {
     bool valid = false;   // a read of the page-table walker
     // Memory-side resolved 32-bit word presented to PTW for this event. The
@@ -65,6 +60,8 @@ public:
     std::array<RoutedEvent, LSU_LDU_COUNT> events{};
     uint8_t event_count = 0;
     bool wakeup_walk = false;
+    // a TLB dropped its walk this cycle (flush / cancel): the client's walk state is cleared at the edge
+    std::array<bool, static_cast<size_t>(Client::NUM_CLIENTS)> walk_client_flush{};
   };
 
   struct CombOut {
@@ -97,17 +94,13 @@ public:
     apply_events(in);
     apply_wakeups(in);
     refresh_outputs();
+    // (after the outputs: the flush shows only from the next cycle on)
+    for (size_t i = 0; i < kClientCount; i++)
+      if (in.walk_client_flush[i]) flush_walk_client_state(nxt_, static_cast<Client>(i));
   }
 
   void seq() {
-    SeqIn in{};
-    seq(in);
-  }
-
-  void seq(const SeqIn &in) {
     cur_ = nxt_;
-    apply_seq_inputs(cur_, in);
-    nxt_ = cur_;
     refresh_outputs();
   }
 
@@ -167,14 +160,6 @@ private:
       }
       if (in.walk_clients[i].req_valid) {
         send_walk_req(client, in.walk_clients[i].req);
-      }
-    }
-  }
-
-  static void apply_seq_inputs(State &state, const SeqIn &in) {
-    for (size_t i = 0; i < kClientCount; i++) {
-      if (in.walk_client_flush[i]) {
-        flush_walk_client_state(state, static_cast<Client>(i));
       }
     }
   }

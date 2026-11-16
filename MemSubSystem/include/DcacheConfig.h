@@ -179,6 +179,7 @@ struct DcacheINIO {
     WBDcacheIO   *wb2dcache   = nullptr;  // WB bypass/merge resp → DCache
     DcacheLineReadResp *dcachelinereadresp[LSU_LDU_COUNT + LSU_STA_COUNT]; // For BSD: output the chosen victim for debugging
     FillIn *fillin; 
+    const bool *fill_store_dirty = nullptr;   // a store that waited for this cycle's fill completes into it: the line is dirty
 };
 
 struct DcacheOUTIO {

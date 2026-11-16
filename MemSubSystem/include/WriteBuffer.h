@@ -57,10 +57,12 @@ public:
     // Input / output signal ports (public for direct access by RealDcache).
     WBIn  in;
     WBOut out;
-    WBState cur, nxt;
+    WBState nxt;   // d; comb updates it in place (d == q at the start of the cycle)
+    const WBState &cur = cur_;   // q: written only in seq / init
 
 
 private:
+    WBState cur_;
     void comb_inputs_axi();
     void comb_outputs_dcache();
     void comb_inputs_dcache();

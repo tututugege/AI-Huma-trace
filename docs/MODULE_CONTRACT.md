@@ -120,3 +120,30 @@ Known: the AXI ports' fields are scanned without the master index, so the I-cach
 the read port array are two port names over the same fields (aliases; the one-writer rule is per name). The interconnect
 reads the memory-side masters' requests in comb_outputs only as their default (cleared) values (`pre`), part of the AXI
 kit's internal registers listed in docs/REG_WIRE.md. TB_ORDER at this level is declared, not scanned.
+
+## Memory subsystem under the contract
+
+The memory blocks (D-cache, MSHR, write buffer, route block, PTW, MMIO) already had cur / nxt register pairs.
+* q is read-only in comb: each block's `cur` is a private `cur_` behind a const reference (`s1s2_cur` / `bank_retry_cur`
+  in the D-cache), written only in seq / init; it compiled unchanged. The MSHR and the write buffer update nxt in place
+  and never read cur (d == q at the start of the cycle, as Exu's FU state).
+* seq is a pure copy: the PTW block applied the TLBs' walk flushes in seq (`apply_seq_inputs`); they are set by the
+  TLBs in front.comb / back.comb, before the memory subsystem's requests, so ptw_feedback passes them in and comb_finish
+  clears the client's walk state in nxt (after the outputs, which show it from the next cycle on, as before).
+* one writer per signal: drive_dcache_response set `dirty` on the MSHR's own fill request (`mshr_dcache_io_.fill_req`)
+  when a waiting store completed into the arriving fill; it is the wire `fill_store_dirty_` now, ORed in by D-cache
+  stage 1 (the only reader). Its writes through local reference aliases are direct member writes (the scan sees them).
+
+The 11 phases are declared in MemSubsystem.h in MemSubsystem's signal names (the wires MemSubsystem::init binds to the
+blocks' in / out pointers): `CONTRACT <block>.<method>` for a block's comb method, `CONTRACT <function> (<block>)` for a
+MemSubsystem function driving a block (the D-cache stages, the PTW request / feedback). `scripts/comb/gen_mem_order.py`
+checks them against the mem-domain scan (exact read / write sets; a block's own state is private and not declared;
+one writer per signal) and generates both bodies. The comb_outputs / comb_inputs split is derived, not declared: a phase
+from which the back end's input dcache2lsu depends goes before the back end, a phase that depends on a back-end /
+front-end request (lsu2dcache, the I-cache probe, the MMIO request, the walk ports) after it; one that is both is a
+loop through the back end and is reported. The generated order equals the hand-made one. `gen_mem_order.py --emit`
+prints the CONTRACT lines of the scanned code (a starting point when a phase is added). Mutations (an input dropped, a
+response phase depending on lsu2dcache, two generated lines swapped) are reported.
+
+Known: the walk-port adapters (`dtlb_walk_port_inst` / `itlb_walk_port_inst`) are declared as whole objects: the PTW
+request reads the TLBs' requests from them, the feedback clears them after use.

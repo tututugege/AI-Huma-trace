@@ -20,9 +20,9 @@ static bool l1d_perf_is_lsu_req(uint32_t req_id) {
 
 void RealDcache::init() {
     init_dcache();
-    s1s2_cur = {};
+    s1s2_cur_ = {};
     s1s2_nxt = {};
-    bank_retry_cur = {};
+    bank_retry_cur_ = {};
     bank_retry_nxt = {};
     bank_retry_issue_wires = {};
     for (int i = 0; i < LSU_LDU_COUNT; i++) {
@@ -102,7 +102,7 @@ void RealDcache::stage1_comb() {
         if (fillout_granted && !same_fill_already_in_s2) {
             s1s2_nxt.fill_write.valid = true;
             s1s2_nxt.fill_write.id = in.mshr2dcache->fill_req.id;
-            s1s2_nxt.fill_write.dirty = in.mshr2dcache->fill_req.dirty;
+            s1s2_nxt.fill_write.dirty = in.mshr2dcache->fill_req.dirty || (in.fill_store_dirty && *in.fill_store_dirty);
             s1s2_nxt.fill_write.lsu_origin = in.mshr2dcache->fill_req.lsu_origin;
             s1s2_nxt.fill_write.is_prefetch = in.mshr2dcache->fill_req.is_prefetch;
             s1s2_nxt.fill_write.set_idx = fill_f.set_idx;
@@ -668,7 +668,7 @@ void RealDcache::stage2_comb() {
 // ─────────────────────────────────────────────────────────────────────────────
 void RealDcache::seq() {
     // 1. Advance pipeline register.
-    s1s2_cur = s1s2_nxt;
-    bank_retry_cur = bank_retry_nxt;
+    s1s2_cur_ = s1s2_nxt;
+    bank_retry_cur_ = bank_retry_nxt;
     pf.seq();
 }

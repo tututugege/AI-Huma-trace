@@ -236,6 +236,10 @@ if '--check' in sys.argv:
                        capture_output=True, text=True)
     print(p.stdout.rstrip())
     if p.returncode != 0: all_hazards.append('top exports')
+    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gen_mem_order.py'), '--check'],
+                       capture_output=True, text=True)
+    print(p.stdout.rstrip())
+    if p.returncode != 0: all_hazards.append('mem contracts')
 if '--check' in sys.argv and all_hazards: sys.exit(1)
 if '--dot' in sys.argv:
     with open(sys.argv[sys.argv.index('--dot') + 1], 'w') as fdot:

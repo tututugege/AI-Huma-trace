@@ -40,7 +40,7 @@ static MSHR *g_dbg_mshr = nullptr;
 void MSHR::init()
 {
     g_dbg_mshr = this;
-    std::memset(&cur, 0, sizeof(cur));
+    std::memset(&cur_, 0, sizeof(cur_));
     std::memset(&nxt, 0, sizeof(nxt));
     axi_resp_accepted_this_cycle = false;
 }
@@ -242,7 +242,7 @@ void MSHR::comb_inputs_axi()
 }
 void MSHR::seq(bool sample_perf)
 {
-    cur = nxt;
+    cur_ = nxt;
 }
 
 void MSHR::comb_axi_to_dcache() {

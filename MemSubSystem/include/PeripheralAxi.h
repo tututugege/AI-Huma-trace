@@ -42,10 +42,11 @@ public:
 
   PeripheralAxiIn in;
   PeripheralAxiOut out;
-  PeripheralAxiState cur;
+  const PeripheralAxiState &cur = cur_;   // q: written only in seq / init
   PeripheralAxiState nxt;
 
 private:
+  PeripheralAxiState cur_;
   void comb_outputs();
   void comb_inputs();
   static uint8_t access_size_bytes(uint8_t func3);

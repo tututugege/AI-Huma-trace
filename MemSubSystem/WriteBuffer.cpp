@@ -40,7 +40,7 @@ static bool valid_wb_entry_index(uint32_t idx) {
 // init
 // ─────────────────────────────────────────────────────────────────────────────
 void WriteBuffer::init() {
-    std::memset(&cur, 0, sizeof(cur));
+    std::memset(&cur_, 0, sizeof(cur_));
     std::memset(&nxt, 0, sizeof(nxt));
     out.clear();
 }
@@ -139,7 +139,7 @@ void WriteBuffer::comb_inputs_dcache() {
 }
 
 void WriteBuffer::seq() {
-    cur = nxt;
+    cur_ = nxt;
 }
 
 void WriteBuffer::comb_axi_to_dcache() {

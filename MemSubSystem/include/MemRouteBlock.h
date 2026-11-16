@@ -81,7 +81,8 @@ struct MemRouteBlockState {
 
 class MemRouteBlock {
 public:
-  MemRouteBlockState cur, nxt;
+  MemRouteBlockState nxt;
+  const MemRouteBlockState &cur = cur_;   // q: written only in seq / init
   MemRouteIn in;
   MemRouteOut out;
 
@@ -92,4 +93,5 @@ public:
 
 
 private:
+  MemRouteBlockState cur_;
 };

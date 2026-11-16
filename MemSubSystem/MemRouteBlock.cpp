@@ -5,10 +5,10 @@
 
 
 void MemRouteBlock::init() {
-  cur = {};
+  cur_ = {};
   nxt = {};
 
-  cur.next_req_id = MemRouteBlockReqID;
+  cur_.next_req_id = MemRouteBlockReqID;
   nxt.next_req_id = MemRouteBlockReqID;
 }
 void MemRouteBlock::comb_response() {
@@ -113,5 +113,5 @@ void MemRouteBlock::comb_request() {
 }
 void MemRouteBlock::seq() {
   // Update the current state to the next state at the end of the cycle.
-  cur = nxt;
+  cur_ = nxt;
 }
