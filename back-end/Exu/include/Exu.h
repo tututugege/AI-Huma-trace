@@ -73,7 +73,10 @@ private:
     wire<PRF_IDX_WIDTH> preg = 0;
     wire<BR_MASK_WIDTH> br_mask = 0;
   };
-  LoadWake lwake_r[ISSUE_WIDTH] = {}, lwake_r_1[ISSUE_WIDTH] = {};
+  // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
+  // is still updated in place in comb: not yet under the contract.)
+  struct Regs { LoadWake lwake_r[ISSUE_WIDTH] = {}; };
+  Regs q_, d;
   std::vector<FuUnit> units;
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order
   uint64_t port_fu_mask[ISSUE_WIDTH] = {};

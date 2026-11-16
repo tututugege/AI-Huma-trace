@@ -161,8 +161,8 @@ void BackTop::load_image(const std::string &filename) {
 // CSRs (address translation, interrupts, traps) and the LR/SC reservation.
 void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   number_PC = state.pc;
-  csr->privilege = csr->privilege_1 = privilege;
-  for (int i = 0; i < CSR_NUM; i++) csr->CSR_RegFile[i] = csr->CSR_RegFile_1[i] = state.csr[i];
+  csr->q_mut().privilege = csr->d.privilege = privilege;
+  for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = csr->d.CSR_RegFile[i] = state.csr[i];
   lsu->cur.lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
   lsu->cur.lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
 }

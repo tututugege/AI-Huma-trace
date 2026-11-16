@@ -129,6 +129,19 @@ typedef struct {
 
 class Csr {
 public:
+  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
+  // d == q at the start of every cycle). seq: q = d.
+  struct Regs {
+    reg<XLEN> CSR_RegFile[CSR_NUM];
+    reg<2> privilege  = 0b11;
+    reg<12> csr_idx;
+    reg<XLEN> csr_wdata;
+    reg<2> csr_wcmd;
+    reg<1> csr_we;
+  };
+  Regs d;
+  const Regs &q() const { return q_; }
+  Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_commit();  // exceptions and the CSR write of the committing instruction
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   CsrIn in;
@@ -137,33 +150,21 @@ public:
   void init();
 
   void comb_csr_status();
-  reg<XLEN> read(int idx) const { return CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
   void comb_interrupt();
   void comb_interrupt_inject();
   void seq();
-
-  reg<XLEN> CSR_RegFile[CSR_NUM];
-  reg<2> privilege = 0b11;
+  reg<XLEN> read(int idx) const { return q_.CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
 
   // 执行时存下需要写入的idx，cmd和data
   // 提交时才写入
   // 否则csr指令未提交，其更改就已经生效
-  reg<12> csr_idx;
-  reg<XLEN> csr_wdata;
-  reg<2> csr_wcmd;
-  reg<1> csr_we;
-  bool fs_dirty_req = false;   // F/D: set at commit of an instruction that turned mstatus.FS to Dirty; applied in seq()
+  bool fs_dirty_req = false;   // F/D: set at commit of an instruction that turned mstatus.FS to Dirty; applied in comb_interrupt_inject
 
-  wire<XLEN> CSR_RegFile_1[CSR_NUM];
-  wire<2> privilege_1 = 0b11;
 
-  wire<12> csr_idx_1;
-  wire<XLEN> csr_wdata_1;
-  wire<2> csr_wcmd_1;
-  wire<1> csr_we_1;
 
 private:
   // phases of one cycle, run in the order of the methods above
   void exception();
   void csr_write();
+  Regs q_;
 };

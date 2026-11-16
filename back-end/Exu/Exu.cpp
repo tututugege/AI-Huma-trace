@@ -120,7 +120,7 @@ void Exu::comb_pipeline() {
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     const auto &e = w.exe2prf.entry[i];
-    LoadWake &l = lwake_r_1[i];
+    LoadWake &l = d.lwake_r[i];
     l.valid = !w.rob_bcast.flush && e.valid && !is_br_killed(e.uop, w.dec_bcast) && e.uop.dest_en &&
               decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
     if (!l.valid) continue;
@@ -374,12 +374,13 @@ void Exu::exec() {
 // Late load wakeup: the loads of the write-back register that survive this cycle's mispredict, in port order, at most
 // LSU_LOAD_WB_WIDTH of them.
 void Exu::load_wake() {
+  const Regs &q = q_;
   begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   Wires &w = *wires;
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
   int n = 0;
   for (int i = 0; i < ISSUE_WIDTH && n < LSU_LOAD_WB_WIDTH; i++) {
-    const LoadWake &l = lwake_r[i];
+    const LoadWake &l = q.lwake_r[i];
     if (!l.valid || (w.dec_bcast.mispred && (l.br_mask & w.dec_bcast.br_mask))) continue;
     w.prf_awake.wake[n].valid = true;
     w.prf_awake.wake[n].preg = l.preg;
@@ -387,7 +388,7 @@ void Exu::load_wake() {
   }
 }
 
-void Exu::seq() { std::memcpy(lwake_r, lwake_r_1, sizeof(lwake_r)); }
+void Exu::seq() { q_ = d; }
 
 // late load wakeup, the FUs, the port readiness for issue
 void Exu::comb_exec() {

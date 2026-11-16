@@ -167,10 +167,10 @@ void SimContext::run_commit_inst(InstEntry *inst_entry, int commit_slot) {
 
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
-  const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->privilege_1);
-  const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->CSR_RegFile_1[csr_mcause]
-                                        : cpu->back.csr->CSR_RegFile_1[csr_scause];
-  tbhook::on_interrupt(c, tp, cpu->back.csr->CSR_RegFile_1[csr_mip]);
+  const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->d.privilege);
+  const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->d.CSR_RegFile[csr_mcause]
+                                        : cpu->back.csr->d.CSR_RegFile[csr_scause];
+  tbhook::on_interrupt(c, tp, cpu->back.csr->d.CSR_RegFile[csr_mip]);
 }
 
 // 复位逻辑
