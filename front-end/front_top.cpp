@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 #include <unordered_set>
+#include <optional>
 #include <vector>
 #include <cstdlib>
 
@@ -664,6 +665,26 @@ void FrontComb::finish() {
 }
 
 } // namespace
+
+struct FrontCombSlot {
+  std::optional<FrontComb> c;
+};
+
+FrontCore::FrontCore() : comb_(std::make_unique<FrontCombSlot>()) {}
+FrontCore::~FrontCore() = default;
+
+void FrontCore::comb_begin(const FrontTopIn &inp, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req) {
+  comb_->c.emplace(*this, inp, rd, out, req);
+}
+void FrontCore::control() { comb_->c->control(); }
+void FrontCore::run_bpu() { comb_->c->run_bpu(); }
+void FrontCore::read_fifos() { comb_->c->read_fifos(); }
+void FrontCore::write_fetch_addr() { comb_->c->write_fetch_addr(); }
+void FrontCore::run_icache() { comb_->c->run_icache(); }
+void FrontCore::write_instruction_fifo() { comb_->c->write_instruction_fifo(); }
+void FrontCore::check_group() { comb_->c->check_group(); }
+void FrontCore::write_front2back() { comb_->c->write_front2back(); }
+void FrontCore::finish() { comb_->c->finish(); }
 
 // Precondition: req's enables are cleared (FrontUpdateRequest::clear_valid; the merged requests accumulate into it).
 void FrontCore::comb(const FrontTopIn &inp, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req) {

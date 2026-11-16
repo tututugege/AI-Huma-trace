@@ -8,6 +8,7 @@
 #include "icache/icache_top.h"
 #include "train_IO.h"
 #include <cstdlib>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -49,8 +50,12 @@ private:
   std::unordered_set<uint32_t> seen_;   // lines filled before
 };
 
+struct FrontCombSlot;   // the cycle's working state of the comb phases (FrontComb, front_top.cpp)
+
 class FrontCore {
 public:
+  FrontCore();
+  ~FrontCore();
   SimContext *ctx = nullptr;
   bpuf::BpuPipe bpu_pipe;              // the pipelined predictor (its registers / arrays and its transaction of the cycle)
   FetchAddrFifo fetch_addr_fifo;
@@ -61,9 +66,22 @@ public:
   FrontIpf ipf;
 
   void read_q(FrontReadData &rd) const;                                    // q and the FIFOs' read data
-  void comb(const FrontTopIn &in, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req);
+  void comb(const FrontTopIn &in, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req);   // all phases (init)
+  // one cycle phase by phase (SimCpu::cycle() schedules them): the working state, then the phases (their CONTRACT lines)
+  void comb_begin(const FrontTopIn &in, const FrontReadData &rd, FrontTopOut &out, FrontUpdateRequest &req);
+  void control();
+  void run_bpu();
+  void read_fifos();
+  void write_fetch_addr();
+  void run_icache();
+  void write_instruction_fifo();
+  void check_group();
+  void write_front2back();
+  void finish();
+
   void seq(const FrontTopIn &in, const FrontUpdateRequest &req);   // the clock edge
 
 private:
   FrontRegs q_;   // the front end's own registers (q; d is req.front_state.d)
+  std::unique_ptr<FrontCombSlot> comb_;   // the cycle's FrontComb (made anew by comb_begin)
 };

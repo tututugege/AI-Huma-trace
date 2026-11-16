@@ -41,10 +41,10 @@ def unit_of(label, group, inner_of):
     p = base.split('.')
     if inner_of and inner_of.startswith('back.'):
         return 'back.' + (p[1] if len(p) >= 3 else 'top')
-    if inner_of == 'front.comb_core': return 'front.core'
+    if inner_of == 'front.comb_core' or (inner_of and inner_of.startswith('front.')): return 'front.core'
     if inner_of and inner_of.startswith('mem_subsystem.'): return 'mem_subsystem.' + (p[1] if len(p) > 2 else 'top')
     if base in ('back.comb_csr_status',): return 'back.csr'
-    if base in ('front.read_core_q', 'front.comb_core'): return 'front.core'
+    if base in ('front.read_core_q', 'front.comb_core') or base.startswith('front.comb_begin'): return 'front.core'
     if base.startswith(('axi.interconnect', 'axi.ddr', 'axi.mmio')): return '.'.join(p[:2])
     if base.startswith('mem_subsystem.llc'): return 'mem_subsystem.llc'
     if base == 'mem_subsystem.comb_commit_store': return 'mem_subsystem.peripheral'

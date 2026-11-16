@@ -76,9 +76,10 @@ void FrontTop::step_bpu() {
   seq_core();
 }
 
-// One front-end cycle from the back end's registered outputs (Back2Front): when the back end does not stall (or a refetch is pending) the
-// fetch-group FIFO is read (can_read; Front2Back then takes the group from out), then the BPU / FIFOs / I-cache comb.
-void FrontTop::comb(CsrStatusIO *csr_status) {
+// The start of a front-end cycle from the back end's registered outputs (Back2Front): when the back end does not stall
+// (or a refetch is pending) the fetch-group FIFO is read (can_read; Front2Back then takes the group from out); the
+// registers' q and the cycle's working state. The phases follow (SimCpu::cycle()).
+void FrontTop::comb_begin(CsrStatusIO *csr_status) {
   const bool registered_refetch = static_cast<bool>(from_back->in.redirect.valid);
   can_read = !from_back->stall || registered_refetch;
 
@@ -87,6 +88,16 @@ void FrontTop::comb(CsrStatusIO *csr_status) {
   in.ctrl.fifo_read_enable = can_read;
   if (!can_read) in.redirect.valid = false;
   read_core_q();
-  comb_core();
+  update_req_->clear_valid();
+  core_->comb_begin(in, *read_data_, out, *update_req_);
 }
+void FrontTop::control() { core_->control(); }
+void FrontTop::run_bpu() { core_->run_bpu(); }
+void FrontTop::read_fifos() { core_->read_fifos(); }
+void FrontTop::write_fetch_addr() { core_->write_fetch_addr(); }
+void FrontTop::run_icache() { core_->run_icache(); }
+void FrontTop::write_instruction_fifo() { core_->write_instruction_fifo(); }
+void FrontTop::check_group() { core_->check_group(); }
+void FrontTop::write_front2back() { core_->write_front2back(); }
+void FrontTop::finish() { core_->finish(); }
 

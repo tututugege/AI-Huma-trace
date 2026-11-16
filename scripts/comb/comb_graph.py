@@ -259,6 +259,7 @@ thaz, tstaged = [], 0
 for i, (n, r, w) in enumerate(trows):
     for j in range(i + 1, len(trows)):
         if texcl(i, j): continue
+        if n.startswith('front.') and trows[j][0].startswith('front.'): continue   # inside the front end: its own check (FIFO ports)
         for f in sorted(toverlap(r, trows[j][2])):
             if (n, f, trows[j][0]) in TOP_KNOWN: continue
             if tprior(i, f): tstaged += 1; continue     # written earlier in the cycle too: not a hidden register

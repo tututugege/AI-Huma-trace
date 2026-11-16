@@ -24,7 +24,7 @@ SUBOBJ = ('mem_subsystem.wb_', 'mem_subsystem.mshr_', 'mem_subsystem.mem_route_b
           'back.lsu', 'front', 'mem_subsystem', 'axi', 'f2b', 'b2f', 'axi.interconnect', 'axi.ddr', 'axi.mmio')
 SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
-INLINE = {'front.comb': ('FrontTop', r'in|out|can_read'),
+INLINE = {'front.comb_begin': ('FrontTop', r'in|out|can_read'),
           'b2f.comb': ('Back2Front', r'q_|d|csr_status'),
           'f2b.comb': ('Front2Back', r'q_|d'),
           'f2b.comb_hold': ('Front2Back', r'q_|d'),
@@ -227,6 +227,9 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
             row[1] |= r1; row[2] |= w1
         if ph == 'run_icache':
             row[1].add('mem_subsystem.itlb_walk.out'); row[2].add('mem_subsystem.itlb_walk.in')
+    for row in SUB['front.comb_core']:   # each front phase: a SimCpu-level phase
+        S[row[0]] = (set(row[1]), set(row[2]))
+        SUB[row[0]] = [row]
     memh = src.t.get(os.path.join(root, 'MemSubSystem', 'include', 'MemSubsystem.h'), '')
     def mem_text(n):
         if '.' in n:

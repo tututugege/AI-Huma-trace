@@ -28,7 +28,8 @@ struct ICacheMemPortResp{
 };
 
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb            in: csr_status b2f_reg  out: front_out axi_ic_req axi_ic_resp_ready icache_probe itlb_walk
+//   EXPORT comb_begin      in: csr_status b2f_reg  out: front_out
+// The phases (FrontComb's, front-end/front_top.cpp) follow it, in the order of their contracts (gen_front_order.py).
 class FrontTop {
 public:
   FrontTopIn in;
@@ -48,7 +49,16 @@ public:
   void read_core_q();
   void comb_core();
   void seq_core();
-  void comb(CsrStatusIO *csr_status);   // one cycle (the fetch group for the back end: out, can_read)
+  void comb_begin(CsrStatusIO *csr_status);   // the start of a cycle; the phases (FrontCore's) follow
+  void control();
+  void run_bpu();
+  void read_fifos();
+  void write_fetch_addr();
+  void run_icache();
+  void write_instruction_fifo();
+  void check_group();
+  void write_front2back();
+  void finish();
   // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
   void restart_at(pc_t pc);
   void step_bpu();

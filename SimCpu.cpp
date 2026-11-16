@@ -104,7 +104,16 @@ void SimCpu::cycle() {
   back.csr->comb_csr_status();
   back.csr->comb_interrupt();
   axi.comb_begin();
-  front.comb(&back.csr_status);
+  front.comb_begin(&back.csr_status);
+  front.control();
+  front.run_bpu();
+  front.read_fifos();
+  front.write_fetch_addr();
+  front.run_icache();
+  front.write_instruction_fifo();
+  front.check_group();
+  front.write_front2back();
+  front.finish();
   axi.comb_outputs();
   f2b.comb();
   back.pre->comb_accept_front();
