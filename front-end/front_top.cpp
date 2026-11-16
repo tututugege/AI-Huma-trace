@@ -92,8 +92,8 @@ struct RvcHeadFix {
 static void fpr_ptab(const PtabIn &p) {
   if (!fpr::on()) return;
   uint32_t m = 0;
-  for (int i = 0; i < FETCH_WIDTH; i++) m |= uint32_t(p.predict_dir[i]) << i;
-  fpr::pt(static_cast<uint32_t>(p.predict_base_pc[0]), static_cast<uint32_t>(p.predict_next_fetch_address), m);
+  for (int i = 0; i < FETCH_WIDTH; i++) m |= uint32_t(p.wdata.predict_dir[i]) << i;
+  fpr::pt(static_cast<uint32_t>(p.wdata.predict_base_pc[0]), static_cast<uint32_t>(p.wdata.predict_next_fetch_address), m);
 }
 
 // PTAB write port from the BPU output.
@@ -105,11 +105,11 @@ static void ptab_write_data(const bpuf::OutputPayload &bpu_output, wire<1> globa
   ptab_in.read_enable = false;
   ptab_in.write_enable = true;
   for (int i = 0; i < FETCH_WIDTH; i++) {
-    ptab_in.predict_dir[i] = bpu_output.out_pred_dir[i];
-    ptab_in.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * SLOT_BYTES);
+    ptab_in.wdata.predict_dir[i] = bpu_output.out_pred_dir[i];
+    ptab_in.wdata.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * SLOT_BYTES);
   }
-  ptab_in.meta = bpu_output.meta;
-  ptab_in.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
+  ptab_in.wdata.meta = bpu_output.meta;
+  ptab_in.wdata.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
 }
 
 static void checker_input(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
@@ -129,12 +129,12 @@ static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
                                         const PredecodeCheckerOut &checker_out, bool bypass,
                                         F2bFifoIn &fifo_in, F2bFifoOut &bypass_out) {
   for (int i = 0; i < FETCH_WIDTH; i++) {
-    fifo_in.fetch_group[i] = fifo_out.instructions[i];
-    fifo_in.page_fault_inst[i] = fifo_out.page_fault_inst[i];
-    fifo_in.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
-    fifo_in.is_rvc[i] = fifo_out.is_rvc[i];
-    fifo_in.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
-    fifo_in.predict_base_pc[i] = ptab_out.predict_base_pc[i];
+    fifo_in.wdata.fetch_group[i] = fifo_out.instructions[i];
+    fifo_in.wdata.page_fault_inst[i] = fifo_out.page_fault_inst[i];
+    fifo_in.wdata.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
+    fifo_in.wdata.is_rvc[i] = fifo_out.is_rvc[i];
+    fifo_in.wdata.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
+    fifo_in.wdata.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     if (bypass) {
       bypass_out.fetch_group[i] = fifo_out.instructions[i];
       bypass_out.page_fault_inst[i] = fifo_out.page_fault_inst[i];
@@ -144,9 +144,9 @@ static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
       bypass_out.predict_base_pc[i] = ptab_out.predict_base_pc[i];
     }
   }
-  fifo_in.meta = ptab_out.meta;
-  fifo_in.meta.mask();
-  fifo_in.predict_next_fetch_address_corrected = checker_out.predict_next_fetch_address_corrected;
+  fifo_in.wdata.meta = ptab_out.meta;
+  fifo_in.wdata.meta.mask();
+  fifo_in.wdata.predict_next_fetch_address_corrected = checker_out.predict_next_fetch_address_corrected;
   if (bypass) {
     bypass_out.meta = ptab_out.meta;
     bypass_out.front2back_FIFO_valid = true;
@@ -467,28 +467,28 @@ void FrontComb::write_instruction_fifo() {
       grp[nv - 1] &= 0xffffu;   // (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line)
     }
   }
-  fifo_in.up16 = rvc_up16; fifo_in.up_ok = rvc_up_ok;
+  fifo_in.wdata.up16 = rvc_up16; fifo_in.wdata.up_ok = rvc_up_ok;
   for (int i = 0; i < FETCH_WIDTH; i++) {
-    fifo_in.raw16[i] = uint16_t(grp[i] & 0xffffu);
-    fifo_in.fetch_group[i] = grp[i];
-    fifo_in.pc[i] = gpc[i];
-    fifo_in.page_fault_inst[i] = gpf[i];
-    fifo_in.inst_valid[i] = gv[i];
+    fifo_in.wdata.raw16[i] = uint16_t(grp[i] & 0xffffu);
+    fifo_in.wdata.instructions[i] = grp[i];
+    fifo_in.wdata.pc[i] = gpc[i];
+    fifo_in.wdata.page_fault_inst[i] = gpf[i];
+    fifo_in.wdata.inst_valid[i] = gv[i];
     if (gv[i]) {
       if constexpr (kRvc) {   // the window at this slot is a 16-bit instruction when its low bits are not 11: expand it (an illegal encoding becomes 0)
         if ((grp[i] & 3u) != 3u) {
           uint32_t ex = 0;
-          fifo_in.is_rvc[i] = true;
+          fifo_in.wdata.is_rvc[i] = true;
           grp[i] = rvc::expand(grp[i] & 0xffffu, ex) ? ex : 0u;
-          fifo_in.fetch_group[i] = grp[i];
+          fifo_in.wdata.instructions[i] = grp[i];
         }
       }
       const PredecodeResult result = predecode(grp[i], gpc[i]);
-      fifo_in.predecode_type[i] = result.type;
-      fifo_in.predecode_target_address[i] = result.target_address;
+      fifo_in.wdata.predecode_type[i] = result.type;
+      fifo_in.wdata.predecode_target_address[i] = result.target_address;
     } else {
-      fifo_in.predecode_type[i] = PREDECODE_NON_BRANCH;
-      fifo_in.predecode_target_address[i] = 0;
+      fifo_in.wdata.predecode_type[i] = PREDECODE_NON_BRANCH;
+      fifo_in.wdata.predecode_target_address[i] = 0;
     }
   }
   if constexpr (kRvc) {   // instruction starts: from slot 0 (start_a) or, when slot 0 is the second half of the previous block's last instruction, from slot 1 (start_b)
@@ -498,11 +498,11 @@ void FrontComb::write_instruction_fifo() {
     while (n < FETCH_WIDTH && gv[n]) n++;
     auto boundary = [&](int k) { return k > 0 && k < n && gpc[k] != gpc[k - 1] + SLOT_BYTES; };
     for (int pass = 0; pass < 2; pass++) {
-      wire<1> *st = pass ? fifo_in.start_b : fifo_in.start_a;
+      wire<1> *st = pass ? fifo_in.wdata.start_b : fifo_in.wdata.start_a;
       int pos = pass;
       while (pos < n) {
         st[pos] = true;
-        int nxt = pos + (fifo_in.is_rvc[pos] ? 1 : 2);
+        int nxt = pos + (fifo_in.wdata.is_rvc[pos] ? 1 : 2);
         for (int k = pos + 1; k < nxt && k < n; k++) if (boundary(k)) { nxt = k; break; }
         pos = nxt;
       }
@@ -510,11 +510,11 @@ void FrontComb::write_instruction_fifo() {
   }
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && ic_out.inst_valid[pr.a_len - 1] && !ic_out.fetch_single_word) {   // FE_PAIR: next pc after the last valid slot
     int last = -1;
-    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_in.inst_valid[i]) last = i;
-    fifo_in.seq_next_pc = fifo_in.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
+    for (int i = 0; i < FETCH_WIDTH; i++) if (fifo_in.wdata.inst_valid[i]) last = i;
+    fifo_in.wdata.seq_next_pc = fifo_in.wdata.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
     (void)fused;
   } else
-  fifo_in.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
+  fifo_in.wdata.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
 
   inst_fifo.write(fifo_in, fifo_rd, req.fifo_req);
 }

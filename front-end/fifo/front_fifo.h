@@ -25,15 +25,7 @@ struct InstFifo {
   using Comb = InstructionCombOut; using Entry = InstFifoEntry;
   static constexpr int N = INSTRUCTION_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "instruction FIFO";
-  static void load(const In &in, Entry &e) {
-    for (int i = 0; i < FETCH_WIDTH; i++) {
-      e.instructions[i] = in.fetch_group[i]; e.pc[i] = in.pc[i]; e.page_fault_inst[i] = in.page_fault_inst[i];
-      e.inst_valid[i] = in.inst_valid[i]; e.predecode_type[i] = in.predecode_type[i];
-      e.predecode_target_address[i] = in.predecode_target_address[i]; e.is_rvc[i] = in.is_rvc[i];
-      e.start_a[i] = in.start_a[i]; e.start_b[i] = in.start_b[i]; e.raw16[i] = in.raw16[i];
-    }
-    e.up16 = in.up16; e.up_ok = in.up_ok; e.seq_next_pc = in.seq_next_pc;
-  }
+  static void load(const In &in, Entry &e) { e = in.wdata; }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) {
       o.instructions[i] = e.instructions[i]; o.pc[i] = e.pc[i]; o.page_fault_inst[i] = e.page_fault_inst[i];
@@ -50,11 +42,7 @@ struct Ptab {
   using In = PtabIn; using Out = PtabOut; using Rd = PtabReadData; using Comb = PtabCombOut; using Entry = PtabEntry;
   static constexpr int N = PTAB_SIZE, FULL_AT = N - 1;
   static constexpr const char *name = "PTAB";
-  static void load(const In &in, Entry &e) {
-    for (int i = 0; i < FETCH_WIDTH; i++) { e.predict_dir[i] = in.predict_dir[i]; e.predict_base_pc[i] = in.predict_base_pc[i]; }
-    e.meta = in.meta; e.meta.mask();
-    e.predict_next_fetch_address = in.predict_next_fetch_address;
-  }
+  static void load(const In &in, Entry &e) { e = in.wdata; e.meta.mask(); }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) { o.predict_dir[i] = e.predict_dir[i]; o.predict_base_pc[i] = e.predict_base_pc[i]; }
     o.meta = e.meta; o.meta.mask();
@@ -67,14 +55,7 @@ struct F2bFifo {
   using Comb = Front2BackCombOut; using Entry = F2bFifoEntry;
   static constexpr int N = FRONT2BACK_FIFO_SIZE, FULL_AT = N;
   static constexpr const char *name = "front-to-back FIFO";
-  static void load(const In &in, Entry &e) {
-    for (int i = 0; i < FETCH_WIDTH; i++) {
-      e.fetch_group[i] = in.fetch_group[i]; e.page_fault_inst[i] = in.page_fault_inst[i]; e.inst_valid[i] = in.inst_valid[i];
-      e.is_rvc[i] = in.is_rvc[i]; e.predict_dir_corrected[i] = in.predict_dir_corrected[i]; e.predict_base_pc[i] = in.predict_base_pc[i];
-    }
-    e.meta = in.meta; e.meta.mask();
-    e.predict_next_fetch_address_corrected = in.predict_next_fetch_address_corrected;
-  }
+  static void load(const In &in, Entry &e) { e = in.wdata; e.meta.mask(); }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) {
       o.fetch_group[i] = e.fetch_group[i]; o.page_fault_inst[i] = e.page_fault_inst[i]; o.inst_valid[i] = e.inst_valid[i];
