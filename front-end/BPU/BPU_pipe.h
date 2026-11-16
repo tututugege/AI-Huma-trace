@@ -56,18 +56,25 @@ struct HistRing {
   uint32_t fh[FH_N_MAX][TN] = {};
   bool back(uint32_t k) const { const uint32_t p = (head - 1 - k) & hr_mask(); return (bits[p >> 6] >> (p & 63)) & 1; }
   void push(bool dir) {
+    const TageCfg &K = tcfg();
+    const uint32_t m = hr_mask();
+    uint32_t out[TN];   // per table: the history bit that leaves its window (back(ghr_len - 1))
+    for (int i = 0; i < TN; i++) {
+      const uint32_t p = (head - K.ghr[i]) & m;
+      out[i] = (bits[p >> 6] >> (p & 63)) & 1;
+    }
     for (int k = 0; k < FH_N_MAX; k++)
       for (int i = 0; i < TN; i++) {
-        const uint32_t len = fh_len(k, i);
+        const uint32_t len = K.fl[k][i];
         uint32_t v = fh[k][i];
         const uint32_t hi = (v >> (len - 1)) & 1;
         v = ((v << 1) & ((1u << len) - 1)) | (uint32_t(dir) ^ hi);
-        v ^= uint32_t(back(ghr_len(i) - 1)) << (ghr_len(i) % len);
+        v ^= out[i] << (K.ghr[i] % len);
         fh[k][i] = v;
       }
     const uint32_t p = head;
     bits[p >> 6] = (bits[p >> 6] & ~(1ull << (p & 63))) | (uint64_t(dir) << (p & 63));
-    head = (head + 1) & hr_mask();
+    head = (head + 1) & m;
   }
 };
 
