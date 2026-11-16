@@ -127,8 +127,10 @@ private:
   std::unique_ptr<AxiKitRuntime> axi_kit_runtime;
 
   void sync_ptw_port_outputs();
-  void dcache_domain_comb_outputs();
-  void dcache_domain_comb_inputs();
+  void dcache_stage2();
+  void dcache_stage1();
+  void ptw_request();
+  void ptw_feedback();
   void dcache_domain_seq(bool sample_mshr_perf);
   void record_dcache_stage1_metadata();
   void drive_dcache_response();

@@ -245,3 +245,12 @@ void MSHR::seq(bool sample_perf)
     cur = nxt;
 }
 
+void MSHR::comb_axi_to_dcache() {
+    comb_inputs_axi();
+    comb_outputs_dcache();
+}
+
+void MSHR::comb_dcache_to_axi() {
+    comb_inputs_dcache();
+    comb_outputs_axi();
+}

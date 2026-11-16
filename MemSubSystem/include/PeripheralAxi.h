@@ -37,8 +37,7 @@ public:
   PeripheralModel *peripheral_model = nullptr;
 
   void init();
-  void comb_outputs();
-  void comb_inputs();
+  void comb();   // request / response of the MMIO path on the EXTRA ports, then the next state
   void seq();
 
   PeripheralAxiIn in;
@@ -47,6 +46,8 @@ public:
   PeripheralAxiState nxt;
 
 private:
+  void comb_outputs();
+  void comb_inputs();
   static uint8_t access_size_bytes(uint8_t func3);
   static uint32_t pack_write_data(uint32_t data, uint8_t func3);
   static uint64_t pack_write_strb(uint8_t func3);

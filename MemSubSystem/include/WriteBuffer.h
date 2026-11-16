@@ -42,18 +42,16 @@ struct WBOut {
 };
 class WriteBuffer {
 public:
+    void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)
+    void comb_dcache_to_axi();  // the DCache requests in, the AXI request out (after the DCache stage 1)
     WriteBuffer() = default;
     
     void init();
 
     // Phase 1: compute out.full and out.free_count from current nxt.count.
-    void comb_outputs_dcache();
-    void comb_outputs_axi();
     // Phase 2: process push requests from in.push_ports[], accept B channel
     // responses, and fill axi_out with the next AW+W request.
     // Reads axi_in (set by caller before invoking); writes axi_out.
-    void comb_inputs_dcache();
-    void comb_inputs_axi();
     void seq();
 
     // Input / output signal ports (public for direct access by RealDcache).
@@ -62,4 +60,9 @@ public:
     WBState cur, nxt;
 
 
+private:
+    void comb_inputs_axi();
+    void comb_outputs_dcache();
+    void comb_inputs_dcache();
+    void comb_outputs_axi();
 };

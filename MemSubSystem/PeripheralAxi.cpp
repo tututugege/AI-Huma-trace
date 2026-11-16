@@ -186,3 +186,8 @@ void PeripheralAxi::seq() {
   cur = nxt;
   nxt = cur;
 }
+
+void PeripheralAxi::comb() {
+  comb_outputs();
+  comb_inputs();
+}

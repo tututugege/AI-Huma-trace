@@ -151,7 +151,34 @@ def best_schedule(rows, e, trials=4000, seed=1):
     return best
 
 
+MEM_MODULE = {'dcache_stage2': 'dcache_', 'dcache_stage1': 'dcache_', 'ptw_request': 'ptw_block', 'ptw_feedback': 'ptw_block'}
+
+
+def mem_rows(group):
+    """the mem rows of MemSubsystem::comb_outputs / comb_inputs, labelled <block>.<phase>"""
+    g = {'__file__': os.path.join(HERE, 'comb_graph.py')}
+    src = open(os.path.join(HERE, 'comb_graph.py')).read().split('# top level: SimCpu::cycle()')[0]
+    argv = sys.argv
+    sys.argv = ['comb_graph.py']
+    with contextlib.redirect_stdout(io.StringIO()):
+        exec(src, g)
+    sys.argv = argv
+    import comb_domains
+    rows = []
+    for n, r, w in comb_domains.MEM_GROUPS[group]:
+        m = MEM_MODULE.get(n, n.split('.')[0] if '.' in n else n)
+        rows.append((f'{m}.{n.split(".")[-1]}', r, w))
+    return rows, g['overlap'], [set() for _ in rows]
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == '--mem':
+        rows, overlap, touch = mem_rows(sys.argv[2])
+        e = edges(rows, overlap, touch)
+        runs = best_schedule(rows, e)
+        print(f'{len(rows)} phases -> {len(runs)} runs')
+        for m, ps in runs: print('  ' + ' + '.join(rows[p][0] for p in ps))
+        return
     rows, overlap, touch = load()
     e = edges(rows, overlap, touch)
     r = reach_from(e, len(rows))

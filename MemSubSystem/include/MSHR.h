@@ -46,13 +46,11 @@ struct MSHROUTIO{
 };
 class MSHR {
 public:
+    void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)
+    void comb_dcache_to_axi();  // the DCache requests in, the AXI request out (after the DCache stage 1)
     MSHR() = default;
     void init();
 
-    void comb_outputs_axi();
-    void comb_outputs_dcache();
-    void comb_inputs_axi();
-    void comb_inputs_dcache();
     void seq(bool sample_perf = true);
 
     MSHRINIO in;
@@ -62,4 +60,9 @@ public:
     bool axi_resp_accepted_this_cycle = false;
     bool nofill_released = false;
 
+private:
+    void comb_inputs_axi();
+    void comb_outputs_dcache();
+    void comb_inputs_dcache();
+    void comb_outputs_axi();
 };

@@ -141,3 +141,13 @@ void WriteBuffer::comb_inputs_dcache() {
 void WriteBuffer::seq() {
     cur = nxt;
 }
+
+void WriteBuffer::comb_axi_to_dcache() {
+    comb_inputs_axi();
+    comb_outputs_dcache();
+}
+
+void WriteBuffer::comb_dcache_to_axi() {
+    comb_inputs_dcache();
+    comb_outputs_axi();
+}

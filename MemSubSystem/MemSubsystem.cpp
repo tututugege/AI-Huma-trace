@@ -473,25 +473,18 @@ static bool replay_waits_for_mshr_fill(ReplayType replay) {
 }
 
 
-void MemSubsystem::dcache_domain_comb_outputs() {
-  // Consume same-cycle AXI feedback before publishing DCache-facing state.
-  // This lets a just-returned MSHR line or just-retired WB entry be visible
-  // to the DCache in this CPU cycle instead of waiting for the next seq edge.
-  wb_.comb_inputs_axi();
-  mshr_.comb_inputs_axi();
-
-  wb_.comb_outputs_dcache();
-  mshr_.comb_outputs_dcache();
-
+// DCache stage 2 of the request that stage 1 issued last cycle: the tag / fill array read, the stage-2 logic, the
+// array writes, the response to the route block.
+void MemSubsystem::dcache_stage2() {
   Dcache_Read(dcache_s1_q_.line_read_req,
               dcache_line_read_resp_,
               dcache_s1_q_.fill_out,
               fill_in_);
-
   dcache_.stage2_comb();
   Dcache_Write(pending_writes_,
                lru_updates_,
                fill_writes_);
+  drive_dcache_response();
 }
 
 void MemSubsystem::record_dcache_stage1_metadata() {
@@ -560,7 +553,9 @@ void MemSubsystem::drive_dcache_response() {
   for (int i = 0; i < LSU_STA_COUNT; i++) r.store_retry_busy[i] = dcache_.store_retry_pending(i);
 }
 
-void MemSubsystem::dcache_domain_comb_inputs() {
+// DCache stage 1 of this cycle's requests (a port whose response is still held is blocked), and its metadata for the
+// response next cycle.
+void MemSubsystem::dcache_stage1() {
   bool load_resp_blocked[LSU_LDU_COUNT] = {};
   bool store_resp_blocked[LSU_STA_COUNT] = {};
   for (int i = 0; i < LSU_LDU_COUNT; i++) {
@@ -576,15 +571,6 @@ void MemSubsystem::dcache_domain_comb_inputs() {
 
   dcache_.stage1_comb();
   record_dcache_stage1_metadata();
-
-  // DCache-side updates run after stage2/stage1 produces requests. AXI
-  // outputs are refreshed afterward so newly allocated MSHR/WB entries can
-  // start their external transaction in the same DCache-domain cycle.
-  mshr_.comb_inputs_dcache();
-  wb_.comb_inputs_dcache();
-
-  mshr_.comb_outputs_axi();
-  wb_.comb_outputs_axi();
 }
 
 void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
@@ -602,14 +588,26 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
 }
 
 void MemSubsystem::comb_outputs() {
-
-  dcache_domain_comb_outputs();
-  drive_dcache_response();
-
+  // AXI responses first, so a line that returns or a write-back that retires now is visible to the DCache this cycle
+  wb_.comb_axi_to_dcache();
+  mshr_.comb_axi_to_dcache();
+  dcache_stage2();
   mem_route_block.comb_response();
 }
 
 void MemSubsystem::comb_inputs() {
+  ptw_request();
+  mem_route_block.comb_request();
+  dcache_stage1();
+  // newly allocated MSHR / write-buffer entries start their AXI transaction in the same cycle
+  mshr_.comb_dcache_to_axi();
+  wb_.comb_dcache_to_axi();
+  ptw_feedback();
+  peripheral_axi_.comb();
+}
+
+// The shared page-table walker: the TLBs' walk requests in, its memory read request to the route block.
+void MemSubsystem::ptw_request() {
   MemPtwBlock::PortIn ptw_port_in{};
   {
     const auto &dtlb_walk_in = dtlb_walk_port_inst->comb_input();
@@ -633,10 +631,11 @@ void MemSubsystem::comb_inputs() {
 
   ptw_walk_req.valid = ptw_out.issue_walk_read;
   ptw_walk_req.addr = ptw_out.walk_read_addr;
+}
 
-  mem_route_block.comb_request();
-  dcache_domain_comb_inputs();
-
+// The shared page-table walker: the route block's grant / response back; the TLBs' request inputs of this cycle are
+// consumed.
+void MemSubsystem::ptw_feedback() {
   MemPtwBlock::FeedbackIn ptw_feedback{};
 
   ptw_feedback.wakeup_walk = wakeup.walk;
@@ -669,14 +668,6 @@ void MemSubsystem::comb_inputs() {
   }
 
   ptw_block.comb_finish(ptw_feedback);
-
-
-  peripheral_axi_.comb_outputs();
-  peripheral_axi_.comb_inputs();
-
-
-  // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
-
   dtlb_walk_port_inst->reset_cycle_input();
   itlb_walk_port_inst->reset_cycle_input();
 }

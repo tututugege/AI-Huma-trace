@@ -216,7 +216,7 @@ def front_domain(root, ASSIGN, overlap):
 # ---------------------------------------------------------------------------------------------------------------------
 MEM_GROUPS = {}   # entry function -> its rows (used by the top domain)
 FRONT_ROWS = []
-MEM_EXPAND = ('dcache_domain_comb_outputs', 'dcache_domain_comb_inputs')
+MEM_EXPAND = ('dcache_stage2', 'dcache_stage1', 'ptw_request', 'ptw_feedback')   # walked statement by statement, one row each
 MEM_KNOWN = {
 }
 
@@ -286,7 +286,13 @@ def mem_domain(root, ASSIGN, overlap):
             if m and m.group(1) in blocks and st.startswith(m.group(1) + '.' + m.group(2)):
                 flush_glue(); block_phase(m.group(1), m.group(2), f'{m.group(1)}.{m.group(2)}')
             elif m_self and m_self.group(1) in MEM_EXPAND:
-                flush_glue(); walk(m_self.group(1))
+                flush_glue()
+                n0 = len(rows)
+                walk(m_self.group(1))
+                sub = rows[n0:]
+                del rows[n0:]
+                rows.append((m_self.group(1), set().union(*[x[1] for x in sub]) if sub else set(),
+                             set().union(*[x[2] for x in sub]) if sub else set()))
             elif m_self and src.body('MemSubsystem', m_self.group(1)):
                 flush_glue()
                 r, w = scan(closure(src, 'MemSubsystem', m_self.group(1)), sig_names + list(blocks), ASSIGN, src, notes, m_self.group(1))
