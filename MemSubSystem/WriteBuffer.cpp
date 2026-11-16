@@ -103,7 +103,6 @@ void WriteBuffer::comb_outputs_axi() {
 
 void WriteBuffer::comb_inputs_axi(){
     const bool req_accepted = in.axi_in->req_accepted;
-    const bool accepted_head = req_accepted && cur.count > 0;
     const bool resp_valid = in.axi_in->resp_valid;
 
     if(req_accepted){
@@ -115,26 +114,8 @@ void WriteBuffer::comb_inputs_axi(){
             out.axi_out->req_wstrb = 0;
         }
         nxt.send = 1; // request has been accepted, wait for response before sending next
-        nxt.axi_write_active = true;
-        nxt.axi_write_lsu_origin =
-            cur.count > 0 ? cur.write_buffer[cur.head].lsu_origin : false;
-        nxt.axi_write_start_cycle = ctx == nullptr ? 0 : ctx->perf.cycle;
     }
     if (resp_valid) {
-        if (ctx != nullptr) {
-            const bool lsu_origin =
-                cur.axi_write_active ? cur.axi_write_lsu_origin
-                                     : (accepted_head &&
-                                        cur.write_buffer[cur.head].lsu_origin);
-            const uint64_t start_cycle =
-                cur.axi_write_active ? cur.axi_write_start_cycle
-                                     : (ctx == nullptr ? 0 : ctx->perf.cycle);
-            if (lsu_origin && ctx->perf.cycle >= start_cycle) {
-
-
-
-            }
-        }
         if (nxt.count > 0) {
             nxt.count = nxt.count - 1;
             nxt.head = (nxt.head + 1) % DCACHE_WB_ENTRIES;
@@ -143,9 +124,6 @@ void WriteBuffer::comb_inputs_axi(){
             assert(false && "WriteBuffer underflow: received AXI response when buffer is empty");
         }
         nxt.send = 0; // allow sending (or retrying) the head entry
-        nxt.axi_write_active = false;
-        nxt.axi_write_lsu_origin = false;
-        nxt.axi_write_start_cycle = 0;
     }
 }
 

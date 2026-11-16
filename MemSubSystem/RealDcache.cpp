@@ -203,9 +203,6 @@ void RealDcache::stage1_comb() {
             slot.replayed  = !bank_granted;
             slot.bank_conflict = !bank_granted;
             slot.perf_replay = use_hidden_retry ? true : lsu_req.replay;
-            if (use_hidden_retry) {
-
-            }
             if (!bank_granted) {
                 continue;
             }
@@ -294,9 +291,6 @@ void RealDcache::stage1_comb() {
             slot.replayed = !bank_granted;
             slot.bank_conflict = !bank_granted;
             slot.perf_replay = use_hidden_retry ? true : lsu_req.replay;
-            if (use_hidden_retry) {
-
-            }
             if (!bank_granted) {
                 continue;
             }

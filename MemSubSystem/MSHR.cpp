@@ -130,22 +130,9 @@ void MSHR::comb_inputs_dcache()
             nxt.mshr_entries[hold_id].issued;
         if (matches_hold && matches_entry) {
             const bool entry_was_valid = nxt.mshr_entries[hold_id].valid;
-            if (ctx != nullptr &&
-                hold_id < DCACHE_MSHR_ENTRIES) {
-                const MSHREntry &e = nxt.mshr_entries[hold_id];
-                if (e.valid && e.lsu_origin &&
-                    ctx->perf.cycle >= e.alloc_cycle) {
-
-
-
-                }
-            }
             nxt.mshr_entries[hold_id].valid = false;
             nxt.mshr_entries[hold_id].issued = false;
             clear_store_merge(nxt.mshr_entries[hold_id]);
-            nxt.mshr_entries[hold_id].alloc_cycle = 0;
-            nxt.mshr_entries[hold_id].axi_read_start_cycle = 0;
-            nxt.mshr_entries[hold_id].axi_read_active = false;
             nxt.mshr_entries[hold_id].lsu_origin = false;
             nxt.mshr_entries[hold_id].is_prefetch = false;
             nxt.mshr_entries[hold_id].no_fill = false;
@@ -174,20 +161,12 @@ void MSHR::comb_inputs_dcache()
                         nxt.mshr_entries[j].issued = false;
                         nxt.mshr_entries[j].addr = line_addr;
                         clear_store_merge(nxt.mshr_entries[j]);
-                        nxt.mshr_entries[j].alloc_cycle =
-                            ctx == nullptr ? 0 : ctx->perf.cycle;
-                        nxt.mshr_entries[j].axi_read_start_cycle = 0;
-                        nxt.mshr_entries[j].axi_read_active = false;
                         nxt.mshr_entries[j].lsu_origin =
                             in.dcache2mshr->mshr_req[i].lsu_origin;
                         nxt.mshr_entries[j].is_prefetch =
                             in.dcache2mshr->mshr_req[i].is_prefetch;
                         nxt.mshr_entries[j].no_fill = in.dcache2mshr->mshr_req[i].no_fill;
                         if (in.dcache2mshr->mshr_req[i].is_prefetch) g_pf_stats.issued++;
-                        if (ctx != nullptr &&
-                            in.dcache2mshr->mshr_req[i].lsu_origin) {
-
-                        }
                         nxt.mshr_count = nxt.mshr_count + 1;
                         break;
                     }
@@ -222,9 +201,6 @@ void MSHR::comb_inputs_axi()
             MSHREntry &ne = nxt.mshr_entries[accepted_id];
             if (ne.valid && !ne.issued) {
                 nxt.mshr_entries[accepted_id].issued = true;
-                nxt.mshr_entries[accepted_id].axi_read_active = true;
-                nxt.mshr_entries[accepted_id].axi_read_start_cycle =
-                    ctx == nullptr ? 0 : ctx->perf.cycle;
             }
             if (out.axi_out->req_valid &&
                 out.axi_out->req_id == accepted_id) {
@@ -254,7 +230,7 @@ void MSHR::comb_inputs_axi()
                 // LLC-only prefetch: the response is consumed and dropped, the entry is released without an L1D fill
                 MSHREntry &fe = nxt.mshr_entries[resp_id];
                 fe.valid = false; fe.issued = false; clear_store_merge(fe);
-                fe.alloc_cycle = 0; fe.axi_read_start_cycle = 0; fe.axi_read_active = false;
+                
                 fe.lsu_origin = false; fe.is_prefetch = false; fe.no_fill = false;
                 if (nxt.mshr_count > 0) nxt.mshr_count = nxt.mshr_count - 1;
                 axi_resp_accepted_this_cycle = true;
@@ -264,17 +240,6 @@ void MSHR::comb_inputs_axi()
                 nxt.axi_resp_hold_valid = true;
                 nxt.axi_resp_hold_id = resp_id;
                 axi_resp_accepted_this_cycle = true;
-                if (ctx != nullptr) {
-                    const MSHREntry &e = nxt.mshr_entries[resp_id];
-                    if (e.lsu_origin && e.axi_read_active &&
-                        ctx->perf.cycle >= e.axi_read_start_cycle) {
-
-
-
-                    }
-                    nxt.mshr_entries[resp_id].axi_read_active = false;
-                    nxt.mshr_entries[resp_id].axi_read_start_cycle = 0;
-                }
             }
             else {
             }

@@ -3,9 +3,6 @@
 #include "MemRouteBlock.h"
 #include "types.h"
 
-namespace {
-static bool owner_is_ptw(Owner owner) { return owner == Owner::PTW_WALK; }
-} // namespace
 
 void MemRouteBlock::init() {
   cur = {};
@@ -37,9 +34,6 @@ void MemRouteBlock::comb_response() {
 
     Owner owner = cur.issued_tags.owner;
     ReplayType replay = in.dcache_resp->resp_ports.load_resps[LSU_LDU_COUNT - 1].replay;
-    if (ctx != nullptr && owner_is_ptw(owner) && replay != ReplayType::HIT) {
-
-    }
     if (replay == ReplayType::HIT) {
       if (owner == Owner::ICACHE) {
         out.icache_resp->resp_valid = true;

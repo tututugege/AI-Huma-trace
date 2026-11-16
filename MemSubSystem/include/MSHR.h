@@ -16,9 +16,6 @@ struct MSHREntry {
     reg<1> issued;
     reg<32> addr;
     reg<1> merged_store_dirty;
-    uint64_t alloc_cycle;
-    uint64_t axi_read_start_cycle;
-    bool axi_read_active;
     bool lsu_origin;
     bool is_prefetch;
     bool no_fill;

@@ -573,12 +573,6 @@ void MemSubsystem::capture_dcache_raw_response() {
     dcache_resp_pending_meta_[meta_idx] = meta;
   }
   if (dcache_resp_raw_.mshr_fill) {
-    if (ctx != nullptr) {
-
-      if (dcache_resp_pending_.mshr_fill) {
-
-      }
-    }
     dcache_resp_pending_.mshr_fill = true;
     dcache_resp_pending_.mshr_fill_addr = dcache_resp_raw_.mshr_fill_addr;
   }
@@ -612,9 +606,6 @@ void MemSubsystem::forward_pending_response_from_fill() {
     }
     fill.dirty = true;
     resp.replay = ReplayType::HIT;
-    if (ctx != nullptr) {
-
-    }
   }
 }
 
