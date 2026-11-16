@@ -204,7 +204,19 @@ def front_domain(root, ASSIGN, overlap):
     phases = re.findall(r'(?<![\w.>])c\.(\w+)\(', calc)   # the phases called on the cycle's FrontComb c
     rows, notes = [], set()
     for p in phases:
-        r, w = scan(closure(src, 'FrontComb', p), names + persistent, ASSIGN, src, notes, p, types)
+        body = closure(src, 'FrontComb', p)
+        # a phase moved into a front-end module: FrontComb's method only calls it; the module's ports are named after the
+        # wires (in.<wire> / out.<wire>), so its body is scanned with them as the wires
+        fw = re.match(r'\{\s*(\w+)\.(\w+)\(\)\s*;\s*\}$', re.sub(r'\s+', ' ', strip_comments(body)).strip())
+        if fw and fw.group(1) in types:
+            mb = closure(src, types[fw.group(1)], fw.group(2)) or ''
+            mb = re.sub(r'\n\s*const [^;]*=\s*\*?\s*in\.\w+(?:\s*,\s*\*?\s*\w+\s*=\s*\*?\s*in\.\w+)*\s*;', '\n', mb)   # local aliases of inputs
+            mb = re.sub(r'\*\s*in\.(\w+)\b', r'\1', mb)
+            mb = re.sub(r'(?<![\w.>])in\.(\w+)\s*->', r'\1.', mb)
+            mb = re.sub(r'(?<![\w.>])(?:in|out)\.(\w+)\b', r'\1', mb)
+            mb = re.sub(r'(?<![\w.>])out\s*=\s*\{\s*\}\s*;', '', mb)   # (the module's default outputs of the cycle)
+            body = mb
+        r, w = scan(body, names + persistent, ASSIGN, src, notes, p, types)
         rows.append((p, r, w))
     FRONT_ROWS[:] = rows
     hz, staged = [], []

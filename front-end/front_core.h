@@ -5,6 +5,7 @@
 #include "BPU/BPU_pipe.h"
 #include "env.h"
 #include "fifo/front_fifo.h"
+#include "front_checker.h"
 #include "icache/icache_top.h"
 #include "train_IO.h"
 #include <cstdlib>
@@ -63,6 +64,7 @@ public:
   FrontFifo<Ptab> ptab;
   FrontFifo<F2bFifo> f2b_fifo;
   ICacheTop icache;
+  FrontChecker checker;   // the predecode check
   FrontIpf ipf;
 
   void read_q(FrontReadData &rd) const;                                    // q and the FIFOs' read data

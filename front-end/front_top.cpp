@@ -249,21 +249,31 @@ struct FrontComb {
   int rvc_n = 0;              // RVC=1: slots of the group at the head (before the head fix), its straddle and carried half
   bool rvc_straddle = false;
   uint16_t carry_low = 0;
-  bool predecode_flush = false;   // the predecode check of this cycle flushes, to flush_address
-  pc_t flush_address = 0;
+  bool &predecode_flush;   // (FrontChecker::Out) the predecode check of this cycle flushes, to flush_address
+  pc_t &flush_address;
   ICacheOut ic_k{};          // the I-cache's outputs of the invalidate step K (a predecode flush), which replace ic_out
-  bpuf::PdInfo pd_next{};
-  PredecodeCheckerOut checker_out{};
-  bool lh_new_valid = false;      // RVC=1: the "last half" state after the group at the FIFO head (set when a head is processed)
-  pc_t lh_new_pc = 0;
-  uint16_t lh_new_data = 0;
-  bool lh_updated = false;
+  // the predecode checker's outputs (FrontChecker::Out)
+  FrontChecker &checker;
+  bpuf::PdInfo &pd_next;
+  PredecodeCheckerOut &checker_out;
+  bool &lh_new_valid;
+  pc_t &lh_new_pc;
+  uint16_t &lh_new_data;
+  bool &lh_updated;
   bpuf::Decision pipe_dec{};      // the BPU pipeline's last-stage decision of this cycle (from its registers)
 
   FrontComb(FrontCore &fe, const FrontTopIn &i, const FrontReadData &r, FrontTopOut &o, FrontUpdateRequest &q)
       : in(i), rd(r), out(o), req(q), ctx(fe.ctx), bpu_pipe(fe.bpu_pipe), fetch_addr_fifo(fe.fetch_addr_fifo),
         inst_fifo(fe.inst_fifo), ptab(fe.ptab), f2b_fifo(fe.f2b_fifo), icache(fe.icache), fetch_addr_rd(r.fetch_addr_fifo_rd_snapshot), fifo_rd(r.fifo_rd_snapshot),
-        ptab_rd(r.ptab_rd_snapshot), f2b_rd(r.front2back_fifo_rd_snapshot) {}
+        ptab_rd(r.ptab_rd_snapshot), f2b_rd(r.front2back_fifo_rd_snapshot),
+        predecode_flush(fe.checker.out.predecode_flush), flush_address(fe.checker.out.flush_address), checker(fe.checker),
+        pd_next(fe.checker.out.pd_next), checker_out(fe.checker.out.checker_out), lh_new_valid(fe.checker.out.lh_new_valid),
+        lh_new_pc(fe.checker.out.lh_new_pc), lh_new_data(fe.checker.out.lh_new_data), lh_updated(fe.checker.out.lh_updated) {
+    auto &ci = fe.checker.in;
+    ci.fifo_read_enable = &fifo_read_enable; ci.fifo_head = &fifo_head; ci.ptab_head = &ptab_head; ci.multi = &multi;
+    ci.grp_in_range = grp_in_range; ci.grp_seg_first = grp_seg_first; ci.rvc_n = &rvc_n; ci.rvc_straddle = &rvc_straddle;
+    ci.carry_low = &carry_low;
+  }
 
   void control();
   void run_bpu();
@@ -524,56 +534,7 @@ void FrontComb::write_instruction_fifo() {
 // for a refetch.
 // The predecode check of the group at the FIFO head against its PTAB entry; the RVC=1 carry and the check's report
 // to the BPU for the next cycle.
-void FrontComb::check_group() {
-  if (!fifo_read_enable) return;
-  PredecodeCheckerIn checker_in;
-  checker_input(fifo_head, ptab_head, checker_in);
-  checker_in.multi = multi;
-  for (int i = 0; i < FETCH_WIDTH; i++) { checker_in.pc[i] = fifo_head.pc[i]; checker_in.inst_valid[i] = fifo_head.inst_valid[i]; checker_in.in_range[i] = grp_in_range[i]; checker_in.seg_first[i] = grp_seg_first[i]; checker_in.is_rvc[i] = fifo_head.is_rvc[i]; }
-  predecode_check(checker_in, checker_out);
-  if (checker_out.predecode_flush_enable) {
-    predecode_flush = true;
-    flush_address = checker_out.predict_next_fetch_address_corrected;
-  }
-  if constexpr (kRvc) {   // the next group starts with the second half of this group's last instruction if it straddles and the fetch continues sequentially
-    bool any_taken = false;
-    int last_seg = 0;   // FE_PAIR: only the last block of the group decides whether the fetch continues sequentially (a taken branch that ends the first block does not)
-    for (int i = 0; i < FETCH_WIDTH; i++) if (grp_seg_first[i]) last_seg = i;
-    for (int i = last_seg; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && checker_out.predict_dir_corrected[i]) any_taken = true;
-    lh_updated = true;
-    lh_new_pc = fifo_head.pc[rvc_n > 0 ? rvc_n - 1 : 0] + (rvc_n > 0 ? SLOT_BYTES : 0);   // the position after the group's last slot
-    // a predecode flush that continues sequentially (corrected target = the end of this group) keeps the carry: the refetched group still begins with the
-    // second half of the straddling instruction
-    lh_new_data = carry_low;
-    lh_new_valid = rvc_straddle && !any_taken && (!checker_out.predecode_flush_enable || checker_out.predict_next_fetch_address_corrected == lh_new_pc);
-  }
-  {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
-    pd_next = bpuf::PdInfo{};
-    pd_next.valid = true;
-    pd_next.flush = predecode_flush;
-    if (predecode_flush) {
-      for (int i = 0; i < FETCH_WIDTH; i++)   // a taken prediction on an instruction that is not a branch (a dropped slot is not one: the carried instruction may be)
-        if (fifo_head.inst_valid[i] && ptab_head.predict_dir[i] && fifo_head.predecode_type[i] == PREDECODE_NON_BRANCH) { pd_next.nb_valid = true; pd_next.nb_pc = fifo_head.pc[i]; break; }
-      for (int i = 0; i < FETCH_WIDTH; i++) {
-        if (!fifo_head.inst_valid[i]) continue;
-        const predecode_type_t ty = fifo_head.predecode_type[i];
-        if (ty == PREDECODE_NON_BRANCH) continue;
-        const pc_t pc = fifo_head.pc[i]; const uint32_t inst = fifo_head.instructions[i];
-        const bool taken = checker_out.predict_dir_corrected[i];
-        const pc_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];   // XLEN wide (rv64: a uint32_t here dropped the sign extension of the history symbol's input)
-        if (multi && i >= checker_out.keep_n) break;
-        if (!taken) continue;
-        pd_next.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << pd_next.nbits; pd_next.nbits += bpuf::HSYM_BITS;
-        const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
-        if (pd_next.ras_op == 0) {
-          if (ty == PREDECODE_JAL && rd_ == 1) { pd_next.ras_op = 1; pd_next.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
-          else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) pd_next.ras_op = 2;
-        }
-        if (!multi || i + 1 >= int(checker_out.keep_n)) break;
-      }
-    }
-  }
-}
+void FrontComb::check_group() { checker.comb(); }
 
 // The checked entry goes to the front2back FIFO, or straight to the output when the FIFO is empty and the back end is
 // reading this cycle.
@@ -665,6 +626,68 @@ void FrontComb::finish() {
 }
 
 } // namespace
+
+// The predecode check (front-end/front_checker.h).
+void FrontChecker::comb() {
+  out = {};
+  const bool fifo_read_enable = *in.fifo_read_enable;
+  const InstFifoOut &fifo_head = *in.fifo_head;
+  const PtabOut &ptab_head = *in.ptab_head;
+  const bool multi = *in.multi;
+  const wire<1> *grp_in_range = in.grp_in_range, *grp_seg_first = in.grp_seg_first;
+  const int rvc_n = *in.rvc_n;
+  const bool rvc_straddle = *in.rvc_straddle;
+  const uint16_t carry_low = *in.carry_low;
+
+  if (!fifo_read_enable) return;
+  PredecodeCheckerIn checker_in;
+  checker_input(fifo_head, ptab_head, checker_in);
+  checker_in.multi = multi;
+  for (int i = 0; i < FETCH_WIDTH; i++) { checker_in.pc[i] = fifo_head.pc[i]; checker_in.inst_valid[i] = fifo_head.inst_valid[i]; checker_in.in_range[i] = grp_in_range[i]; checker_in.seg_first[i] = grp_seg_first[i]; checker_in.is_rvc[i] = fifo_head.is_rvc[i]; }
+  predecode_check(checker_in, out.checker_out);
+  if (out.checker_out.predecode_flush_enable) {
+    out.predecode_flush = true;
+    out.flush_address = out.checker_out.predict_next_fetch_address_corrected;
+  }
+  if constexpr (kRvc) {   // the next group starts with the second half of this group's last instruction if it straddles and the fetch continues sequentially
+    bool any_taken = false;
+    int last_seg = 0;   // FE_PAIR: only the last block of the group decides whether the fetch continues sequentially (a taken branch that ends the first block does not)
+    for (int i = 0; i < FETCH_WIDTH; i++) if (grp_seg_first[i]) last_seg = i;
+    for (int i = last_seg; i < FETCH_WIDTH; i++) if (fifo_head.inst_valid[i] && out.checker_out.predict_dir_corrected[i]) any_taken = true;
+    out.lh_updated = true;
+    out.lh_new_pc = fifo_head.pc[rvc_n > 0 ? rvc_n - 1 : 0] + (rvc_n > 0 ? SLOT_BYTES : 0);   // the position after the group's last slot
+    // a predecode flush that continues sequentially (corrected target = the end of this group) keeps the carry: the refetched group still begins with the
+    // second half of the straddling instruction
+    out.lh_new_data = carry_low;
+    out.lh_new_valid = rvc_straddle && !any_taken && (!out.checker_out.predecode_flush_enable || out.checker_out.predict_next_fetch_address_corrected == out.lh_new_pc);
+  }
+  {  // BPO_PDCKPT: report the check, and the history / RAS effect of the corrected block, to the BPU next cycle
+    out.pd_next = bpuf::PdInfo{};
+    out.pd_next.valid = true;
+    out.pd_next.flush = out.predecode_flush;
+    if (out.predecode_flush) {
+      for (int i = 0; i < FETCH_WIDTH; i++)   // a taken prediction on an instruction that is not a branch (a dropped slot is not one: the carried instruction may be)
+        if (fifo_head.inst_valid[i] && ptab_head.predict_dir[i] && fifo_head.predecode_type[i] == PREDECODE_NON_BRANCH) { out.pd_next.nb_valid = true; out.pd_next.nb_pc = fifo_head.pc[i]; break; }
+      for (int i = 0; i < FETCH_WIDTH; i++) {
+        if (!fifo_head.inst_valid[i]) continue;
+        const predecode_type_t ty = fifo_head.predecode_type[i];
+        if (ty == PREDECODE_NON_BRANCH) continue;
+        const pc_t pc = fifo_head.pc[i]; const uint32_t inst = fifo_head.instructions[i];
+        const bool taken = out.checker_out.predict_dir_corrected[i];
+        const pc_t tgt = ty == PREDECODE_JALR ? ptab_head.predict_next_fetch_address : fifo_head.predecode_target_address[i];   // XLEN wide (rv64: a uint32_t here dropped the sign extension of the history symbol's input)
+        if (multi && i >= out.checker_out.keep_n) break;
+        if (!taken) continue;
+        out.pd_next.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << out.pd_next.nbits; out.pd_next.nbits += bpuf::HSYM_BITS;
+        const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
+        if (out.pd_next.ras_op == 0) {
+          if (ty == PREDECODE_JAL && rd_ == 1) { out.pd_next.ras_op = 1; out.pd_next.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
+          else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) out.pd_next.ras_op = 2;
+        }
+        if (!multi || i + 1 >= int(out.checker_out.keep_n)) break;
+      }
+    }
+  }
+}
 
 struct FrontCombSlot {
   std::optional<FrontComb> c;
