@@ -16,19 +16,7 @@
 //   default: driven first, every cycle, to a default the other writers override (an always_comb default assignment)
 // The ports (fields as SimCpu paths; {a,b} lists alternatives):
 //   PORT csr_status         = back.csr_status
-//   PORT back_in            = back.in
-//   PORT front_in           = front.in front.read_data   (the front end's inputs and registers of the cycle)
-//   PORT front_out          = front.out front.can_read
-//   PORT b2f_reg            = b2f.q_                 (Back2Front's register: the front end's inputs of the cycle)
-//   PORT fetch_group        = back.in.{inst,pc,is_rvc,valid,front_stall,front_upd_free,front_tq_free,predict_dir,meta,predict_next_fetch_address,page_fault_inst}
-//   PORT dcache2lsu         = back.in.dcache2lsu
-//   PORT lsu2dcache         = back.out.lsu2dcache
-//   PORT mmio_req           = back.out.peripheral_req
-//   PORT mmio_resp          = back.lsu.mmio_resp_d
-//   PORT commit_store       = back.out.commit_store
-//   PORT csr_inject         = back.csr_interrupt_inject_io
 //   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)
-//   PORT back2front         = back.out.{commit_entry,commit_extra,commit_ftq,fence_i,fire,flush,itlb_flush,mispred,redirect_pc,rf_blk,rf_is_rvc,rf_pc,rf_slot,rf_type,rf_valid,stall}
 //   PORT dtlb_walk          = mem_subsystem.dtlb_walk_port_inst.comb_input mem_subsystem.dtlb_walk_port_inst.seq_input   (the TLBs' walk requests / flushes)
 //   PORT itlb_walk          = mem_subsystem.itlb_walk_port_inst.comb_input mem_subsystem.itlb_walk_port_inst.seq_input
 //   PORT icache_probe       = icache_req

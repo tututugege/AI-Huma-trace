@@ -25,18 +25,10 @@ SUBOBJ = ('mem_subsystem.wb_', 'mem_subsystem.mshr_', 'mem_subsystem.mem_route_b
           'axi.interconnect', 'axi.ddr', 'axi.mmio') + tuple(m for m, _ in modules.MODULES)
 SEQ_CALLS = ('back.pmu_sample', 'front.seq_core')   # the comb part of cycle() ends at the first of these
 # methods of a sub-object inlined like SimCpu's: call -> (class, member pattern prefixed with the object)
-INLINE = {'front.comb_begin': ('FrontTop', r'in|out|can_read'),
-          'b2f.comb': ('Back2Front', r'q_|d|csr_status'),
-          'f2b.comb': ('Front2Back', r'q_|d'),
-          'f2b.comb_hold': ('Front2Back', r'q_|d'),
-          'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
+INLINE = {'axi.comb_begin': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
-BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')],
-         'FrontTop': [(r'\bfrom_back->', 'b2f.q_.')],
-         'Back2Front': [(r'\*back_out\b', 'back.out')],
-         'Front2Back': [(r'\*front_out\b', 'front.out'), (r'\*can_read\b', 'front.can_read'), (r'\bback_out->', 'back.out.'),
-                        (r'\*to_back\b', 'back.in')]}   # pointer members of an inlined class -> the object bound
+BOUND = {'AxiSubsystem': [(r'\bllc->', 'mem_subsystem.')]}   # pointer members of an inlined class -> the object bound
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
 TOP_DETAIL = []   # filled by top_domain: per row of cycle() (label, R, W, group, tag, inner); inner: for a sub-object call
                   # summarised from a domain, that domain's phases [label, R, W, source text] as SimCpu paths, else None

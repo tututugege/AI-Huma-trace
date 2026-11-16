@@ -32,6 +32,7 @@ TOPS = {
                         'csr_interrupt_inject_io': 'back.csr_interrupt_inject_io'}),
     'front': dict(cls='FrontCore', bind=[('FrontCore', 'FrontCore'), ('FrontCore', 'bind')], prefix='front.core.',
                   call='front.core->{m}.', own='{m}.', alias={'in': 'front.in', 'rd': 'front.read_data', 'out': 'front.out'}),
+    'cpu': dict(cls='SimCpu', bind=[('SimCpu', 'init')], prefix='', call='{m}.', own='{m}.', alias={}),
     'mem_subsystem': dict(cls='MemSubsystem', bind=[('MemSubsystem', 'init')], prefix='mem_subsystem.',
                           call='mem_subsystem.{m}.', own='{m}.', alias=None),   # alias: its pointer members (SimCpu::init)
 }
@@ -44,6 +45,7 @@ MODULES = [   # (path, class), in each top's tie-break order
     ('mem_subsystem.wb_', 'WriteBuffer'), ('mem_subsystem.mshr_', 'MSHR'), ('mem_subsystem.dcache_', 'RealDcache'),
     ('mem_subsystem.mem_route_block', 'MemRouteBlock'), ('mem_subsystem.ptw_block', 'MemPtwBlock'),
     ('mem_subsystem.peripheral_axi_', 'PeripheralAxi'), ('mem_subsystem.peripheral_model_', 'PeripheralModel'),
+    ('b2f', 'Back2Front'), ('f2b', 'Front2Back'),
 ]
 TOP_STRUCTS = {'back.in', 'back.out', 'front.in', 'front.out', 'front.read_data'}   # a port at one of them: per field
 FIELD_PORTS = {'mem_subsystem.dcache_mshr_io_', 'mem_subsystem.dcache_wb_io_'}   # written by two phases: per field (also
@@ -225,10 +227,14 @@ def scan(mod, cls, phase, bind):
             if call[0] == 'swap': w.add(k); r.add(k); continue
         r.add(k)
     for a, (k, const) in aliases.items():
+        d0, p0 = k.split('.')[:2]
+        per_field = k.count('.') == 1 and (bind.get((mod, d0, p0)) or '') in TOP_STRUCTS   # an alias of a whole top struct
         for um in re.finditer(r'(?<![\w.>])' + a + r'\b', body):
             tail = body[um.end():um.end() + 200]
-            if not const and (re.match(r'(?:\[[^\]]*\]|\.\w+)*' + ASSIGN, tail) or re.match(r'\s*=\s*\{\s*\}', tail)): w.add(k)
-            elif not re.match(r'\s*=[^=]', tail): r.add(k)
+            fm = re.match(r'\s*\.\s*(\w+)', tail) if per_field else None
+            kk = f'{k}.{fm.group(1)}' if fm else k
+            if not const and (re.match(r'(?:\[[^\]]*\]|\.\w+)*' + ASSIGN, tail) or re.match(r'\s*=\s*\{\s*\}', tail)): w.add(kk)
+            elif not re.match(r'\s*=[^=]', tail): r.add(kk)
     # a read of its own output field is internal (a pointer output, bound to a shared signal, is not; a class whose
     # Out struct is declared elsewhere has pointer outputs)
     owned = pt['out'] if pt['out'] else {}
@@ -236,7 +242,7 @@ def scan(mod, cls, phase, bind):
     return r, w
 
 
-def top_of(mod): return next(t for t, d in TOPS.items() if mod.startswith(d['prefix']))
+def top_of(mod): return max((t for t, d in TOPS.items() if mod.startswith(d['prefix'])), key=lambda t: len(TOPS[t]['prefix']))
 
 
 def call(mod, phase):

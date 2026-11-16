@@ -11,9 +11,20 @@ void Back2Front::init(CsrStatusIO *csr) {
   d.in.csr_status = csr;
 }
 
+void Back2Front::comb_front() {
+  const bool registered_refetch = static_cast<bool>(q_.in.redirect.valid);
+  const bool can_read = !q_.stall || registered_refetch;
+  *out.can_read = can_read;
+  FrontTopIn &fi = *out.front_in;
+  fi = q_.in;   // (reset is 0 here: only FrontTop::init() runs the front end with reset)
+  fi.csr_status = csr_status;
+  fi.ctrl.fifo_read_enable = can_read;
+  if (!can_read) fi.redirect.valid = false;
+}
+
 // The front end's inputs of the next cycle: the redirect and the BPU training of the back end's commit.
 void Back2Front::comb() {
-  const auto &bo = *back_out;
+  const auto &bo = *in.back_out;
   d.in = q_.in;
   d.stall = bo.stall;
   d.in.ctrl.fifo_read_enable = false;

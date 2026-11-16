@@ -50,7 +50,10 @@ void FrontTop::comb_core() {
   core->comb();
 }
 
-void FrontTop::seq_core() { core->seq(in); }
+void FrontTop::seq_core() {
+  core->seq(in);
+  core->read_q(*read_data_);   // q and the FIFOs' read data of the next cycle
+}
 
 void FrontTop::warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc) {
   core->bpu_pipe.warm_commit(pc, type, dir, target, rvc);
@@ -74,17 +77,4 @@ void FrontTop::step_bpu() {
   seq_core();
 }
 
-// The start of a front-end cycle from the back end's registered outputs (Back2Front): when the back end does not stall
-// (or a refetch is pending) the fetch-group FIFO is read (can_read; Front2Back then takes the group from out); the
-// registers' q and the cycle's working state. The phases follow (SimCpu::cycle()).
-void FrontTop::comb_begin(CsrStatusIO *csr_status) {
-  const bool registered_refetch = static_cast<bool>(from_back->in.redirect.valid);
-  can_read = !from_back->stall || registered_refetch;
-
-  in = from_back->in;   // (reset is 0 here: only init() runs the front end with reset)
-  in.csr_status = csr_status;
-  in.ctrl.fifo_read_enable = can_read;
-  if (!can_read) in.redirect.valid = false;
-  read_core_q();
-}
 

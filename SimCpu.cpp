@@ -63,14 +63,15 @@ void SimCpu::init() {
   // front.init() steps the BPU once and touches the I-cache's AXI port, so the AXI side is reset first
   icache_port_regs_seq();
   front.init();
-  f2b.front_out = &front.out;
-  f2b.can_read = &front.can_read;
-  f2b.back_out = &back.out;
-  f2b.to_back = &back.in;
+  f2b.in.front_out = &front.out;
+  f2b.in.can_read = &front.can_read;
+  f2b.in.back_out = &back.out;
+  f2b.out.to_back = &back.in;
   f2b.init();
-  b2f.back_out = &back.out;
+  b2f.in.back_out = &back.out;
+  b2f.out.front_in = &front.in;
+  b2f.out.can_read = &front.can_read;
   b2f.init(&back.csr_status);
-  front.from_back = &b2f.q();
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -105,7 +106,7 @@ void SimCpu::cycle() {
   back.csr->comb_csr_status();
   back.csr->comb_interrupt();
   axi.comb_begin();
-  front.comb_begin(&back.csr_status);
+  b2f.comb_front();
   front.core->ctrl.control();
   front.core->bpu_pipe.comb_front();
   front.core->ctrl.enables();

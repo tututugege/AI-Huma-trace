@@ -26,8 +26,6 @@ struct ICacheMemPortResp{
   uint32_t resp_data;
 };
 
-// SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_begin      in: csr_status b2f_reg  out: front_in front_out
 // The front end's modules (core->...) have their own CONTRACT lines; SimCpu::cycle() calls their phases.
 class FrontTop {
 public:
@@ -39,7 +37,6 @@ public:
   ICacheMemPortResp *icache_mem_resp_port = nullptr;
   axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;    // the I-cache drives its requests here
   const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr; // and reads the port's outputs here (a register)
-  const Back2FrontRegs *from_back = nullptr;   // the back end's registered outputs (Back2Front's q), bound by SimCpu
   bool can_read = false;   // the back end takes a group from out this cycle (it did not stall, or a refetch is pending)
 
   FrontTop();
@@ -47,8 +44,7 @@ public:
   void init();
   void read_core_q();
   void comb_core();
-  void seq_core();
-  void comb_begin(CsrStatusIO *csr_status);   // the start of a cycle; the front end's modules' phases follow
+  void seq_core();   // the clock edge, then the registers' q of the next cycle (read_data)
   // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
   void restart_at(pc_t pc);
   void step_bpu();
