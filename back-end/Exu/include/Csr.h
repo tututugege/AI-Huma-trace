@@ -129,6 +129,7 @@ typedef struct {
 
 class Csr {
 public:
+  void comb_commit();  // exceptions and the CSR write of the committing instruction
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   CsrIn in;
   CsrOut out;
@@ -137,10 +138,8 @@ public:
 
   void comb_csr_status();
   reg<XLEN> read(int idx) const { return CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
-  void comb_csr_write();
   void comb_interrupt();
   void comb_interrupt_inject();
-  void comb_exception();
   void seq();
 
   reg<XLEN> CSR_RegFile[CSR_NUM];
@@ -162,4 +161,9 @@ public:
   wire<XLEN> csr_wdata_1;
   wire<2> csr_wcmd_1;
   wire<1> csr_we_1;
+
+private:
+  // phases of one cycle, run in the order of the methods above
+  void exception();
+  void csr_write();
 };

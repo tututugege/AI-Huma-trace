@@ -6,6 +6,7 @@ class SimContext;
 
 class Idu {
 public:
+  void comb_decode();  // branch resolution (mispredict broadcast), then decode
   Idu(SimContext *ctx, int max_br = 1) {
     this->ctx = ctx;
     this->max_br_per_cycle = max_br;
@@ -16,8 +17,6 @@ public:
   void decode(Uop &uop, uint32_t inst);
 
   void init();
-  void comb_decode(); // 译码并分配tag
-  void comb_branch(); // 分支处理
   void comb_fire();  // 发射握手与分支tag推进
   void seq();              // 时钟跳变，状态更新
 
@@ -32,4 +31,9 @@ public:
   wire<BR_MASK_WIDTH> br_mask_cp_1[MAX_BR_NUM];
   wire<1> tag_vec_1[MAX_BR_NUM];
   ExuIdIO br_latch_1;
+
+private:
+  // phases of one cycle, run in the order of the methods above
+  void branch();
+  void decode();
 };

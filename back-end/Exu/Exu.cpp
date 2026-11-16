@@ -82,7 +82,7 @@ void Exu::begin_cycle() {
 
 // Which operation classes each issue port can accept. After the collect phase an input slot is occupied only if its unit
 // could not take the uop, so a free slot is what makes a unit ready. Nothing is accepted during a flush.
-void Exu::comb_ready() {
+void Exu::ready() {
   Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     uint64_t mask = 0;
@@ -167,7 +167,7 @@ void Exu::comb_pipeline() {
 // FU is broadcast for bypass; each port's first completing FU wins the port and, unless flushed/killed, completes in the ROB,
 // sends its LSU request, writes back (ALU ports) or takes part in the branch arbitration (the oldest mispredicted branch
 // redirects). LSU write-backs come in on their own ports.
-void Exu::comb_exec() {
+void Exu::exec() {
   Wires &w = *wires;
   to_csr();   // the CSR uop in port 0's input slot: its read / write request (exe2csr, written at commit by Csr::comb_csr_write)
   const bool flush_all = w.rob_bcast.flush, flush_br = !flush_all && w.dec_bcast.mispred;
@@ -373,7 +373,7 @@ void Exu::comb_exec() {
 
 // Late load wakeup: the loads of the write-back register that survive this cycle's mispredict, in port order, at most
 // LSU_LOAD_WB_WIDTH of them.
-void Exu::comb_load_wake() {
+void Exu::load_wake() {
   begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   Wires &w = *wires;
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
@@ -388,3 +388,10 @@ void Exu::comb_load_wake() {
 }
 
 void Exu::seq() { std::memcpy(lwake_r, lwake_r_1, sizeof(lwake_r)); }
+
+// late load wakeup, the FUs, the port readiness for issue
+void Exu::comb_exec() {
+  load_wake();
+  exec();
+  ready();
+}

@@ -25,16 +25,12 @@ struct RobStoredEntry {
 
 class Rob {
 public:
+  void comb_commit();  // the head: commit and its broadcasts
+  void comb_update();  // completions, branch recovery, enqueue, flush
   Rob(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   void init();
   void seq();
-  void comb_ready();
-  void comb_commit();
-  void comb_complete();
-  void comb_fire();
-  void comb_branch();
-  void comb_flush();
   // PMU (EXP-013): the oldest incomplete instruction of the head line (the one that blocks commit), if any
   bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
@@ -67,7 +63,14 @@ public:
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
 private:
-  void begin_cycle();   // called by comb_ready(), the first phase of the cycle
+  // phases of one cycle, run in the order of the methods above
+  void ready();
+  void commit();
+  void complete();
+  void branch();
+  void fire();
+  void flush();
+  void begin_cycle();   // called by ready(), the first phase of the cycle
   FtqPc head_pc_{};   // the FTQ read of the head (comb_commit)
   int stall_cycle = 0;
   bool is_empty() const { return c_count == 0; }

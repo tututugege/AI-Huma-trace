@@ -34,6 +34,10 @@ struct LsuState {
 
 class RealLsu {
 public:
+  void comb_outputs();  // outputs from the registers: wakeups, free counts to dispatch, completion to the ROB
+  void comb_writeback();  // committed stores, MMIO and DCache responses, load write-back to the EXU
+  void comb_translate();  // AGU / STD results in, address translation, store-to-load forwarding
+  void comb_requests();  // allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
   RealLsu() : cur{}, nxt{}, ctx(nullptr) {}
   explicit RealLsu(SimContext *ctx) : cur{}, nxt{}, ctx(ctx) {}
 
@@ -44,21 +48,6 @@ public:
   TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
 
   void init();
-  void comb_cal();
-  void comb_lsu2dis();
-  void comb_lsu2rob();
-  void comb_mmio_out();
-  void comb_mmio_in();
-  void comb_tlb();          // L1 address translation: requests, the DTLB lookup, responses (one phase)
-  void comb_exe2lsu();
-  void comb_dis2lsu();
-  void comb_lsu2dcache();   // the DCache requests of the load and store pipes
-  void comb_dcache2lsu();   // the DCache responses of the load and store pipes
-  void comb_lsu2exe();
-  void comb_stq_commit();
-  void comb_flush();
-  void comb_stlf();
-  void comb_check();
   void seq() {
     cur = nxt;
     seq_pipe();
@@ -72,6 +61,22 @@ public:
   void seq_pipe();  // pcur = pnxt, copying only the live LDQ / STQ entries (see RealLsuPipe.cpp)
 
 private:
+  // phases of one cycle, run in the order of the methods above
+  void cal();
+  void lsu2dis();
+  void lsu2rob();
+  void stq_commit();
+  void mmio_in();
+  void dcache2lsu();
+  void lsu2exe();
+  void exe2lsu();
+  void tlb();
+  void stlf();
+  void dis2lsu();
+  void flush();
+  void lsu2dcache();
+  void mmio_out();
+  void check();
   void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
   void tlb_out();
   void tlb_in_ldq();

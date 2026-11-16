@@ -62,7 +62,7 @@ void Rob::begin_cycle() {
 
 // Dispatch/CSR handshake: ready/empty, stall when a flush-type instruction heads the ROB, and the top-down
 // attribution of the oldest incomplete instruction (core bound vs memory bound vs cache miss).
-void Rob::comb_ready() {
+void Rob::ready() {
   begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   Wires &w = *wires;
   w.rob2dis.stall = false;
@@ -90,7 +90,7 @@ void Rob::comb_ready() {
 // Commit: the longest completed prefix from the head (at most COMMIT_WIDTH entries), cut by the BPU commit
 // credits (below). Flush-type instructions, fences, WFI and interrupts retire alone at
 // the head; one of them inside the prefix ends it. Commit slot k is the k-th oldest entry.
-void Rob::comb_commit() {
+void Rob::commit() {
   Wires &w = *wires;
   // the pc of the head (a trap / interrupt / flushing instruction redirects to it): the FTQ read port
   head_pc_ = is_empty() ? FtqPc{} : ftq->ftq_pc(cent(c_head).uop->ftq_idx, cent(c_head).uop->ftq_offset);
@@ -229,7 +229,7 @@ void Rob::single_actions(const Uop &u) {
 }
 
 // Execution results mark their issue port's completion bit; load/store ports also record the address or the fault.
-void Rob::comb_complete() {
+void Rob::complete() {
   Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     if (!w.exu2rob.entry[i].valid) continue;
@@ -270,7 +270,7 @@ void Rob::comb_complete() {
 }
 
 // Branch mispredict: the tail moves to the entry right after the branch; everything younger is invalidated.
-void Rob::comb_branch() {
+void Rob::branch() {
   const Wires &w = *wires;
   if (!w.dec_bcast.mispred || w.rob_bcast.flush) return;
   tbhook::on_mispredict((uint64_t)entry[get_rob_bank(w.dec_bcast.redirect_rob_idx)][get_rob_line(w.dec_bcast.redirect_rob_idx)].uop->dbg.inst_idx);
@@ -288,7 +288,7 @@ void Rob::comb_branch() {
 }
 
 // Dispatch enqueues at the tail: the fired slots are the first m valid slots; Dispatch numbered them tail, tail+1, ...
-void Rob::comb_fire() {
+void Rob::fire() {
   Wires &w = *wires;
   if (!w.rob2dis.ready) return;
   int m = 0;
@@ -309,7 +309,7 @@ void Rob::comb_fire() {
 }
 
 // A global flush empties the ROB and resets the pointers (overrides any recovery or enqueue above).
-void Rob::comb_flush() {
+void Rob::flush() {
   if (!wires->rob_bcast.flush) return;
   for (int i = 0; i < ROB_BANK_NUM; i++)
     for (int j = 0; j < ROB_LINE_NUM; j++) entry_1[i][j].valid = false;
@@ -335,7 +335,7 @@ void Rob::seq() {
   c_prev_ctl = c_prev_ctl_1; c_prev_blk = c_prev_blk_1;
 }
 
-// PMU (EXP-013): same "oldest incomplete instruction" as comb_ready(); also the number of valid entries.
+// PMU (EXP-013): same "oldest incomplete instruction" as ready(); also the number of valid entries.
 bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
   occupied_entries = 0;
   for (int l = 0; l < ROB_LINE_NUM; l++)
@@ -345,4 +345,18 @@ bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
     if (!rob_is_complete(e.uop)) { out = e.uop; return true; }
   }
   return false;
+}
+
+// the head: commit and its broadcasts
+void Rob::comb_commit() {
+  ready();
+  commit();
+}
+
+// completions, branch recovery, enqueue, flush
+void Rob::comb_update() {
+  complete();
+  branch();
+  fire();
+  flush();
 }

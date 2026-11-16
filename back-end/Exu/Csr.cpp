@@ -74,7 +74,7 @@ void Csr::comb_interrupt_inject() {
 
 // Trap entry / xRET: next-cycle status, privilege, cause, tval and the redirect target. Machine traps take priority
 // over supervisor traps; a trap is delegated to S according to medeleg (interrupts: mideleg inside eval_interrupts).
-void Csr::comb_exception() {
+void Csr::exception() {
   const RobBroadcastIO &rb = wires->rob_bcast;
   xlen_t mstatus = CSR_RegFile[csr_mstatus];
   xlen_t sstatus = CSR_RegFile[csr_sstatus];
@@ -176,7 +176,7 @@ void Csr::comb_exception() {
 
 // A CSR instruction latches its write at execute and performs it when it commits (so a squashed instruction has no
 // effect). The aliases (sie/sip/sstatus) update the machine register and the derived supervisor view.
-void Csr::comb_csr_write() {
+void Csr::csr_write() {
   if (wires->exe2csr.we) {
     csr_we_1 = wires->exe2csr.we;
     csr_idx_1 = wires->exe2csr.idx;
@@ -233,4 +233,10 @@ void Csr::seq() {
   csr_wcmd = csr_wcmd_1;
   csr_we = csr_we_1;
   privilege = privilege_1;
+}
+
+// exceptions and the CSR write of the committing instruction
+void Csr::comb_commit() {
+  exception();
+  csr_write();
 }

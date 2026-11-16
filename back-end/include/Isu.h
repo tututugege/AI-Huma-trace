@@ -32,9 +32,18 @@ constexpr int ISU_FP_WAKE_SLOT_NUM = 24;
 
 class Isu {
 public:
+  void comb_issue();  // free slots, select and issue, the wakeup bus, next-cycle latencies
+  void comb_enq();  // enqueue from dispatch, flush
   friend struct IsuDigestAccess;  // lockstep test hook
 private:
-  void begin_cycle();   // called by comb_ready(), the first phase of the cycle
+  // phases of one cycle, run in the order of the methods above
+  void ready();
+  void issue();
+  void awake();
+  void calc_latency_next();
+  void enq();
+  void flush();
+  void begin_cycle();   // called by ready(), the first phase of the cycle
   SimContext *ctx;
 
   // 1. 发射队列 (固定顺序: INT, LD, STA, STD, BR...)
@@ -59,14 +68,8 @@ public:
   void init();
 
   // 组合逻辑
-  void comb_ready(); // 更新 iss2dis->free_slots
-  void comb_enq();   // 处理 dispatch 入队
-  void comb_issue(); // 调度 + 发射 + 延迟处理
-  void comb_awake(); // 汇总所有唤醒源
-  void comb_calc_latency_next();
 
   // 辅助逻辑
-  void comb_flush(); // 全局流水线清空
 
   // 时序逻辑
   void seq();

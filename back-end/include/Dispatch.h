@@ -12,6 +12,11 @@ struct UopPacket {
 
 class Dispatch {
 private:
+  // phases of one cycle, run in the order of the methods above
+  void wake();
+  void dispatch();
+  void fire();
+  void pipeline();
 
   Uop make_dis_iss_uop(const Uop &inst, int k) const;
   bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;
@@ -40,6 +45,7 @@ private:
   DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:
+  void comb_dispatch();  // wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register
   friend struct DisDigestAccess;  // lockstep test hook
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
@@ -47,10 +53,6 @@ public:
 
   void init();
   void comb_alloc();
-  void comb_dispatch();
-  void comb_wake();
-  void comb_fire();
-  void comb_pipeline();
   void seq();
   // PMU (EXP-013): classify this cycle's DECODE_WIDTH dispatch slots into the event vector (read-only, after comb_fire)
   void pmu_slots(struct PmuVec &ev, bool recovering, bool recovering_by_flush, int &be_slots) const;

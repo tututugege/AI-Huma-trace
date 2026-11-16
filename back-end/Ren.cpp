@@ -96,7 +96,7 @@ bool Ren::elim_refs_ok(int i) const {
 
 // Pick destination physical registers from the free list, in order. The first instruction that finds it empty stalls
 // itself and everything behind it (ren2dis.valid = 0).
-void Ren::comb_alloc() {
+void Ren::alloc() {
   int head = free_head;
   int left = ring_distance(free_head, free_tail);
   int fhead = fp_free_head;
@@ -136,7 +136,7 @@ void Ren::comb_alloc() {
 
 // Source/old-destination lookup in spec_RAT; an older instruction of the same group that writes the same architectural
 // register (x0 excluded) takes precedence, the youngest such writer wins.
-void Ren::comb_rename() {
+void Ren::rename() {
   wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination register of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
     wires->ren2dis.uop[i] = inst_r[i];
@@ -203,7 +203,7 @@ void count_commit(SimContext *ctx, const Uop &u) {
 // Rename state updates: fired instructions take their register and checkpoint spec_RAT at branches, commits free old
 // registers and update arch_RAT, then flush (restore from arch_RAT) or mispredict (restore a checkpoint) override
 // the next-cycle spec state.
-void Ren::comb_fire() {
+void Ren::handshake() {
   const bool flush = wires->rob_bcast.flush, mispred = wires->dec_bcast.mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) fire[i] = wires->ren2dis.valid[i] && wires->dis2ren.ready;
 
@@ -294,7 +294,7 @@ void Ren::comb_fire() {
 
 // Pipeline register: emptied by flush/mispredict, reloaded from decode when ready, else keeps unfired instructions.
 // Bits of branches resolved this cycle are cleared from every mask that stays.
-void Ren::comb_pipeline() {
+void Ren::pipeline() {
   const wire<BR_MASK_WIDTH> clear = wires->dec_bcast.clear_mask;
   const bool drain = wires->rob_bcast.flush || wires->dec_bcast.mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
@@ -339,4 +339,16 @@ void Ren::seq() {
   }
   ckpt_dirty_fp = 0;
   memcpy(fp_alloc_checkpoint_head, fp_alloc_checkpoint_head_1, sizeof(fp_alloc_checkpoint_head));
+}
+
+// allocate the destination registers and rename the decoded group
+void Ren::comb_rename() {
+  alloc();
+  rename();
+}
+
+// dispatch handshake: commit the rename, the next pipeline register
+void Ren::comb_fire() {
+  handshake();
+  pipeline();
 }

@@ -6,15 +6,13 @@ class BackTop;
 
 class Ren {
 public:
+  void comb_rename();  // allocate the destination registers and rename the decoded group
+  void comb_fire();  // dispatch handshake: commit the rename, the next pipeline register
   Ren(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
-  void comb_rename(); // 重命名
-  void comb_fire();
-  void comb_alloc(); // 分配寄存器
-  void comb_pipeline();
   void seq();
 
   // register
@@ -59,4 +57,11 @@ public:
   wire<PRF_IDX_WIDTH> free_head_commit_1;
   wire<PRF_IDX_WIDTH> free_tail_1;
   wire<PRF_IDX_WIDTH> alloc_checkpoint_head_1[MAX_BR_NUM];
+
+private:
+  // phases of one cycle, run in the order of the methods above
+  void alloc();
+  void rename();
+  void handshake();
+  void pipeline();
 };

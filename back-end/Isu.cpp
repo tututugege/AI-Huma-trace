@@ -114,13 +114,13 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
 }
 
 // Free slots of each queue go to Dispatch.
-void Isu::comb_ready() {
+void Isu::ready() {
   begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   for (int i = 0; i < IQ_NUM; i++) wires->iss2dis.ready_num[i] = iqs[i].out.free_slots;
 }
 
 // Dispatch requests enter their queue, with this cycle's wakeups applied first (a readable source must not enter busy).
-void Isu::comb_enq() {
+void Isu::enq() {
   for (int i = 0; i < IQ_NUM; i++) {
     auto &q = iqs[i];
     const int width = configs[i].dispatch_width;
@@ -150,7 +150,7 @@ bool Isu::grant_gate(const Uop &u, int port) {
 }
 
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
-void Isu::comb_issue() {
+void Isu::issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
   g_wb.new_cycle(wires->rob_bcast.flush);
   g_fpwb.new_cycle(wires->rob_bcast.flush);
@@ -170,7 +170,7 @@ void Isu::comb_issue() {
 
 // Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and
 // uops issued this cycle with a multi-cycle latency enter them.
-void Isu::comb_calc_latency_next() {
+void Isu::calc_latency_next() {
   auto age = [](auto &cur, auto &nxt) {
     for (size_t i = 0; i < std::size(cur); i++) {
       nxt[i] = {};
@@ -216,7 +216,7 @@ void Isu::comb_calc_latency_next() {
 // Gather every wakeup source onto its own broadcast channel (so write-backs never collide) and wake the queues:
 // load write-backs (slow), DIV/FP countdown reaching zero and the last MUL stage (delayed), and uops issued this
 // cycle with single-cycle latency (fast, ALU ports only).
-void Isu::comb_awake() {
+void Isu::awake() {
   auto &bus = wires->iss_awake.wake;
   for (int i = 0; i < WAKE_CH_ALL; i++) {
     bus[i].valid = false;
@@ -280,7 +280,7 @@ void Isu::comb_awake() {
 
 // Flush / mispredict / branch-resolve handling for the queues and the delayed wakeups. A flush empties everything,
 // a mispredict kills the wakeups of squashed uops, and resolved branches free their mask bit in the survivors.
-void Isu::comb_flush() {
+void Isu::flush() {
   const bool flush_all = wires->rob_bcast.flush;
   const bool flush_br = !flush_all && wires->dec_bcast.mispred;
   const wire<BR_MASK_WIDTH> br_mask = wires->dec_bcast.br_mask, clear = wires->dec_bcast.clear_mask;
@@ -306,4 +306,18 @@ void Isu::seq() {
     for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) mul_wake_pipe[d][s] = mul_wake_pipe_1[d][s];
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++) div_wake_slots[i] = div_wake_slots_1[i];
   for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++) fp_wake_slots[i] = fp_wake_slots_1[i];
+}
+
+// free slots, select and issue, the wakeup bus, next-cycle latencies
+void Isu::comb_issue() {
+  ready();
+  issue();
+  awake();
+  calc_latency_next();
+}
+
+// enqueue from dispatch, flush
+void Isu::comb_enq() {
+  enq();
+  flush();
 }

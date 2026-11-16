@@ -25,7 +25,7 @@ void Idu::init() {
 // Decode the instructions of the pre-decode queue and give every branch a tag/mask. A younger instruction depends on all
 // older unresolved branches (its br_mask); a branch itself does not depend on its own bit. When the free tags run out
 // the group is cut at that branch.
-void Idu::comb_decode() {
+void Idu::decode() {
   Wires &w = *wires;
   bool alloc_valid[DECODE_WIDTH];
   int tags = 0;
@@ -91,7 +91,7 @@ void Idu::comb_decode() {
 }
 
 // Broadcast last cycle's branch resolution (mispredict, tag, clear bits) to everyone; only comb_fire updates local state.
-void Idu::comb_branch() {
+void Idu::branch() {
   DecBroadcastIO &b = wires->dec_bcast;
   b.mispred = br_latch.mispred;
   b.br_id = br_latch.mispred ? br_latch.br_id : 0;
@@ -353,4 +353,10 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   // an AMO that discards its result still writes through a dedicated register (it keeps the load's destination)
   if (type == AMO && uop->dest_areg == 0 && amo != AmoOp::LR && amo != AmoOp::SC) uop->dest_areg = 32;
   if (uop->dest_areg == 0 && !uop->dest_fp) uop.dest_en = false;   // x0 is not written (f0 is a register)
+}
+
+// branch resolution (mispredict broadcast), then decode
+void Idu::comb_decode() {
+  branch();
+  decode();
 }

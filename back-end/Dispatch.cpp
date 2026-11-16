@@ -94,7 +94,7 @@ void Dispatch::comb_alloc() {
 
 // Source-operand busy bits: busy table, this cycle's wakeups, and a register written by an older slot of the same group
 // stays busy (the older instruction has not issued yet).
-void Dispatch::comb_wake() {
+void Dispatch::wake() {
   Wires &w = *wires;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!w.dis2rob.valid[i]) continue;
@@ -115,7 +115,7 @@ void Dispatch::comb_wake() {
 
 // Split each instruction into uops and place them in the issue-queue request ports, in slot order; the first
 // instruction that does not fit stops the group. What was placed is remembered so comb_fire can take it back.
-void Dispatch::comb_dispatch() {
+void Dispatch::dispatch() {
   Wires &w = *wires;
   for (int i = 0; i < IQ_NUM; i++)
     for (int k = 0; k < MAX_IQ_DISPATCH_WIDTH; k++) w.dis2iss.req[i][k].valid = false;
@@ -170,7 +170,7 @@ void Dispatch::comb_dispatch() {
 // Flushes and stalls block everything; CSR and atomic instructions only go when the ROB is empty and nothing
 // older fires in the same cycle; an atomic or WFI that fires blocks the slots behind it; a slot that does not
 // fire blocks the slots behind it.
-void Dispatch::comb_fire() {
+void Dispatch::fire() {
   Wires &w = *wires;
   const auto clear_mask = w.dec_bcast.clear_mask;
   const bool global_flush = w.rob_bcast.flush || w.dec_bcast.mispred || w.rob2dis.stall;
@@ -239,7 +239,7 @@ void Dispatch::comb_fire() {
 
 // Stage register: cleared by a flush or mispredict, refilled from rename when the stage is free, otherwise the
 // instructions that did not fire stay (with busy bits refreshed by this cycle's wakeups).
-void Dispatch::comb_pipeline() {
+void Dispatch::pipeline() {
   Wires &w = *wires;
   const auto clear_mask = w.dec_bcast.clear_mask;
   const bool kill = w.rob_bcast.flush || w.dec_bcast.mispred;
@@ -394,4 +394,12 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
     out[2].uop.src1_busy = amo != AmoOp::SWAP;
   }
   return n;
+}
+
+// wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register
+void Dispatch::comb_dispatch() {
+  wake();
+  dispatch();
+  fire();
+  pipeline();
 }

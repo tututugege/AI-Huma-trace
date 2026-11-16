@@ -89,7 +89,7 @@ def overlap(a, b):
             if x == y or y.startswith(x + '.') or x.startswith(y + '.'): out.add(x if len(x) >= len(y) else y)
     return out
 
-def body_closure(cls, fn, depth=3, seen=None):
+def body_closure(cls, fn, depth=4, seen=None):
     """the phase body plus the bodies of the same-class member functions it calls (to `depth` levels)"""
     seen = seen if seen is not None else set()
     b = body_of(cls, fn)
@@ -108,7 +108,7 @@ for obj, cls, fn in phases:
 
 # reviewed false positives of the static scan (reader, field, writer): reason
 KNOWN = {
-    ('lsu.comb_cal', 'lsu_awake.wake', 'lsu.comb_lsu2exe'): 'comb_cal clears the wake slots (a write through a range-for alias)',
+    ('lsu.comb_outputs', 'lsu_awake.wake', 'lsu.comb_writeback'): 'cal() clears the wake slots (a write through a range-for alias)',
 }
 hazards, staged = [], 0
 for i, (n, r, w) in enumerate(rows):

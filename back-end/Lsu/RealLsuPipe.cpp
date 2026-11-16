@@ -335,7 +335,7 @@ void RealLsu::seq_pipe() {
   std::memcpy(dp + off, sp + off, sizeof(LsuPipeState) - off);
 }
 
-void RealLsu::comb_cal() {
+void RealLsu::cal() {
   pw = {};
   mdp_write_pending();
   {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
@@ -366,7 +366,7 @@ void RealLsu::comb_cal() {
   }
 }
 
-void RealLsu::comb_lsu2rob() {
+void RealLsu::lsu2rob() {
   wires->lsu2rob = {};
   wires->lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
   std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 
@@ -375,7 +375,7 @@ void RealLsu::comb_lsu2rob() {
   wires->lsu2rob.tma.miss_mask = m;
 }
 
-void RealLsu::comb_lsu2dis() {
+void RealLsu::lsu2dis() {
   wires->lsu2dis = {};
   const uint32_t head = pcur.stq_head, count = pcur.stq_count;
   wires->lsu2dis.stq_tail = (head + count) % STQ_SIZE;
@@ -395,7 +395,7 @@ void RealLsu::comb_lsu2dis() {
 // ---------------------------------------------------------------------------------------------------------------
 // ROB commit: STQ entries become committed in order
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_stq_commit() {
+void RealLsu::stq_commit() {
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     if (!wires->rob_commit.commit_entry[i].valid) continue;
     const auto &u = wires->rob_commit.commit_entry[i].uop;
@@ -416,7 +416,7 @@ void RealLsu::comb_stq_commit() {
 // ---------------------------------------------------------------------------------------------------------------
 // MMIO
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_mmio_in() {
+void RealLsu::mmio_in() {
   if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
@@ -433,7 +433,7 @@ void RealLsu::comb_mmio_in() {
   nxt.uncached_unit.valid = false;
 }
 
-void RealLsu::comb_mmio_out() {
+void RealLsu::mmio_out() {
   wires->out.peripheral_req = {};
   if (!wires->in.peripheral_resp.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
@@ -450,7 +450,7 @@ void RealLsu::comb_mmio_out() {
 // L2: DCache response + STLF confirm + hit/forward select. Reads the L1/L2 registers and the registered STQ state.
 // A load that cannot complete is parked in the LDQ entry (cause + wake condition), nothing is queued anywhere.
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_dcache2lsu() {
+void RealLsu::dcache2lsu() {
   dcache2lsu_ldq();
   dcache2lsu_stq();
 }
@@ -670,7 +670,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   }
 }
 
-void RealLsu::comb_lsu2exe() {
+void RealLsu::lsu2exe() {
   wires->lsu2exe = {};
   bool busy[LD] = {};
   for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
@@ -765,7 +765,7 @@ void RealLsu::comb_lsu2exe() {
 // ---------------------------------------------------------------------------------------------------------------
 // AGU arrivals: STD write, STA (va), load (L1 input)
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_exe2lsu() {
+void RealLsu::exe2lsu() {
   const ExeLsuIO &x = wires->exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
@@ -865,7 +865,7 @@ void RealLsu::comb_exe2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 address translation, one phase: the requests of the load / STA pipes, the DTLB lookup (a fence flushes it, a flush
 // or mispredict cancels its pending walk and returns nothing), the responses.
-void RealLsu::comb_tlb() {
+void RealLsu::tlb() {
   tlb_out();
   tlb_resp_ = {};
   if (dtlb != nullptr) {
@@ -990,7 +990,7 @@ void RealLsu::tlb_in_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_stlf() {
+void RealLsu::stlf() {
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v || !l.hit || l.mmio) continue;
@@ -1029,7 +1029,7 @@ void RealLsu::comb_stlf() {
 // ---------------------------------------------------------------------------------------------------------------
 // Allocation
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_dis2lsu() {
+void RealLsu::dis2lsu() {
   const DisLsuIO &d = wires->dis2lsu;
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
@@ -1068,7 +1068,7 @@ void RealLsu::comb_dis2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 // flush / mispredict / clear_mask
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_flush() {
+void RealLsu::flush() {
   if (wires->rob_bcast.flush) {
     msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
@@ -1124,7 +1124,7 @@ void RealLsu::comb_flush() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 -> DCache request and the L1/L2 pipeline register
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_lsu2dcache() {
+void RealLsu::lsu2dcache() {
   lsu2dcache_ldq();
   lsu2dcache_stq();
 }
@@ -1250,7 +1250,7 @@ void RealLsu::lsu2dcache_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // STQ retire, wake-up pass (events of this cycle -> LDQ entries), replay-register fill
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::comb_check() {
+void RealLsu::check() {
   int ret = 0;
   while (ret < RETIRE_PORTS && pnxt.stq_ccount > 0 && pnxt.stq_count > 0 && pnxt.stq[pnxt.stq_head].done &&
          (uint32_t)ret < pcur.stq_ccount && (uint32_t)ret < pcur.stq_count && pcur.stq[pnxt.stq_head].done) {  // R: registered state only
@@ -1422,4 +1422,35 @@ void RealLsu::comb_check() {
       break;
     }
   }
+}
+
+// outputs from the registers: wakeups, free counts to dispatch, completion to the ROB
+void RealLsu::comb_outputs() {
+  cal();
+  lsu2dis();
+  lsu2rob();
+}
+
+// committed stores, MMIO and DCache responses, load write-back to the EXU
+void RealLsu::comb_writeback() {
+  stq_commit();
+  mmio_in();
+  dcache2lsu();
+  lsu2exe();
+}
+
+// AGU / STD results in, address translation, store-to-load forwarding
+void RealLsu::comb_translate() {
+  exe2lsu();
+  tlb();
+  stlf();
+}
+
+// allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
+void RealLsu::comb_requests() {
+  dis2lsu();
+  flush();
+  lsu2dcache();
+  mmio_out();
+  check();
 }
