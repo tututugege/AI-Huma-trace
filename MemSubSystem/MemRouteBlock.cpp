@@ -4,10 +4,7 @@
 #include "types.h"
 
 namespace {
-static bool owner_is_ptw(Owner owner) {
-  return owner == Owner::PTW_DTLB || owner == Owner::PTW_ITLB ||
-         owner == Owner::PTW_WALK;
-}
+static bool owner_is_ptw(Owner owner) { return owner == Owner::PTW_WALK; }
 } // namespace
 
 void MemRouteBlock::init() {
@@ -67,26 +64,18 @@ void MemRouteBlock::comb_response() {
       out.icache_resp->resp_valid = (owner == Owner::ICACHE);
       out.icache_resp->resp_retry = icache_retry;
       out.icache_resp->resp_miss = (owner == Owner::ICACHE) && !icache_retry;
-      out.wakeup->dtlb = (owner == Owner::PTW_DTLB);
-      out.wakeup->itlb = (owner == Owner::PTW_ITLB);
       out.wakeup->walk = (owner == Owner::PTW_WALK);
     } else {
       out.icache_resp->resp_valid = (owner == Owner::ICACHE);
       out.icache_resp->resp_miss = (owner == Owner::ICACHE);
       if (in.dcache_resp->mshr_fill) {
-        out.wakeup->dtlb = (owner == Owner::PTW_DTLB);
-        out.wakeup->itlb = (owner == Owner::PTW_ITLB);
         out.wakeup->walk = (owner == Owner::PTW_WALK);
       } else {
-        nxt.ptw_wait.dtlb = (owner == Owner::PTW_DTLB);
-        nxt.ptw_wait.itlb = (owner == Owner::PTW_ITLB);
         nxt.ptw_wait.walk = (owner == Owner::PTW_WALK);
       }
     }
   }
   if (in.dcache_resp->mshr_fill) {
-    out.wakeup->dtlb |= nxt.ptw_wait.dtlb;
-    out.wakeup->itlb |= nxt.ptw_wait.itlb;
     out.wakeup->walk |= nxt.ptw_wait.walk;
     nxt.ptw_wait = {};
   }
@@ -106,12 +95,6 @@ void MemRouteBlock::comb_request() {
   } else if (in.ptw_walk_req->valid && cur.issued_tags.owner != Owner::PTW_WALK) {
     ptw_owner = Owner::PTW_WALK;
     ptw_addr = in.ptw_walk_req->addr;
-  } else if (in.ptw_dtlb_req->valid && cur.issued_tags.owner != Owner::PTW_DTLB) {
-    ptw_owner = Owner::PTW_DTLB;
-    ptw_addr = in.ptw_dtlb_req->addr;
-  } else if (in.ptw_itlb_req->valid && cur.issued_tags.owner != Owner::PTW_ITLB) {
-    ptw_owner = Owner::PTW_ITLB;
-    ptw_addr = in.ptw_itlb_req->addr;
   }
 
   nxt.issued_tags.owner = ptw_owner;

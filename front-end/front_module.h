@@ -4,7 +4,6 @@
 #include "front_IO.h"
 #include <cstdint>
 
-class PtwMemPort;
 class PtwWalkPort;
 class SimContext;
 struct ICacheMemPortReq;

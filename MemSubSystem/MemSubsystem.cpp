@@ -200,41 +200,6 @@ struct AxiKitRuntime {
   axi_interconnect::AXI_LLCPerfCounters_t llc_perf_snapshot{};
 };
 
-class MemSubsystemPtwMemPortAdapter : public PtwMemPort {
-public:
-  bool send_read_req(uint32_t paddr) override {
-    if (!comb_out_.req_ready || comb_in_.req_valid) {
-      return false;
-    }
-    comb_in_.req_valid = true;
-    comb_in_.req_addr = paddr;
-    comb_out_.req_ready = false;
-    comb_out_.resp_valid = false;
-    comb_out_.resp_data = 0;
-    return true;
-  }
-
-  bool resp_valid() const override { return comb_out_.resp_valid; }
-
-  uint32_t resp_data() const override { return comb_out_.resp_data; }
-
-  void consume_resp() override {
-    comb_in_.resp_consumed = true;
-    comb_out_.resp_valid = false;
-    comb_out_.resp_data = 0;
-  }
-
-  const PtwMemPortCombIn &comb_input() const { return comb_in_; }
-
-  void set_comb_output(const PtwMemPortCombOut &out) { comb_out_ = out; }
-
-  void reset_cycle_input() { comb_in_ = {}; }
-
-private:
-  PtwMemPortCombIn comb_in_{};
-  PtwMemPortCombOut comb_out_{};
-};
-
 class MemSubsystemPtwWalkPortAdapter : public PtwWalkPort {
 public:
   bool send_walk_req(const PtwWalkReq &req) override {
@@ -286,22 +251,6 @@ private:
 
 void MemSubsystem::sync_ptw_port_outputs() {
   const auto &ptw_out = ptw_block.comb_outputs();
-  if (dtlb_ptw_port_inst != nullptr) {
-    PtwMemPortCombOut out{};
-    const auto &src = ptw_out.mem_clients[static_cast<size_t>(PtwClient::DTLB)];
-    out.req_ready = src.req_ready;
-    out.resp_valid = src.resp_valid;
-    out.resp_data = src.resp_data;
-    dtlb_ptw_port_inst->set_comb_output(out);
-  }
-  if (itlb_ptw_port_inst != nullptr) {
-    PtwMemPortCombOut out{};
-    const auto &src = ptw_out.mem_clients[static_cast<size_t>(PtwClient::ITLB)];
-    out.req_ready = src.req_ready;
-    out.resp_valid = src.resp_valid;
-    out.resp_data = src.resp_data;
-    itlb_ptw_port_inst->set_comb_output(out);
-  }
   if (dtlb_walk_port_inst != nullptr) {
     PtwWalkPortCombOut out{};
     const auto &src =
@@ -394,12 +343,8 @@ void MemSubsystem::llc_seq(
 MemSubsystem::MemSubsystem(SimContext *ctx) : ctx(ctx) {
   axi_kit_runtime = std::make_unique<AxiKitRuntime>();
   ptw_block.bind_context(ctx);
-  dtlb_ptw_port_inst = std::make_unique<MemSubsystemPtwMemPortAdapter>();
-  itlb_ptw_port_inst = std::make_unique<MemSubsystemPtwMemPortAdapter>();
   dtlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
   itlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
-  dtlb_ptw_port = dtlb_ptw_port_inst.get();
-  itlb_ptw_port = itlb_ptw_port_inst.get();
   dtlb_walk_port = dtlb_walk_port_inst.get();
   itlb_walk_port = itlb_walk_port_inst.get();
 }
@@ -459,8 +404,6 @@ void MemSubsystem::init() {
   mem_route_block.out.icache_resp = icache_resp;
 
   mem_route_block.in.ptw_walk_req = &ptw_walk_req; // PTW walk request → MemRouteBlock input
-  mem_route_block.in.ptw_dtlb_req = &ptw_dtlb_req; // MemRouteBlock output → PTW walk response
-  mem_route_block.in.ptw_itlb_req = &ptw_itlb_req; // MemRouteBlock output → PTW walk response
 
   mem_route_block.out.ptw_events = &ptw_events; // MemRouteBlock output → PTW event signals
   mem_route_block.out.ptw_grant = &ptw_grant;   // MemRouteBlock output → PTW grant signals
@@ -481,8 +424,6 @@ void MemSubsystem::init() {
   ptw_block.init();
   mem_route_block.init();
   sync_ptw_port_outputs();
-  dtlb_ptw_port_inst->reset_cycle_input();
-  itlb_ptw_port_inst->reset_cycle_input();
   dtlb_walk_port_inst->reset_cycle_input();
   itlb_walk_port_inst->reset_cycle_input();
   dtlb_walk_port_inst->reset_seq_input();
@@ -739,22 +680,6 @@ void MemSubsystem::comb_outputs() {
 void MemSubsystem::comb_inputs() {
   MemPtwBlock::PortIn ptw_port_in{};
   {
-    const auto &dtlb_mem_in = dtlb_ptw_port_inst->comb_input();
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::DTLB)].req_valid =
-        dtlb_mem_in.req_valid;
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::DTLB)].req_addr =
-        dtlb_mem_in.req_addr;
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::DTLB)]
-        .resp_consumed = dtlb_mem_in.resp_consumed;
-
-    const auto &itlb_mem_in = itlb_ptw_port_inst->comb_input();
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::ITLB)].req_valid =
-        itlb_mem_in.req_valid;
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::ITLB)].req_addr =
-        itlb_mem_in.req_addr;
-    ptw_port_in.mem_clients[static_cast<size_t>(PtwClient::ITLB)]
-        .resp_consumed = itlb_mem_in.resp_consumed;
-
     const auto &dtlb_walk_in = dtlb_walk_port_inst->comb_input();
     ptw_port_in.walk_clients[static_cast<size_t>(PtwClient::DTLB)].req_valid =
         dtlb_walk_in.req_valid;
@@ -777,23 +702,11 @@ void MemSubsystem::comb_inputs() {
   ptw_walk_req.valid = ptw_out.issue_walk_read;
   ptw_walk_req.addr = ptw_out.walk_read_addr;
 
-  ptw_dtlb_req.valid =
-      ptw_out.mem_req_pending[static_cast<size_t>(PtwClient::DTLB)];
-  ptw_dtlb_req.addr =
-      ptw_out.mem_req_addr[static_cast<size_t>(PtwClient::DTLB)];
-
-  ptw_itlb_req.valid =
-      ptw_out.mem_req_pending[static_cast<size_t>(PtwClient::ITLB)];
-  ptw_itlb_req.addr =
-      ptw_out.mem_req_addr[static_cast<size_t>(PtwClient::ITLB)];
-
   mem_route_block.comb_request();
   dcache_domain_comb_inputs();
 
   MemPtwBlock::FeedbackIn ptw_feedback{};
 
-  ptw_feedback.wakeup_dtlb = wakeup.dtlb;
-  ptw_feedback.wakeup_itlb = wakeup.itlb;
   ptw_feedback.wakeup_walk = wakeup.walk;
 
   // grant 转换
@@ -801,20 +714,7 @@ void MemSubsystem::comb_inputs() {
     ptw_feedback.grant_valid = true;
     ptw_feedback.grant_req_id = ptw_grant.req_id;
 
-    switch (ptw_grant.owner) {
-    case Owner::PTW_DTLB:
-      ptw_feedback.grant_owner = MemPtwBlock::GrantOwner::MEM_DTLB;
-      break;
-    case Owner::PTW_ITLB:
-      ptw_feedback.grant_owner = MemPtwBlock::GrantOwner::MEM_ITLB;
-      break;
-    case Owner::PTW_WALK:
-      ptw_feedback.grant_owner = MemPtwBlock::GrantOwner::WALK;
-      break;
-    default:
-      ptw_feedback.grant_valid = false;
-      break;
-    }
+    if (ptw_grant.owner != Owner::PTW_WALK) ptw_feedback.grant_valid = false;
   }
 
   // 单个 ptw_event 转换
@@ -828,20 +728,7 @@ void MemSubsystem::comb_inputs() {
     mapped.req_addr = evt.req_addr;
     mapped.req_id = evt.req_id;
 
-    switch (evt.owner) {
-    case Owner::PTW_DTLB:
-      mapped.owner = MemPtwBlock::RoutedEventOwner::MEM_DTLB;
-      break;
-    case Owner::PTW_ITLB:
-      mapped.owner = MemPtwBlock::RoutedEventOwner::MEM_ITLB;
-      break;
-    case Owner::PTW_WALK:
-      mapped.owner = MemPtwBlock::RoutedEventOwner::WALK;
-      break;
-    default:
-      mapped.valid = false;
-      break;
-    }
+    if (evt.owner != Owner::PTW_WALK) mapped.valid = false;
 
     if (mapped.valid) {
       ptw_feedback.events[0] = mapped;
@@ -864,8 +751,6 @@ void MemSubsystem::comb_inputs() {
   // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
 
   sync_ptw_port_outputs();
-  dtlb_ptw_port_inst->reset_cycle_input();
-  itlb_ptw_port_inst->reset_cycle_input();
   dtlb_walk_port_inst->reset_cycle_input();
   itlb_walk_port_inst->reset_cycle_input();
 }

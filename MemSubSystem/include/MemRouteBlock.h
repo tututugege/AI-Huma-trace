@@ -22,8 +22,6 @@ enum class Owner : uint8_t {
   NONE = 0,
   LSU,
   ICACHE,
-  PTW_DTLB,
-  PTW_ITLB,
   PTW_WALK,
 };
 struct PtwReq {
@@ -44,9 +42,7 @@ struct PtwEvent {
   uint32_t req_id;
 };
 struct ReplayWakeup {
-  wire<1> dtlb;
-  wire<1> itlb;
-  wire<1> walk;
+  wire<1> walk;   // the page-table walker's read must be re-issued
 };
 struct MemRouteIn {
   DcacheLsuIO *dcache_resp;
@@ -55,8 +51,6 @@ struct MemRouteIn {
   ICacheMemPortReq *icache_req;
 
   PtwReq *ptw_walk_req;
-  PtwReq *ptw_dtlb_req;
-  PtwReq *ptw_itlb_req;
 };
 
 struct MemRouteOut {

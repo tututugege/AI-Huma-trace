@@ -18,7 +18,6 @@
 #include <memory>
 
 class SimContext;
-class PtwMemPort;
 class PtwWalkPort;
 
 class Dispatch;

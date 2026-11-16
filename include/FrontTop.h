@@ -3,7 +3,6 @@
 #include "front_IO.h"
 #include <memory>
 
-class PtwMemPort;
 class PtwWalkPort;
 class SimContext;
 struct FrontReadData;

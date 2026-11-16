@@ -25,32 +25,6 @@ public:
     IGNORED,
   };
 
-  enum class GrantOwner : uint8_t {
-    NONE = 0,
-    MEM_DTLB,
-    MEM_ITLB,
-    WALK,
-  };
-
-  enum class RoutedEventOwner : uint8_t {
-    NONE = 0,
-    MEM_DTLB,
-    MEM_ITLB,
-    WALK,
-  };
-
-  struct MemClientIn {
-    bool req_valid = false;
-    uint32_t req_addr = 0;
-    bool resp_consumed = false;
-  };
-
-  struct MemClientOut {
-    bool req_ready = false;
-    bool resp_valid = false;
-    uint32_t resp_data = 0;
-  };
-
   struct WalkClientIn {
     bool req_valid = false;
     PtwWalkReq req = {};
@@ -65,8 +39,6 @@ public:
   };
 
   struct PortIn {
-    std::array<MemClientIn, static_cast<size_t>(Client::NUM_CLIENTS)>
-        mem_clients{};
     std::array<WalkClientIn, static_cast<size_t>(Client::NUM_CLIENTS)>
         walk_clients{};
   };
@@ -77,8 +49,7 @@ public:
   };
 
   struct RoutedEvent {
-    bool valid = false;
-    RoutedEventOwner owner = RoutedEventOwner::NONE;
+    bool valid = false;   // a read of the page-table walker
     // Memory-side resolved 32-bit word presented to PTW for this event. The
     // surrounding memory subsystem may rewrite the raw routed response into the
     // PTW-visible value before filling FeedbackIn.
@@ -89,25 +60,18 @@ public:
   };
 
   struct FeedbackIn {
-    bool grant_valid = false;
-    GrantOwner grant_owner = GrantOwner::NONE;
+    bool grant_valid = false;   // the walker's read was sent to the D-cache
     size_t grant_req_id = 0;
     std::array<RoutedEvent, LSU_LDU_COUNT> events{};
     uint8_t event_count = 0;
-    bool wakeup_dtlb = false;
-    bool wakeup_itlb = false;
     bool wakeup_walk = false;
   };
 
   struct CombOut {
-    std::array<MemClientOut, static_cast<size_t>(Client::NUM_CLIENTS)>
-        mem_clients{};
     std::array<WalkClientOut, static_cast<size_t>(Client::NUM_CLIENTS)>
         walk_clients{};
     bool issue_walk_read = false;
     uint32_t walk_read_addr = 0;
-    bool mem_req_pending[2] = {false, false};
-    uint32_t mem_req_addr[2] = {0, 0};
   };
 
   explicit MemPtwBlock(SimContext *ctx = nullptr) : ctx(ctx) { init(); }
@@ -125,7 +89,6 @@ public:
     nxt_ = cur_;
     reset_outputs(comb_);
     apply_port_inputs(in);
-    count_wait_cycles();
     select_walk_owner();
     refresh_outputs();
   }
@@ -153,14 +116,6 @@ public:
 
 
 private:
-  struct PtwClientState {
-    bool req_pending = false;
-    bool req_inflight = false;
-    uint32_t req_addr = 0;
-    bool resp_valid = false;
-    uint32_t resp_data = 0;
-  };
-
   struct WalkClientState {
     bool req_pending = false;
     bool req_inflight = false;
@@ -181,7 +136,6 @@ private:
       static_cast<size_t>(Client::NUM_CLIENTS);
 
   struct State {
-    std::array<PtwClientState, kClientCount> mem_clients{};
     std::array<WalkClientState, kClientCount> walk_clients{};
     WalkState walk_state = WalkState::IDLE;
     bool walk_active = false;
@@ -208,14 +162,6 @@ private:
   void apply_port_inputs(const PortIn &in) {
     for (size_t i = 0; i < kClientCount; i++) {
       const Client client = static_cast<Client>(i);
-      auto &mem_state = nxt_.mem_clients[i];
-      if (in.mem_clients[i].resp_consumed) {
-        mem_state.resp_valid = false;
-      }
-      if (in.mem_clients[i].req_valid) {
-        send_mem_req(client, in.mem_clients[i].req_addr);
-      }
-
       auto &walk_state = nxt_.walk_clients[i];
       if (in.walk_clients[i].resp_consumed) {
         walk_state.resp_valid = false;
@@ -231,24 +177,6 @@ private:
       if (in.walk_client_flush[i]) {
         flush_walk_client_state(state, static_cast<Client>(i));
       }
-    }
-  }
-
-  void count_wait_cycles() const {
-    if (ctx == nullptr) {
-      return;
-    }
-    if (nxt_.mem_clients[client_idx(Client::DTLB)].req_pending ||
-        nxt_.mem_clients[client_idx(Client::DTLB)].req_inflight ||
-        nxt_.walk_clients[client_idx(Client::DTLB)].req_pending ||
-        nxt_.walk_clients[client_idx(Client::DTLB)].req_inflight) {
-
-    }
-    if (nxt_.mem_clients[client_idx(Client::ITLB)].req_pending ||
-        nxt_.mem_clients[client_idx(Client::ITLB)].req_inflight ||
-        nxt_.walk_clients[client_idx(Client::ITLB)].req_pending ||
-        nxt_.walk_clients[client_idx(Client::ITLB)].req_inflight) {
-
     }
   }
 
@@ -283,14 +211,6 @@ private:
   static void project_outputs_from_state(const State &state, CombOut &out) {
     reset_outputs(out);
     for (size_t i = 0; i < kClientCount; i++) {
-      const auto &mem_state = state.mem_clients[i];
-      out.mem_clients[i].req_ready =
-          !mem_state.req_pending && !mem_state.req_inflight;
-      out.mem_clients[i].resp_valid = mem_state.resp_valid;
-      out.mem_clients[i].resp_data = mem_state.resp_data;
-      out.mem_req_pending[i] = mem_state.req_pending;
-      out.mem_req_addr[i] = mem_state.req_addr;
-
       const auto &walk_state = state.walk_clients[i];
       out.walk_clients[i].req_ready =
           !walk_state.req_pending && !walk_state.req_inflight;
@@ -329,23 +249,7 @@ private:
   void refresh_outputs() { project_outputs_from_state(nxt_, comb_); }
 
   void apply_grant(const FeedbackIn &in) {
-    if (!in.grant_valid) {
-      return;
-    }
-
-    switch (in.grant_owner) {
-    case GrantOwner::MEM_DTLB:
-      on_mem_read_granted(Client::DTLB);
-      break;
-    case GrantOwner::MEM_ITLB:
-      on_mem_read_granted(Client::ITLB);
-      break;
-    case GrantOwner::WALK:
-      on_walk_read_granted(in.grant_req_id);
-      break;
-    default:
-      break;
-    }
+    if (in.grant_valid) on_walk_read_granted(in.grant_req_id);
   }
 
   void apply_events(const FeedbackIn &in) {
@@ -354,115 +258,25 @@ private:
       if (!evt.valid) {
         continue;
       }
-      switch (evt.owner) {
-      case RoutedEventOwner::MEM_DTLB:
-        if (evt.replay == 0) {
-          on_mem_resp_client(Client::DTLB, static_cast<uint32_t>(evt.data));
-        }
-        break;
-      case RoutedEventOwner::MEM_ITLB:
-        if (evt.replay == 0) {
-          on_mem_resp_client(Client::ITLB, static_cast<uint32_t>(evt.data));
-        }
-        break;
-      case RoutedEventOwner::WALK:
-        if (evt.replay == 0) {
-          (void)on_walk_mem_resp(evt.req_id, evt.data);
-        } else {
-          (void)on_walk_mem_replay(evt.req_id, evt.replay);
-        }
-        break;
-      default:
-        break;
-      }
+      if (evt.replay == 0) (void)on_walk_mem_resp(evt.req_id, evt.data);
+      else (void)on_walk_mem_replay(evt.req_id, evt.replay);
     }
   }
 
   void apply_wakeups(const FeedbackIn &in) {
-    if (in.wakeup_dtlb) {
-      retry_mem_req(Client::DTLB);
-    }
-    if (in.wakeup_itlb) {
-      retry_mem_req(Client::ITLB);
-    }
     if (in.wakeup_walk) {
       retry_active_walk();
     }
   }
 
-  void send_mem_req(Client client, uint32_t paddr) {
-    auto &s = nxt_.mem_clients[client_idx(client)];
-    if (ctx != nullptr) {
-      if (client == Client::DTLB) {
-
-      } else {
-
-      }
-    }
-    s.resp_valid = false;
-    if (s.req_pending || s.req_inflight) {
-      if (ctx != nullptr) {
-        if (client == Client::DTLB) {
-
-        } else {
-
-        }
-      }
-      return;
-    }
-    s.req_pending = true;
-    s.req_addr = paddr;
-  }
-
   void send_walk_req(Client client, const PtwWalkReq &req) {
     auto &s = nxt_.walk_clients[client_idx(client)];
-    if (ctx != nullptr) {
-      if (client == Client::DTLB) {
-
-      } else {
-
-      }
-    }
     s.resp_valid = false;
     if (s.req_pending || s.req_inflight) {
-      if (ctx != nullptr) {
-        if (client == Client::DTLB) {
-
-        } else {
-
-        }
-      }
       return;
     }
     s.req_pending = true;
     s.req = req;
-  }
-
-  void on_mem_read_granted(Client client) {
-    auto &s = nxt_.mem_clients[client_idx(client)];
-    s.req_pending = false;
-    s.req_inflight = true;
-    if (ctx != nullptr) {
-      if (client == Client::DTLB) {
-
-      } else {
-
-      }
-    }
-  }
-
-  void on_mem_resp_client(Client client, uint32_t data) {
-    auto &s = nxt_.mem_clients[client_idx(client)];
-    s.resp_valid = true;
-    s.resp_data = data;
-    s.req_inflight = false;
-    if (ctx != nullptr) {
-      if (client == Client::DTLB) {
-
-      } else {
-
-      }
-    }
   }
 
   void on_walk_read_granted(size_t req_id) {
@@ -473,13 +287,6 @@ private:
     }
     nxt_.walk_req_id_valid = true;
     nxt_.walk_req_id = req_id;
-    if (ctx != nullptr) {
-      if (nxt_.walk_owner == Client::DTLB) {
-
-      } else {
-
-      }
-    }
   }
 
   WalkRespResult on_walk_mem_resp(size_t req_id, uint64_t pte) {
@@ -553,13 +360,6 @@ private:
       publish_fault();
     }
 
-    if (ctx != nullptr && wc.resp_valid) {
-      if (nxt_.walk_owner == Client::DTLB) {
-
-      } else {
-
-      }
-    }
     return WalkRespResult::HANDLED;
   }
 
@@ -592,15 +392,6 @@ private:
     nxt_.walk_req_id_valid = false;
     nxt_.walk_req_id = 0;
     return WalkRespResult::HANDLED;
-  }
-
-  void retry_mem_req(Client client) {
-    auto &s = nxt_.mem_clients[client_idx(client)];
-    if (!s.req_inflight) {
-      return;
-    }
-    s.req_inflight = false;
-    s.req_pending = true;
   }
 
   void retry_active_walk() {

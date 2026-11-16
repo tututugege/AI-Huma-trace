@@ -6,7 +6,6 @@
 #include "PeripheralAxi.h"
 #include "PeripheralModel.h"
 #include "MemRouteBlock.h"
-#include "PtwMemPort.h"
 #include "PtwWalkPort.h"
 #include "RealDcache.h"
 #include "WriteBuffer.h"
@@ -19,7 +18,6 @@
 
 class SimContext;
 class Csr;
-class MemSubsystemPtwMemPortAdapter;
 class MemSubsystemPtwWalkPortAdapter;
 class RealLsu;
 struct AxiKitRuntime;
@@ -59,8 +57,6 @@ public:
   PeripheralAxiWriteOut peripheral_axi_write_out{};
 
   // PTW 端口连线（对外直接赋值/读取）
-  PtwMemPort  *dtlb_ptw_port  = nullptr;
-  PtwMemPort  *itlb_ptw_port  = nullptr;
   PtwWalkPort *dtlb_walk_port = nullptr;
   PtwWalkPort *itlb_walk_port = nullptr;
   PeripheralReqIO *peripheral_req = nullptr;
@@ -129,8 +125,6 @@ private:
   FillOut fill_out_{};
 
   PtwReq ptw_walk_req;
-  PtwReq ptw_dtlb_req;
-  PtwReq ptw_itlb_req;
 
   PtwGrant ptw_grant;
   PtwEvent ptw_events;
@@ -149,11 +143,8 @@ private:
   void publish_pending_dcache_response();
   void clear_pending_dcache_response();
 
-  friend class MemSubsystemPtwMemPortAdapter;
   friend class MemSubsystemPtwWalkPortAdapter;
 
-  std::unique_ptr<MemSubsystemPtwMemPortAdapter>  dtlb_ptw_port_inst;
-  std::unique_ptr<MemSubsystemPtwMemPortAdapter>  itlb_ptw_port_inst;
   std::unique_ptr<MemSubsystemPtwWalkPortAdapter> dtlb_walk_port_inst;
   std::unique_ptr<MemSubsystemPtwWalkPortAdapter> itlb_walk_port_inst;
 
