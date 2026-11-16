@@ -18,8 +18,21 @@ class SimContext;
 struct ICacheMemPortReq;
 struct ICacheMemPortResp;
 
+// The front end's fetch step is a phase of the I-cache (ports named after the front end's wires):
+//   CONTRACT comb_fetch  in: in.global_reset in.global_refetch in.in in.fetch_addr_head  out: out.ic_in out.ic_out
 class ICacheTop {
 public:
+  struct In {
+    const bool *global_reset = nullptr;
+    const bool *global_refetch = nullptr;
+    const FrontTopIn *in = nullptr;                 // the front end's inputs (redirect / fence / csr_status)
+    const FetchAddrFifoOut *fetch_addr_head = nullptr;
+  } in;
+  struct Out {
+    ICacheIn ic_in{};
+    ICacheOut ic_out{};
+  } out;
+  void comb_fetch();   // the address popped from the fetch-address FIFO into the I-cache
   // The ports, bound by FrontTop (they take effect at the I-cache's next step).
   struct Ports {
     PtwWalkPort *ptw_walk = nullptr;

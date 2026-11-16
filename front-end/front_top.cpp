@@ -226,8 +226,8 @@ struct FrontComb {
   InstFifoIn fifo_in{};
   PtabIn ptab_in{};
   F2bFifoIn f2b_in{};
-  ICacheIn ic_in{};
-  ICacheOut ic_out{};
+  ICacheIn &ic_in;     // (ICacheTop::Out)
+  ICacheOut &ic_out;
 
   // FIFO heads read this cycle.
   FetchAddrFifoOut fetch_addr_head{};
@@ -265,7 +265,7 @@ struct FrontComb {
   FrontComb(FrontCore &fe, const FrontTopIn &i, const FrontReadData &r, FrontTopOut &o, FrontUpdateRequest &q)
       : in(i), rd(r), out(o), req(q), ctx(fe.ctx), bpu_pipe(fe.bpu_pipe), fetch_addr_fifo(fe.fetch_addr_fifo),
         inst_fifo(fe.inst_fifo), ptab(fe.ptab), f2b_fifo(fe.f2b_fifo), icache(fe.icache), fetch_addr_rd(r.fetch_addr_fifo_rd_snapshot), fifo_rd(r.fifo_rd_snapshot),
-        ptab_rd(r.ptab_rd_snapshot), f2b_rd(r.front2back_fifo_rd_snapshot),
+        ptab_rd(r.ptab_rd_snapshot), f2b_rd(r.front2back_fifo_rd_snapshot), ic_in(fe.icache.out.ic_in), ic_out(fe.icache.out.ic_out),
         predecode_flush(fe.checker.out.predecode_flush), flush_address(fe.checker.out.flush_address), checker(fe.checker),
         pd_next(fe.checker.out.pd_next), checker_out(fe.checker.out.checker_out), lh_new_valid(fe.checker.out.lh_new_valid),
         lh_new_pc(fe.checker.out.lh_new_pc), lh_new_data(fe.checker.out.lh_new_data), lh_updated(fe.checker.out.lh_updated) {
@@ -273,6 +273,8 @@ struct FrontComb {
     ci.fifo_read_enable = &fifo_read_enable; ci.fifo_head = &fifo_head; ci.ptab_head = &ptab_head; ci.multi = &multi;
     ci.grp_in_range = grp_in_range; ci.grp_seg_first = grp_seg_first; ci.rvc_n = &rvc_n; ci.rvc_straddle = &rvc_straddle;
     ci.carry_low = &carry_low;
+    auto &ii = fe.icache.in;
+    ii.global_reset = &global_reset; ii.global_refetch = &global_refetch; ii.in = &in; ii.fetch_addr_head = &fetch_addr_head;
   }
 
   void control();
@@ -429,22 +431,7 @@ void FrontComb::write_fetch_addr() {
 }
 
 // The ICache takes the address popped from the fetch-address FIFO.
-void FrontComb::run_icache() {
-  ic_in.reset = global_reset;
-  ic_in.refetch = global_refetch;
-  ic_in.itlb_flush = in.ctrl.itlb_flush;
-  ic_in.fence_i = in.ctrl.fence_i;
-  ic_in.invalidate_req = false;
-  ic_in.csr_status = in.csr_status;
-  ic_in.icache_read_valid = fetch_addr_head.read_valid;
-  ic_in.fetch_address = fetch_addr_head.read_valid ? fetch_addr_head.fetch_address : 0;
-  icache.comb_calc(&ic_in, &ic_out);
-  g_pmu_front.icache_req_fire = ic_out.perf_req_fire;
-  g_pmu_front.icache_miss_issue = ic_out.perf_miss_event;
-  g_pmu_front.icache_miss_busy = ic_out.perf_miss_busy;
-  g_pmu_front.itlb_access = ic_out.perf_itlb_hit || ic_out.perf_itlb_miss || ic_out.perf_itlb_fault;
-  g_pmu_front.itlb_miss = ic_out.perf_itlb_miss;
-}
+void FrontComb::run_icache() { icache.comb_fetch(); }
 
 // A completed ICache read is predecoded and written to the instruction FIFO.
 void FrontComb::write_instruction_fifo() {
@@ -626,6 +613,28 @@ void FrontComb::finish() {
 }
 
 } // namespace
+
+// The front end's fetch step (front-end/icache/icache_top.h).
+void ICacheTop::comb_fetch() {
+  out = {};
+  const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
+  const FetchAddrFifoOut &fetch_addr_head = *in.fetch_addr_head;
+
+  out.ic_in.reset = global_reset;
+  out.ic_in.refetch = global_refetch;
+  out.ic_in.itlb_flush = in.in->ctrl.itlb_flush;
+  out.ic_in.fence_i = in.in->ctrl.fence_i;
+  out.ic_in.invalidate_req = false;
+  out.ic_in.csr_status = in.in->csr_status;
+  out.ic_in.icache_read_valid = fetch_addr_head.read_valid;
+  out.ic_in.fetch_address = fetch_addr_head.read_valid ? fetch_addr_head.fetch_address : 0;
+  comb_calc(&out.ic_in, &out.ic_out);
+  g_pmu_front.icache_req_fire = out.ic_out.perf_req_fire;
+  g_pmu_front.icache_miss_issue = out.ic_out.perf_miss_event;
+  g_pmu_front.icache_miss_busy = out.ic_out.perf_miss_busy;
+  g_pmu_front.itlb_access = out.ic_out.perf_itlb_hit || out.ic_out.perf_itlb_miss || out.ic_out.perf_itlb_fault;
+  g_pmu_front.itlb_miss = out.ic_out.perf_itlb_miss;
+}
 
 // The predecode check (front-end/front_checker.h).
 void FrontChecker::comb() {
