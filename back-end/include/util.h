@@ -101,16 +101,15 @@ inline bool is_load(InstInfo uop) {
   return uop->type == LOAD || (uop->type == AMO && (uop->func7 >> 2) != AmoOp::SC);
 }
 
-// Move elimination (CFG_MOVE_ELIM / MOVE_ELIM in config.h): `addi rd, rs, 0` with rd and rs both real registers is
-// renamed away: rd takes over rs's physical register, no uop is issued, the ROB entry completes at dispatch.
-inline constexpr bool move_elim_enabled() { return MOVE_ELIM != 0; }
+// Move elimination (EXP-012): `addi rd, rs, 0` with rd and rs both real registers is renamed away: rd takes over rs's
+// physical register, no uop is issued, the ROB entry completes at dispatch.
 inline bool is_move_shape(const InstInfo &u) {
   return decode_inst_type(u->type) == ADD && u->src2_is_imm && !u->is_word && u->func3 == 0 && u->imm == 0 && u->src1_en &&
          !u->src1_is_pc && u->src1_areg != 0 && u.dest_en && u->dest_areg != 0;
 }
 // After rename: an eliminated move shares its source's physical register.
 inline bool is_eliminated_move(const InstInfo &u) {
-  return move_elim_enabled() && is_move_shape(u) && u.dest_preg == u->src1_preg;
+  return is_move_shape(u) && u.dest_preg == u->src1_preg;
 }
 
 static inline bool is_amo_lr_uop(const MicroOp &uop) {

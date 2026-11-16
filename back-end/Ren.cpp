@@ -27,15 +27,6 @@ static inline void fp_freelist_sanity(int spec_head, int commit_head, int tail) 
 }
 
 // Free list invariant: free slots + registers held by in-flight instructions == the managed pool.
-static inline void ren_freelist_sanity(int spec_head, int commit_head, int tail) {
-  constexpr int kManagedPool = PRF_NUM - (ARF_NUM + 1);
-  if (move_elim_enabled()) return;  // shared registers change the pool size
-  Assert(spec_head >= 0 && spec_head < PRF_NUM && commit_head >= 0 && commit_head < PRF_NUM && tail >= 0 &&
-         tail < PRF_NUM && "Ren: free list pointer out of range");
-  Assert(ring_distance(spec_head, tail) + ring_distance(commit_head, spec_head) == kManagedPool &&
-         "Ren: free slots + pending spec must equal managed pool");
-}
-
 void Ren::init() {
   int free_count = 0;
   for (int i = 0; i < PRF_NUM; i++) {
@@ -50,7 +41,6 @@ void Ren::init() {
   free_head = free_head_commit = 0;
   free_tail = free_count;
   for (int i = 0; i < MAX_BR_NUM; i++) alloc_checkpoint_head[i] = free_head;
-  ren_freelist_sanity(free_head, free_head_commit, free_tail);
   {
     int fp_free_count = 0;
     for (int i = 0; i < FPRF_NUM; i++) {
@@ -107,7 +97,6 @@ bool Ren::elim_refs_ok(int i) const {
 // Pick destination physical registers from the free list, in order. The first instruction that finds it empty stalls
 // itself and everything behind it (ren2dis.valid = 0).
 void Ren::comb_alloc() {
-  ren_freelist_sanity(free_head, free_head_commit, free_tail);
   int head = free_head;
   int left = ring_distance(free_head, free_tail);
   int fhead = fp_free_head;
@@ -119,7 +108,7 @@ void Ren::comb_alloc() {
     elim[i] = false;
     wires->ren2dis.valid[i] = false;
     if (!inst_valid[i]) continue;
-    if (move_elim_enabled() && is_move_shape(inst_r[i]) && elim_refs_ok(i)) {
+    if (is_move_shape(inst_r[i]) && elim_refs_ok(i)) {
       elim[i] = true;
       wires->ren2dis.valid[i] = !stall;
     } else if (!inst_r[i].dest_en) {
@@ -266,25 +255,18 @@ void Ren::comb_fire() {
       fp_arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
     } else
     if (inst->dest_en && !is_exception(*inst) && !interrupt) {
-      if (move_elim_enabled()) {
-        // the old register is freed when no architectural register names it any more; an eliminated move
-        // allocated nothing, so it does not advance the commit head
-        Assert(!mispred && "Ren(ME): commit together with mispredict");
-        if (!is_eliminated_move(*inst)) {
-          Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
-          LOOP_INC(free_head_commit_1, PRF_NUM);
-        }
-        arch_cnt[inst->dest_preg]++;
-        const auto old = (*inst)->old_dest_preg;
-        if (--arch_cnt[old] == 0) {
-          free_list_1[free_tail_1] = old;
-          LOOP_INC(free_tail_1, PRF_NUM);
-        }
-      } else {
+      // move elimination: the old register is freed when no architectural register names it any more; an eliminated
+      // move allocated nothing, so it does not advance the commit head
+      Assert(!mispred && "Ren(ME): commit together with mispredict");
+      if (!is_eliminated_move(*inst)) {
         Assert(free_head_commit_1 != free_head_1 && "Ren: commit reclaim when no pending spec allocation");
-        free_list_1[free_tail_1] = (*inst)->old_dest_preg;
-        LOOP_INC(free_tail_1, PRF_NUM);
         LOOP_INC(free_head_commit_1, PRF_NUM);
+      }
+      arch_cnt[inst->dest_preg]++;
+      const auto old = (*inst)->old_dest_preg;
+      if (--arch_cnt[old] == 0) {
+        free_list_1[free_tail_1] = old;
+        LOOP_INC(free_tail_1, PRF_NUM);
       }
       arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
     }
@@ -307,7 +289,6 @@ void Ren::comb_fire() {
     fp_free_head_1 = fp_alloc_checkpoint_head[br];
     fp_free_tail_1 = fp_free_tail;
   }
-  ren_freelist_sanity(free_head_1, free_head_commit_1, free_tail_1);
   fp_freelist_sanity(fp_free_head_1, fp_free_head_commit_1, fp_free_tail_1);
 }
 
