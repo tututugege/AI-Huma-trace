@@ -14,12 +14,10 @@ CXXFLAGS += -MMD -MP
 CXXFLAGS += -Wall -Wextra -Wno-unused-parameter
 CXXFLAGS += --std=c++2a
 CXXFLAGS += $(EXTRA_CXXFLAGS)
-# register width of the core and of the function model (default 64; rv32 only exists on branch rv32-legacy). Needs a librefcpu built with the same XLEN, FP, RVC.
+# register width of the core and of the function model (default 64; rv32 only exists on branch rv32-legacy). Needs a librefcpu built with the same XLEN, RVC (and FP=1).
 XLEN ?= 64
 CXXFLAGS += -DXLEN=$(XLEN)
-# F/D (EXP-030): FP=1 (default; rv32 and rv64) needs a librefcpu built with the same FP (RefCpuState carries the FP registers); FP=0 = no floating point
-FP ?= 1
-CXXFLAGS += -DFP=$(FP)
+# F/D (EXP-030) is always built in: librefcpu must be built with FP=1 (its default; RefCpuState carries the FP registers).
 # C extension (EXP-038): RVC=1 needs a librefcpu built with RVC=1 (inst_len, halfword fetch); default 0
 RVC ?= 0
 CXXFLAGS += -DRVC=$(RVC)

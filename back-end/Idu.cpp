@@ -168,7 +168,7 @@ bool is_known_csr(uint32_t c) {
   case number_sie: case number_sip: case number_satp: case number_mhartid: case number_misa:
     return true;
   case number_fflags: case number_frm: case number_fcsr:
-    return FP != 0;
+    return true;
   default:
     return false;
   }
@@ -292,7 +292,6 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     uop->imm = 0;
     uop->is_atomic = true;
     break;
-#if FP
   // F/D (rv64): the function model decides what traps (reserved rounding modes, mstatus.FS = Off): an executed FP uop whose fact
   // says "trapped with illegal instruction" becomes the exception in Fu::compute.  Statically reserved encodings trap here.
   case 0x07:  // flw / fld
@@ -342,7 +341,6 @@ void Idu::decode(Uop &uop, uint32_t inst) {
     }
     break;
   }
-#endif
   default:
     set(false, false, false, NOP);
     uop.illegal_inst = true;

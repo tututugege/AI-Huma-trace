@@ -10,11 +10,7 @@ namespace {
 // TB_TRACE_TRAP=1 prints every trap the CSR model takes (cause, epc, tval, target)
 bool trace_traps() { static const bool on = std::getenv("TB_TRACE_TRAP") != nullptr; return on; }
 // mstatus bits visible through sstatus / writable (as in the function model: rv64 has no SD tracking, UXL = SXL = 2 are read-only)
-#if FP
 constexpr xlen_t kSstatusMask = 0x80000003000DE133ull;   // SD included (FS = Dirty)
-#else
-constexpr xlen_t kSstatusMask = 0x00000003000DE133ull;
-#endif
 constexpr xlen_t kSstatusWriteMask = 0x00000000000DE133ull;
 constexpr xlen_t kMstatusWriteMask = 0x00000000007FF9BBull;
 constexpr xlen_t kMstatusReset = 0x0000000A00000000ull;
@@ -45,11 +41,7 @@ IrqState eval_interrupts(xlen_t mstatus, xlen_t mie, xlen_t mip, xlen_t mideleg,
 }  // namespace
 
 void Csr::init() {
-#if FP
   CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x14112B | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
-#else
-  CSR_RegFile[csr_misa] = CSR_RegFile_1[csr_misa] = (xlen_t(2) << 62) | (0x141103 | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B
-#endif
   CSR_RegFile[csr_mstatus] = CSR_RegFile_1[csr_mstatus] = kMstatusReset;
   CSR_RegFile[csr_sstatus] = CSR_RegFile_1[csr_sstatus] = kMstatusReset & kSstatusMask;
 }
@@ -223,13 +215,11 @@ void Csr::comb_csr_write() {
     CSR_RegFile_1[csr_sip] = CSR_RegFile[csr_mip] & CSR_RegFile_1[csr_mideleg];
   } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
     write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask, kSstatusMask);
-#if FP
     {  // SD follows FS
       const xlen_t sd = xlen_t(1) << (XLEN - 1);
       if (((CSR_RegFile_1[csr_mstatus] >> 13) & 3) == 3) CSR_RegFile_1[csr_mstatus] |= sd; else CSR_RegFile_1[csr_mstatus] &= ~sd;
       CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & kSstatusMask;
     }
-#endif
   } else if (csr_idx == number_satp) {
     const xlen_t old_satp = CSR_RegFile[csr_satp];
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
@@ -243,13 +233,11 @@ void Csr::comb_csr_write() {
 }
 
 void Csr::seq() {
-#if FP
   if (fs_dirty_req) {   // FS = Dirty, SD: applied on top of whatever else changed mstatus this cycle
     CSR_RegFile_1[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     CSR_RegFile_1[csr_sstatus] = CSR_RegFile_1[csr_mstatus] & kSstatusMask;
     fs_dirty_req = false;
   }
-#endif
   for (int i = 0; i < CSR_NUM; i++) CSR_RegFile[i] = CSR_RegFile_1[i];
   csr_idx = csr_idx_1;
   csr_wdata = csr_wdata_1;

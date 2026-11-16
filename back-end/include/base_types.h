@@ -1,9 +1,6 @@
 #pragma once
 #include <cstdint>
 // F/D build switch: -DFP=1 (default) = standard F/D on rv32 and rv64, -DFP=0 = no floating point at all; also defined in config.h
-#ifndef FP
-#define FP 1
-#endif
 #include <type_traits>
 
 #define SIMULATOR_HAS_PARENT_WIRE_REG 1
@@ -318,7 +315,7 @@ enum IQType {
   IQ_FP,   // F/D only (FP=1)
 };
 // (an unscoped enum value IQ_NUM before F/D: the count is FP dependent now)
-constexpr int IQ_NUM = FP ? 6 : 5;
+constexpr int IQ_NUM = 6;
 
 constexpr int ROB_CPLT_MASK_WIDTH = 3;
 constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G0 = 0x1;

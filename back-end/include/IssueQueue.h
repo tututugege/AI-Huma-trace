@@ -146,7 +146,7 @@ public:
     wake_matrix_src2.resize(TAG_NUM * wake_words_per_row, 0);
     wake_matrix_src1_1.resize(TAG_NUM * wake_words_per_row, 0);
     wake_matrix_src2_1.resize(TAG_NUM * wake_words_per_row, 0);
-    if (FP) {
+    {
       wake_matrix_src3.resize(TAG_NUM * wake_words_per_row, 0);
       wake_matrix_src3_1.resize(TAG_NUM * wake_words_per_row, 0);
     }
@@ -229,7 +229,7 @@ public:
         }
         wake_matrix_src2_1[row_base + w] = 0;
 
-        if (FP) {
+        {
           uint64_t mask3 = wake_matrix_src3_1[row_base + w];
           while (mask3) {
             int bit = __builtin_ctzll(mask3);
@@ -404,7 +404,7 @@ public:
         for (int w = 0; w < wake_words_per_row; w++) {
           wake_matrix_src1[base + w] = wake_matrix_src1_1[base + w];
           wake_matrix_src2[base + w] = wake_matrix_src2_1[base + w];
-          if (FP) wake_matrix_src3[base + w] = wake_matrix_src3_1[base + w];
+          wake_matrix_src3[base + w] = wake_matrix_src3_1[base + w];
         }
         row_dirty[r] = 0;
       }
@@ -506,7 +506,7 @@ private:
         mark_row(preg);
       }
     }
-    if (FP && ent.uop->src3_en && ent.uop.src3_busy) {
+    if (ent.uop->src3_en && ent.uop.src3_busy) {
       uint32_t preg = ent.uop->src3_preg;
       if (preg < TAG_NUM) {
         wake_matrix_src3_1[matrix_row_base(preg) + word] |= bit;
@@ -534,7 +534,7 @@ private:
         mark_row(preg);
       }
     }
-    if (FP && ent.uop->src3_en) {
+    if (ent.uop->src3_en) {
       uint32_t preg = ent.uop->src3_preg;
       if (preg < TAG_NUM) {
         wake_matrix_src3_1[matrix_row_base(preg) + word] &= clear_mask;

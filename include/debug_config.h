@@ -119,9 +119,6 @@ constexpr uint64_t MMU_LOG_START = LOG_START;
 // BackTop::comb() before any comb_* runs. This helps detect hidden dependence
 // on previous-cycle IO values (latch-like behavior in combinational paths).
 // Keep disabled for normal runs.
-#ifndef CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN
-#define CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN 0
-#endif
 
 
 

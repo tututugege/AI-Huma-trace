@@ -144,40 +144,19 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
  * 0 = use true icache
  * 1 = use ideal icache
  */
-#ifndef FRONTEND_ICACHE_MODE
-#define FRONTEND_ICACHE_MODE 0
-#endif
 
 /* Front-end dual request switch for ideal icache (1: on, 0: off) */
-#ifndef ENABLE_FRONTEND_IDEAL_ICACHE_DUAL_REQ
-#define ENABLE_FRONTEND_IDEAL_ICACHE_DUAL_REQ 0
-#endif
 
 /* Derive legacy USE_TRUE_ICACHE / USE_IDEAL_ICACHE macros from mode switch */
-#if FRONTEND_ICACHE_MODE == 1
-#ifdef USE_TRUE_ICACHE
-#undef USE_TRUE_ICACHE
-#endif
-#ifndef USE_IDEAL_ICACHE
-#define USE_IDEAL_ICACHE
-#endif
-#elif FRONTEND_ICACHE_MODE == 0
 #ifdef USE_IDEAL_ICACHE
 #undef USE_IDEAL_ICACHE
 #endif
 #ifndef USE_TRUE_ICACHE
 #define USE_TRUE_ICACHE
 #endif
-#else
-#error "FRONTEND_ICACHE_MODE must be 0 (true) or 1 (ideal)"
-#endif
 
 /* Dual request only active under ideal icache mode */
-#if (FRONTEND_ICACHE_MODE == 1) && ENABLE_FRONTEND_IDEAL_ICACHE_DUAL_REQ
-#define FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE 1
-#else
 #define FRONTEND_IDEAL_ICACHE_DUAL_REQ_ACTIVE 0
-#endif
 
 // 统一使用全局 config.h 中的 ICACHE_LINE_SIZE。
 // 真实 icache miss 延迟由 shared AXI / SimDDR 配置建模。

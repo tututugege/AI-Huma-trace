@@ -212,62 +212,6 @@ void BackTop::comb_stage_fire_and_recover() {
 // Diagnostic mode (CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN): clear the stage IOs to expose hidden dependence on
 // previous-cycle combinational values.
 void BackTop::clear_stage_ios() {
-#if CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN
-  // Diagnostic mode: clear backend internal stage IOs to expose hidden
-  // dependence on previous-cycle combinational values.
-  pre2front = {};
-  pre_issue = {};
-  ftq_prf_pc_req = {};
-  ftq_prf_pc_resp = {};
-  ftq_rob_pc_req = {};
-  ftq_rob_pc_resp = {};
-  ftq_commit_info = {};
-
-  dec2ren = {};
-  dec_bcast = {};
-
-  ren2dec = {};
-  idu_consume = {};
-  ren2dis = {};
-
-  dis2ren = {};
-  dis2iss = {};
-  dis2rob = {};
-  dis2lsu = {};
-
-  iss_awake = {};
-  iss2prf = {};
-  iss2dis = {};
-
-  prf2exe = {};
-  prf_awake = {};
-  lsu_awake = {};
-
-  exu2id = {};
-  // Known issue path: ROB consumes exu2rob before EXU refreshes it in current
-  // comb order. Keep it out of global clear for now and handle EXU separately.
-  exe2prf = {};
-  exe2iss = {};
-  exe2lsu = {};
-  exe2csr = {};
-
-  rob2dis = {};
-  rob2csr = {};
-  rob_bcast = {};
-  rob_commit = {};
-
-  csr2exe = {};
-  csr2rob = {};
-  csr2front = {};
-
-  lsu2exe = {};
-  lsu2dis = {};
-  lsu2rob = {};
-  out.peripheral_req = {};
-  out.lsu2dcache = {};
-  lsu2mmu_io = {};
-  mmu2lsu_io = {};
-#endif
 }
 
 // Outputs to the front end / difftest: redirect (mispredict or flush target), commit group.
@@ -320,9 +264,7 @@ void BackTop::comb_outputs() {
             rob_commit.commit_entry[i].valid);
     if (rob_commit.commit_entry[i].valid &&
         !rob_bcast.interrupt) {
-#if FP
       if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) csr->fs_dirty_req = true;
-#endif
       tbhook::on_commit(
           (uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }

@@ -16,7 +16,6 @@ static bool elim[DECODE_WIDTH];  // move elimination: renamed away, takes no fre
 
 static inline int ring_distance(int from, int to) { return to >= from ? to - from : to - from + PRF_NUM; }
 
-#if FP
 static inline int fp_ring_distance(int from, int to) { return to >= from ? to - from : to - from + FPRF_NUM; }
 // FP free list invariant: free slots + registers held by in-flight instructions == the managed pool (no move elimination here)
 static inline void fp_freelist_sanity(int spec_head, int commit_head, int tail) {
@@ -26,7 +25,6 @@ static inline void fp_freelist_sanity(int spec_head, int commit_head, int tail) 
   Assert(fp_ring_distance(spec_head, tail) + fp_ring_distance(commit_head, spec_head) == kManagedPool &&
          "Ren: FP free slots + pending spec must equal the managed pool (FP register leak)");
 }
-#endif
 
 // Free list invariant: free slots + registers held by in-flight instructions == the managed pool.
 static inline void ren_freelist_sanity(int spec_head, int commit_head, int tail) {
@@ -53,7 +51,6 @@ void Ren::init() {
   free_tail = free_count;
   for (int i = 0; i < MAX_BR_NUM; i++) alloc_checkpoint_head[i] = free_head;
   ren_freelist_sanity(free_head, free_head_commit, free_tail);
-#if FP
   {
     int fp_free_count = 0;
     for (int i = 0; i < FPRF_NUM; i++) {
@@ -72,7 +69,6 @@ void Ren::init() {
     fp_free_tail_1 = fp_free_tail;
     memcpy(fp_alloc_checkpoint_head_1, fp_alloc_checkpoint_head, sizeof(fp_alloc_checkpoint_head));
   }
-#endif
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
     inst_r[i] = inst_r_1[i] = {};
@@ -114,11 +110,9 @@ void Ren::comb_alloc() {
   ren_freelist_sanity(free_head, free_head_commit, free_tail);
   int head = free_head;
   int left = ring_distance(free_head, free_tail);
-#if FP
   int fhead = fp_free_head;
   int fleft = fp_ring_distance(fp_free_head, fp_free_tail);
   fp_freelist_sanity(fp_free_head, fp_free_head_commit, fp_free_tail);
-#endif
   bool stall = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     alloc_reg[i] = 0;
@@ -130,7 +124,6 @@ void Ren::comb_alloc() {
       wires->ren2dis.valid[i] = !stall;
     } else if (!inst_r[i].dest_en) {
       wires->ren2dis.valid[i] = !stall;
-#if FP
     } else if (inst_r[i]->dest_fp) {  // each domain stalls on its own free list; everything behind a stalled slot waits
       if (!stall && fleft > 0) {
         alloc_reg[i] = fp_free_list[fhead];
@@ -140,7 +133,6 @@ void Ren::comb_alloc() {
       } else {
         stall = true;
       }
-#endif
     } else if (!stall && left > 0) {
       alloc_reg[i] = free_list[head];
       wires->ren2dis.valid[i] = true;
@@ -168,9 +160,7 @@ void Ren::comb_rename() {
     if (msd::on && inst_r[i].dest_en && !elim[i] && alloc_reg[i] != 0 && alloc_reg[i] < TAG_NUM) msd::taint[alloc_reg[i]] = msd::TV{};
     auto lookup = [&](int areg, bool fp) {
       wire<PRF_IDX_WIDTH> p = 0;
-#if FP
       if (fp) p = fp_spec_RAT[areg]; else
-#endif
       p = spec_RAT[areg];
       for (int j = 0; j < i; j++) {
         if (!inst_valid[j] || !inst_r[j].dest_en || bool(inst_r[j]->dest_fp) != fp) continue;
@@ -180,9 +170,7 @@ void Ren::comb_rename() {
     };
     wires->ren2dis.uop[i]->src1_preg = lookup(inst_r[i]->src1_areg, inst_r[i]->src1_fp);
     wires->ren2dis.uop[i]->src2_preg = lookup(inst_r[i]->src2_areg, inst_r[i]->src2_fp);
-#if FP
     if (inst_r[i]->src3_en) wires->ren2dis.uop[i]->src3_preg = lookup(inst_r[i]->src3_areg, inst_r[i]->src3_fp);
-#endif
     wires->ren2dis.uop[i]->old_dest_preg = lookup(inst_r[i]->dest_areg, inst_r[i]->dest_fp);
     if (elim[i]) {
       dest_of[i] = wires->ren2dis.uop[i]->src1_preg;
@@ -269,13 +257,11 @@ void Ren::comb_fire() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!fire[i]) continue;
     if (wires->ren2dis.uop[i].dest_en) {
-#if FP
       if (inst_r[i]->dest_fp) {
         fp_spec_RAT_1[inst_r[i]->dest_areg] = wires->ren2dis.uop[i].dest_preg;
         Assert(fp_free_head_1 != fp_free_tail_1 && "Ren: allocate when the FP free list is empty");
         LOOP_INC(fp_free_head_1, FPRF_NUM);
       } else
-#endif
       {
         spec_RAT_1[inst_r[i]->dest_areg] = wires->ren2dis.uop[i].dest_preg;
         if (!elim[i]) {
@@ -290,11 +276,9 @@ void Ren::comb_fire() {
       memcpy(RAT_checkpoint_1[br_id], spec_RAT_1, sizeof(spec_RAT_1));
       ckpt_dirty |= uint64_t(1) << br_id;
       alloc_checkpoint_head_1[br_id] = free_head_1;
-#if FP
       ckpt_dirty_fp |= uint64_t(1) << br_id;
       memcpy(fp_RAT_checkpoint_1[br_id], fp_spec_RAT_1, sizeof(fp_spec_RAT_1));
       fp_alloc_checkpoint_head_1[br_id] = fp_free_head_1;
-#endif
     }
   }
 
@@ -310,7 +294,6 @@ void Ren::comb_fire() {
     InstEntry commit_entry = commit_uop.to_inst_entry(wires->rob_commit.commit_entry[i].valid);
     InstInfo *inst = &commit_entry.uop;
     // An exception instruction does not free its old destination: it looks as if it never committed.
-#if FP
     if (inst->dest_en && !is_exception(*inst) && !interrupt && (*inst)->dest_fp) {  // FP destination: no move elimination
       Assert(fp_free_head_commit_1 != fp_free_head_1 && "Ren: FP commit reclaim when no pending spec allocation");
       fp_free_list_1[fp_free_tail_1] = (*inst)->old_dest_preg;
@@ -318,7 +301,6 @@ void Ren::comb_fire() {
       LOOP_INC(fp_free_head_commit_1, FPRF_NUM);
       fp_arch_RAT_1[(*inst)->dest_areg] = inst->dest_preg;
     } else
-#endif
     if (inst->dest_en && !is_exception(*inst) && !interrupt) {
       if (move_elim_enabled()) {
         // the old register is freed when no architectural register names it any more; an eliminated move
@@ -356,26 +338,20 @@ void Ren::comb_fire() {
   if (flush) {
     memcpy(spec_RAT_1, arch_RAT_1, sizeof(spec_RAT_1));
     free_head_1 = free_head_commit_1;
-#if FP
     memcpy(fp_spec_RAT_1, fp_arch_RAT_1, sizeof(fp_spec_RAT_1));
     fp_free_head_1 = fp_free_head_commit_1;
-#endif
   } else if (mispred) {  // never together with flush
     const auto br = wires->dec_bcast.br_id;
     Assert(br < MAX_BR_NUM && br != 0 && "Ren: mispred br_id out of range");
     memcpy(spec_RAT_1, RAT_checkpoint[br], sizeof(spec_RAT_1));
     free_head_1 = alloc_checkpoint_head[br];
     free_tail_1 = free_tail;  // reclaims of this cycle are dropped, as in the original
-#if FP
     memcpy(fp_spec_RAT_1, fp_RAT_checkpoint[br], sizeof(fp_spec_RAT_1));
     fp_free_head_1 = fp_alloc_checkpoint_head[br];
     fp_free_tail_1 = fp_free_tail;
-#endif
   }
   ren_freelist_sanity(free_head_1, free_head_commit_1, free_tail_1);
-#if FP
   fp_freelist_sanity(fp_free_head_1, fp_free_head_commit_1, fp_free_tail_1);
-#endif
   if (move_elim_enabled()) me_check();
 }
 
@@ -414,7 +390,6 @@ void Ren::seq() {
   }
   ckpt_dirty = 0;
   memcpy(alloc_checkpoint_head, alloc_checkpoint_head_1, sizeof(alloc_checkpoint_head));
-#if FP
   memcpy(fp_spec_RAT, fp_spec_RAT_1, sizeof(fp_spec_RAT));
   memcpy(fp_arch_RAT, fp_arch_RAT_1, sizeof(fp_arch_RAT));
   memcpy(fp_free_list, fp_free_list_1, sizeof(fp_free_list));
@@ -427,5 +402,4 @@ void Ren::seq() {
   }
   ckpt_dirty_fp = 0;
   memcpy(fp_alloc_checkpoint_head, fp_alloc_checkpoint_head_1, sizeof(fp_alloc_checkpoint_head));
-#endif
 }

@@ -24,10 +24,8 @@ RefCpuContext *core() {
 RefCpuState to_ref_state(const CPU_state &state, uint8_t privilege) {
   RefCpuState ref_state{};
   std::memcpy(ref_state.gpr, state.gpr, sizeof(ref_state.gpr));
-#if FP
   std::memcpy(ref_state.fpr, state.fpr, sizeof(ref_state.fpr));
   ref_state.fcsr = state.fcsr;
-#endif
   std::memcpy(ref_state.csr, state.csr, sizeof(ref_state.csr));
   ref_state.pc = state.pc;
   ref_state.store_addr = state.store_addr;
@@ -49,10 +47,8 @@ RefCpuState to_ref_state(const CPU_state &state, uint8_t privilege) {
 CPU_state from_ref_state(const RefCpuState &ref_state) {
   CPU_state state{};
   std::memcpy(state.gpr, ref_state.gpr, sizeof(state.gpr));
-#if FP
   std::memcpy(state.fpr, ref_state.fpr, sizeof(state.fpr));
   state.fcsr = ref_state.fcsr;
-#endif
   std::memcpy(state.csr, ref_state.csr, sizeof(state.csr));
   state.pc = ref_state.pc;
   state.store_addr = ref_state.store_addr;

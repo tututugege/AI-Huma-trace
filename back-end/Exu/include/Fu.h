@@ -69,7 +69,7 @@ inline void compute(FuKind kind, ExuInst &inst) {
   default:
     break;
   }
-  if (FP) fp_trap(inst);
+  fp_trap(inst);
   if (msd::on) {
     msd::self_check(inst);
     msd::exec(0, inst);

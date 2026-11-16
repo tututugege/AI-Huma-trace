@@ -87,7 +87,6 @@ void Isu::comb_begin() {
 int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
   if (uop == UOP_MUL) return MUL_MAX_LATENCY;
   if (uop == UOP_DIV) return div_latency(word);
-#if FP
   if (uop == UOP_FMA) return FP_FMA_LAT;
   if (uop == UOP_FMISC) return FP_MISC_LAT;
   if (uop == UOP_I2F) return FP_I2F_LAT;
@@ -95,7 +94,6 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
     const bool d = func7 & 1, sq = (func7 >> 2) == 0x0b;
     return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
   }
-#endif
   return 1;
 }
 
@@ -128,10 +126,8 @@ bool Isu::grant_gate(const Uop &u, int port) {
   const int lat = get_latency(t, u->func7, u->is_word);
   const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
   if (!g_wb.free(port, off)) return false;   // another uop of the port completes in that cycle
-#if FP
   if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
       !g_fp_stats.try_reserve(lat)) return false;
-#endif
   g_wb.reserve(port, off);
   return true;
 }
@@ -140,12 +136,8 @@ bool Isu::grant_gate(const Uop &u, int port) {
 void Isu::comb_issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
   g_wb.new_cycle(wires->rob_bcast.flush);
-#if FP
   g_fp_stats.new_cycle(wires->rob_bcast.flush);
-#endif
-#if FP
   int fp_reads = 0, std_reads = 0;
-#endif
   for (auto &q : iqs) {
     q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
@@ -156,7 +148,6 @@ void Isu::comb_issue() {
       Assert(!wires->iss2prf.iss_entry[p].valid);
       wires->iss2prf.iss_entry[p].valid = true;
       wires->iss2prf.iss_entry[p].uop = grant.uop;
-#if FP
       {
         const Uop &g = grant.uop;
         const int reads = (g->src1_en && g->src1_fp) + (g->src2_en && g->src2_fp) + (g->src3_en && g->src3_fp);
@@ -176,13 +167,10 @@ void Isu::comb_issue() {
         st.issued[t]++;
         if (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV) st.d_issued += grant.uop->func7 & 1;
       }
-#endif
     }
   }
-#if FP
   FpStats::bump(g_fp_stats.rd_hist, fp_reads);
   FpStats::bump(g_fp_stats.std_hist, std_reads);
-#endif
 }
 
 // Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and
@@ -260,7 +248,6 @@ void Isu::comb_awake() {
     }
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++)
     if (div_wake_slots[i].valid && div_wake_slots[i].countdown == 0) drive(div_base + i, div_wake_slots[i].dest_preg, "Delayed writeback collision");
-#if FP
   {  // the FP slots fire on the FPW_CH channels after the fast ones, in slot order
     int ch = fast_base + ALU_NUM;
     for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
@@ -269,7 +256,6 @@ void Isu::comb_awake() {
         drive(ch++, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
       }
   }
-#endif
   if (MUL_MAX_LATENCY > 1)
     for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)
       if (mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");

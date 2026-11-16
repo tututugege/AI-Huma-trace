@@ -13,9 +13,6 @@
 
 // F/D (EXP-030): the standard floating-point extensions, rv32 and rv64 (the function model's FP; Zfinx no longer exists).  The build
 // passes -DFP=<0|1> (default 1); the same value must be used for librefcpu.a.  FP=0 is a core without floating point.
-#ifndef FP
-#define FP 1
-#endif
 
 // Default profile:
 // - wide frontend / backend
@@ -177,9 +174,6 @@ static_assert(CONFIG_AXI_SUBSYSTEM_FREQ_DIV >= 1,
 
 // Enable the dedicated AXI-backed icache memory path.
 // Keep this disabled when axi-interconnect-kit is not present.
-#ifndef CONFIG_ICACHE_USE_AXI_MEM_PORT
-#define CONFIG_ICACHE_USE_AXI_MEM_PORT 1
-#endif
 
 // Enable the shared AXI LLC path.
 #ifndef CONFIG_AXI_LLC_ENABLE
@@ -259,11 +253,11 @@ constexpr int PRF_NUM = CFG_PRF_NUM;
 #ifndef CFG_FPRF_NUM
 #define CFG_FPRF_NUM 96
 #endif
-constexpr int FPRF_NUM = FP ? CFG_FPRF_NUM : 0;
+constexpr int FPRF_NUM = CFG_FPRF_NUM;
 constexpr int FP_TAG_BASE = PRF_NUM;
 constexpr int TAG_NUM = PRF_NUM + FPRF_NUM;
 constexpr int FP_ARF_NUM = 32;
-static_assert(!FP || FPRF_NUM > FP_ARF_NUM + 1, "CFG_FPRF_NUM too small");
+static_assert(FPRF_NUM > FP_ARF_NUM + 1, "CFG_FPRF_NUM too small");
 #ifndef CFG_MAX_BR_NUM
 #define CFG_MAX_BR_NUM 32
 #endif
@@ -350,7 +344,7 @@ inline unsigned lsu_pipe_env_mask(const char *name, unsigned dflt) {
   const char *e = std::getenv(name);
   return e && e[0] ? (unsigned)std::atoi(e) : dflt;
 }
-constexpr int CSR_NUM = FP ? 22 : 21;   // F/D: + the fcsr register (fflags / frm / fcsr)
+constexpr int CSR_NUM = 22;   // F/D: + the fcsr register (fflags / frm / fcsr)
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;
 #ifndef CFG_ROB_NUM
@@ -493,13 +487,8 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL |
              OP_MASK_CSR), // Port 0: ALU + MUL/DIV + CSR
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV
-#if FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL | OP_MASK_I2F), // Port 2: ALU + MUL + integer -> FP
     PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_I2F), // Port 3: ALU + DIV + integer -> FP
-#else
-    PORT_CFG(OP_MASK_ALU | OP_MASK_MUL), // Port 2: ALU + MUL
-    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 3: ALU + DIV
-#endif
 #if CFG_PLAIN_ALU_PORTS >= 1
     PORT_CFG(OP_MASK_ALU ), // plain ALU
 #endif
@@ -555,13 +544,11 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
 #if CFG_BR_PORTS >= 4
     PORT_CFG(OP_MASK_BR),
 #endif
-#if FP
     // F/D issue ports (last: the FP queue binds by base + offset): two FMA pipes, a divide / square-root unit; all three
     // also take the miscellaneous FP operations (each as its own unit, so a long divide does not block them)
     PORT_CFG(OP_MASK_FMA | OP_MASK_FMISC),
     PORT_CFG(OP_MASK_FMA | OP_MASK_FMISC),
     PORT_CFG(OP_MASK_FDIV | OP_MASK_FMISC),
-#endif
 };
 #undef PORT_CFG
 
@@ -646,7 +633,7 @@ constexpr int DTLB_ENTRIES = 64;
 
 // F/D: wake-up channels of the delayed FP wake-ups (one result per FP unit and cycle at most: 3 FP ports (FMA/MISC or DIV each
 // completing one uop per cycle in the worst case counted per unit) + 2 integer ports with I2F; 8 is a safe bound)
-constexpr int FPW_CH = FP ? 8 : 0;
+constexpr int FPW_CH = 8;
 constexpr int MAX_WAKEUP_PORTS =
     LSU_LOAD_WB_WIDTH + count_ports_with_mask(OP_MASK_ALU) +
     count_ports_with_mask(OP_MASK_MUL) + count_ports_with_mask(OP_MASK_DIV) +
@@ -673,7 +660,7 @@ constexpr int IQ_LD_PORT_BASE = find_first_port_with_mask(OP_MASK_LD);
 constexpr int IQ_STA_PORT_BASE = find_first_port_with_mask(OP_MASK_STA);
 constexpr int IQ_STD_PORT_BASE = find_first_port_with_mask(OP_MASK_STD);
 constexpr int IQ_BR_PORT_BASE = find_first_port_with_mask(OP_MASK_BR);
-constexpr int IQ_FP_PORT_BASE = FP ? find_first_port_with_mask(OP_MASK_FPQ) : 0;
+constexpr int IQ_FP_PORT_BASE = find_first_port_with_mask(OP_MASK_FPQ);
 
 // ============================================================
 // Derived Counts
@@ -711,10 +698,8 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
      count_ports_with_mask(OP_MASK_STD)},
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
      count_ports_with_mask(OP_MASK_BR)}
-#if FP
     ,
     {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)}
-#endif
 };
 
 // per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)

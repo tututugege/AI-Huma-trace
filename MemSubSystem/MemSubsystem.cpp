@@ -11,13 +11,8 @@
 #include "AXI_Interconnect.h"
 #define AXI_KIT_HEADERS_AVAILABLE 1
 
-#if AXI_KIT_HEADERS_AVAILABLE && CONFIG_ICACHE_USE_AXI_MEM_PORT
 #define AXI_KIT_RUNTIME_ENABLED 1
-#else
-#define AXI_KIT_RUNTIME_ENABLED 0
-#endif
 
-#if AXI_KIT_RUNTIME_ENABLED
 namespace {
 
 struct AxiLlcTableRuntime {
@@ -215,9 +210,6 @@ struct AxiKitRuntime {
   AxiLlcTableRuntime llc_tables;
   axi_interconnect::AXI_LLCPerfCounters_t llc_perf_snapshot{};
 };
-#else
-struct AxiKitRuntime {};
-#endif
 
 class MemSubsystemPtwMemPortAdapter : public PtwMemPort {
 public:
@@ -345,20 +337,15 @@ void MemSubsystem::sync_ptw_port_outputs() {
 
 
 void MemSubsystem::set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg) {
-#if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {
     return;
   }
   axi_kit_runtime->llc_tables.configure(cfg);
   axi_kit_runtime->llc_perf_snapshot = {};
-#else
-  (void)cfg;
-#endif
 }
 
 void MemSubsystem::llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t *valid, const uint8_t *dirty,
                                 uint32_t repl_next) {
-#if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr || !axi_kit_runtime->llc_tables.enabled) return;
   auto &t = axi_kit_runtime->llc_tables;
   const uint32_t ways = t.config.ways;
@@ -386,53 +373,37 @@ void MemSubsystem::llc_warm_set(uint32_t set, const uint32_t *tag, const uint8_t
   t.meta.seq({}, m);
   t.valid.seq({}, v);
   t.repl.seq({}, r);
-#else
-  (void)set; (void)tag; (void)valid; (void)dirty; (void)repl_next;
-#endif
 }
 
 void MemSubsystem::llc_comb_outputs() {
-#if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {
     return;
   }
   axi_kit_runtime->llc_tables.comb_outputs();
-#endif
 }
 
 const axi_interconnect::AXI_LLC_LookupIn_t &MemSubsystem::llc_lookup_in() const {
   static const axi_interconnect::AXI_LLC_LookupIn_t kEmpty{};
-#if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {
     return kEmpty;
   }
   return axi_kit_runtime->llc_tables.lookup_in;
-#else
-  return kEmpty;
-#endif
 }
 
 void MemSubsystem::llc_seq(
     const axi_interconnect::AXI_LLC_TableOut_t &table_out,
     const axi_interconnect::AXI_LLCPerfCounters_t &perf) {
-#if AXI_KIT_RUNTIME_ENABLED
   if (axi_kit_runtime == nullptr) {
     return;
   }
   axi_kit_runtime->llc_tables.seq(table_out);
   axi_kit_runtime->llc_perf_snapshot = perf;
 
-#else
-  (void)table_out;
-  (void)perf;
-#endif
 }
 
 
 MemSubsystem::MemSubsystem(SimContext *ctx) : ctx(ctx) {
-#if AXI_KIT_RUNTIME_ENABLED
   axi_kit_runtime = std::make_unique<AxiKitRuntime>();
-#endif
   ptw_block.bind_context(ctx);
   dtlb_ptw_port_inst = std::make_unique<MemSubsystemPtwMemPortAdapter>();
   itlb_ptw_port_inst = std::make_unique<MemSubsystemPtwMemPortAdapter>();
@@ -569,7 +540,6 @@ void MemSubsystem::init() {
   peripheral_axi_write_in = {};
   peripheral_axi_write_out = {};
 
-#if AXI_KIT_RUNTIME_ENABLED
   {
     axi_interconnect::AXI_LLCConfig llc_cfg;
     llc_cfg.enable = (CONFIG_AXI_LLC_ENABLE != 0);
@@ -579,7 +549,6 @@ void MemSubsystem::init() {
     llc_cfg.lookup_latency = CONFIG_AXI_LLC_LOOKUP_LATENCY;
     set_llc_config(llc_cfg);
   }
-#endif
 }
 
 void MemSubsystem::on_commit_store(uint32_t paddr, uint64_t data, uint8_t func3) {
@@ -772,8 +741,6 @@ void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
 }
 
 void MemSubsystem::comb_outputs() {
-#if AXI_KIT_RUNTIME_ENABLED
-#endif
 
   dcache_domain_comb_outputs();
   capture_dcache_raw_response();
@@ -909,8 +876,6 @@ void MemSubsystem::comb_inputs() {
   peripheral_axi_write_out = peripheral_axi_.out.write;
 
   // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
-#if AXI_KIT_RUNTIME_ENABLED
-#endif
 
   sync_ptw_port_outputs();
   dtlb_ptw_port_inst->reset_cycle_input();
@@ -931,8 +896,6 @@ void MemSubsystem::seq() {
   peripheral_axi_.seq();
   mem_route_block.seq();
   clear_pending_dcache_response();
-#if AXI_KIT_RUNTIME_ENABLED
-#endif
   dtlb_walk_port_inst->reset_seq_input();
   itlb_walk_port_inst->reset_seq_input();
   sync_ptw_port_outputs();
