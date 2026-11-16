@@ -1,4 +1,5 @@
 #pragma once
+#include "AxiMasterPort.h"
 
 #include "DcacheConfig.h"
 #include "IO.h"
@@ -25,51 +26,18 @@ struct WBState {
     WriteBufferEntry write_buffer[DCACHE_WB_ENTRIES];
 };
 
-// AXI write-channel interface signals (IC's write_ports[MASTER_DCACHE_W]).
-// axi_in  — inputs from IC to WriteBuffer (driven by RealDcache bridge).
-// axi_out — outputs from WriteBuffer to IC (consumed by RealDcache bridge).
-struct WbAxiIn {
-    wire<1> req_ready  = false;  // IC is ready to accept the current request
-    wire<1> req_accepted = false; // one-cycle pulse when IC actually accepts it
-    wire<1> resp_valid = false;  // B response available
-    void clear() {
-        req_ready = false;
-        req_accepted = false;
-        resp_valid = false;
-    }
-};
-
-struct WbAxiOut {
-    wire<1>  req_valid      = false;  // AW+W request to IC
-    wire<32> req_addr       = 0;
-    wire<8>  req_total_size = 0;
-    wire<8>  req_id         = 0;
-    wire<64> req_wstrb      = 0;
-    wire<1>  resp_ready     = false;  // ready to accept B response
-
-    void clear() {
-        req_valid = false;
-        req_addr = 0;
-        req_total_size = 0;
-        req_id = 0;
-        req_wstrb = 0;
-        resp_ready = false;
-    }
-};
-
-
 struct WBIn {
     DcacheWBIO *dcache2wb;              // this cycle's DCache requests (dirty_info)
     const DcacheS1Reg *s1_q = nullptr;  // the stage-1 lookups of the last cycle (bypass_req, merge_req)
-    WbAxiIn *axi_in;
+    const axi_interconnect::WriteMasterPort_t *axi = nullptr;  // the DCACHE_W port: req.accepted / resp (interconnect side)
 };
 struct WBOut {
     WBDcacheIO *wb2dcache;
-    WbAxiOut *axi_out;
+    axi_interconnect::WriteMasterPort_t *axi = nullptr;        // the same port: the request and resp.ready (WB side)
 
     void clear() {
         wb2dcache->clear();
-        axi_out->clear();
+        clear_master_fields(*axi);
     }
 };
 class WriteBuffer {

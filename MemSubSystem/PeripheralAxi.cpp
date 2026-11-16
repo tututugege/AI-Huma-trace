@@ -4,9 +4,7 @@
 #include "config.h"
 #include "mmio_address_map.h"
 
-void PeripheralAxi::init() {
-  in = {};
-  out = {};
+void PeripheralAxi::init() {   // (in / out are the port bindings, set by MemSubsystem::init)
   cur = {};
   nxt = {};
   if (peripheral_resp != nullptr) {
@@ -67,7 +65,10 @@ uint32_t PeripheralAxi::extract_read_data(uint32_t raw, uint8_t func3) {
 }
 
 void PeripheralAxi::comb_outputs() {
-  out = {};
+  clear_master_fields(*out.read);
+  clear_master_fields(*out.write);
+  out.write->req.wdata.clear();
+  out.read->req.bypass = out.write->req.bypass = true;   // MMIO: never through the LLC
 
   if (peripheral_resp != nullptr) {
     *peripheral_resp = {};
@@ -85,25 +86,25 @@ void PeripheralAxi::comb_outputs() {
   if (!cur.req_accepted) {
     const uint8_t total_size = static_cast<uint8_t>(access_size_bytes(cur.func3) - 1u);
     if (cur.write) {
-      out.write.req_valid = true;
-      out.write.req_addr = cur.addr;
-      out.write.req_total_size = total_size;
-      out.write.req_id = cur.req_id;
-      out.write.req_wstrb = pack_write_strb(cur.func3);
-      out.write.req_wdata[0] = pack_write_data(cur.wdata, cur.func3);
+      out.write->req.valid = true;
+      out.write->req.addr = cur.addr;
+      out.write->req.total_size = total_size;
+      out.write->req.id = cur.req_id;
+      out.write->req.wstrb = pack_write_strb(cur.func3);
+      out.write->req.wdata[0] = pack_write_data(cur.wdata, cur.func3);
     } else {
-      out.read.req_valid = true;
-      out.read.req_addr = cur.addr;
-      out.read.req_total_size = total_size;
-      out.read.req_id = cur.req_id;
+      out.read->req.valid = true;
+      out.read->req.addr = cur.addr;
+      out.read->req.total_size = total_size;
+      out.read->req.id = cur.req_id;
     }
     return;
   }
 
   if (cur.write) {
-    out.write.resp_ready = true;
+    out.write->resp.ready = true;
   } else {
-    out.read.resp_ready = true;
+    out.read->resp.ready = true;
   }
 }
 
@@ -150,15 +151,15 @@ void PeripheralAxi::comb_inputs() {
   }
 
   if (!cur.req_accepted) {
-    if ((cur.write && in.write.req_accepted) ||
-        (!cur.write && in.read.req_accepted)) {
+    if ((cur.write && in.write->req.accepted) ||
+        (!cur.write && in.read->req.accepted)) {
       nxt.req_accepted = true;
     }
     return;
   }
 
   if (cur.write) {
-    if (in.write.resp_valid) {
+    if (in.write->resp.valid) {
       nxt.busy = false;
       nxt.write = false;
       nxt.req_accepted = false;
@@ -168,12 +169,12 @@ void PeripheralAxi::comb_inputs() {
     return;
   }
 
-  if (in.read.resp_valid) {
+  if (in.read->resp.valid) {
     nxt.busy = false;
     nxt.write = false;
     nxt.req_accepted = false;
     nxt.resp_valid = true;
-    nxt.rdata = extract_read_data(in.read.resp_data[0], cur.func3);
+    nxt.rdata = extract_read_data(in.read->resp.data[0], cur.func3);
   }
 
   if (peripheral_resp != nullptr) {

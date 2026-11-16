@@ -350,10 +350,11 @@ void MemSubsystem::init() {
   mshr_.in.s1_q = &dcache_s1_q_;
   mshr_.out.mshr2dcache = &mshr_dcache_io_;   // MSHR output → DCache input
 
-  mshr_.in.axi_in = &mshr_axi_in;    // MSHR comb input ← AXI read/write ports
-  mshr_.out.axi_out = &mshr_axi_out; // MSHR output → AXI read/write ports
-  wb_.in.axi_in = &wb_axi_in;        // WB comb input ← AXI read/write ports (for write response handling)
-  wb_.out.axi_out = &wb_axi_out;     // WB output → AXI read/write ports (for write issuance)
+  Assert(dcache_axi_r && dcache_axi_w && extra_axi_r && extra_axi_w && "MemSubsystem: AXI master ports not bound");
+  mshr_.in.axi = dcache_axi_r;       // MSHR <-> the DCACHE_R master port
+  mshr_.out.axi = dcache_axi_r;
+  wb_.in.axi = dcache_axi_w;         // write buffer <-> the DCACHE_W master port
+  wb_.out.axi = dcache_axi_w;
 
   // Internal WriteBuffer ↔ DCache wires.
   dcache_.in.wb2dcache = &wb_dcache_io_;  // WB output → DCache input
@@ -397,6 +398,10 @@ void MemSubsystem::init() {
   peripheral_axi_.peripheral_req = peripheral_req;
   peripheral_axi_.peripheral_resp = peripheral_resp;
   peripheral_axi_.peripheral_model = &peripheral_model_;
+  peripheral_axi_.in.read = extra_axi_r;   // MMIO <-> the EXTRA_R / EXTRA_W master ports
+  peripheral_axi_.out.read = extra_axi_r;
+  peripheral_axi_.in.write = extra_axi_w;
+  peripheral_axi_.out.write = extra_axi_w;
   peripheral_axi_.init();
 
   ptw_block.init();
@@ -440,14 +445,6 @@ void MemSubsystem::init() {
   fill_out_ = {};
   dcache_s1_q_ = {};
 
-  mshr_axi_in = {};
-  mshr_axi_out = {};
-  wb_axi_in = {};
-  wb_axi_out = {};
-  peripheral_axi_read_in = {};
-  peripheral_axi_read_out = {};
-  peripheral_axi_write_in = {};
-  peripheral_axi_write_out = {};
 
   {
     axi_interconnect::AXI_LLCConfig llc_cfg;
@@ -714,13 +711,9 @@ void MemSubsystem::comb_inputs() {
   ptw_block.comb_finish(ptw_feedback);
 
 
-  peripheral_axi_.in.read = peripheral_axi_read_in;
-  peripheral_axi_.in.write = peripheral_axi_write_in;
   peripheral_axi_.comb_outputs();
   peripheral_axi_.comb_inputs();
 
-  peripheral_axi_read_out = peripheral_axi_.out.read;
-  peripheral_axi_write_out = peripheral_axi_.out.write;
 
   // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "AxiMasterPort.h"
 
 #include "config.h"
 #include "types.h"
@@ -34,38 +35,14 @@ struct MSHR_STATE{
     MSHREntry mshr_entries[DCACHE_MSHR_ENTRIES];
 };
 
-struct MshrAxiIn {
-    wire<1>     req_ready  = false;   // IC ready-first hint for AR request
-    wire<1>     req_accepted = false; // true AR handshake committed in IC seq
-    wire<8>     req_accepted_id = 0; // accepted request ID from IC
-    wire<1>     resp_valid = false;   // R data available from IC
-    wire<8>     resp_id    = 0;       // transaction ID echoed back
-};
-
-struct MshrAxiOut {
-    wire<1>     req_valid      = false;  // AR request to IC
-    wire<32>    req_addr       = 0;
-    wire<8>     req_total_size = 0;
-    wire<8>     req_id         = 0;
-    wire<1>     resp_ready     = false;  // ready to accept R data
-    void clear() {
-        req_valid = false;
-        req_addr = 0;
-        req_total_size = 0;
-        req_id = 0;
-        resp_ready = false;
-    }
-};
-
-
 struct MSHRINIO{
     DcacheMSHRIO* dcache2mshr;          // this cycle's DCache requests (mshr_req, fill_resp)
     const DcacheS1Reg* s1_q = nullptr;  // the stage-1 lookups of the last cycle (find_req)
-    MshrAxiIn*  axi_in;
+    const axi_interconnect::ReadMasterPort_t *axi = nullptr;  // the DCACHE_R port: req.accepted / resp (interconnect side)
 };
 struct MSHROUTIO{
     MSHRDcacheIO* mshr2dcache;
-    MshrAxiOut* axi_out;
+    axi_interconnect::ReadMasterPort_t *axi = nullptr;        // the same port: the request and resp.ready (MSHR side)
 };
 class MSHR {
 public:

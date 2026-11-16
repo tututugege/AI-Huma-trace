@@ -88,7 +88,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | C | LSU: the DTLB lookup inside the LSU, ldq / stq phase pairs merged | 63 -> 58 |
 | D | CSR read: a direct read of the CSR file | 58 -> 56 |
 | E | comb_begin into each module's first phase (comb_pipeline stays in comb) | 56 -> 52 |
-| F | the cache-line data path (AXI resp.data / wdata, DCache / LLC / DDR line data) | (top level) |
+| F | the AXI bridges: MSHR / WB / MMIO drive the interconnect ports directly (line data was already gone) | top 201 -> 155 |
 | G | the DCache response buffering (capture / forward / publish) | (mem) |
 
 A (f13f6d2): `PreIduQueue::ftq_pc(idx, off)` reads the registered `ftq_lookup_entries`; `Prf::comb_read` (ALU pc
@@ -122,3 +122,15 @@ module's first phase of the cycle (`PreIduQueue::comb_accept_front`, `Exu::comb_
 gates are identical. `BackTop::comb_begin_all` and the empty `clear_stage_ios` are gone. The planned move of
 `comb_pipeline` into seq was dropped: it computes the next value of the pipeline registers (`d = f(wires)`), i.e.
 their input logic, which belongs to comb; seq stays a pure copy.
+
+F: the cache-line data was already gone (the vendored AXI kit keeps one word, the MMIO value, in `WideReadData_t` /
+`WideWriteData_t`). What F removed is the glue: every cycle the top level copied the interconnect's DCACHE_R / DCACHE_W
+/ EXTRA_R / EXTRA_W master ports field by field into eight MemSubsystem structs (`MshrAxiIn/Out`, `WbAxiIn/Out`,
+`PeripheralAxiRead/WriteIn/Out`) and back (`bridge_*` in rv_simu_mmu_v2.cpp; for the MMIO path a second copy into
+`PeripheralAxi::in/out`). Now SimCpu::init binds the ports into MemSubsystem (`dcache_axi_r/w`, `extra_axi_r/w`), the
+MSHR, the write buffer and PeripheralAxi read the interconnect side through `in.axi` / `in.read|write` and drive the
+request side through `out.axi` / `out.read|write` (`clear_master_fields` in AxiMasterPort.h clears what a master
+owns). Values on the ports are unchanged, with one exception that nothing observes: the MMIO write data. The bridge
+copied `req_wdata[0..15]` into a `WideWriteData_t` whose indices all alias one word, so the port carried
+`req_wdata[15]` (always 0); it now carries the value (`req_wdata[0]`). The AXI UART behind the interconnect never
+printed (no NUL bytes in any console log), the gates, FPR and the Linux console are unchanged.

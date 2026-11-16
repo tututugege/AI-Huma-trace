@@ -1,4 +1,5 @@
 #pragma once
+#include "AxiMasterPort.h"
 
 #include "DcacheConfig.h"
 #include "IO.h"
@@ -7,47 +8,14 @@
 
 class PeripheralModel;
 
-struct PeripheralAxiReadIn {
-  bool req_ready = false;
-  bool req_accepted = false;
-  bool resp_valid = false;
-  uint32_t resp_data[DCACHE_WORD_NUM] = {};
-  uint8_t resp_id = 0;
-};
-
-struct PeripheralAxiReadOut {
-  bool req_valid = false;
-  uint32_t req_addr = 0;
-  uint8_t req_total_size = 0;
-  uint8_t req_id = 0;
-  bool resp_ready = false;
-};
-
-struct PeripheralAxiWriteIn {
-  bool req_ready = false;
-  bool req_accepted = false;
-  bool resp_valid = false;
-  uint8_t resp_id = 0;
-};
-
-struct PeripheralAxiWriteOut {
-  bool req_valid = false;
-  uint32_t req_addr = 0;
-  uint8_t req_total_size = 0;
-  uint8_t req_id = 0;
-  uint64_t req_wstrb = 0;
-  uint32_t req_wdata[DCACHE_WORD_NUM] = {};
-  bool resp_ready = false;
-};
-
 struct PeripheralAxiIn {
-  PeripheralAxiReadIn read;
-  PeripheralAxiWriteIn write;
+  const axi_interconnect::ReadMasterPort_t *read = nullptr;    // the EXTRA_R / EXTRA_W ports, interconnect side
+  const axi_interconnect::WriteMasterPort_t *write = nullptr;
 };
 
 struct PeripheralAxiOut {
-  PeripheralAxiReadOut read;
-  PeripheralAxiWriteOut write;
+  axi_interconnect::ReadMasterPort_t *read = nullptr;          // the same ports, the request side (bypass: MMIO)
+  axi_interconnect::WriteMasterPort_t *write = nullptr;
 };
 
 struct PeripheralAxiState {

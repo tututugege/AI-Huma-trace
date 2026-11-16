@@ -84,8 +84,8 @@ void WriteBuffer::comb_outputs_dcache() {
     }
 }
 void WriteBuffer::comb_outputs_axi() {
-    out.axi_out->clear();
-    out.axi_out->resp_ready = true;
+    clear_master_fields(*out.axi);
+    out.axi->resp.ready = true;
     if (nxt.send != 0) {
         return;
     }
@@ -93,17 +93,17 @@ void WriteBuffer::comb_outputs_axi() {
         return;
     }
     const WriteBufferEntry &head_e = nxt.write_buffer[nxt.head];
-    out.axi_out->req_valid = true;
-    out.axi_out->req_addr = head_e.addr;
-    out.axi_out->req_total_size = DCACHE_LINE_SIZE - 1;
-    out.axi_out->req_id = 0;
-    out.axi_out->req_wstrb = full_line_wstrb_mask();
+    out.axi->req.valid = true;
+    out.axi->req.addr = head_e.addr;
+    out.axi->req.total_size = DCACHE_LINE_SIZE - 1;
+    out.axi->req.id = 0;
+    out.axi->req.wstrb = full_line_wstrb_mask();
 
 }
 
 void WriteBuffer::comb_inputs_axi(){
-    const bool req_accepted = in.axi_in->req_accepted;
-    const bool resp_valid = in.axi_in->resp_valid;
+    const bool req_accepted = in.axi->req.accepted;
+    const bool resp_valid = in.axi->resp.valid;
 
     if(req_accepted){
         nxt.send = 1; // request has been accepted, wait for response before sending next

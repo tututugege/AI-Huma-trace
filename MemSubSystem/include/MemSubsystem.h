@@ -46,14 +46,12 @@ public:
   DcacheLsuIO  *dcache2lsu  = nullptr;  // DCache → LSU responses
 
   // AXI interfaces exposed for the memory interconnect to drive/read each cycle.
-  MshrAxiIn   mshr_axi_in{};   // IC read-channel  → MSHR  (set by caller)
-  MshrAxiOut  mshr_axi_out{};  // MSHR → IC read-channel   (read by caller)
-  WbAxiIn     wb_axi_in{};     // IC write-channel → WB    (set by caller)
-  WbAxiOut    wb_axi_out{};    // WB → IC write-channel    (read by caller)
-  PeripheralAxiReadIn peripheral_axi_read_in{};
-  PeripheralAxiReadOut peripheral_axi_read_out{};
-  PeripheralAxiWriteIn peripheral_axi_write_in{};
-  PeripheralAxiWriteOut peripheral_axi_write_out{};
+  // the interconnect's master ports the D-cache (MSHR refills, write-buffer write-backs) and the MMIO path drive directly
+  // (bound by SimCpu::init before init())
+  axi_interconnect::ReadMasterPort_t *dcache_axi_r = nullptr;
+  axi_interconnect::WriteMasterPort_t *dcache_axi_w = nullptr;
+  axi_interconnect::ReadMasterPort_t *extra_axi_r = nullptr;
+  axi_interconnect::WriteMasterPort_t *extra_axi_w = nullptr;
 
   // PTW 端口连线（对外直接赋值/读取）
   PtwWalkPort *dtlb_walk_port = nullptr;

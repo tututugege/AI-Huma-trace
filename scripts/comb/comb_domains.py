@@ -262,8 +262,8 @@ def mem_domain(root, ASSIGN, overlap):
             sig = bind.get((blk, d, fld))
             k = sig if sig else f'{blk}.{d}.{fld}'
             tail = b[m.end():m.end() + 200]
-            sub = re.match(r'\s*->\s*(\w+)', tail)   # a pointer to a whole struct: one level below it
-            if sig and sub: k = sig + '.' + sub.group(1)
+            sub = re.match(r'\s*->\s*(\w+)(?:\s*(?:\[[^\]]*\])*\s*\.\s*(\w+))?', tail)   # a pointer to a whole struct: two levels below it
+            if sig and sub: k = sig + '.' + sub.group(1) + ('.' + sub.group(2) if sub.group(2) else '')
             head = b[max(0, m.start() - 12):m.start()]
             if re.match(r'(?:\[[^\]]*\]|\.\w+|->\w+)*' + ASSIGN, tail) or re.search(r'memset\(\s*&?\s*$', head) or \
                (star and re.match(r'(?:\[[^\]]*\])*\s*=(?!=)', tail)):

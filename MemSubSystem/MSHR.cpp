@@ -95,24 +95,24 @@ void MSHR::comb_outputs_dcache()
 }
 void MSHR::comb_outputs_axi()
 {  
-    out.axi_out->clear();
+    clear_master_fields(*out.axi);
 
     // demand misses go out before prefetches (two fixed-priority passes over the entries)
-    for (int pass = 0; pass < 2 && !out.axi_out->req_valid; pass++) {
+    for (int pass = 0; pass < 2 && !out.axi->req.valid; pass++) {
         for(uint32_t i=0; i<DCACHE_MSHR_ENTRIES; i++){
             const MSHREntry &ce = nxt.mshr_entries[i];
             if (ce.valid && !ce.issued && ce.is_prefetch == (pass == 1))
             {
-                out.axi_out->req_valid = true;
-                out.axi_out->req_addr = ce.addr;
-                out.axi_out->req_total_size = DCACHE_LINE_SIZE - 1;
-                out.axi_out->req_id = i;
+                out.axi->req.valid = true;
+                out.axi->req.addr = ce.addr;
+                out.axi->req.total_size = DCACHE_LINE_SIZE - 1;
+                out.axi->req.id = i;
                 break;
             }
         }
     }
-    out.axi_out->resp_ready =
-        in.axi_in->resp_valid ? axi_resp_accepted_this_cycle
+    out.axi->resp.ready =
+        in.axi->resp.valid ? axi_resp_accepted_this_cycle
                               : !nxt.axi_resp_hold_valid;
 }
 
@@ -190,8 +190,8 @@ void MSHR::comb_inputs_axi()
 {
     axi_resp_accepted_this_cycle = false;
     nofill_released = false;
-    const bool req_accepted = in.axi_in->req_accepted;
-    const uint8_t accepted_id = in.axi_in->req_accepted_id;
+    const bool req_accepted = in.axi->req.accepted;
+    const uint8_t accepted_id = in.axi->req.accepted_id;
 
     // The AXI/LLC fabric can accept a DCache read and produce the response
     // before the next CPU cycle observes the issued bit. Make the accepted
@@ -212,8 +212,8 @@ void MSHR::comb_inputs_axi()
     // ── Accept R channel response ─────────────────────────────────────────────
 
     if(!nxt.axi_resp_hold_valid){
-        if(in.axi_in->resp_valid){
-            const uint8_t resp_id = in.axi_in->resp_id;
+        if(in.axi->resp.valid){
+            const uint8_t resp_id = in.axi->resp.id;
             bool resp_matches_entry = false;
             if (resp_id < DCACHE_MSHR_ENTRIES) {
                 const MSHREntry &e = nxt.mshr_entries[resp_id];

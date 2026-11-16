@@ -114,84 +114,6 @@ axi_interconnect::AXI_LLCConfig make_default_llc_config() {
   return llc_cfg;
 }
 
-// L1D (MSHR refill / write-back) side of the AXI <-> MemSubsystem handshake.
-void bridge_dcache_axi_to_mem_subsystem(SimCpu &cpu) {
-  const auto &rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
-  cpu.mem_subsystem.mshr_axi_in.req_ready = rport.req.ready;
-  cpu.mem_subsystem.mshr_axi_in.req_accepted = rport.req.accepted;
-  cpu.mem_subsystem.mshr_axi_in.req_accepted_id = rport.req.accepted_id;
-  cpu.mem_subsystem.mshr_axi_in.resp_valid = rport.resp.valid;
-  cpu.mem_subsystem.mshr_axi_in.resp_id = rport.resp.id;
-  const auto &wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
-  cpu.mem_subsystem.wb_axi_in.req_ready = wport.req.ready;
-  cpu.mem_subsystem.wb_axi_in.req_accepted = wport.req.accepted;
-  cpu.mem_subsystem.wb_axi_in.resp_valid = wport.resp.valid;
-}
-
-void bridge_axi_to_mem_subsystem(SimCpu &cpu) {
-  bridge_dcache_axi_to_mem_subsystem(cpu);
-
-  const auto &peri_rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
-  cpu.mem_subsystem.peripheral_axi_read_in.req_ready = peri_rport.req.ready;
-  cpu.mem_subsystem.peripheral_axi_read_in.req_accepted = peri_rport.req.accepted;
-  cpu.mem_subsystem.peripheral_axi_read_in.resp_valid = peri_rport.resp.valid;
-  cpu.mem_subsystem.peripheral_axi_read_in.resp_id = peri_rport.resp.id;
-  for (int i = 0; i < DCACHE_WORD_NUM && i < axi_interconnect::MAX_READ_TRANSACTION_WORDS; i++) {
-    cpu.mem_subsystem.peripheral_axi_read_in.resp_data[i] = peri_rport.resp.data[i];
-  }
-
-  const auto &peri_wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
-  cpu.mem_subsystem.peripheral_axi_write_in.req_ready = peri_wport.req.ready;
-  cpu.mem_subsystem.peripheral_axi_write_in.req_accepted = peri_wport.req.accepted;
-  cpu.mem_subsystem.peripheral_axi_write_in.resp_valid = peri_wport.resp.valid;
-  cpu.mem_subsystem.peripheral_axi_write_in.resp_id = peri_wport.resp.id;
-}
-
-void bridge_dcache_mem_subsystem_to_axi(SimCpu &cpu) {
-  auto &rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
-  rport.req.valid = cpu.mem_subsystem.mshr_axi_out.req_valid;
-  rport.req.addr = cpu.mem_subsystem.mshr_axi_out.req_addr;
-  rport.req.total_size = cpu.mem_subsystem.mshr_axi_out.req_total_size;
-  rport.req.id = cpu.mem_subsystem.mshr_axi_out.req_id;
-  rport.req.bypass = false;
-  rport.resp.ready = cpu.mem_subsystem.mshr_axi_out.resp_ready;
-
-  auto &wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
-  wport.req.valid = cpu.mem_subsystem.wb_axi_out.req_valid;
-  wport.req.addr = cpu.mem_subsystem.wb_axi_out.req_addr;
-  wport.req.total_size = cpu.mem_subsystem.wb_axi_out.req_total_size;
-  wport.req.id = cpu.mem_subsystem.wb_axi_out.req_id;
-  wport.req.wstrb = cpu.mem_subsystem.wb_axi_out.req_wstrb;
-  wport.req.bypass = false;
-  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) wport.req.wdata[i] = 0;
-  wport.resp.ready = cpu.mem_subsystem.wb_axi_out.resp_ready;
-}
-
-void bridge_mem_subsystem_to_axi(SimCpu &cpu) {
-  bridge_dcache_mem_subsystem_to_axi(cpu);
-
-  auto &peri_rport = cpu.axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
-  peri_rport.req.valid = cpu.mem_subsystem.peripheral_axi_read_out.req_valid;
-  peri_rport.req.addr = cpu.mem_subsystem.peripheral_axi_read_out.req_addr;
-  peri_rport.req.total_size = cpu.mem_subsystem.peripheral_axi_read_out.req_total_size;
-  peri_rport.req.id = cpu.mem_subsystem.peripheral_axi_read_out.req_id;
-  peri_rport.req.bypass = true;
-  peri_rport.resp.ready = cpu.mem_subsystem.peripheral_axi_read_out.resp_ready;
-
-  auto &peri_wport = cpu.axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
-  peri_wport.req.valid = cpu.mem_subsystem.peripheral_axi_write_out.req_valid;
-  peri_wport.req.addr = cpu.mem_subsystem.peripheral_axi_write_out.req_addr;
-  peri_wport.req.total_size = cpu.mem_subsystem.peripheral_axi_write_out.req_total_size;
-  peri_wport.req.id = cpu.mem_subsystem.peripheral_axi_write_out.req_id;
-  peri_wport.req.wstrb = cpu.mem_subsystem.peripheral_axi_write_out.req_wstrb;
-  peri_wport.req.bypass = true;
-  for (int i = 0; i < axi_interconnect::CACHELINE_WORDS; i++) peri_wport.req.wdata[i] = 0;
-  for (int i = 0; i < DCACHE_WORD_NUM && i < axi_interconnect::CACHELINE_WORDS; i++) {
-    peri_wport.req.wdata[i] = cpu.mem_subsystem.peripheral_axi_write_out.req_wdata[i];
-  }
-  peri_wport.resp.ready = cpu.mem_subsystem.peripheral_axi_write_out.resp_ready;
-}
-
 void axi_subsystem_comb_outputs(SimCpu &cpu) {
   cpu.mem_subsystem.llc_comb_outputs();
   cpu.axi_interconnect.set_llc_lookup_in(cpu.mem_subsystem.llc_lookup_in());
@@ -276,6 +198,10 @@ void SimCpu::init() {
   mem_subsystem.dcache2lsu = &back.in.dcache2lsu;
 
   mem_subsystem.icache_req = &icache_req;
+  mem_subsystem.dcache_axi_r = &axi_interconnect.read_ports[axi_interconnect::MASTER_DCACHE_R];
+  mem_subsystem.dcache_axi_w = &axi_interconnect.write_ports[axi_interconnect::MASTER_DCACHE_W];
+  mem_subsystem.extra_axi_r = &axi_interconnect.read_ports[axi_interconnect::MASTER_EXTRA_R];
+  mem_subsystem.extra_axi_w = &axi_interconnect.write_ports[axi_interconnect::MASTER_EXTRA_W];
   mem_subsystem.icache_resp = &icache_resp;
 
   front.icache_ptw_walk_port = mem_subsystem.itlb_walk_port;
@@ -360,12 +286,9 @@ void SimCpu::cycle() {
 
   front_comb_before_back();
 
-  // AXI phase-1: slave outputs -> interconnect outputs.
-  // Interconnect outputs (req.ready/resp.valid) are bridged into MemSubsystem
-  // before backend comb, so DCache responses from the previous DCache stage can
-  // be visible to LSU in this CPU cycle.
+  // AXI phase 1: slave outputs -> interconnect outputs (req.ready / accepted / resp on the master ports, which the
+  // MSHR, the write buffer and the MMIO path read directly in the memory subsystem's comb).
   axi_subsystem_comb_outputs(*this);
-  bridge_axi_to_mem_subsystem(*this);
 
   mem_subsystem.comb_outputs();
 
@@ -373,8 +296,6 @@ void SimCpu::cycle() {
 
   mem_subsystem.comb_inputs();
   peripheral_resp_hold_comb();
-
-  bridge_mem_subsystem_to_axi(*this);
 
   // AXI phase-2: master requests -> interconnect -> slave inputs.
   axi_subsystem_comb_inputs(*this);

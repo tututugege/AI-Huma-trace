@@ -100,7 +100,8 @@ def top_domain(root, ASSIGN, back_rows):
     init = src.body('SimCpu', 'init')[1]
 
     # pointer members of MemSubsystem bound in SimCpu::init(): mem member -> top path
-    membind = {m.group(1): norm_path(m.group(2)) for m in re.finditer(r'\bmem_subsystem\.(\w+)\s*=\s*&\s*([\w.\[\]>-]+)\s*;', init)}
+    membind = {m.group(1): norm_path(re.sub(r'\[\w+::(MASTER_\w+)\]', r'[\1]', m.group(2)))
+               for m in re.finditer(r'\bmem_subsystem\.(\w+)\s*=\s*&\s*([\w.\[\]:>-]+)\s*;', init)}
     WALK = {'dtlb_walk_port_inst': 'mem_subsystem.dtlb_walk', 'itlb_walk_port_inst': 'mem_subsystem.itlb_walk'}
 
     # ---- summaries of the sub-object calls ---------------------------------------------------------------------------
