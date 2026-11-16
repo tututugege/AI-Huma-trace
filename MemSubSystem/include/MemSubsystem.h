@@ -119,6 +119,7 @@ private:
   FILLWrite fill_writes_{};
   FillIn fill_in_{};
   FillOut fill_out_{};
+  DcacheS1Reg dcache_s1_q_{};   // register: stage-1 requests (find / bypass / merge, line reads, fill read) of the last cycle
 
   PtwReq ptw_walk_req;
 

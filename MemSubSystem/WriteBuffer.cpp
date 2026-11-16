@@ -52,9 +52,9 @@ void WriteBuffer::comb_outputs_dcache() {
     // reg<1> bypassvalid[LSU_LDU_COUNT];
     for(int i=0;i<LSU_LDU_COUNT;i++){
         bool bypassvalid = false;
-        if(in.dcache2wb->bypass_req[i].valid){
+        if(in.s1_q->bypass_req[i].valid){
             int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
-                                       in.dcache2wb->bypass_req[i].addr);
+                                       in.s1_q->bypass_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
                 bypassvalid = true;
             }
@@ -67,9 +67,9 @@ void WriteBuffer::comb_outputs_dcache() {
     for(int i=0;i<LSU_STA_COUNT;i++){
         bool mergevalid = false;
         bool mergebusy = false;
-        if(in.dcache2wb->merge_req[i].valid){
+        if(in.s1_q->merge_req[i].valid){
             int wb_idx = find_wb_entry(nxt.write_buffer, nxt.head, nxt.count,
-                                       in.dcache2wb->merge_req[i].addr);
+                                       in.s1_q->merge_req[i].addr);
             if(valid_wb_entry_index(wb_idx)){
                 if(wb_idx == nxt.head && nxt.count > 0 && nxt.send != 0){
                     mergebusy = true;
@@ -106,13 +106,6 @@ void WriteBuffer::comb_inputs_axi(){
     const bool resp_valid = in.axi_in->resp_valid;
 
     if(req_accepted){
-        if (out.axi_out->req_valid) {
-            out.axi_out->req_valid = false;
-            out.axi_out->req_addr = 0;
-            out.axi_out->req_total_size = 0;
-            out.axi_out->req_id = 0;
-            out.axi_out->req_wstrb = 0;
-        }
         nxt.send = 1; // request has been accepted, wait for response before sending next
     }
     if (resp_valid) {

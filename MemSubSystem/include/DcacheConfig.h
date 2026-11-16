@@ -163,6 +163,16 @@ struct FillOut {
     wire<DCACHE_SET_BITS> set_idx;
 };
 
+// The stage-1 -> stage-2 register of the DCache: what stage 1 requested in the last cycle, used at the start of this
+// cycle by the MSHR / write-buffer lookups (comb_outputs_dcache) and the tag / fill array reads (Dcache_Read).
+struct DcacheS1Reg {
+    MSHRFINDReq find_req[LSU_LDU_COUNT + LSU_STA_COUNT];
+    BypassReq bypass_req[LSU_LDU_COUNT];
+    MergeReq merge_req[LSU_STA_COUNT];
+    DcacheLineReadReq line_read_req[LSU_LDU_COUNT + LSU_STA_COUNT];
+    FillOut fill_out;
+};
+
 struct DcacheINIO {
     LsuDcacheIO  *lsu2dcache  = nullptr;  // LSU → DCache requests
     MSHRDcacheIO *mshr2dcache = nullptr;  // MSHR fill/free → DCache

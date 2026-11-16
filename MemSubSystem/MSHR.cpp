@@ -51,15 +51,15 @@ void MSHR::comb_outputs_dcache()
 
     for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){
         bool hit = false;
-        if (in.dcache2mshr->find_req[i].valid) {
+        if (in.s1_q->find_req[i].valid) {
             const uint32_t find_addr =
-                get_addr(in.dcache2mshr->find_req[i].set_idx,
-                         in.dcache2mshr->find_req[i].tag, 0);
+                get_addr(in.s1_q->find_req[i].set_idx,
+                         in.s1_q->find_req[i].tag, 0);
             for (int j = 0; j < DCACHE_MSHR_ENTRIES; j++) {
                 MSHREntry &e = nxt.mshr_entries[j];
                 if (e.valid && e.addr == find_addr) {
                     hit = true;
-                    if (e.is_prefetch && !in.dcache2mshr->find_req[i].is_prefetch) {
+                    if (e.is_prefetch && !in.s1_q->find_req[i].is_prefetch) {
                         // a demand request (load/store) merges into an in-flight prefetch: it must now fill the L1D,
                         // otherwise an LLC-only prefetch would be dropped and the demand request would wait forever
                         e.is_prefetch = false;
@@ -201,13 +201,6 @@ void MSHR::comb_inputs_axi()
             MSHREntry &ne = nxt.mshr_entries[accepted_id];
             if (ne.valid && !ne.issued) {
                 nxt.mshr_entries[accepted_id].issued = true;
-            }
-            if (out.axi_out->req_valid &&
-                out.axi_out->req_id == accepted_id) {
-                out.axi_out->req_valid = false;
-                out.axi_out->req_addr = 0;
-                out.axi_out->req_total_size = 0;
-                out.axi_out->req_id = 0;
             }
         }
         else

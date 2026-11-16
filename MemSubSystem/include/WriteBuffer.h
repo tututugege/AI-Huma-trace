@@ -59,7 +59,8 @@ struct WbAxiOut {
 
 
 struct WBIn {
-    DcacheWBIO *dcache2wb;
+    DcacheWBIO *dcache2wb;              // this cycle's DCache requests (dirty_info)
+    const DcacheS1Reg *s1_q = nullptr;  // the stage-1 lookups of the last cycle (bypass_req, merge_req)
     WbAxiIn *axi_in;
 };
 struct WBOut {

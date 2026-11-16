@@ -347,6 +347,7 @@ void MemSubsystem::init() {
   dcache_.in.mshr2dcache = &mshr_dcache_io_;  // MSHR output → DCache input
   dcache_.out.dcache2mshr = &dcache_mshr_io_; // DCache output → MSHR input
   mshr_.in.dcache2mshr = &dcache_mshr_io_;    // DCache output → MSHR comb input
+  mshr_.in.s1_q = &dcache_s1_q_;
   mshr_.out.mshr2dcache = &mshr_dcache_io_;   // MSHR output → DCache input
 
   mshr_.in.axi_in = &mshr_axi_in;    // MSHR comb input ← AXI read/write ports
@@ -358,6 +359,7 @@ void MemSubsystem::init() {
   dcache_.in.wb2dcache = &wb_dcache_io_;  // WB output → DCache input
   dcache_.out.dcache2wb = &dcache_wb_io_; // DCache output → WB input
   wb_.in.dcache2wb = &dcache_wb_io_;      // DCache output → WB comb input
+  wb_.in.s1_q = &dcache_s1_q_;
   wb_.out.wb2dcache = &wb_dcache_io_;     // WB output → DCache inputs
 
   for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
@@ -436,6 +438,7 @@ void MemSubsystem::init() {
   fill_writes_ = {};
   fill_in_ = {};
   fill_out_ = {};
+  dcache_s1_q_ = {};
 
   mshr_axi_in = {};
   mshr_axi_out = {};
@@ -487,9 +490,9 @@ void MemSubsystem::dcache_domain_comb_outputs() {
   wb_.comb_outputs_dcache();
   mshr_.comb_outputs_dcache();
 
-  Dcache_Read(dcache_line_read_req_,
+  Dcache_Read(dcache_s1_q_.line_read_req,
               dcache_line_read_resp_,
-              fill_out_,
+              dcache_s1_q_.fill_out,
               fill_in_);
 
   dcache_.stage2_comb();
@@ -627,6 +630,11 @@ void MemSubsystem::dcache_domain_comb_inputs() {
 
 void MemSubsystem::dcache_domain_seq(bool sample_mshr_perf) {
   dcache_.seq();
+  std::memcpy(dcache_s1_q_.find_req, dcache_mshr_io_.find_req, sizeof(dcache_s1_q_.find_req));
+  std::memcpy(dcache_s1_q_.bypass_req, dcache_wb_io_.bypass_req, sizeof(dcache_s1_q_.bypass_req));
+  std::memcpy(dcache_s1_q_.merge_req, dcache_wb_io_.merge_req, sizeof(dcache_s1_q_.merge_req));
+  std::memcpy(dcache_s1_q_.line_read_req, dcache_line_read_req_, sizeof(dcache_s1_q_.line_read_req));
+  dcache_s1_q_.fill_out = fill_out_;
   for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
     dcache_resp_meta_cur_[i] = dcache_resp_meta_nxt_[i];
   }

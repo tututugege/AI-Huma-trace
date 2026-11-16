@@ -8,6 +8,7 @@ not seen: the tool under-reports such writes).  Prints the table, the order haza
 LATER phase writes) and a DOT graph.  usage: comb_graph.py [--dot out.dot] [--check]   (--check: exit 1 on a hazard)
 """
 import re, sys, os, collections
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def rd(p): return open(os.path.join(ROOT, p), errors='ignore').read()
@@ -130,7 +131,25 @@ for n, r, w in rows: out.append(f'{n:32s} R: {" ".join(sorted(r))} | W: {" ".joi
 out.append('hazards (reader, field, later writer):')
 for h in hazards: out.append('  %s reads %s, written later by %s' % h)
 print('\n'.join(out))
-if '--check' in sys.argv and hazards: sys.exit(1)
+all_hazards = list(hazards)
+
+# =====================================================================================================================
+# Front end and memory subsystem.  Their phases are member functions of one class (FrontComb) or the statements of
+# MemSubsystem::comb_outputs / comb_inputs; their signals are that class's data members (accessed unqualified).
+# A sub-block's comb method reads the signals its `in.F` pointers are bound to and writes those of its `out.F`
+# pointers (bindings parsed from MemSubsystem::init).  A member passed to a function as a non-const reference /
+# pointer argument counts as written and read (parameter constness from the function definition; unresolved
+# callees count as reads).
+# =====================================================================================================================
+from comb_domains import front_domain, mem_domain
+for name, (drows, dhaz, notes) in (('front', front_domain(ROOT, ASSIGN, overlap)), ('mem', mem_domain(ROOT, ASSIGN, overlap))):
+    print(f'\n== {name}: phases: {len(drows)}, read-before-later-write hazards: {len(dhaz)}')
+    for n, r, w in drows: print(f'{n:40s} R: {" ".join(sorted(r))} | W: {" ".join(sorted(w))}')
+    print('hazards (reader, signal, later writer):')
+    for h in dhaz: print('  %s reads %s, written later by %s' % h)
+    for x in notes: print('  note: ' + x)
+    all_hazards += dhaz
+if '--check' in sys.argv and all_hazards: sys.exit(1)
 if '--dot' in sys.argv:
     with open(sys.argv[sys.argv.index('--dot') + 1], 'w') as fdot:
         fdot.write('digraph comb {\n  rankdir=LR;\n')

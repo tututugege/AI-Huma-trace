@@ -59,7 +59,8 @@ struct MshrAxiOut {
 
 
 struct MSHRINIO{
-    DcacheMSHRIO* dcache2mshr;
+    DcacheMSHRIO* dcache2mshr;          // this cycle's DCache requests (mshr_req, fill_resp)
+    const DcacheS1Reg* s1_q = nullptr;  // the stage-1 lookups of the last cycle (find_req)
     MshrAxiIn*  axi_in;
 };
 struct MSHROUTIO{
