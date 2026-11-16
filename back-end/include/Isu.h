@@ -32,6 +32,16 @@ constexpr int ISU_FP_WAKE_SLOT_NUM = 24;
 
 class Isu {
 public:
+  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
+  // d == q at the start of every cycle). seq: q = d.
+  struct Regs {
+    MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
+    IterWakeEntry div_wake_slots[ISU_DIV_WAKE_SLOT_NUM];
+    IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
+  };
+  Regs d;
+  const Regs &q() const { return q_; }
+  Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_issue();  // free slots, select and issue, the wakeup bus, next-cycle latencies
   void comb_enq();  // enqueue from dispatch, flush
   friend struct IsuDigestAccess;  // lockstep test hook
@@ -53,13 +63,7 @@ private:
 
   // 2. 延迟唤醒
   // MUL: 固定延迟，使用移位寄存器模型（深度 = MUL_MAX_LATENCY - 1）
-  MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
-  MulWakeEntry mul_wake_pipe_1[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
   // DIV / FP: 迭代单元，使用 countdown 槽位（槽位数 = 对应 FU 个数）
-  IterWakeEntry div_wake_slots[ISU_DIV_WAKE_SLOT_NUM];
-  IterWakeEntry div_wake_slots_1[ISU_DIV_WAKE_SLOT_NUM];
-  IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
-  IterWakeEntry fp_wake_slots_1[ISU_FP_WAKE_SLOT_NUM];
 
 public:
   uint32_t port_attributes[ISSUE_WIDTH];
@@ -81,9 +85,12 @@ private:
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
-  template <class F> void for_each_wake_slot_1(F f) {
-    for (auto &stage : mul_wake_pipe_1) for (auto &e : stage) f(e);
-    for (auto &e : div_wake_slots_1) f(e);
-    for (auto &e : fp_wake_slots_1) f(e);
+  template <class F> void for_each_wake_slot_1(F f) {   // the wake slots of d
+    for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) f(e);
+    for (auto &e : d.div_wake_slots) f(e);
+    for (auto &e : d.fp_wake_slots) f(e);
   }
+
+private:
+  Regs q_;
 };

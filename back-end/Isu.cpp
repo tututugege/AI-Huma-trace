@@ -65,10 +65,8 @@ void Isu::apply_wakeup_to_uop(Uop &uop) const {
   }
 }
 
+// Empties the wake slots of d (a global flush; init); the registers follow at seq.
 void Isu::clear_wake_state() {
-  for (auto &stage : mul_wake_pipe) for (auto &e : stage) e = {};
-  for (auto &e : div_wake_slots) e = {};
-  for (auto &e : fp_wake_slots) e = {};
   for_each_wake_slot_1([](auto &e) { e = {}; });
 }
 
@@ -77,6 +75,7 @@ void Isu::init() {
   iqs.clear();
   configs.clear();
   clear_wake_state();
+  q_ = d;
   for (int i = 0; i < IQ_NUM; i++) {
     const auto &iq = GLOBAL_IQ_CONFIG[i];
     IssueQueueConfig cfg;
@@ -171,6 +170,7 @@ void Isu::issue() {
 // Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and
 // uops issued this cycle with a multi-cycle latency enter them.
 void Isu::calc_latency_next() {
+  const Regs &q = q_;
   auto age = [](auto &cur, auto &nxt) {
     for (size_t i = 0; i < std::size(cur); i++) {
       nxt[i] = {};
@@ -180,13 +180,13 @@ void Isu::calc_latency_next() {
       }
     }
   };
-  age(div_wake_slots, div_wake_slots_1);
-  age(fp_wake_slots, fp_wake_slots_1);
+  age(q.div_wake_slots, d.div_wake_slots);
+  age(q.fp_wake_slots, d.fp_wake_slots);
 
-  for (auto &stage : mul_wake_pipe_1) for (auto &e : stage) e = {};
+  for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) e = {};
   if (MUL_MAX_LATENCY > 1)
     for (int stage = ISU_MUL_WAKE_DEPTH - 1; stage >= 1; stage--)
-      for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) mul_wake_pipe_1[stage][s] = mul_wake_pipe[stage - 1][s];
+      for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) d.mul_wake_pipe[stage][s] = q.mul_wake_pipe[stage - 1][s];
 
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     const auto &inst = wires->iss2prf.iss_entry[i];
@@ -206,9 +206,9 @@ void Isu::calc_latency_next() {
       return false;
     };
     bool ok = true;  // the placement must not sit inside Assert (it has to run in every build)
-    if (op == UOP_MUL) ok = MUL_MAX_LATENCY > 1 && free_slot(mul_wake_pipe_1[0], 0);
-    else if (op == UOP_DIV) ok = free_slot(div_wake_slots_1, lat - 1);
-    else if (op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(fp_wake_slots_1, lat - 1);
+    if (op == UOP_MUL) ok = MUL_MAX_LATENCY > 1 && free_slot(d.mul_wake_pipe[0], 0);
+    else if (op == UOP_DIV) ok = free_slot(d.div_wake_slots, lat - 1);
+    else if (op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(d.fp_wake_slots, lat - 1);
     Assert(ok && "delayed-wakeup slots full");
   }
 }
@@ -217,6 +217,7 @@ void Isu::calc_latency_next() {
 // load write-backs (slow), DIV/FP countdown reaching zero and the last MUL stage (delayed), and uops issued this
 // cycle with single-cycle latency (fast, ALU ports only).
 void Isu::awake() {
+  const Regs &q = q_;
   auto &bus = wires->iss_awake.wake;
   for (int i = 0; i < WAKE_CH_ALL; i++) {
     bus[i].valid = false;
@@ -242,18 +243,18 @@ void Isu::awake() {
       bus[lsu_base + i].preg = wires->prf_awake.wake[i].preg;
     }
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++)
-    if (div_wake_slots[i].valid && div_wake_slots[i].countdown == 0) drive(div_base + i, div_wake_slots[i].dest_preg, "Delayed writeback collision");
+    if (q.div_wake_slots[i].valid && q.div_wake_slots[i].countdown == 0) drive(div_base + i, q.div_wake_slots[i].dest_preg, "Delayed writeback collision");
   {  // the FP slots fire on the FPW_CH channels after the fast ones, in slot order
     int ch = fast_base + ALU_NUM;
     for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
-      if (fp_wake_slots[i].valid && fp_wake_slots[i].countdown == 0) {
+      if (q.fp_wake_slots[i].valid && q.fp_wake_slots[i].countdown == 0) {
         Assert(ch < fast_base + ALU_NUM + FPW_CH && "more FP wake-ups in one cycle than channels");
-        drive(ch++, fp_wake_slots[i].dest_preg, "Delayed writeback collision");
+        drive(ch++, q.fp_wake_slots[i].dest_preg, "Delayed writeback collision");
       }
   }
   if (MUL_MAX_LATENCY > 1)
     for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)
-      if (mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");
+      if (q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     const auto &e = wires->iss2prf.iss_entry[i];
     if (!(e.valid && e.uop.dest_en)) continue;
@@ -301,11 +302,8 @@ void Isu::flush() {
 }
 
 void Isu::seq() {
-  for (auto &q : iqs) q.seq();
-  for (int d = 0; d < ISU_MUL_WAKE_DEPTH; d++)
-    for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) mul_wake_pipe[d][s] = mul_wake_pipe_1[d][s];
-  for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++) div_wake_slots[i] = div_wake_slots_1[i];
-  for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++) fp_wake_slots[i] = fp_wake_slots_1[i];
+  for (auto &iq : iqs) iq.seq();
+  q_ = d;
 }
 
 // free slots, select and issue, the wakeup bus, next-cycle latencies
