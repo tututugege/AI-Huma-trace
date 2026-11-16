@@ -280,7 +280,7 @@ void SimCpu::init() {
 
   front.icache_ptw_walk_port = mem_subsystem.itlb_walk_port;
   front.icache_mem_req_port = &icache_req;
-  front.icache_mem_resp_port = &icache_resp;
+  front.icache_mem_resp_port = &icache_resp_q;   // the I-cache reads its memory responses through the registers
   // Keep a single active SoC memory topology. DCache/PTW/peripheral already use
   // the top-level interconnect; frontend icache should use the same shared path
   // whenever the real BPU frontend is enabled. Oracle mode does not step the
@@ -288,6 +288,7 @@ void SimCpu::init() {
   // back to MemSubsystem's legacy private AXI runtime.
   front.icache_mem_read_port =
       &axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
+  front.icache_mem_read_q = &icache_axi_q;
 
   // 第四阶段：统一执行各模块复位逻辑
   // 先初始化内存子系统，确保 PTW / DCache / WB 等内部状态已经完成复位。
@@ -301,6 +302,7 @@ void SimCpu::init() {
   // top-level icache AXI port, so the shared interconnect/MMIO/DDRx must be
   // reset before frontend init. Keeping the order uniform is harmless in the
   // LLC-off path.
+  icache_port_regs_seq();
   front.init();
   oracle_pending_valid = false;
   oracle_pending_out = {};
@@ -336,7 +338,15 @@ void SimCpu::restore_pc(pc_t pc) {
   back.comb_csr_status();
 }
 
+// The clock edge of the I-cache port registers (at the start of the cycle: nothing between the end of the previous
+// cycle and here changes the port outputs or icache_resp).
+void SimCpu::icache_port_regs_seq() {
+  icache_axi_q = axi_interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
+  icache_resp_q = icache_resp;
+}
+
 void SimCpu::cycle() {
+  icache_port_regs_seq();
   ctx.perf.cycle++;
   // BackTop inputs are combinational wires. Re-drive the only intentionally
   // retained payload from an explicit top-level register before producers run.
@@ -392,12 +402,9 @@ void SimCpu::cycle() {
   }
 }
 
-// The hold registers stay all-zero in the common (no stall) case; the live flags let the cycle skip copying zeros.
+// The hold register: d = front2back_hold_1 (written only when the back end stalls, otherwise left all-zero), q =
+// front2back_hold. The live flags let the cycle skip copying zeros; seq clears d after the copy.
 void SimCpu::front2back_hold_comb() {
-  if (front2back_hold_1_live) {
-    front2back_hold_1 = {};
-    front2back_hold_1_live = false;
-  }
   if (back.out.mispred || back.out.flush || !back.out.stall) {
     return;
   }
@@ -414,6 +421,10 @@ void SimCpu::front2back_hold_comb() {
 void SimCpu::front2back_hold_seq() {
   if (front2back_hold_live || front2back_hold_1_live) front2back_hold = front2back_hold_1;
   front2back_hold_live = front2back_hold_1_live;
+  if (front2back_hold_1_live) {
+    front2back_hold_1 = {};
+    front2back_hold_1_live = false;
+  }
 }
 
 void SimCpu::peripheral_resp_hold_comb() {
@@ -428,9 +439,7 @@ void SimCpu::front_comb_before_back() {
   const bool registered_refetch = static_cast<bool>(front.back2front.refetch);
   const bool frontend_can_read = !front.back2front_stall || registered_refetch;
 
-  const auto reset = front.in.reset;
-  front.in = front.back2front;
-  front.in.reset = reset;
+  front.in = front.back2front;   // (reset is 0 here: only FrontTop::init() runs the front end with reset)
   front.in.csr_status = &back.csr_status;
 
   if (frontend_can_read) {

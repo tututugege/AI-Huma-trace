@@ -30,7 +30,8 @@ public:
   PtwWalkPort *icache_ptw_walk_port = nullptr;
   ICacheMemPortReq *icache_mem_req_port = nullptr;
   ICacheMemPortResp *icache_mem_resp_port = nullptr;
-  axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;
+  axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;    // the I-cache drives its requests here
+  const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr; // and reads the port's outputs here (a register)
   front_top_in back2front = {};
   front_top_in back2front_1 = {};
   reg<1> back2front_stall = false;

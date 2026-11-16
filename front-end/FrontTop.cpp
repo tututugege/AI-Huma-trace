@@ -12,6 +12,7 @@ inline void sync_icache_ptw_ports(const FrontTop &front) {
   icache_mem_req_port = front.icache_mem_req_port;
   icache_mem_resp_port = front.icache_mem_resp_port;
   icache_mem_read_port = front.icache_mem_read_port;
+  icache_mem_read_q = front.icache_mem_read_q;
 }
 } // namespace
 

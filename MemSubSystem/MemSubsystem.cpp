@@ -713,7 +713,6 @@ void MemSubsystem::comb_inputs() {
 
   ptw_block.comb_finish(ptw_feedback);
 
-  sync_ptw_port_outputs();
 
   peripheral_axi_.in.read = peripheral_axi_read_in;
   peripheral_axi_.in.write = peripheral_axi_write_in;
@@ -725,11 +724,12 @@ void MemSubsystem::comb_inputs() {
 
   // Stage-1 AXI wiring: connect ICache read master, keep all others idle.
 
-  sync_ptw_port_outputs();
   dtlb_walk_port_inst->reset_cycle_input();
   itlb_walk_port_inst->reset_cycle_input();
 }
 
+// The walk-port outputs (req_ready / resp of the shared PTW) are registers: set here, at the clock edge, from the PTW
+// block's state and read by the TLBs during the next cycle.
 void MemSubsystem::seq() {
   MemPtwBlock::SeqIn ptw_seq_in{};
   ptw_seq_in.walk_client_flush[static_cast<size_t>(PtwClient::DTLB)] =

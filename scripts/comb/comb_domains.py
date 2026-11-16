@@ -202,6 +202,7 @@ def front_domain(root, ASSIGN, overlap):
     for p in phases:
         r, w = scan(closure(src, 'FrontComb', p), names + persistent, ASSIGN, src, notes, p, types)
         rows.append((p, r, w))
+    FRONT_ROWS[:] = rows
     hz, staged = [], []
     for h in hazards_of(rows, overlap, FRONT_KNOWN):
         (hz if h[1].split('.')[0] in persistent else staged).append(h)
@@ -213,6 +214,8 @@ def front_domain(root, ASSIGN, overlap):
 # ---------------------------------------------------------------------------------------------------------------------
 # memory subsystem: the statements of MemSubsystem::comb_outputs() then comb_inputs()
 # ---------------------------------------------------------------------------------------------------------------------
+MEM_GROUPS = {}   # entry function -> its rows (used by the top domain)
+FRONT_ROWS = []
 MEM_EXPAND = ('dcache_domain_comb_outputs', 'dcache_domain_comb_inputs')
 MEM_KNOWN = {
 }
@@ -296,5 +299,8 @@ def mem_domain(root, ASSIGN, overlap):
                 glue.append(st)
         flush_glue()
     walk('comb_outputs')
+    n_out = len(rows)
     walk('comb_inputs')
+    MEM_GROUPS.clear()
+    MEM_GROUPS.update({'comb_outputs': rows[:n_out], 'comb_inputs': rows[n_out:]})
     return rows, hazards_of(rows, overlap, MEM_KNOWN), sorted(notes)

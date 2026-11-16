@@ -24,6 +24,7 @@ PtwWalkPort *icache_ptw_walk_port = nullptr;
 ICacheMemPortReq *icache_mem_req_port = nullptr;
 ICacheMemPortResp *icache_mem_resp_port = nullptr;
 axi_interconnect::ReadMasterPort_t *icache_mem_read_port = nullptr;
+const axi_interconnect::ReadMasterPort_t *icache_mem_read_q = nullptr;
 void (*g_icache_fill_hook)(uint32_t index, uint32_t tag) = nullptr;   // FE_IPF: demand fills are reported to the prefetcher
 
 static_assert(ICACHE_LINE_SIZE <= axi_interconnect::MAX_READ_TRANSACTION_BYTES, "ICACHE_LINE_SIZE exceeds the AXI read transaction limit");
@@ -48,7 +49,8 @@ struct LookupResp {
 struct Binding {
   SimContext *ctx = nullptr, *ctx_set = nullptr;   // ctx_set: icache_set_context(); ctx: bound at the next cycle
   PtwWalkPort *ptw_walk = nullptr;
-  axi_interconnect::ReadMasterPort_t *read = nullptr;
+  axi_interconnect::ReadMasterPort_t *read = nullptr;         // requests (driven this cycle)
+  const axi_interconnect::ReadMasterPort_t *read_q = nullptr;  // the port's outputs of the last cycle (SimCpu::icache_axi_q)
   ICacheMemPortReq *probe_req = nullptr;
   ICacheMemPortResp *probe_resp = nullptr;
   TlbMmu *itlb = nullptr;
@@ -56,6 +58,7 @@ struct Binding {
   void bind() {
     if (ptw_walk != icache_ptw_walk_port) { ptw_walk = icache_ptw_walk_port; if (itlb) itlb->set_ptw_walk_port(ptw_walk); }
     read = icache_mem_read_port;
+    read_q = icache_mem_read_q;
     probe_req = icache_mem_req_port;
     probe_resp = icache_mem_resp_port;
     ctx = ctx_set;
@@ -170,11 +173,12 @@ void comb(icache_in *in, icache_out *out) {
   hin.ppn = 0;
   hin.ppn_valid = false;
   hin.page_fault = false;
-  hin.mem_req_ready = rp ? rp->req.ready : false;
-  hin.mem_req_accepted = rp ? rp->req.accepted : false;
-  hin.mem_req_accepted_id = rp ? static_cast<uint8_t>(rp->req.accepted_id & 0xF) : 0;
-  hin.mem_resp_valid = rp ? rp->resp.valid : false;
-  hin.mem_resp_id = rp ? static_cast<uint8_t>(rp->resp.id & 0xF) : 0;
+  const auto *rq = g_bind.read_q;
+  hin.mem_req_ready = rq ? rq->req.ready : false;
+  hin.mem_req_accepted = rq ? rq->req.accepted : false;
+  hin.mem_req_accepted_id = rq ? static_cast<uint8_t>(rq->req.accepted_id & 0xF) : 0;
+  hin.mem_resp_valid = rq ? rq->resp.valid : false;
+  hin.mem_resp_id = rq ? static_cast<uint8_t>(rq->resp.id & 0xF) : 0;
   const auto *pr = g_bind.probe_resp;
   hin.dcache_resp_valid = pr ? pr->resp_valid : false;
   hin.dcache_resp_retry = pr ? pr->resp_retry : false;

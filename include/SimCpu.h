@@ -16,6 +16,12 @@ class SimCpu {
   // 性能计数器
 public:
   ICacheMemPortReq icache_req{}; // 供 FrontTop 直接驱动的 ICache 请求端口（可选，取决于 CONFIG_ICACHE_USE_AXI_MEM_PORT）
+  // The I-cache's view of its memory side is registered: the ICACHE read port of the interconnect (req.ready / accepted /
+  // resp, driven by axi_interconnect.comb_outputs()) and the probe response (driven by mem_subsystem.comb_outputs())
+  // both come after the front end in the cycle, so the front end sees them as of the previous cycle.
+  axi_interconnect::ReadMasterPort_t icache_axi_q{};
+  ICacheMemPortResp icache_resp_q{};
+  void icache_port_regs_seq();
   ICacheMemPortResp icache_resp{}; // 供 FrontTop 直接驱动的 ICache 响应端口（可选，取决于 CONFIG_ICACHE_USE
   SimCpu() : back(&this->ctx), mem_subsystem(&this->ctx) {};
   SimContext ctx;

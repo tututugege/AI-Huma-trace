@@ -15,6 +15,7 @@ extern PtwWalkPort *icache_ptw_walk_port;
 extern ICacheMemPortReq *icache_mem_req_port;
 extern ICacheMemPortResp *icache_mem_resp_port;
 extern axi_interconnect::ReadMasterPort_t *icache_mem_read_port;
+extern const axi_interconnect::ReadMasterPort_t *icache_mem_read_q;
 
 
 struct fetch_address_FIFO_read_data {

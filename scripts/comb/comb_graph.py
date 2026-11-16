@@ -149,6 +149,30 @@ for name, (drows, dhaz, notes) in (('front', front_domain(ROOT, ASSIGN, overlap)
     for h in dhaz: print('  %s reads %s, written later by %s' % h)
     for x in notes: print('  note: ' + x)
     all_hazards += dhaz
+# top level: SimCpu::cycle() (see comb_top.py)
+from comb_top import top_domain
+trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows)
+# reviewed: the AXI interconnect keeps some of its own last-cycle outputs in the shared port structs (the downstream
+# AR / AW / W valid it drove, the write-port req.ready) and reads them in comb_outputs: registers inside the AXI kit,
+# to become explicit when the AXI kit is reworked (docs/REG_WIRE.md)
+TOP_KNOWN = {('axi_interconnect.comb_outputs', f'axi_interconnect.{io}.{ch}.{ch}valid', 'axi_interconnect.comb_inputs'): 'AXI kit'
+             for io in ('axi_ddr_io', 'axi_mmio_io') for ch in ('ar', 'aw', 'w')}
+TOP_KNOWN[('axi_interconnect.comb_outputs', 'axi_interconnect.write_ports[].req.ready', 'axi_interconnect.comb_inputs')] = 'AXI kit'
+thaz, tstaged = [], 0
+for i, (n, r, w) in enumerate(trows):
+    for j in range(i + 1, len(trows)):
+        if texcl(i, j): continue
+        for f in sorted(toverlap(r, trows[j][2])):
+            if (n, f, trows[j][0]) in TOP_KNOWN: continue
+            if tprior(i, f): tstaged += 1; continue     # written earlier in the cycle too: not a hidden register
+            thaz.append((n, f, trows[j][0]))
+tnotes = set(tnotes) | {f'{tstaged} staged reads (also written by an earlier phase of the cycle)'}
+print(f'\n== top: phases: {len(trows)}, read-before-later-write hazards: {len(thaz)}')
+for n, r, w in trows: print(f'{n:40s} R: {" ".join(sorted(r))} | W: {" ".join(sorted(w))}')
+print('hazards (reader, signal, later writer):')
+for h in thaz: print('  %s reads %s, written later by %s' % h)
+for x in sorted(tnotes): print('  note: ' + x)
+all_hazards += thaz
 if '--check' in sys.argv and all_hazards: sys.exit(1)
 if '--dot' in sys.argv:
     with open(sys.argv[sys.argv.index('--dot') + 1], 'w') as fdot:
