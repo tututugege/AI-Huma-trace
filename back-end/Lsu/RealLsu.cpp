@@ -6,15 +6,16 @@
 
 // The LSU is the staged pipeline in RealLsuPipe.cpp; this file holds its setup and the commit-time store view.
 void RealLsu::init() {
-  cur = {};
+  cur_ = {};
   nxt = {};
-  pcur = {};
+  pcur_ = {};
   pnxt = {};
   pw = {};
 }
 
 // Commit-time view of a store for the peripheral model (state of the registered STQ).
 StqEntry RealLsu::get_stq_entry(int idx, bool flag) {
+  const lp::LsuPipeState &pcur = pcur_;
   if (idx < 0 || idx >= STQ_SIZE) return {};
   const uint32_t rank = (idx + STQ_SIZE - pcur.stq_head) % STQ_SIZE;
   if (rank >= pcur.stq_count) return {};

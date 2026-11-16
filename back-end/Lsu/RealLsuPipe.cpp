@@ -300,7 +300,7 @@ void RealLsu::seq_pipe() {
   static_assert(std::is_trivially_copyable_v<lp::LsuPipeState>);
   using namespace lp;
   const LsuPipeState &n = pnxt;
-  LsuPipeState &c = pcur;
+  LsuPipeState &c = pcur_;
   for (int i = 0; i < LDQ_SIZE; i++) {
     if (c.ldq[i].st != L_EMPTY || n.ldq[i].st != L_EMPTY) {
       c.ldq[i] = n.ldq[i];
@@ -336,6 +336,7 @@ void RealLsu::seq_pipe() {
 }
 
 void RealLsu::cal() {
+  const lp::LsuPipeState &pcur = pcur_;
   pw = {};
   mdp_write_pending();
   {  // train one flagged live entry (flags of earlier cycles); entries that died are dropped
@@ -367,6 +368,7 @@ void RealLsu::cal() {
 }
 
 void RealLsu::lsu2rob() {
+  const lp::LsuPipeState &pcur = pcur_;
   wires->lsu2rob = {};
   wires->lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
   std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 
@@ -376,6 +378,7 @@ void RealLsu::lsu2rob() {
 }
 
 void RealLsu::lsu2dis() {
+  const lp::LsuPipeState &pcur = pcur_;
   wires->lsu2dis = {};
   const uint32_t head = pcur.stq_head, count = pcur.stq_count;
   wires->lsu2dis.stq_tail = (head + count) % STQ_SIZE;
@@ -417,6 +420,7 @@ void RealLsu::stq_commit() {
 // MMIO
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::mmio_in() {
+  const LsuState &cur = cur_;
   if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
@@ -456,6 +460,7 @@ void RealLsu::dcache2lsu() {
 }
 
 void RealLsu::dcache2lsu_ldq() {
+  const lp::LsuPipeState &pcur = pcur_;
   const DcacheLsuIO &dc = wires->in.dcache2lsu;
   pw.fill = dc.mshr_fill && LSU_WAIT_MSHR_FILL;
   pw.fill_addr = dc.mshr_fill_addr;
@@ -671,6 +676,8 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
 }
 
 void RealLsu::lsu2exe() {
+  const lp::LsuPipeState &pcur = pcur_;
+  const LsuState &cur = cur_;
   wires->lsu2exe = {};
   bool busy[LD] = {};
   for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
@@ -766,6 +773,7 @@ void RealLsu::lsu2exe() {
 // AGU arrivals: STD write, STA (va), load (L1 input)
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::exe2lsu() {
+  const lp::LsuPipeState &pcur = pcur_;
   const ExeLsuIO &x = wires->exe2lsu;
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
@@ -878,6 +886,7 @@ void RealLsu::tlb() {
 }
 
 void RealLsu::tlb_out() {
+  const lp::LsuPipeState &pcur = pcur_;
   tlb_req_ = {};
   tlb_req_.csr_status = wires->csr_status;
 
@@ -991,6 +1000,7 @@ void RealLsu::tlb_in_stq() {
 // L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::stlf() {
+  const lp::LsuPipeState &pcur = pcur_;
   for (int k = 0; k < LD; k++) {
     PL1 &l = pw.l1[k];
     if (!l.v || !l.hit || l.mmio) continue;
@@ -1069,6 +1079,7 @@ void RealLsu::dis2lsu() {
 // flush / mispredict / clear_mask
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::flush() {
+  const lp::LsuPipeState &pcur = pcur_;
   if (wires->rob_bcast.flush) {
     msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
@@ -1169,6 +1180,7 @@ void RealLsu::lsu2dcache_ldq() {
 //      (first lp_drain ports); then the stores committed at the cycle start are inserted (wb_insert).
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::lsu2dcache_stq() {
+  const lp::LsuPipeState &pcur = pcur_;
   auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
@@ -1251,6 +1263,7 @@ void RealLsu::lsu2dcache_stq() {
 // STQ retire, wake-up pass (events of this cycle -> LDQ entries), replay-register fill
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::check() {
+  const lp::LsuPipeState &pcur = pcur_;
   int ret = 0;
   while (ret < RETIRE_PORTS && pnxt.stq_ccount > 0 && pnxt.stq_count > 0 && pnxt.stq[pnxt.stq_head].done &&
          (uint32_t)ret < pcur.stq_ccount && (uint32_t)ret < pcur.stq_count && pcur.stq[pnxt.stq_head].done) {  // R: registered state only

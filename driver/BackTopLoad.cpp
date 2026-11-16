@@ -163,8 +163,8 @@ void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   number_PC = state.pc;
   csr->q_mut().privilege = csr->d.privilege = privilege;
   for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = csr->d.CSR_RegFile[i] = state.csr[i];
-  lsu->cur.lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
-  lsu->cur.lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
+  lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
+  lsu->cur_mut().lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
 }
 
 void BackTop::restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file) {

@@ -32,29 +32,41 @@ struct LsuState {
   LrScUnit lrsc_unit;
 };
 
+// Load / store unit (staged pipeline, docs/LSU_PIPE.md). Contract (checked by scripts/comb/comb_graph.py against the
+// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives. (out: BackTop's
+// output struct, shared: the LSU drives its DCache / MMIO requests there.)
+//   CONTRACT comb_outputs    in: -                                                    out: lsu2dis lsu2rob lsu_awake
+//   CONTRACT comb_writeback  in: dec_bcast in rob_bcast rob_commit                     out: lsu2exe lsu_awake
+//   CONTRACT comb_translate  in: csr_status dec_bcast exe2lsu rob_bcast                out: -
+//   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu in out rob_bcast rob_commit out: out
+//   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe
 class RealLsu {
 public:
   void comb_outputs();  // outputs from the registers: wakeups, free counts to dispatch, completion to the ROB
   void comb_writeback();  // committed stores, MMIO and DCache responses, load write-back to the EXU
   void comb_translate();  // AGU / STD results in, address translation, store-to-load forwarding
   void comb_requests();  // allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
-  RealLsu() : cur{}, nxt{}, ctx(nullptr) {}
-  explicit RealLsu(SimContext *ctx) : cur{}, nxt{}, ctx(ctx) {}
+  RealLsu() : nxt{}, ctx(nullptr), cur_{} {}
+  explicit RealLsu(SimContext *ctx) : nxt{}, ctx(ctx), cur_{} {}
 
-  LsuState cur;
+  // Registers: cur_ / pcur_ (q: read in comb through const references, written only by seq) and nxt / pnxt (d: written
+  // by comb; d == q at the start of every cycle); pw holds the wires between the LSU's phases of one cycle.
   LsuState nxt;
+  const LsuState &cur() const { return cur_; }
+  LsuState &cur_mut() { return cur_; }   // checkpoint restore only
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   SimContext *ctx = nullptr;
   TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
 
   void init();
   void seq() {
-    cur = nxt;
+    cur_ = nxt;
     seq_pipe();
   }
 
   // Staged LSU: the comb phases above are in RealLsuPipe.cpp, design in docs/LSU_PIPE.md.
-  lp::LsuPipeState pcur, pnxt;
+  lp::LsuPipeState pnxt;
+  const lp::LsuPipeState &pcur() const { return pcur_; }
   lp::PCycle pw;
 
   StqEntry get_stq_entry(int idx, bool flag);
@@ -87,4 +99,6 @@ private:
   void dcache2lsu_stq();
   LsuMMUIO tlb_req_{};    // this cycle's DTLB requests and responses (also printed by LSU_PIPE_EVT)
   MMULsuIO tlb_resp_{};
+  LsuState cur_;
+  lp::LsuPipeState pcur_;
 };
