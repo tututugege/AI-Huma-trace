@@ -111,12 +111,13 @@ void Exu::to_csr() {
   }
 }
 
-// Issued uops enter the FU input slots (killed ones are dropped, resolved branch bits are cleared); a flush empties them.
-void Exu::comb_pipeline() {
+// The clock edge: the load write-back register; issued uops enter the FU input slots (killed ones are dropped, resolved
+// branch bits are cleared); a flush empties them.
+void Exu::seq() {
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     const auto &e = out.exe2prf.entry[i];
-    LoadWake &l = d.lwake_r[i];
+    LoadWake &l = q_.lwake_r[i];
     l.valid = !in.rob_bcast->flush && e.valid && !is_br_killed(e.uop, (*in.dec_bcast)) && e.uop.dest_en &&
               decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
     if (!l.valid) continue;
@@ -382,7 +383,6 @@ void Exu::load_wake() {
   }
 }
 
-void Exu::seq() { q_ = d; }
 
 // late load wakeup, the FUs, the port readiness for issue
 void Exu::comb_exec() {

@@ -126,11 +126,9 @@ inline int cvt_number_to_csr(int csr_idx) {
 //   CONTRACT comb_csr_status  in: -  out: out.csr_status
 //   CONTRACT comb_interrupt  in: -  out: out.csr2rob
 //   CONTRACT comb_commit  in: in.exe2csr in.rob2csr in.rob_bcast  out: out.csr2front
-//   CONTRACT comb_interrupt_inject  in: in.csr_interrupt_inject_io in.top2csr  out: -
 class Csr {
 public:
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq: q = d.
+  // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
     reg<XLEN> CSR_RegFile[CSR_NUM];
     reg<2> privilege  = 0b11;
@@ -139,8 +137,9 @@ public:
     reg<2> csr_wcmd;
     reg<1> csr_we;
   };
-  Regs d;
   const Regs &q() const { return q_; }
+  struct TrapWire { uint8_t privilege = 0; uint64_t cause = 0; };   // a trap taken this cycle: its mode and cause
+  const TrapWire &trap() const { return trap_; }   // (the trace bridge's interrupt report)
   Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_commit();  // exceptions and the CSR write of the committing instruction
   // Outputs: the signals this module drives (it alone).
@@ -162,7 +161,6 @@ public:
 
   void comb_csr_status();
   void comb_interrupt();
-  void comb_interrupt_inject();
   void seq();
   reg<XLEN> read(int idx) const { return q_.CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
 
@@ -173,7 +171,9 @@ public:
 
 private:
   // phases of one cycle, run in the order of the methods above
-  void exception();
-  void csr_write();
+  TrapWire trap_{};
+  void exception(const Regs &q, Regs *d);   // d: also apply the state (seq)
+  void csr_write(const Regs &q, Regs &d);
+  void interrupt_inject();
   Regs q_;
 };

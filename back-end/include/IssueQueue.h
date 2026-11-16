@@ -72,8 +72,8 @@ public:
   int port_lo = 0, port_hi = 0;   // the queue's physical issue ports are [port_lo, port_hi)
 private:
 
-  // Registers: q_ (read in comb through const Regs &q, written only by seq) and d (written by comb; d == q at the start
-  // of every cycle). seq copies the written slots / wakeup-matrix rows of d to q.
+  // Registers: read by comb_issue (the select), updated only by seq: the picks leave, this cycle's wake-ups clear busy
+  // bits, the enqueue requests enter, then the flush / branch-clear.
   struct Regs {
     std::vector<IqStoredEntry> entry;
     int count = 0;
@@ -82,13 +82,13 @@ private:
     std::vector<uint64_t> wake_matrix_src2;
     std::vector<uint64_t> wake_matrix_src3;   // F/D: the third source of the fused multiply-add (empty without FP)
   };
-  Regs q_, d;
+  Regs q_;
 
-  // Dirty tracking: q == d at the start of the cycle; writes to d are recorded so seq() copies only what changed.
+  // Slots changed at this edge: seq() refreshes only their ready bits.
   bool entry_dirty = false;
   bool entry_all_dirty = false;
   std::vector<uint64_t> slot_dirty;
-  std::vector<uint64_t> d_vmask;     // bit i = d.entry[i].valid, so scans visit only the live slots
+  std::vector<uint64_t> d_vmask;     // bit i = entry[i].valid, so scans visit only the live slots
   std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]), refreshed in seq()
   void refresh_ready(int i) {
     const Regs &q = q_;
@@ -100,18 +100,7 @@ private:
     slot_dirty[i >> 6] |= 1ull << (i & 63);
     entry_dirty = true;
   }
-  bool matrix_all_dirty = false;
-  std::vector<uint8_t> row_dirty;
-  std::vector<uint32_t> dirty_rows;
-  void mark_row(uint32_t preg) {
-    if (!row_dirty[preg]) {
-      row_dirty[preg] = 1;
-      dirty_rows.push_back(preg);
-    }
-  }
-#ifdef IQ_SELFCHECK
-
-#endif
+  std::vector<uint32_t> wake_pregs_;   // this cycle's wake-ups (the valid channels of the bus), applied at seq
 
 public:
   IssueQueue(const IssueQueueConfig &cfg)
@@ -122,35 +111,25 @@ public:
       for (const auto &pb : ports) { port_lo = std::min(port_lo, pb.port_idx); port_hi = std::max(port_hi, pb.port_idx + 1); }
     }
     q_.entry.resize(size);
-    d.entry.resize(size);
     slot_dirty.assign((size + 63) / 64, 0);
     ready_bits.assign((size + 63) / 64, 0);
     d_vmask.assign((size + 63) / 64, 0);
     q_.count = 0;
-    d.count = 0;
     wake_words_per_row = (size + 63) / 64;
 
     // Initialize segmented wakeup matrices:
     // [preg][word_idx], where each word tracks 64 IQ slots.
     q_.wake_matrix_src1.resize(TAG_NUM * wake_words_per_row, 0);
     q_.wake_matrix_src2.resize(TAG_NUM * wake_words_per_row, 0);
-    d.wake_matrix_src1.resize(TAG_NUM * wake_words_per_row, 0);
-    d.wake_matrix_src2.resize(TAG_NUM * wake_words_per_row, 0);
     {
       q_.wake_matrix_src3.resize(TAG_NUM * wake_words_per_row, 0);
-      d.wake_matrix_src3.resize(TAG_NUM * wake_words_per_row, 0);
     }
-    row_dirty.assign(TAG_NUM, 0);
 
     in.enq_reqs.resize(dispatch_width);
   }
 
   void comb_begin() {
     const Regs &q = q_;
-#ifdef IQ_SELFCHECK
-    selfcheck("comb_begin");
-#endif
-    d.count = q.count;
     out.free_slots = size - q.count;
     if (grants_live) {   // the grants are all-zero unless the last comb_issue() filled one
       for (auto &grant : out.issue_grants) grant = {};
@@ -164,18 +143,10 @@ public:
     in.clear_mask = 0;
   }
 
-  void comb_enq() {
-    for (const auto &req : in.enq_reqs) {
-      if (!req.valid) {
-        continue;
-      }
-      int success = enqueue(req);
-      Assert(success && "issue queue overflow: dispatch logic error");
-    }
-    out.free_slots = size - d.count;
-  }
+  // The registers woken this cycle (the valid channels of the wake-up bus, in channel order); applied at seq.
+  void set_wakeup(const uint32_t *pregs, int n) { wake_pregs_.assign(pregs, pregs + n); }
 
-  // The registers woken this cycle (the valid channels of the wake-up bus, in channel order).
+private:
   void wakeup(const uint32_t *pregs, int n) {
     for (int i = 0; i < n; i++) {
       uint32_t preg = pregs[i];
@@ -183,53 +154,53 @@ public:
         continue;
       }
       size_t row_base = matrix_row_base(preg);
-      mark_row(preg);
 
       for (int w = 0; w < wake_words_per_row; w++) {
-        uint64_t mask1 = d.wake_matrix_src1[row_base + w];
+        uint64_t mask1 = q_.wake_matrix_src1[row_base + w];
         while (mask1) {
           int bit = __builtin_ctzll(mask1);
           int idx = (w << 6) + bit;
-          if (idx < size && d.entry[idx].valid && d.entry[idx].uop->src1_en &&
-              d.entry[idx].uop.src1_busy && d.entry[idx].uop->src1_preg == preg) {
-            d.entry[idx].uop.src1_busy = false;
+          if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src1_en &&
+              q_.entry[idx].uop.src1_busy && q_.entry[idx].uop->src1_preg == preg) {
+            q_.entry[idx].uop.src1_busy = false;
             mark_slot(idx);
           }
           mask1 &= (mask1 - 1);
         }
-        d.wake_matrix_src1[row_base + w] = 0;
+        q_.wake_matrix_src1[row_base + w] = 0;
 
-        uint64_t mask2 = d.wake_matrix_src2[row_base + w];
+        uint64_t mask2 = q_.wake_matrix_src2[row_base + w];
         while (mask2) {
           int bit = __builtin_ctzll(mask2);
           int idx = (w << 6) + bit;
-          if (idx < size && d.entry[idx].valid && d.entry[idx].uop->src2_en &&
-              d.entry[idx].uop.src2_busy && d.entry[idx].uop->src2_preg == preg) {
-            d.entry[idx].uop.src2_busy = false;
+          if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src2_en &&
+              q_.entry[idx].uop.src2_busy && q_.entry[idx].uop->src2_preg == preg) {
+            q_.entry[idx].uop.src2_busy = false;
             mark_slot(idx);
           }
           mask2 &= (mask2 - 1);
         }
-        d.wake_matrix_src2[row_base + w] = 0;
+        q_.wake_matrix_src2[row_base + w] = 0;
 
         {
-          uint64_t mask3 = d.wake_matrix_src3[row_base + w];
+          uint64_t mask3 = q_.wake_matrix_src3[row_base + w];
           while (mask3) {
             int bit = __builtin_ctzll(mask3);
             int idx = (w << 6) + bit;
-            if (idx < size && d.entry[idx].valid && d.entry[idx].uop->src3_en &&
-                d.entry[idx].uop.src3_busy && d.entry[idx].uop->src3_preg == preg) {
-              d.entry[idx].uop.src3_busy = false;
+            if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src3_en &&
+                q_.entry[idx].uop.src3_busy && q_.entry[idx].uop->src3_preg == preg) {
+              q_.entry[idx].uop.src3_busy = false;
               mark_slot(idx);
             }
             mask3 &= (mask3 - 1);
           }
-          d.wake_matrix_src3[row_base + w] = 0;
+          q_.wake_matrix_src3[row_base + w] = 0;
         }
       }
     }
   }
 
+public:
   void comb_issue() {
     const Regs &q = q_;
     // Grants are all-zero unless the previous call filled one, and most cycles have nothing ready.
@@ -241,12 +212,8 @@ public:
     }
     bool any_ready = false;
     for (uint64_t w : ready_bits) any_ready |= (w != 0);
-    if (!any_ready) {
-      out.free_slots = size - d.count;
-      return;
-    }
+    if (!any_ready) return;
     const std::vector<std::pair<int, int>> &scheduled_pairs = schedule();
-    committed_indices.clear();
 
     for (const auto &pair : scheduled_pairs) {
       int entry_idx = pair.first;
@@ -261,26 +228,12 @@ public:
       }
     }
 
-    commit_issue(committed_indices);
-    out.free_slots = size - d.count;
-  }
-
-  void comb_flush() {
-    if (in.flush_all) {
-      flush_all();
-    } else if (in.flush_br) {
-      flush_br(in.flush_br_mask);
-    }
-    if (in.clear_mask) {
-      clear_br(in.clear_mask);
-    }
-    out.free_slots = size - d.count;
   }
 
 private:
   // enqueue (returns the number enqueued)
   int enqueue(const IqStoredEntry &inst) {
-    if (d.count >= size)
+    if (q_.count >= size)
       return 0;
     for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
       const uint64_t freebits = ~d_vmask[w];
@@ -290,12 +243,12 @@ private:
 #ifndef IQ_NEG_CONTROL
       mark_slot(i);
 #endif
-      d.entry[i] = inst;
-      d.entry[i].valid = true;
+      q_.entry[i] = inst;
+      q_.entry[i].valid = true;
       d_vmask[w] |= 1ull << (i & 63);
-      set_dep_bits_for_slot(d.entry[i], i);
+      set_dep_bits_for_slot(q_.entry[i], i);
 
-      d.count++;
+      q_.count++;
       return 1;
     }
     return 0;
@@ -306,12 +259,12 @@ private:
     for (size_t w = 0; w < d_vmask.size(); w++)
       for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int i = int(w * 64) + __builtin_ctzll(m);
-        if ((d.entry[i].uop.br_mask & br_mask) == 0) continue;
-        clear_dep_bits_for_slot(d.entry[i], i);
-        d.entry[i].valid = false;
+        if ((q_.entry[i].uop.br_mask & br_mask) == 0) continue;
+        clear_dep_bits_for_slot(q_.entry[i], i);
+        q_.entry[i].valid = false;
         d_vmask[w] &= ~(1ull << (i & 63));
         mark_slot(i);
-        d.count--;
+        q_.count--;
       }
   }
 
@@ -321,82 +274,65 @@ private:
     for (size_t w = 0; w < d_vmask.size(); w++)
       for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int i = int(w * 64) + __builtin_ctzll(m);
-        if ((d.entry[i].uop.br_mask & clear_mask) == 0) continue;   // unchanged entries need no copy at seq()
-        d.entry[i].uop.br_mask &= ~clear_mask;
+        if ((q_.entry[i].uop.br_mask & clear_mask) == 0) continue;   // unchanged entries need no copy at seq()
+        q_.entry[i].uop.br_mask &= ~clear_mask;
         mark_slot(i);
       }
   }
 
   void flush_all() {
-    for (auto &e : d.entry)
+    for (auto &e : q_.entry)
       e.valid = false;
     std::fill(d_vmask.begin(), d_vmask.end(), 0);
     entry_dirty = true;
     entry_all_dirty = true;
-    matrix_all_dirty = true;
-    d.count = 0;
+    q_.count = 0;
     
     // Clear Wakeup Matrices
-    std::fill(d.wake_matrix_src1.begin(), d.wake_matrix_src1.end(), 0);
-    std::fill(d.wake_matrix_src2.begin(), d.wake_matrix_src2.end(), 0);
-    std::fill(d.wake_matrix_src3.begin(), d.wake_matrix_src3.end(), 0);
+    std::fill(q_.wake_matrix_src1.begin(), q_.wake_matrix_src1.end(), 0);
+    std::fill(q_.wake_matrix_src2.begin(), q_.wake_matrix_src2.end(), 0);
+    std::fill(q_.wake_matrix_src3.begin(), q_.wake_matrix_src3.end(), 0);
   }
 
   // apply the issue selection (remove the selected entries)
   void commit_issue(const std::vector<int> &indices) {
     for (int idx : indices) {
-      if (d.entry[idx].valid) {
-        clear_dep_bits_for_slot(d.entry[idx], idx);
-        d.entry[idx].valid = false;
+      if (q_.entry[idx].valid) {
+        clear_dep_bits_for_slot(q_.entry[idx], idx);
+        q_.entry[idx].valid = false;
         d_vmask[idx >> 6] &= ~(1ull << (idx & 63));
         mark_slot(idx);
-        d.count--;
+        q_.count--;
       }
     }
   }
 
 public:
+  // The clock edge: the picks of this cycle leave, the wake-ups clear busy bits, the enqueue requests enter (their
+  // wake-ups already applied by the Isu), then the flush / resolved-branch clear; the ready bits of the changed slots.
   void seq() {
+    commit_issue(committed_indices);
+    committed_indices.clear();
+    if (!wake_pregs_.empty()) wakeup(wake_pregs_.data(), int(wake_pregs_.size()));
+    for (const auto &req : in.enq_reqs) {
+      if (!req.valid) continue;
+      const int success = enqueue(req);
+      Assert(success && "issue queue overflow: dispatch logic error");
+    }
+    if (in.flush_all) flush_all();
+    else if (in.flush_br) flush_br(in.flush_br_mask);
+    if (in.clear_mask) clear_br(in.clear_mask);
     if (entry_dirty) {
       if (entry_all_dirty) {
-        q_.entry = d.entry;
-        entry_all_dirty = false;
         for (int i = 0; i < size; i++) refresh_ready(i);
+        entry_all_dirty = false;
       } else {
-        for (size_t k = 0; k < slot_dirty.size(); ++k) {
-          for (uint64_t m = slot_dirty[k]; m; m &= m - 1) {
-            const size_t i = k * 64 + __builtin_ctzll(m);
-            q_.entry[i] = d.entry[i];
-            refresh_ready(i);
-          }
-        }
+        for (size_t k = 0; k < slot_dirty.size(); ++k)
+          for (uint64_t m = slot_dirty[k]; m; m &= m - 1) refresh_ready(int(k * 64 + __builtin_ctzll(m)));
       }
       std::fill(slot_dirty.begin(), slot_dirty.end(), 0);
       entry_dirty = false;
     }
-    q_.count = d.count;
-    if (matrix_all_dirty) {
-      q_.wake_matrix_src1 = d.wake_matrix_src1;
-      q_.wake_matrix_src2 = d.wake_matrix_src2;
-      q_.wake_matrix_src3 = d.wake_matrix_src3;
-      matrix_all_dirty = false;
-      for (uint32_t r : dirty_rows) row_dirty[r] = 0;
-      dirty_rows.clear();
-    } else {
-      for (uint32_t r : dirty_rows) {
-        const size_t base = matrix_row_base(r);
-        for (int w = 0; w < wake_words_per_row; w++) {
-          q_.wake_matrix_src1[base + w] = d.wake_matrix_src1[base + w];
-          q_.wake_matrix_src2[base + w] = d.wake_matrix_src2[base + w];
-          q_.wake_matrix_src3[base + w] = d.wake_matrix_src3[base + w];
-        }
-        row_dirty[r] = 0;
-      }
-      dirty_rows.clear();
-    }
-#ifdef IQ_SELFCHECK
-    selfcheck("seq");
-#endif
   }
 
 private:
@@ -478,22 +414,19 @@ private:
     if (ent.uop->src1_en && ent.uop.src1_busy) {
       uint32_t preg = ent.uop->src1_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src1[matrix_row_base(preg) + word] |= bit;
-        mark_row(preg);
+        q_.wake_matrix_src1[matrix_row_base(preg) + word] |= bit;
       }
     }
     if (ent.uop->src2_en && ent.uop.src2_busy) {
       uint32_t preg = ent.uop->src2_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src2[matrix_row_base(preg) + word] |= bit;
-        mark_row(preg);
+        q_.wake_matrix_src2[matrix_row_base(preg) + word] |= bit;
       }
     }
     if (ent.uop->src3_en && ent.uop.src3_busy) {
       uint32_t preg = ent.uop->src3_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src3[matrix_row_base(preg) + word] |= bit;
-        mark_row(preg);
+        q_.wake_matrix_src3[matrix_row_base(preg) + word] |= bit;
       }
     }
   }
@@ -506,22 +439,19 @@ private:
     if (ent.uop->src1_en) {
       uint32_t preg = ent.uop->src1_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src1[matrix_row_base(preg) + word] &= clear_mask;
-        mark_row(preg);
+        q_.wake_matrix_src1[matrix_row_base(preg) + word] &= clear_mask;
       }
     }
     if (ent.uop->src2_en) {
       uint32_t preg = ent.uop->src2_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src2[matrix_row_base(preg) + word] &= clear_mask;
-        mark_row(preg);
+        q_.wake_matrix_src2[matrix_row_base(preg) + word] &= clear_mask;
       }
     }
     if (ent.uop->src3_en) {
       uint32_t preg = ent.uop->src3_preg;
       if (preg < TAG_NUM) {
-        d.wake_matrix_src3[matrix_row_base(preg) + word] &= clear_mask;
-        mark_row(preg);
+        q_.wake_matrix_src3[matrix_row_base(preg) + word] &= clear_mask;
       }
     }
   }

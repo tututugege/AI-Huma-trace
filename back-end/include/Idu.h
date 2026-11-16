@@ -10,15 +10,13 @@ class SimContext;
 //   CONTRACT comb_fire  in: in.exu2id in.ren2dec in.rob_bcast  out: out.idu_consume
 class Idu {
 public:
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq: q = d.
+  // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
     reg<BR_MASK_WIDTH> now_br_mask;
     reg<BR_MASK_WIDTH> br_mask_cp[MAX_BR_NUM];
     reg<1> tag_vec[MAX_BR_NUM];
     ExuIdIO br_latch;
   };
-  Regs d;
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_decode();  // branch resolution (mispredict broadcast), then decode

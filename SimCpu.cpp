@@ -12,10 +12,8 @@
 // An interrupt taken at commit is reported to the trace bridge (Ren calls it through SimContext while it commits).
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
-  const uint8_t tp = static_cast<uint8_t>(cpu->back.csr->d.privilege);
-  const xlen_t c = tp == RISCV_MODE_M ? cpu->back.csr->d.CSR_RegFile[csr_mcause]
-                                        : cpu->back.csr->d.CSR_RegFile[csr_scause];
-  tbhook::on_interrupt(c, tp, cpu->back.csr->d.CSR_RegFile[csr_mip]);
+  const auto &t = cpu->back.csr->trap();   // the trap of this cycle (comb_commit)
+  tbhook::on_interrupt(t.cause, t.privilege, cpu->back.csr->q().CSR_RegFile[csr_mip]);
 }
 
 // reset
@@ -150,8 +148,6 @@ void SimCpu::cycle() {
   back.pre->comb_fire();
   back.lsu->comb_requests();
   back.lsu->comb_commit_store();
-  back.exu->comb_pipeline();
-  back.isu->comb_enq();
   f2b.comb_hold();
   b2f.comb();
   mem_subsystem.ptw_block.comb_request();
@@ -162,7 +158,6 @@ void SimCpu::cycle() {
   mem_subsystem.ptw_block.comb_feedback();
   mem_subsystem.peripheral_axi_.comb_commit_store();
   mem_subsystem.peripheral_axi_.comb();
-  back.csr->comb_interrupt_inject();
   axi.comb_inputs();
   // END GENERATED
   back.pmu_sample();   // the cycle's PMU sample (after all comb phases)

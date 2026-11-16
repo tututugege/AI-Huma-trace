@@ -138,8 +138,8 @@ void BackTop::seq() {
 // CSRs (address translation, interrupts, traps) and the LR/SC reservation.
 void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
   restored_pc = state.pc;
-  csr->q_mut().privilege = csr->d.privilege = privilege;
-  for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = csr->d.CSR_RegFile[i] = state.csr[i];
+  csr->q_mut().privilege = privilege;
+  for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = state.csr[i];
   lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
   lsu->cur_mut().lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
   // the pipeline starts with a refetch from the restored pc

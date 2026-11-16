@@ -23,9 +23,9 @@ void Isu::apply_wakeup_to_uop(Uop &uop) const {
   }
 }
 
-// Empties the wake slots of d (a global flush; init); the registers follow at seq.
+// Empties the wake slots (a global flush at the edge; init).
 void Isu::clear_wake_state() {
-  for_each_wake_slot_d([](auto &e) { e = {}; });
+  for_each_wake_slot([](auto &e) { e = {}; });
 }
 
 // One issue queue per GLOBAL_IQ_CONFIG entry (the order matches the IQ enum); each claims its range of physical issue ports.
@@ -33,7 +33,6 @@ void Isu::init() {
   iqs.clear();
   configs.clear();
   clear_wake_state();
-  q_ = d;
   for (int i = 0; i < IQ_NUM; i++) {
     const auto &iq = GLOBAL_IQ_CONFIG[i];
     IssueQueueConfig cfg;
@@ -51,7 +50,7 @@ void Isu::init() {
   for (auto &q : iqs) q.in.grant_gate = [this](const Uop &u, int port) { return grant_gate(u, port); };
 }
 
-// Working copies already equal the registered state (seq() copies them back); each IQ resets its default IO.
+// Each IQ resets its default IO.
 void Isu::begin_cycle() {
   for (auto &q : iqs) q.comb_begin();
 }
@@ -72,7 +71,7 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
 
 // Free slots of each queue go to Dispatch.
 void Isu::ready() {
-  begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
+  begin_cycle();   // the first phase of the cycle: default outputs
   for (int i = 0; i < IQ_NUM; i++) out.iss2dis.ready_num[i] = iqs[i].out.free_slots;
 }
 
@@ -89,7 +88,6 @@ void Isu::enq() {
       apply_wakeup_to_uop(slot.uop);
       slot.valid = true;
     }
-    q.comb_enq();
   }
 }
 
@@ -125,10 +123,10 @@ void Isu::issue() {
   }
 }
 
-// Next state of the delayed wakeups: DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts, and
-// uops issued this cycle with a multi-cycle latency enter them.
-void Isu::calc_latency_next() {
-  const Regs &q = q_;
+// Next state of the delayed wakeups (the edge): DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts,
+// and uops issued this cycle with a multi-cycle latency enter them (q: the registers of this cycle).
+void Isu::calc_latency_next(const Regs &q) {
+  Regs &d = q_;   // updated in place
   auto age = [](auto &cur, auto &nxt) {
     for (size_t i = 0; i < std::size(cur); i++) {
       nxt[i] = {};
@@ -233,11 +231,10 @@ void Isu::awake() {
   int n_woken = 0;
   for (int i = 0; i < WAKE_CH_ALL; i++)
     if (bus[i].valid) woken[n_woken++] = bus[i].preg;
-  if (n_woken)
-    for (auto &q : iqs) q.wakeup(woken, n_woken);
+  for (auto &q : iqs) q.set_wakeup(woken, n_woken);   // (applied at the edge)
 }
 
-// Flush / mispredict / branch-resolve handling for the queues and the delayed wakeups. A flush empties everything,
+// Flush / mispredict / branch-resolve handling for the queues (their inputs; applied by their seq) and the delayed wakeups. A flush empties everything,
 // a mispredict kills the wakeups of squashed uops, and resolved branches free their mask bit in the survivors.
 void Isu::flush() {
   const bool flush_all = in.rob_bcast->flush;
@@ -249,31 +246,28 @@ void Isu::flush() {
     q.in.flush_br = flush_br;
     q.in.flush_br_mask = br_mask;
     q.in.clear_mask = clear;
-    q.comb_flush();
   }
   if (flush_all) {
     clear_wake_state();
   } else if (in.dec_bcast->mispred) {
-    for_each_wake_slot_d([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
+    for_each_wake_slot([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
   }
-  if (clear) for_each_wake_slot_d([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });
+  if (clear) for_each_wake_slot([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });
 }
 
+// The clock edge: the delayed wakeups, the dispatch requests into the queues (with this cycle's wake-ups applied), the
+// flush / branch clear; then each queue's own edge.
 void Isu::seq() {
+  const Regs q = q_;   // the wake slots of this cycle
+  calc_latency_next(q);
+  enq();
+  flush();
   for (auto &iq : iqs) iq.seq();
-  q_ = d;
 }
 
-// free slots, select and issue, the wakeup bus, next-cycle latencies
+// free slots, select and issue, the wakeup bus
 void Isu::comb_issue() {
   ready();
   issue();
   awake();
-  calc_latency_next();
-}
-
-// enqueue from dispatch, flush
-void Isu::comb_enq() {
-  enq();
-  flush();
 }

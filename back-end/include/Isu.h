@@ -35,28 +35,24 @@ constexpr int ISU_FP_WAKE_SLOT_NUM = 24;
 // Issue unit (the issue queues and the wake-up network). Contract (checked by scripts/comb/comb_graph.py against the
 // code): the signals each phase reads (in) and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_issue  in: in.dec_bcast in.exe2iss in.lsu_awake in.prf_awake in.rob_bcast  out: out.iss2dis out.iss2prf out.iss_awake
-//   CONTRACT comb_enq  in: in.dec_bcast in.dis2iss in.rob_bcast  out: -
 class Isu {
 public:
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq: q = d.
+  // Registers (the delayed wake-up slots): read by comb_issue, updated only by seq.
   struct Regs {
     MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
     IterWakeEntry div_wake_slots[ISU_DIV_WAKE_SLOT_NUM];
     IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
   };
-  Regs d;
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
-  void comb_issue();  // free slots, select and issue, the wakeup bus, next-cycle latencies
-  void comb_enq();  // enqueue from dispatch, flush
+  void comb_issue();  // free slots, select and issue, the wakeup bus
   friend struct IsuDigestAccess;  // lockstep test hook
 private:
   // phases of one cycle, run in the order of the methods above
   void ready();
   void issue();
   void awake();
-  void calc_latency_next();
+  void calc_latency_next(const Regs &q);
   void enq();
   void flush();
   void begin_cycle();   // called by ready(), the first phase of the cycle
@@ -105,10 +101,10 @@ private:
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
-  template <class F> void for_each_wake_slot_d(F f) {   // the wake slots of d
-    for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) f(e);
-    for (auto &e : d.div_wake_slots) f(e);
-    for (auto &e : d.fp_wake_slots) f(e);
+  template <class F> void for_each_wake_slot(F f) {   // the wake slots (registers)
+    for (auto &stage : q_.mul_wake_pipe) for (auto &e : stage) f(e);
+    for (auto &e : q_.div_wake_slots) f(e);
+    for (auto &e : q_.fp_wake_slots) f(e);
   }
 
 private:

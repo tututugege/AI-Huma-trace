@@ -12,12 +12,12 @@
 
 void Idu::init() {
   for (int i = 0; i < MAX_BR_NUM; i++) {
-    q_.tag_vec[i] = d.tag_vec[i] = true;
-    q_.br_mask_cp[i] = d.br_mask_cp[i] = 0;
+    q_.tag_vec[i] = true;
+    q_.br_mask_cp[i] = 0;
   }
-  q_.tag_vec[0] = d.tag_vec[0] = false;  // tag 0 is "no branch"
-  q_.now_br_mask = d.now_br_mask = 0;
-  q_.br_latch = d.br_latch = {};
+  q_.tag_vec[0] = false;  // tag 0 is "no branch"
+  q_.now_br_mask = 0;
+  q_.br_latch = {};
 }
 
 // Decode the instructions of the pre-decode queue and give every branch a tag/mask. A younger instruction depends on all
@@ -99,13 +99,20 @@ void Idu::branch() {
   b.clear_mask = q.br_latch.clear_mask;  // includes the mispredicted branch's own bit; receivers flush first, then clear
 }
 
-// Branch tag bookkeeping and the consume handshake with the pre-decode queue.
-// Flush resets everything; resolved branches return their tags; a mispredict frees the tags younger than the branch
-// (and allocates nothing this cycle); otherwise fired branches take their tag and checkpoint the mask.
+// The consume handshake with the pre-decode queue: every decoded slot fires when rename takes the group (nothing in a
+// flush or mispredict cycle).
 void Idu::comb_fire() {
-  const Regs &q = q_;
   for (int i = 0; i < DECODE_WIDTH; i++) out.idu_consume.fire[i] = false;
+  if (in.rob_bcast->flush || q_.br_latch.mispred) return;
+  for (int i = 0; i < DECODE_WIDTH; i++) out.idu_consume.fire[i] = out.dec2ren.valid[i] && in.ren2dec->ready;
+}
 
+// The clock edge: branch tag bookkeeping. Flush resets everything; resolved branches return their tags; a mispredict
+// frees the tags younger than the branch (and allocates nothing); otherwise fired branches take their tag and
+// checkpoint the mask.
+void Idu::seq() {
+  const Regs q = q_;   // the registers of this cycle
+  Regs &d = q_;        // updated in place
   d.br_latch = in.rob_bcast->flush ? ExuIdIO{} : (*in.exu2id);
   if (in.rob_bcast->flush) {
     for (int i = 1; i < MAX_BR_NUM; i++) d.tag_vec[i] = true;
@@ -133,9 +140,7 @@ void Idu::comb_fire() {
 
   int br_num = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    const bool fire = out.dec2ren.valid[i] && in.ren2dec->ready;  // every fired slot leaves the pre-decode queue
-    out.idu_consume.fire[i] = fire;
-    if (fire && is_branch(out.dec2ren.uop[i]->type)) {
+    if (out.idu_consume.fire[i] && is_branch(out.dec2ren.uop[i]->type)) {
       const auto tag = alloc_tag[br_num++];
       d.tag_vec[tag] = false;
       d.now_br_mask |= wire<BR_MASK_WIDTH>(1) << tag;
@@ -144,9 +149,6 @@ void Idu::comb_fire() {
   }
 }
 
-void Idu::seq() {
-  q_ = d;
-}
 
 
 // One instruction into a Uop: the ISA view from the shared decoder (decode_inst, bridge/InstDecode.h), then the decode

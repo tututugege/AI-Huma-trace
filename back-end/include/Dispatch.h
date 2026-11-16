@@ -20,7 +20,6 @@ private:
   void wake();
   void dispatch();
   void fire();
-  void pipeline();
 
   Uop make_dis_iss_uop(const Uop &inst, int k) const;
   bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;
@@ -49,14 +48,12 @@ private:
   DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:
-  // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;
-  // d == q at the start of every cycle). seq: q = d.
+  // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
     Uop inst_r[DECODE_WIDTH];
     reg<1> inst_valid[DECODE_WIDTH];
     reg<1> busy_table[TAG_NUM];
   };
-  Regs d;
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_dispatch();  // wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register

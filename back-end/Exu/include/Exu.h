@@ -46,7 +46,6 @@ struct FuUnit {
 // Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2csr out.exe2iss out.exe2lsu out.exe2prf out.exu2id out.exu2rob out.prf_awake
-//   CONTRACT comb_pipeline  in: in.dec_bcast in.iss2prf in.rob_bcast  out: -
 class Exu {
 public:
   void comb_exec();  // late load wakeup, the FUs, the port readiness for issue
@@ -55,7 +54,6 @@ public:
   SimContext *ctx;
 
   void init();
-  void comb_pipeline(); // issued uops enter the FU input slots
   void seq();           // the write-back register; the FU state is updated in place (each phase runs once per cycle, in order)
 
   // Outputs: the signals this module drives (it alone).
@@ -96,7 +94,7 @@ private:
   // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
   // is still updated in place in comb: not yet under the contract.)
   struct Regs { LoadWake lwake_r[ISSUE_WIDTH] = {}; };
-  Regs q_, d;
+  Regs q_;
   std::vector<FuUnit> units;
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order
   uint64_t port_fu_mask[ISSUE_WIDTH] = {};

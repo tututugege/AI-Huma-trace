@@ -20,15 +20,14 @@ void Dispatch::apply_wakeup_to_uop(Uop &uop) const {
 
 void Dispatch::init() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    q_.inst_r[i] = d.inst_r[i] = inst_alloc[i] = {};
-    q_.inst_valid[i] = d.inst_valid[i] = false;
+    q_.inst_r[i] = inst_alloc[i] = {};
+    q_.inst_valid[i] = false;
     dispatch_success_flags[i] = false;
     dispatch_cache[i] = {};
   }
   for (int &o : stq_port_owner) o = -1;
   for (int &o : ldq_port_owner) o = -1;
   std::memset(q_.busy_table, 0, sizeof(q_.busy_table));
-  std::memset(d.busy_table, 0, sizeof(d.busy_table));
 }
 
 // Allocate ROB ids and LDQ/STQ entries for the instructions waiting in the stage. A load records the STQ tail it must
@@ -174,11 +173,6 @@ void Dispatch::fire() {
   const auto clear_mask = in.dec_bcast->clear_mask;
   const bool global_flush = in.rob_bcast->flush || in.dec_bcast->mispred || in.rob2dis->stall;
 
-  std::memcpy(d.busy_table, q.busy_table, sizeof(d.busy_table));
-  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
-    if (in.prf_awake->wake[k].valid) d.busy_table[in.prf_awake->wake[k].preg] = false;
-  for (int k = 0; k < WAKE_CH_ALL; k++)
-    if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
 
   bool pre_stall = false, pre_fire = false;
   int rob_used = 0;  // ROB entries taken by the older slots of this group
@@ -194,9 +188,6 @@ void Dispatch::fire() {
     if (fire && (atomic || wfi)) pre_stall = true;  // exclusive issue slot
     if (fire) pre_fire = true;
   }
-  for (int i = 0; i < DECODE_WIDTH; i++)
-    if (out.dis2rob.dis_fire[i] && q.inst_r[i].dest_en && !is_eliminated_move(q.inst_r[i]))
-      d.busy_table[q.inst_r[i].dest_preg] = true;
   out.dis2ren.ready = !pre_stall;
 
   // take back the issue requests of instructions that did not fire (ports were assigned in slot order)
@@ -236,9 +227,18 @@ void Dispatch::fire() {
   }
 }
 
-// Stage register: cleared by a flush or mispredict, refilled from rename when the stage is free, otherwise the
-// instructions that did not fire stay (with busy bits refreshed by this cycle's wakeups).
-void Dispatch::pipeline() {
+// The clock edge. Busy table: this cycle's wakeups clear, the fired destinations set. Stage register: cleared by a flush or
+// mispredict, refilled from rename when the stage is free, otherwise the instructions that did not fire stay (with busy
+// bits refreshed by this cycle's wakeups).
+void Dispatch::seq() {
+  Regs &d = q_;   // updated in place (each slot reads only its own old value first)
+  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
+    if (in.prf_awake->wake[k].valid) d.busy_table[in.prf_awake->wake[k].preg] = false;
+  for (int k = 0; k < WAKE_CH_ALL; k++)
+    if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
+  for (int i = 0; i < DECODE_WIDTH; i++)
+    if (out.dis2rob.dis_fire[i] && d.inst_r[i].dest_en && !is_eliminated_move(d.inst_r[i]))
+      d.busy_table[d.inst_r[i].dest_preg] = true;
   const Regs &q = q_;
   const auto clear_mask = in.dec_bcast->clear_mask;
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
@@ -261,9 +261,6 @@ void Dispatch::pipeline() {
   }
 }
 
-void Dispatch::seq() {
-  q_ = d;
-}
 
 // A uop of `inst`: it gets its own pool slot (static fields are copied; STA/STD, JAL/JALR pieces differ).
 Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
@@ -391,10 +388,9 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   return n;
 }
 
-// wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register
+// wakeups, dispatch to the issue queues / LSU / ROB, the handshake
 void Dispatch::comb_dispatch() {
   wake();
   dispatch();
   fire();
-  pipeline();
 }

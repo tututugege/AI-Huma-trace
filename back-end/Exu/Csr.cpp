@@ -39,9 +39,9 @@ IrqState eval_interrupts(xlen_t mstatus, xlen_t mie, xlen_t mip, xlen_t mideleg,
 }  // namespace
 
 void Csr::init() {
-  q_.CSR_RegFile[csr_misa] = d.CSR_RegFile[csr_misa] = (xlen_t(2) << 62) | (0x14112B | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
-  q_.CSR_RegFile[csr_mstatus] = d.CSR_RegFile[csr_mstatus] = kMstatusReset;
-  q_.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_sstatus] = kMstatusReset & kSstatusMask;
+  q_.CSR_RegFile[csr_misa] = (xlen_t(2) << 62) | (0x14112B | (kRvc ? 4 : 0));   // MXL = 2: U/S/M, RV64 I/A/M/B/F/D
+  q_.CSR_RegFile[csr_mstatus] = kMstatusReset;
+  q_.CSR_RegFile[csr_sstatus] = kMstatusReset & kSstatusMask;
 }
 
 void Csr::comb_csr_status() {
@@ -59,8 +59,10 @@ void Csr::comb_interrupt() {
   out.csr2rob.interrupt_req = irq.to_m() || irq.to_s();
 }
 
-// External interrupt lines set/clear their mip bit; sip mirrors the supervisor-visible bits.
-void Csr::comb_interrupt_inject() {
+// External interrupt lines set/clear their mip bit; sip mirrors the supervisor-visible bits (the clock edge, after the
+// commit's CSR updates).
+void Csr::interrupt_inject() {
+  Regs &d = q_;
   const CsrInterruptInjectIO &io = (*in.csr_interrupt_inject_io);
   const struct { bool valid, pending; uint32_t bit; } lines[] = {
       {io.external_irq_pending_valid, io.external_irq_pending, MIP_MEIP},
@@ -72,18 +74,17 @@ void Csr::comb_interrupt_inject() {
     d.CSR_RegFile[csr_mip] = l.pending ? (d.CSR_RegFile[csr_mip] | l.bit) : (d.CSR_RegFile[csr_mip] & ~l.bit);
     d.CSR_RegFile[csr_sip] = d.CSR_RegFile[csr_mip] & (d.CSR_RegFile[csr_mideleg] & kDelegBits);
   }
-  // FS = Dirty, SD (an FP instruction committed: top2csr.fs_dirty from BackTop::comb_outputs): on top of whatever else
-  // changed mstatus this cycle; this is the CSR's last phase of the cycle
+  // FS = Dirty, SD (an FP instruction committed: top2csr.fs_dirty from the ROB): on top of whatever else changed mstatus
+  // this cycle
   if (in.top2csr->fs_dirty) {
     d.CSR_RegFile[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     d.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_mstatus] & kSstatusMask;
   }
 }
 
-// Trap entry / xRET: next-cycle status, privilege, cause, tval and the redirect target. Machine traps take priority
+// Trap entry / xRET: the redirect target (comb), and with d the next status, privilege, cause and tval (seq). Machine traps take priority
 // over supervisor traps; a trap is delegated to S according to medeleg (interrupts: mideleg inside eval_interrupts).
-void Csr::exception() {
-  const Regs &q = q_;
+void Csr::exception(const Regs &q, Regs *d) {
   const RobBroadcastIO &rb = (*in.rob_bcast);
   xlen_t mstatus = q.CSR_RegFile[csr_mstatus];
   xlen_t sstatus = q.CSR_RegFile[csr_sstatus];
@@ -117,7 +118,7 @@ void Csr::exception() {
   };
 
   if (m_trap) {
-    d.CSR_RegFile[csr_mepc] = rb.pc;
+    if (d) d->CSR_RegFile[csr_mepc] = rb.pc;
     const bool is_irq = irq.to_m();  // same selection as the hardware: the cause reports the raw interrupt state
     xlen_t cause = is_irq ? xlen_t(1) << (XLEN - 1) : xlen_t(0);
     cause += irq.m_sw ? 3
@@ -131,18 +132,19 @@ void Csr::exception() {
              : (bp && !d_bp) ? 3
              : illegal ? 2
                        : 0;
-    d.CSR_RegFile[csr_mcause] = cause;
+    if (d) d->CSR_RegFile[csr_mcause] = cause;
+    trap_ = {RISCV_MODE_M, cause};
     out.csr2front.trap_pc = trap_target(mtvec, cause);
 
     mstatus = (mstatus & ~MSTATUS_MPP) | ((q.privilege & 0x3) << 11);  // MPP = q.privilege
     mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);  // MPIE = MIE
     mstatus &= ~MSTATUS_MIE;
-    d.CSR_RegFile[csr_mstatus] = mstatus;
-    d.CSR_RegFile[csr_sstatus] = mstatus & kSstatusMask;
-    d.privilege = RISCV_MODE_M;
-    d.CSR_RegFile[csr_mtval] = (pf || illegal || bp) ? rb.trap_val : 0;
+    if (d) d->CSR_RegFile[csr_mstatus] = mstatus;
+    if (d) d->CSR_RegFile[csr_sstatus] = mstatus & kSstatusMask;
+    if (d) d->privilege = RISCV_MODE_M;
+    if (d) d->CSR_RegFile[csr_mtval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (s_trap) {
-    d.CSR_RegFile[csr_sepc] = rb.pc;
+    if (d) d->CSR_RegFile[csr_sepc] = rb.pc;
     xlen_t cause = irq.to_s() ? xlen_t(1) << (XLEN - 1) : xlen_t(0);
     cause += (irq.s_ext || (s_ecall && d_secall)) ? 9
              : irq.s_timer ? 5
@@ -154,39 +156,39 @@ void Csr::exception() {
              : (bp && d_bp) ? 3
              : (illegal && d_illegal) ? 2
                                       : 0;
-    d.CSR_RegFile[csr_scause] = cause;
+    if (d) d->CSR_RegFile[csr_scause] = cause;
+    trap_ = {1, cause};
     out.csr2front.trap_pc = trap_target(stvec, cause);
 
     sstatus = q.privilege == 1 ? (sstatus | MSTATUS_SPP) : (sstatus & ~MSTATUS_SPP);  // SPP = q.privilege
     sstatus = (sstatus & MSTATUS_SIE) ? (sstatus | MSTATUS_SPIE) : (sstatus & ~MSTATUS_SPIE);  // SPIE = SIE
     sstatus &= ~MSTATUS_SIE;
-    d.CSR_RegFile[csr_sstatus] = sstatus;
-    d.CSR_RegFile[csr_mstatus] = (q.CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
-    d.privilege = 1;
-    d.CSR_RegFile[csr_stval] = (pf || illegal || bp) ? rb.trap_val : 0;
+    if (d) d->CSR_RegFile[csr_sstatus] = sstatus;
+    if (d) d->CSR_RegFile[csr_mstatus] = (q.CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
+    if (d) d->privilege = 1;
+    if (d) d->CSR_RegFile[csr_stval] = (pf || illegal || bp) ? rb.trap_val : 0;
   } else if (rb.mret) {
     mstatus = (mstatus & MSTATUS_MPIE) ? (mstatus | MSTATUS_MIE) : (mstatus & ~MSTATUS_MIE);  // MIE = MPIE
-    d.privilege = GET_MPP(mstatus);
+    if (d) d->privilege = GET_MPP(mstatus);
     mstatus |= MSTATUS_MPIE;
     mstatus &= ~MSTATUS_MPP;  // MPP = U
-    d.CSR_RegFile[csr_mstatus] = mstatus;
-    d.CSR_RegFile[csr_sstatus] = mstatus & kSstatusMask;
+    if (d) d->CSR_RegFile[csr_mstatus] = mstatus;
+    if (d) d->CSR_RegFile[csr_sstatus] = mstatus & kSstatusMask;
     out.csr2front.epc = q.CSR_RegFile[csr_mepc];
   } else if (rb.sret) {
     sstatus = (sstatus & MSTATUS_SPIE) ? (sstatus | MSTATUS_SIE) : (sstatus & ~MSTATUS_SIE);  // SIE = SPIE
-    d.privilege = GET_SPP(sstatus);
+    if (d) d->privilege = GET_SPP(sstatus);
     sstatus |= MSTATUS_SPIE;
     sstatus &= ~MSTATUS_SPP;  // SPP = U
-    d.CSR_RegFile[csr_sstatus] = sstatus;
-    d.CSR_RegFile[csr_mstatus] = (q.CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
+    if (d) d->CSR_RegFile[csr_sstatus] = sstatus;
+    if (d) d->CSR_RegFile[csr_mstatus] = (q.CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
     out.csr2front.epc = q.CSR_RegFile[csr_sepc];
   }
 }
 
 // A CSR instruction latches its write at execute and performs it when it commits (so a squashed instruction has no
 // effect). The aliases (sie/sip/sstatus) update the machine register and the derived supervisor view.
-void Csr::csr_write() {
-  const Regs &q = q_;
+void Csr::csr_write(const Regs &q, Regs &d) {
   if (in.exe2csr->we) {
     d.csr_we = in.exe2csr->we;
     d.csr_idx = in.exe2csr->idx;
@@ -232,12 +234,15 @@ void Csr::csr_write() {
   d.csr_we = false;
 }
 
+// The clock edge: the trap / xRET state, the committed CSR write (and the latch of an executed one), the interrupt lines.
 void Csr::seq() {
-  q_ = d;
+  const Regs q = q_;   // the registers of this cycle
+  exception(q, &q_);
+  csr_write(q, q_);
+  interrupt_inject();
 }
 
-// exceptions and the CSR write of the committing instruction
+// the redirect target of a trap / xRET at commit
 void Csr::comb_commit() {
-  exception();
-  csr_write();
+  exception(q_, nullptr);
 }
