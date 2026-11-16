@@ -29,7 +29,6 @@ public:
   SimContext *ctx;
   void init();
   void seq();
-  void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
   void comb_ready();
   void comb_commit();
   void comb_complete();
@@ -68,6 +67,7 @@ public:
   void single_actions(const Uop &u);  // what a single-retired instruction triggers (flush, trap, CSR, fence, ...)
 
 private:
+  void begin_cycle();   // called by comb_ready(), the first phase of the cycle
   FtqPc head_pc_{};   // the FTQ read of the head (comb_commit)
   int stall_cycle = 0;
   bool is_empty() const { return c_count == 0; }

@@ -56,13 +56,14 @@ void Rob::init() {
 }
 
 // Working pointers start from the registered ones; entry_1 already equals entry (seq() copies back the touched slots).
-void Rob::comb_begin() {
+void Rob::begin_cycle() {
   c_head_1 = c_head; c_count_1 = c_count; c_hflag_1 = c_hflag;
 }
 
 // Dispatch/CSR handshake: ready/empty, stall when a flush-type instruction heads the ROB, and the top-down
 // attribution of the oldest incomplete instruction (core bound vs memory bound vs cache miss).
 void Rob::comb_ready() {
+  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   Wires &w = *wires;
   w.rob2dis.stall = false;
   w.rob2csr.commit = false;

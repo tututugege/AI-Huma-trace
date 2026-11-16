@@ -82,13 +82,6 @@ void BackTop::clear_comb_inputs() { in = Back_in{}; }
 // ---------------------------------------------------------------------------------------------
 
 // Working copies and default outputs of every module.
-void BackTop::comb_begin_all() {
-  pre->comb_begin();
-  isu->comb_begin();
-  exu->comb_begin();
-  rob->comb_begin();
-}
-
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_stage_decode_and_resources() {
   idu->comb_branch();
@@ -175,9 +168,6 @@ void BackTop::comb_stage_fire_and_recover() {
 
 // Diagnostic mode (CONFIG_BE_IO_CLEAR_AT_COMB_BEGIN): clear the stage IOs to expose hidden dependence on
 // previous-cycle combinational values.
-void BackTop::clear_stage_ios() {
-}
-
 // Outputs to the front end / difftest: redirect (mispredict or flush target), commit group.
 void BackTop::comb_outputs() {
   // 用于调试
@@ -241,9 +231,6 @@ void BackTop::comb_outputs() {
 
 void BackTop::comb() {
   // CSR 状态由 SimCpu::cycle() 在进入 front/back 组合逻辑前统一刷新。
-  clear_stage_ios();
-
-  comb_begin_all();
   comb_stage_decode_and_resources();
   comb_stage_commit();
   comb_stage_memory_responses();

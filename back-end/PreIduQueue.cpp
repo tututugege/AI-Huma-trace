@@ -73,7 +73,7 @@ void PreIduQueue::init() {
 }
 
 // Publish the oldest DECODE_WIDTH buffered instructions to decode.
-void PreIduQueue::comb_begin() {
+void PreIduQueue::begin_cycle() {
   ftq_head_1 = ftq_head;
   ftq_tail_1 = ftq_tail;
   ftq_count_1 = ftq_count;
@@ -90,6 +90,7 @@ void PreIduQueue::comb_begin() {
 // Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
 // gets an FTQ entry and each instruction a buffer entry (and a uop-pool block).
 void PreIduQueue::comb_accept_front() {
+  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   if (wires->idu_br_latch->mispred || flush_q) return;  // the cycle after a mispredict / flush: ready stays false
 
   int incoming = 0;

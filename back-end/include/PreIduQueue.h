@@ -15,7 +15,6 @@ public:
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
 
   void init();
-  void comb_begin();
   void comb_accept_front();
   void comb_fire();
   void comb_commit_info();
@@ -28,6 +27,7 @@ public:
   // FTQ PC read (the PRF's ALU / BRU ports, the ROB head): a combinational read of the registered FTQ array
   FtqPc ftq_pc(uint32_t idx, uint32_t off) const;
 private:
+  void begin_cycle();   // called by comb_accept_front(), the first phase of the cycle
 
   int ftq_alloc();
   void ftq_pop(int pop_cnt);

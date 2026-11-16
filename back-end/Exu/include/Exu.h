@@ -50,7 +50,6 @@ public:
   SimContext *ctx;
 
   void init();
-  void comb_begin();    // idle default outputs
   void comb_exec();     // FU controls, FU evaluation, result collection
   void comb_pipeline(); // issued uops enter the FU input slots
   void comb_ready();    // which operation classes each port can accept
@@ -63,6 +62,7 @@ public:
   const class Csr *csr = nullptr;          // CSR read port (Csr::read): the CSR uop's result  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU
 
 private:
+  void begin_cycle();   // called by comb_load_wake(), the first phase of the cycle
   void to_csr();
   // The write-back register (one cycle after exe2prf.entry), kept only for what it is used for: a load completing on a
   // port that the LSU did not wake early wakes its consumers one cycle later (comb_load_wake -> prf_awake).

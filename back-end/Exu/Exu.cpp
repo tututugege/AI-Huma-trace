@@ -56,7 +56,7 @@ void Exu::init() {
 }
 
 // Default (idle) outputs.
-void Exu::comb_begin() {
+void Exu::begin_cycle() {
   Wires &w = *wires;
   w.exe2csr.we = w.exe2csr.re = false;
   w.exe2csr.idx = 0;
@@ -374,6 +374,7 @@ void Exu::comb_exec() {
 // Late load wakeup: the loads of the write-back register that survive this cycle's mispredict, in port order, at most
 // LSU_LOAD_WB_WIDTH of them.
 void Exu::comb_load_wake() {
+  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   Wires &w = *wires;
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
   int n = 0;

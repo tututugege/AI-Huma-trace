@@ -34,6 +34,7 @@ class Isu {
 public:
   friend struct IsuDigestAccess;  // lockstep test hook
 private:
+  void begin_cycle();   // called by comb_ready(), the first phase of the cycle
   SimContext *ctx;
 
   // 1. 发射队列 (固定顺序: INT, LD, STA, STD, BR...)
@@ -56,7 +57,6 @@ public:
   struct Wires *wires = nullptr;  // signals shared with the other back-end modules
   Isu(SimContext *ctx);
   void init();
-  void comb_begin(); // 默认保持寄存器状态（*_1 <- *）
 
   // 组合逻辑
   void comb_ready(); // 更新 iss2dis->free_slots

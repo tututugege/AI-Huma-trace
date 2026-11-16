@@ -87,7 +87,7 @@ only a one-cycle delay, phases split in two, the cache-line data path. Plan (eac
 | B | the PRF module folded into the EXU | 65 -> 63 |
 | C | LSU: the DTLB lookup inside the LSU, ldq / stq phase pairs merged | 63 -> 58 |
 | D | CSR read: a direct read of the CSR file | 58 -> 56 |
-| E | comb_pipeline into seq, comb_begin into the first phase | |
+| E | comb_begin into each module's first phase (comb_pipeline stays in comb) | 56 -> 52 |
 | F | the cache-line data path (AXI resp.data / wdata, DCache / LLC / DDR line data) | (top level) |
 | G | the DCache response buffering (capture / forward / publish) | (mem) |
 
@@ -115,3 +115,10 @@ file is real model state (counters, interrupts), so the read stays, but `Csr::re
 `CSR_RegFile` directly (nothing writes it in comb) and `comb_exec` starts with the request (`to_csr`, which still
 drives `exe2csr` for the write at commit). Removed: `csr2exe` (`CsrExeIO`), `Csr::comb_csr_read`, the phase
 `exu.comb_to_csr`.
+
+E: each `comb_begin` (default outputs, working copies `x_1 = x`) is now `begin_cycle()`, called at the top of the
+module's first phase of the cycle (`PreIduQueue::comb_accept_front`, `Exu::comb_load_wake`, `Isu::comb_ready`,
+`Rob::comb_ready`); the checker showed no phase between the old and the new position reads what it writes, and the
+gates are identical. `BackTop::comb_begin_all` and the empty `clear_stage_ios` are gone. The planned move of
+`comb_pipeline` into seq was dropped: it computes the next value of the pipeline registers (`d = f(wires)`), i.e.
+their input logic, which belongs to comb; seq stays a pure copy.

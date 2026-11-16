@@ -95,7 +95,7 @@ void Isu::init() {
 }
 
 // Working copies already equal the registered state (seq() copies them back); each IQ resets its default IO.
-void Isu::comb_begin() {
+void Isu::begin_cycle() {
   for (auto &q : iqs) q.comb_begin();
 }
 
@@ -115,6 +115,7 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
 
 // Free slots of each queue go to Dispatch.
 void Isu::comb_ready() {
+  begin_cycle();   // the first phase of the cycle: default outputs, working copies (x_1 = x)
   for (int i = 0; i < IQ_NUM; i++) wires->iss2dis.ready_num[i] = iqs[i].out.free_slots;
 }
 

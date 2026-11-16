@@ -33,7 +33,6 @@ class MemSubsystem;
 class BackTop : public Wires {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
-  void clear_stage_ios();
   void comb_outputs();
   void install_arch_state(const CPU_state &state, uint8_t privilege);
 
@@ -60,7 +59,6 @@ public:
   void clear_comb_inputs();
   void comb_csr_status();
   void comb();
-  void comb_begin_all();
   void comb_stage_decode_and_resources();
   void comb_stage_commit();
   void comb_stage_memory_responses();
