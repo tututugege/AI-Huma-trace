@@ -1,4 +1,4 @@
-#include "Wires.h"
+#include "BackPorts.h"
 #include "PreIduQueue.h"
 #include "types.h"
 
@@ -81,10 +81,10 @@ void PreIduQueue::begin_cycle() {
   d.ftq_count = q.ftq_count;
 
   const int n = q.ibuf.count() < DECODE_WIDTH ? q.ibuf.count() : DECODE_WIDTH;
-  for (int i = 0; i < DECODE_WIDTH; i++) wires->pre_issue.entries[i] = i < n ? q.ibuf.peek(i) : InstructionBufferEntry{};
+  for (int i = 0; i < DECODE_WIDTH; i++) out.pre_issue.entries[i] = i < n ? q.ibuf.peek(i) : InstructionBufferEntry{};
 
-  wires->pre2front.ready = false;
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) wires->pre2front.fire[i] = false;
+  out.pre2front.ready = false;
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.pre2front.fire[i] = false;
   push_count = 0;
   g_bypass = false;
 }
@@ -94,45 +94,45 @@ void PreIduQueue::begin_cycle() {
 void PreIduQueue::comb_accept_front() {
   const Regs &q = q_;
   begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
-  if (wires->idu_br_latch->mispred || q.flush_q) return;  // the cycle after a mispredict / flush: ready stays false
+  if (in.idu_br_latch->mispred || q.flush_q) return;  // the cycle after a mispredict / flush: ready stays false
 
   int incoming = 0;
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) incoming += wires->in.valid[i] ? 1 : 0;
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) incoming += in.top_in->valid[i] ? 1 : 0;
 
-  wires->pre2front.ready = q.ftq_count < FTQ_SIZE && q.ibuf.can_accept(incoming);
-  if (!wires->pre2front.ready || incoming == 0) return;
+  out.pre2front.ready = q.ftq_count < FTQ_SIZE && q.ibuf.can_accept(incoming);
+  if (!out.pre2front.ready || incoming == 0) return;
 
   const int ftq_idx = ftq_alloc();
   Assert(ftq_idx >= 0 && "PreIduQueue: ready with a full FTQ");  // ready required a free slot and nothing allocated yet
   FTQEntry &block = d.ftq_lookup_entries[ftq_idx];
   block = FTQEntry();
-  block.next_pc = wires->in.predict_next_fetch_address[0];
+  block.next_pc = in.top_in->predict_next_fetch_address[0];
   block.nslots = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
-    block.slot_pc[i] = wires->in.pc[i];
-    block.slot_rvc[i] = wires->in.is_rvc[i];
-    block.pred_taken_mask[i] = wires->in.predict_dir[i];
-    if (wires->in.valid[i]) block.nslots = i + 1;
+    block.slot_pc[i] = in.top_in->pc[i];
+    block.slot_rvc[i] = in.top_in->is_rvc[i];
+    block.pred_taken_mask[i] = in.top_in->predict_dir[i];
+    if (in.top_in->valid[i]) block.nslots = i + 1;
   }
   d.ftq_train_meta_fifo[ftq_idx] = FTQTrainMetaEntry();
-  d.ftq_train_meta_fifo[ftq_idx].meta = wires->in.meta;
+  d.ftq_train_meta_fifo[ftq_idx].meta = in.top_in->meta;
   d.ftq_valid[ftq_idx] = true;
   ftq_alloc_mask |= 1ull << ftq_idx;
   ftq_dirty = true;
 
   int last = -1;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
-    wires->pre2front.fire[i] = wires->in.valid[i];
-    if (wires->in.valid[i]) last = i;
+    out.pre2front.fire[i] = in.top_in->valid[i];
+    if (in.top_in->valid[i]) last = i;
   }
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
-    if (!wires->in.valid[i]) continue;
+    if (!in.top_in->valid[i]) continue;
     InstructionBufferEntry &e = push_entries[push_count++];
     e.valid = true;
-    e.inst = wires->in.inst[i];
-    e.pc = wires->in.pc[i];
-    e.is_rvc = wires->in.is_rvc[i];
-    e.page_fault_inst = wires->in.page_fault_inst[i];
+    e.inst = in.top_in->inst[i];
+    e.pc = in.top_in->pc[i];
+    e.is_rvc = in.top_in->is_rvc[i];
+    e.page_fault_inst = in.top_in->page_fault_inst[i];
     e.ftq_idx = ftq_idx;
     e.ftq_offset = i;
     e.ftq_is_last = (i == last);
@@ -140,7 +140,7 @@ void PreIduQueue::comb_accept_front() {
   }
   if (q.ibuf.count() == 0 && push_count > 0) {
     g_bypass = true;
-    for (int i = 0; i < DECODE_WIDTH; i++) wires->pre_issue.entries[i] = i < push_count ? push_entries[i] : InstructionBufferEntry{};
+    for (int i = 0; i < DECODE_WIDTH; i++) out.pre_issue.entries[i] = i < push_count ? push_entries[i] : InstructionBufferEntry{};
   }
 }
 
@@ -148,12 +148,12 @@ void PreIduQueue::comb_accept_front() {
 // flush and mispredict empty it (and the FTQ: everything, or what is younger than the branch's block). Committed blocks
 // leave the FTQ head.
 void PreIduQueue::comb_fire() {
-  const bool flush = wires->rob_bcast.flush, mispred = wires->idu_br_latch->mispred;
+  const bool flush = in.rob_bcast->flush, mispred = in.idu_br_latch->mispred;
   d.flush_q = flush;   // the next cycle sees this cycle's ROB flush (accept_front stays closed)
   if (flush) {
     ftq_flush();
   } else if (mispred) {
-    ftq_recover((wires->idu_br_latch->ftq_idx + 1) % FTQ_SIZE);
+    ftq_recover((in.idu_br_latch->ftq_idx + 1) % FTQ_SIZE);
   }
 
   if (flush || mispred) {
@@ -163,7 +163,7 @@ void PreIduQueue::comb_fire() {
   }
 
   int pop_count = 0;
-  while (pop_count < DECODE_WIDTH && wires->idu_consume.fire[pop_count]) pop_count++;
+  while (pop_count < DECODE_WIDTH && in.idu_consume->fire[pop_count]) pop_count++;
   int first_push = 0;
   if (g_bypass) {  // the first pop_count pushed entries were consumed by decode in the cycle they arrived
     first_push = pop_count < push_count ? pop_count : push_count;
@@ -176,7 +176,7 @@ void PreIduQueue::comb_fire() {
 
   int committed_blocks = 0;
   for (int i = 0; i < COMMIT_WIDTH; i++)
-    if (wires->rob_commit.commit_entry[i].valid && wires->rob_commit.commit_entry[i].uop.ftq_is_last) committed_blocks++;
+    if (in.rob_commit->commit_entry[i].valid && in.rob_commit->commit_entry[i].uop.ftq_is_last) committed_blocks++;
   ftq_pop(committed_blocks);
 }
 
@@ -191,8 +191,8 @@ void PreIduQueue::comb_commit_info() {
   bool cursor_valid = q.ftq_count > 0;
 
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    auto &resp = wires->ftq_commit_info.resp[i];
-    const auto &commit = wires->rob_commit.commit_entry[i];
+    auto &resp = out.ftq_commit_info.resp[i];
+    const auto &commit = in.rob_commit->commit_entry[i];
     resp = {};
     if (!commit.valid) continue;
 

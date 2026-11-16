@@ -1,7 +1,7 @@
 #pragma once
-// Every signal that crosses a module boundary inside the back-end (and the top-level in/out), in one place.
-// Modules read and write them through a Wires pointer; BackTop owns the Wires (it derives from it) and
-// evaluates the modules in dependency order, so a wire is valid once the stage that drives it has run.
+// The back end's interface and BackTop's own signals. Every other signal between the back-end modules is an output of
+// its module (struct Out, the module alone writes it); a module reads its inputs through const pointers (struct In),
+// all bound in BackTop::init.
 #include "IO.h"
 
 struct BackIn : FrontPreIO {
@@ -46,43 +46,10 @@ struct BackOut {
         lsu2dcache{} {}
 };
 
-struct Wires {
-  PreFrontIO pre2front;
-  DecRenIO dec2ren;
-  DecBroadcastIO dec_bcast;
-  RenDecIO ren2dec;
-  RenDisIO ren2dis;
-  DisRenIO dis2ren;
-  DisIssIO dis2iss;
-  DisRobIO dis2rob;
-  DisLsuIO dis2lsu;
-  IssAwakeIO iss_awake;
-  IssPrfIO iss2prf;
-  IssDisIO iss2dis;
-  PrfAwakeIO prf_awake;
-  LsuAwakeIO lsu_awake;
-  ExuIdIO exu2id;
-  ExuRobIO exu2rob;
-  ExePrfIO exe2prf;
-  ExeIssIO exe2iss;
-  ExeLsuIO exe2lsu;
-  LsuExeIO lsu2exe;
-  LsuDisIO lsu2dis;
-  LsuRobIO lsu2rob;
-  RobDisIO rob2dis;
-  RobCsrIO rob2csr;
-  TopCsrIO top2csr;
-  RobBroadcastIO rob_bcast;
-  RobCommitIO rob_commit;
-  CsrRobIO csr2rob;
-  CsrFrontIO csr2front;
-  CsrStatusIO csr_status;
-  ExeCsrIO exe2csr;
-  PreIssueIO pre_issue;
-  IduConsumeIO idu_consume;
-  FtqCommitInfoIO ftq_commit_info;
-  CsrInterruptInjectIO csr_interrupt_inject_io;
-  BackIn in;
-  BackOut out;
-  const ExuIdIO *idu_br_latch = nullptr;  // owned by Idu
+struct BackPorts {
+  TopCsrIO top2csr;                          // BackTop -> CSR
+  CsrStatusIO csr_status;                    // CSR -> the front end, the back end (the CSR drives it)
+  CsrInterruptInjectIO csr_interrupt_inject_io;   // the interrupt sources (memory subsystem) -> CSR
+  BackIn in;                                 // from SimCpu / the front end / the memory subsystem
+  BackOut out;                               // to SimCpu / the front end / the memory subsystem
 };

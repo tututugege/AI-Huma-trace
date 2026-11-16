@@ -4,7 +4,7 @@
 #include "Exu.h"
 #include "FTQ.h"
 #include "IO.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "Idu.h"
 #include "Isu.h"
 #include "PreIduQueue.h"
@@ -37,7 +37,7 @@ class MemSubsystem;
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
 //   EXPORT comb_csr_status  out: csr_status
 //   EXPORT comb             in: csr_status back_in fetch_group dcache2lsu  out: back2front lsu2dcache mmio_req dtlb_walk
-class BackTop : public Wires {
+class BackTop : public BackPorts {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
   void comb_outputs();

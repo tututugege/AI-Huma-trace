@@ -1,5 +1,5 @@
 #include "Isu.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "config.h"
 #include <cstdint>
 #include <cstring>
@@ -58,8 +58,8 @@ void Isu::add_iq(const IssueQueueConfig &cfg) {
 // A register woken by this cycle's broadcast is no longer busy for an entering uop.
 void Isu::apply_wakeup_to_uop(Uop &uop) const {
   for (int k = 0; k < WAKE_CH_ALL; k++) {
-    if (!wires->iss_awake.wake[k].valid) continue;
-    const uint32_t preg = wires->iss_awake.wake[k].preg;
+    if (!out.iss_awake.wake[k].valid) continue;
+    const uint32_t preg = out.iss_awake.wake[k].preg;
     if (uop->src1_en && uop->src1_preg == preg) uop.src1_busy = false;
     if (uop->src2_en && uop->src2_preg == preg) uop.src2_busy = false;
   }
@@ -115,7 +115,7 @@ int Isu::get_latency(UopType uop, wire<7> func7, bool word) {
 // Free slots of each queue go to Dispatch.
 void Isu::ready() {
   begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
-  for (int i = 0; i < IQ_NUM; i++) wires->iss2dis.ready_num[i] = iqs[i].out.free_slots;
+  for (int i = 0; i < IQ_NUM; i++) out.iss2dis.ready_num[i] = iqs[i].out.free_slots;
 }
 
 // Dispatch requests enter their queue, with this cycle's wakeups applied first (a readable source must not enter busy).
@@ -126,8 +126,8 @@ void Isu::enq() {
     for (int w = 0; w < width; w++) {
       auto &slot = q.in.enq_reqs[w];
       slot.valid = false;  // the payload is only read when valid
-      if (!wires->dis2iss.req[i][w].valid) continue;
-      slot.uop = wires->dis2iss.req[i][w].uop;
+      if (!in.dis2iss->req[i][w].valid) continue;
+      slot.uop = in.dis2iss->req[i][w].uop;
       apply_wakeup_to_uop(slot.uop);
       slot.valid = true;
     }
@@ -150,19 +150,19 @@ bool Isu::grant_gate(const Uop &u, int port) {
 
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::issue() {
-  for (int i = 0; i < ISSUE_WIDTH; i++) wires->iss2prf.iss_entry[i].valid = false;
-  g_wb.new_cycle(wires->rob_bcast.flush);
-  g_fpwb.new_cycle(wires->rob_bcast.flush);
+  for (int i = 0; i < ISSUE_WIDTH; i++) out.iss2prf.iss_entry[i].valid = false;
+  g_wb.new_cycle(in.rob_bcast->flush);
+  g_fpwb.new_cycle(in.rob_bcast->flush);
   for (auto &q : iqs) {
-    q.in.issue_block = wires->rob_bcast.flush || wires->dec_bcast.mispred;
-    for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = wires->exe2iss.fu_ready_mask[p];
+    q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
+    for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];
     q.comb_issue();
     for (int p = q.port_lo; p < q.port_hi; p++) {
       const auto &grant = q.out.issue_grants[p];
       if (!grant.valid) continue;
-      Assert(!wires->iss2prf.iss_entry[p].valid);
-      wires->iss2prf.iss_entry[p].valid = true;
-      wires->iss2prf.iss_entry[p].uop = grant.uop;
+      Assert(!out.iss2prf.iss_entry[p].valid);
+      out.iss2prf.iss_entry[p].valid = true;
+      out.iss2prf.iss_entry[p].uop = grant.uop;
     }
   }
 }
@@ -189,7 +189,7 @@ void Isu::calc_latency_next() {
       for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) d.mul_wake_pipe[stage][s] = q.mul_wake_pipe[stage - 1][s];
 
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &inst = wires->iss2prf.iss_entry[i];
+    const auto &inst = out.iss2prf.iss_entry[i];
     if (!(inst.valid && inst.uop.dest_en)) continue;
     const UopType op = decode_uop_type(inst.uop.op);
     const int lat = get_latency(op, inst.uop->func7, inst.uop->is_word);
@@ -218,7 +218,7 @@ void Isu::calc_latency_next() {
 // cycle with single-cycle latency (fast, ALU ports only).
 void Isu::awake() {
   const Regs &q = q_;
-  auto &bus = wires->iss_awake.wake;
+  auto &bus = out.iss_awake.wake;
   for (int i = 0; i < WAKE_CH_ALL; i++) {
     bus[i].valid = false;
     bus[i].preg = 0;
@@ -238,9 +238,9 @@ void Isu::awake() {
   for (int i = 0; i < ISSUE_WIDTH; i++) fast_ch[i] = (get_port_capability(i) & OP_MASK_ALU) ? next_fast++ : -1;
 
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
-    if (wires->prf_awake.wake[i].valid) {
+    if (in.prf_awake->wake[i].valid) {
       bus[lsu_base + i].valid = true;
-      bus[lsu_base + i].preg = wires->prf_awake.wake[i].preg;
+      bus[lsu_base + i].preg = in.prf_awake->wake[i].preg;
     }
   for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++)
     if (q.div_wake_slots[i].valid && q.div_wake_slots[i].countdown == 0) drive(div_base + i, q.div_wake_slots[i].dest_preg, "Delayed writeback collision");
@@ -256,7 +256,7 @@ void Isu::awake() {
     for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)
       if (q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &e = wires->iss2prf.iss_entry[i];
+    const auto &e = out.iss2prf.iss_entry[i];
     if (!(e.valid && e.uop.dest_en)) continue;
     const UopType op = decode_uop_type(e.uop.op);
     if (get_latency(op, e.uop->func7, e.uop->is_word) <= 1 && op != UOP_LOAD && op != UOP_STA && fast_ch[i] != -1)
@@ -266,9 +266,9 @@ void Isu::awake() {
   {  // LSU channels after the fast ones ([p] unused since the speculative L2 wake-up was removed, [LD + p] L3 register)
     const int early_base = MAX_WAKEUP_PORTS;  // config.h channels first
     for (int i = 0; i < LSU_EARLY_WAKE_PORTS; i++)
-      if (wires->lsu_awake.wake[i].valid) {
+      if (in.lsu_awake->wake[i].valid) {
         bus[early_base + i].valid = true;
-        bus[early_base + i].preg = wires->lsu_awake.wake[i].preg;
+        bus[early_base + i].preg = in.lsu_awake->wake[i].preg;
       }
   }
   uint32_t woken[WAKE_CH_ALL];
@@ -282,9 +282,9 @@ void Isu::awake() {
 // Flush / mispredict / branch-resolve handling for the queues and the delayed wakeups. A flush empties everything,
 // a mispredict kills the wakeups of squashed uops, and resolved branches free their mask bit in the survivors.
 void Isu::flush() {
-  const bool flush_all = wires->rob_bcast.flush;
-  const bool flush_br = !flush_all && wires->dec_bcast.mispred;
-  const wire<BR_MASK_WIDTH> br_mask = wires->dec_bcast.br_mask, clear = wires->dec_bcast.clear_mask;
+  const bool flush_all = in.rob_bcast->flush;
+  const bool flush_br = !flush_all && in.dec_bcast->mispred;
+  const wire<BR_MASK_WIDTH> br_mask = in.dec_bcast->br_mask, clear = in.dec_bcast->clear_mask;
 
   for (auto &q : iqs) {
     q.in.flush_all = flush_all;
@@ -295,7 +295,7 @@ void Isu::flush() {
   }
   if (flush_all) {
     clear_wake_state();
-  } else if (wires->dec_bcast.mispred) {
+  } else if (in.dec_bcast->mispred) {
     for_each_wake_slot_d([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
   }
   if (clear) for_each_wake_slot_d([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });

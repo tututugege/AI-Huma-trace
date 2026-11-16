@@ -17,7 +17,7 @@
 //   comb_lsu2dcache_stq              committed-store drain
 //   comb_mmio_out, comb_check        MMIO request, STQ retire, wake-up pass, replay-register fill
 #include <type_traits>
-#include "Wires.h"
+#include "BackPorts.h"
 #include "RealLsu.h"
 #include "DcacheConfig.h"
 #include "MemUtils.h"
@@ -347,7 +347,7 @@ void RealLsu::cal() {
   }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
-  for (auto &w : wires->lsu_awake.wake) w = {};
+  for (auto &w : out.lsu_awake.wake) w = {};
   {  // trace info of the stores allocated in an earlier cycle (the fact leaves the bridge when the store commits)
     for (uint32_t k = 0; k < pnxt.stq_count; k++) {
       PStq &t = pnxt.stq[(pnxt.stq_head + k) % STQ_SIZE];
@@ -369,29 +369,29 @@ void RealLsu::cal() {
 
 void RealLsu::lsu2rob() {
   const lp::LsuPipeState &pcur = pcur_;
-  wires->lsu2rob = {};
-  wires->lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
+  out.lsu2rob = {};
+  out.lsu2rob.committed_store_pending = pcur.stq_ccount != 0;
   std::bitset<ROB_NUM> m;  // ROB_NUM bits: a 64-bit mask lost the entries above 63 
   for (const PLdq &l : pcur.ldq)
     if (l.miss && l.st != L_EMPTY) m.set(l.rob_idx);
-  wires->lsu2rob.tma.miss_mask = m;
+  out.lsu2rob.tma.miss_mask = m;
 }
 
 void RealLsu::lsu2dis() {
   const lp::LsuPipeState &pcur = pcur_;
-  wires->lsu2dis = {};
+  out.lsu2dis = {};
   const uint32_t head = pcur.stq_head, count = pcur.stq_count;
-  wires->lsu2dis.stq_tail = (head + count) % STQ_SIZE;
-  wires->lsu2dis.stq_tail_flag = stq_tail_flag(head, count, pcur.stq_head_flag);
+  out.lsu2dis.stq_tail = (head + count) % STQ_SIZE;
+  out.lsu2dis.stq_tail_flag = stq_tail_flag(head, count, pcur.stq_head_flag);
   uint32_t empty = 0;
   for (const PLdq &l : pcur.ldq) empty += l.st == L_EMPTY;
-  wires->lsu2dis.ldq_free = empty;
-  wires->lsu2dis.stq_free = STQ_SIZE - count;
+  out.lsu2dis.ldq_free = empty;
+  out.lsu2dis.stq_free = STQ_SIZE - count;
   uint32_t n = 0;
   for (int i = 0; i < LDQ_SIZE && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
     if (pcur.ldq[i].st == L_EMPTY) {
-      wires->lsu2dis.ldq_alloc_idx[n] = i;
-      wires->lsu2dis.ldq_alloc_valid[n++] = true;
+      out.lsu2dis.ldq_alloc_idx[n] = i;
+      out.lsu2dis.ldq_alloc_valid[n++] = true;
     }
 }
 
@@ -400,14 +400,14 @@ void RealLsu::lsu2dis() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::stq_commit() {
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (!wires->rob_commit.commit_entry[i].valid) continue;
-    const auto &u = wires->rob_commit.commit_entry[i].uop;
+    if (!in.rob_commit->commit_entry[i].valid) continue;
+    const auto &u = in.rob_commit->commit_entry[i].uop;
     if (!is_store(u)) continue;
     const int idx = u.stq_idx;
     if (idx != pnxt.stq_commit || !pnxt.stq[idx].wbd) continue;
     PStq &s = pnxt.stq[idx];
     s.cmt = 1;
-    if (static_cast<bool>(wires->rob_bcast.flush) || (s.lrsc && !s.sc_pass)) {
+    if (static_cast<bool>(in.rob_bcast->flush) || (s.lrsc && !s.sc_pass)) {
       s.suppress = 1;  // flushed or failed SC: retire without writing
       s.done = 1;
     }
@@ -421,12 +421,12 @@ void RealLsu::stq_commit() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::mmio_in() {
   const LsuState &cur = cur_;
-  if (!(wires->in.peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
+  if (!(in.top_in->peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
     PLdq &e = pnxt.ldq[idx];
     if (e.st == L_MMR) {
-      e.result = wires->in.peripheral_resp.mmio_rdata;
+      e.result = in.top_in->peripheral_resp.mmio_rdata;
       e.st = L_WBP;
       pw.mmio_ld = idx;
     }
@@ -438,15 +438,15 @@ void RealLsu::mmio_in() {
 }
 
 void RealLsu::mmio_out() {
-  wires->out.peripheral_req = {};
-  if (!wires->in.peripheral_resp.ready) return;
+  (*out.peripheral_req) = {};
+  if (!in.top_in->peripheral_resp.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
-  wires->out.peripheral_req.is_mmio = u.valid;
+  out.peripheral_req->is_mmio = u.valid;
   if (u.valid) {
-    wires->out.peripheral_req.wen = !u.is_load;
-    wires->out.peripheral_req.mmio_addr = u.addr;
-    wires->out.peripheral_req.mmio_wdata = u.wdata;
-    wires->out.peripheral_req.mmio_fun3 = u.func3;
+    out.peripheral_req->wen = !u.is_load;
+    out.peripheral_req->mmio_addr = u.addr;
+    out.peripheral_req->mmio_wdata = u.wdata;
+    out.peripheral_req->mmio_fun3 = u.func3;
   }
 }
 
@@ -461,7 +461,7 @@ void RealLsu::dcache2lsu() {
 
 void RealLsu::dcache2lsu_ldq() {
   const lp::LsuPipeState &pcur = pcur_;
-  const DcacheLsuIO &dc = wires->in.dcache2lsu;
+  const DcacheLsuIO &dc = in.top_in->dcache2lsu;
   pw.fill = dc.mshr_fill && LSU_WAIT_MSHR_FILL;
   pw.fill_addr = dc.mshr_fill_addr;
 
@@ -547,7 +547,7 @@ void RealLsu::dcache2lsu_ldq() {
 }
 
 void RealLsu::dcache2lsu_stq() {
-  const DcacheLsuIO &dc = wires->in.dcache2lsu;
+  const DcacheLsuIO &dc = in.top_in->dcache2lsu;
   for (int i = 0; i < LSU_STA_COUNT; i++) {
     const auto &r = dc.resp_ports.store_resps[i];
     if (!r.valid || r.req_id >= STQ_SIZE) continue;
@@ -622,15 +622,15 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   bool early = second;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
-  if (!early && from_l3 && !l.pf && l.dest_preg != 0 && !wires->rob_bcast.flush &&
-      !(wires->dec_bcast.mispred && (l.br_mask & wires->dec_bcast.br_mask) != 0)) {  // a2: wake from the L3 register
-    wires->lsu_awake.wake[LD + port].valid = true;
-    wires->lsu_awake.wake[LD + port].preg = l.dest_preg;
+  if (!early && from_l3 && !l.pf && l.dest_preg != 0 && !in.rob_bcast->flush &&
+      !(in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask) != 0)) {  // a2: wake from the L3 register
+    out.lsu_awake.wake[LD + port].valid = true;
+    out.lsu_awake.wake[LD + port].preg = l.dest_preg;
     early = true;
   }
   wb.early_woken = early;
-  wires->lsu2exe.wb_req[port].valid = true;
-  wires->lsu2exe.wb_req[port].uop = wb;
+  out.lsu2exe.wb_req[port].valid = true;
+  out.lsu2exe.wb_req[port].uop = wb;
   if (l.lrsc && !l.pf) {
     LrScUnit &r = nxt.lrsc_unit;
     r.reserve_valid = true;
@@ -678,7 +678,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
 void RealLsu::lsu2exe() {
   const lp::LsuPipeState &pcur = pcur_;
   const LsuState &cur = cur_;
-  wires->lsu2exe = {};
+  out.lsu2exe = {};
   bool busy[LD] = {};
   for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
     if (pcur.l3[p].v && pnxt.ldq[pcur.l3[p].ldq].st == L_WB3) {
@@ -722,14 +722,14 @@ void RealLsu::lsu2exe() {
       }
       busy[p] = true;
       sc_n++;
-      wires->lsu2exe.wb_req[p].valid = true;
-      wires->lsu2exe.wb_req[p].uop = wb;
+      out.lsu2exe.wb_req[p].valid = true;
+      out.lsu2exe.wb_req[p].uop = wb;
     } else {
       if (sta_n >= LSU_STA_COUNT) continue;
       wb.op = UOP_STA;
       wb.result = s.vaddr;
-      wires->lsu2exe.sta_wb_req[sta_n].valid = true;
-      wires->lsu2exe.sta_wb_req[sta_n++].uop = wb;
+      out.lsu2exe.sta_wb_req[sta_n].valid = true;
+      out.lsu2exe.sta_wb_req[sta_n++].uop = wb;
     }
     s.wbp = 0;
     s.wbd = 1;
@@ -774,7 +774,7 @@ void RealLsu::lsu2exe() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::exe2lsu() {
   const lp::LsuPipeState &pcur = pcur_;
-  const ExeLsuIO &x = wires->exe2lsu;
+  const ExeLsuIO &x = (*in.exe2lsu);
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
     const MicroOp &inst = x.sdu_req[i].uop;
@@ -877,8 +877,8 @@ void RealLsu::tlb() {
   tlb_out();
   tlb_resp_ = {};
   if (dtlb != nullptr) {
-    if (wires->rob_bcast.fence) dtlb->flush();
-    else if (wires->rob_bcast.flush || wires->dec_bcast.mispred) dtlb->cancel_pending_walk();
+    if (in.rob_bcast->fence) dtlb->flush();
+    else if (in.rob_bcast->flush || in.dec_bcast->mispred) dtlb->cancel_pending_walk();
     else dtlb->translate_lsu_ports(tlb_req_, tlb_resp_);
   }
   tlb_in_ldq();
@@ -888,7 +888,7 @@ void RealLsu::tlb() {
 void RealLsu::tlb_out() {
   const lp::LsuPipeState &pcur = pcur_;
   tlb_req_ = {};
-  tlb_req_.csr_status = wires->csr_status;
+  tlb_req_.csr_status = (*in.csr_status);
 
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;
@@ -1022,7 +1022,7 @@ void RealLsu::stlf() {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_MMW || nxt.uncached_unit.valid) continue;
     if (pcur.ldq[i].st != L_MMW) continue;  // M: only entries that were already MMW at the start of the cycle
-    if (!lsu_mmio_is_oldest_unfinished(&wires->rob_bcast, e.rob_idx)) continue;
+    if (!lsu_mmio_is_oldest_unfinished(in.rob_bcast, e.rob_idx)) continue;
     const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
     const uint32_t b = (e.snap_flag ? STQ_SIZE : 0) + e.snap_idx;
     if ((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE) != 0) continue;
@@ -1040,7 +1040,7 @@ void RealLsu::stlf() {
 // Allocation
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::dis2lsu() {
-  const DisLsuIO &d = wires->dis2lsu;
+  const DisLsuIO &d = (*in.dis2lsu);
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
     PLdq &e = pnxt.ldq[d.ldq_idx[i]];
@@ -1080,7 +1080,7 @@ void RealLsu::dis2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::flush() {
   const lp::LsuPipeState &pcur = pcur_;
-  if (wires->rob_bcast.flush) {
+  if (in.rob_bcast->flush) {
     msd::clear_all();  // every stale value dies with the flush
     for (PLdq &l : pnxt.ldq) {
             l.st = L_EMPTY;
@@ -1094,7 +1094,7 @@ void RealLsu::flush() {
     if (!keep_store) nxt.uncached_unit.valid = false;
   }
 
-  const DecBroadcastIO &dec = wires->dec_bcast;
+  const DecBroadcastIO &dec = (*in.dec_bcast);
   if (dec.mispred) {
     for (PLdq &l : pnxt.ldq)
       if (l.st != L_EMPTY && (l.br_mask & dec.br_mask) != 0) {
@@ -1118,7 +1118,7 @@ void RealLsu::flush() {
     pnxt.stq_ccount = std::min<uint32_t>(pnxt.stq_ccount, pnxt.stq_count);
     pnxt.stq_commit = stq_idx_after(pnxt.stq_head, pnxt.stq_ccount);
   }
-  if (wires->rob_bcast.flush || dec.mispred) {  // replay registers of dead entries
+  if (in.rob_bcast->flush || dec.mispred) {  // replay registers of dead entries
     for (int r = 0; r < RP_MAX; r++)
       if (pnxt.rp[r].v && pnxt.ldq[pnxt.rp[r].ldq].st == L_EMPTY) pnxt.rp[r].v = 0;
     if (pnxt.srp.v && stq_rank(pnxt.srp.ldq, pnxt.stq_head) >= pnxt.stq_count) pnxt.srp.v = 0;
@@ -1141,7 +1141,7 @@ void RealLsu::lsu2dcache() {
 }
 
 void RealLsu::lsu2dcache_ldq() {
-  auto &ports = wires->out.lsu2dcache.req_ports.load_ports;
+  auto &ports = out.lsu2dcache->req_ports.load_ports;
   for (int i = 0; i < LSU_LDU_COUNT; i++) ports[i].valid = ports[i].replay = false;
   for (int k = 0; k < LD; k++) {
     const PL1 &l = pw.l1[k];
@@ -1158,7 +1158,7 @@ void RealLsu::lsu2dcache_ldq() {
     sl.dcblk = 0;
     // the DCache is read in parallel with the partial CAM; the read enable is qualified by "no conflicting older store"
     // (12-bit compare, ready with the DTLB result); a port with a pending DCache hidden retry does not launch.
-    if (l.hit && !l.mmio && !l.cand_v && wires->in.dcache2lsu.load_retry_busy[k]) {
+    if (l.hit && !l.mmio && !l.cand_v && in.top_in->dcache2lsu.load_retry_busy[k]) {
       sl.dcblk = 1;  // the port belongs to the DCache hidden retry this cycle
     } else if (l.hit && !l.mmio && !l.cand_v) {
       e.epoch = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
@@ -1181,7 +1181,7 @@ void RealLsu::lsu2dcache_ldq() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::lsu2dcache_stq() {
   const lp::LsuPipeState &pcur = pcur_;
-  auto &ports = wires->out.lsu2dcache.req_ports.store_ports;
+  auto &ports = out.lsu2dcache->req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
 
   const uint32_t n = std::min<uint32_t>(pcur.stq_ccount, pnxt.stq_count);  // H: stores committed at the cycle start
@@ -1210,7 +1210,7 @@ void RealLsu::lsu2dcache_stq() {
   // free ports among the first lp_drain (no hidden retry pending)
   int free_port[DRAIN_MAX], nfree = 0;
   for (int t = 0; t < lp_drain; t++)
-    if (!wires->in.dcache2lsu.store_retry_busy[t]) free_port[nfree++] = t;
+    if (!in.top_in->dcache2lsu.store_retry_busy[t]) free_port[nfree++] = t;
   {  // EXP-024: the committed stores go through the write buffer
     bool issued_now[WB_MAX] = {};
     const LsuPipeState &C = pcur;  // the decision reads the registered buffer only
@@ -1292,23 +1292,23 @@ void RealLsu::check() {
   if (static const bool ev = std::getenv("LSU_PIPE_EVT") != nullptr; ev) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
     for (int p = 0; p < LD; p++)
-      if (wires->lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)wires->lsu2exe.wb_req[p].uop.rob_idx, (int)wires->lsu2exe.wb_req[p].uop.dest_preg,
-                                                       (int)wires->lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)wires->lsu2exe.wb_req[p].uop.br_mask),
-        std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)wires->lsu2exe.wb_req[p].uop.result, (unsigned)wires->lsu2exe.wb_req[p].uop.diag_val,
-                     (int)wires->lsu2exe.wb_req[p].uop.page_fault_load, (int)wires->lsu2exe.wb_req[p].uop.page_fault_store);
+      if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)out.lsu2exe.wb_req[p].uop.rob_idx, (int)out.lsu2exe.wb_req[p].uop.dest_preg,
+                                                       (int)out.lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)out.lsu2exe.wb_req[p].uop.br_mask),
+        std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)out.lsu2exe.wb_req[p].uop.result, (unsigned)out.lsu2exe.wb_req[p].uop.diag_val,
+                     (int)out.lsu2exe.wb_req[p].uop.page_fault_load, (int)out.lsu2exe.wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " sta:");
     for (int p = 0; p < STA; p++)
-      if (wires->lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)wires->lsu2exe.sta_wb_req[p].uop.rob_idx, (unsigned long long)wires->lsu2exe.sta_wb_req[p].uop.br_mask),
-        std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)wires->lsu2exe.sta_wb_req[p].uop.result, (unsigned)wires->lsu2exe.sta_wb_req[p].uop.diag_val,
-                     (int)wires->lsu2exe.sta_wb_req[p].uop.page_fault_store);
+      if (out.lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)out.lsu2exe.sta_wb_req[p].uop.rob_idx, (unsigned long long)out.lsu2exe.sta_wb_req[p].uop.br_mask),
+        std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)out.lsu2exe.sta_wb_req[p].uop.result, (unsigned)out.lsu2exe.sta_wb_req[p].uop.diag_val,
+                     (int)out.lsu2exe.sta_wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " dl:");
     for (int p = 0; p < LD; p++) {
-      const auto &q = wires->out.lsu2dcache.req_ports.load_ports[p];
+      const auto &q = out.lsu2dcache->req_ports.load_ports[p];
       if (q.valid) std::fprintf(stderr, " %d=%x/%x", p, (unsigned)q.addr, (unsigned)(q.req_id & 0x7fffffffu));
     }
     std::fprintf(stderr, " ds:");
     for (int p = 0; p < STA; p++) {
-      const auto &q = wires->out.lsu2dcache.req_ports.store_ports[p];
+      const auto &q = out.lsu2dcache->req_ports.store_ports[p];
       if (q.valid) std::fprintf(stderr, " %d=%x/%d", p, (unsigned)q.addr, (int)q.req_id);
     }
     std::fprintf(stderr, " mmu:");
@@ -1316,15 +1316,15 @@ void RealLsu::check() {
       if (tlb_req_.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)tlb_req_.ldq_req[p].entry_idx);
     for (int p = 0; p < STA; p++)
       if (tlb_req_.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)tlb_req_.stq_req[p].entry_idx);
-    std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)wires->lsu2dis.stq_free, (int)wires->lsu2dis.ldq_free, (int)wires->lsu2dis.stq_tail,
-                 (int)wires->lsu2dis.stq_tail_flag, (int)wires->lsu2rob.committed_store_pending);
+    std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)out.lsu2dis.stq_free, (int)out.lsu2dis.ldq_free, (int)out.lsu2dis.stq_tail,
+                 (int)out.lsu2dis.stq_tail_flag, (int)out.lsu2rob.committed_store_pending);
     {
       unsigned dsa = 0, dla = 0, cm = 0;
-      for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) dsa |= (unsigned)wires->dis2lsu.alloc_req[i] << i;
-      for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) dla |= (unsigned)wires->dis2lsu.ldq_alloc_req[i] << i;
-      for (int i = 0; i < COMMIT_WIDTH; i++) cm |= (unsigned)wires->rob_commit.commit_entry[i].valid << i;
-      std::fprintf(stderr, " b: mp=%d fl=%d cl=%llx dsa=%x dla=%x cm=%x", (int)wires->dec_bcast.mispred, (int)wires->rob_bcast.flush,
-                   (unsigned long long)wires->dec_bcast.clear_mask, dsa, dla, cm);
+      for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) dsa |= (unsigned)in.dis2lsu->alloc_req[i] << i;
+      for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) dla |= (unsigned)in.dis2lsu->ldq_alloc_req[i] << i;
+      for (int i = 0; i < COMMIT_WIDTH; i++) cm |= (unsigned)in.rob_commit->commit_entry[i].valid << i;
+      std::fprintf(stderr, " b: mp=%d fl=%d cl=%llx dsa=%x dla=%x cm=%x", (int)in.dec_bcast->mispred, (int)in.rob_bcast->flush,
+                   (unsigned long long)in.dec_bcast->clear_mask, dsa, dla, cm);
     }
     std::fprintf(stderr, " in:");
     for (int p = 0; p < LD; p++)
@@ -1332,28 +1332,28 @@ void RealLsu::check() {
     for (int p = 0; p < STA; p++)
       if (tlb_resp_.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)tlb_resp_.stq_resp[p].result, (unsigned)tlb_resp_.stq_resp[p].paddr);
     for (int p = 0; p < LD; p++) {
-      const auto &r = wires->in.dcache2lsu.resp_ports.load_resps[p];
+      const auto &r = in.top_in->dcache2lsu.resp_ports.load_resps[p];
       if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);
     }
     for (int p = 0; p < STA; p++) {
-      const auto &r = wires->in.dcache2lsu.resp_ports.store_resps[p];
+      const auto &r = in.top_in->dcache2lsu.resp_ports.store_resps[p];
       if (r.valid) std::fprintf(stderr, " sr%d=%d/%d", p, (int)r.req_id, (int)r.replay);
     }
-    if (wires->in.dcache2lsu.mshr_fill) std::fprintf(stderr, " fill=%x", (unsigned)(wires->in.dcache2lsu.mshr_fill_addr >> 6));
-    for (int p = 0; p < LD; p++) if (wires->in.dcache2lsu.load_retry_busy[p]) std::fprintf(stderr, " rb%d", p);
-    for (int p = 0; p < STA; p++) if (wires->in.dcache2lsu.store_retry_busy[p]) std::fprintf(stderr, " sb%d", p);
+    if (in.top_in->dcache2lsu.mshr_fill) std::fprintf(stderr, " fill=%x", (unsigned)(in.top_in->dcache2lsu.mshr_fill_addr >> 6));
+    for (int p = 0; p < LD; p++) if (in.top_in->dcache2lsu.load_retry_busy[p]) std::fprintf(stderr, " rb%d", p);
+    for (int p = 0; p < STA; p++) if (in.top_in->dcache2lsu.store_retry_busy[p]) std::fprintf(stderr, " sb%d", p);
     std::fprintf(stderr, " ai:");
     for (int p = 0; p < MAX_LDQ_DISPATCH_WIDTH; p++)
-      if (wires->lsu2dis.ldq_alloc_valid[p]) std::fprintf(stderr, " %d", (int)wires->lsu2dis.ldq_alloc_idx[p]);
+      if (out.lsu2dis.ldq_alloc_valid[p]) std::fprintf(stderr, " %d", (int)out.lsu2dis.ldq_alloc_idx[p]);
     std::fprintf(stderr, " x:");
     for (int p = 0; p < LSU_SDU_COUNT; p++)
-      if (wires->exe2lsu.sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)wires->exe2lsu.sdu_req[p].uop.stq_idx);
+      if (in.exe2lsu->sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)in.exe2lsu->sdu_req[p].uop.stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
-      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_STA)
-        std::fprintf(stderr, " A%d=%d", p - LD, (int)wires->exe2lsu.agu_req[p].uop.stq_idx);
+      if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_STA)
+        std::fprintf(stderr, " A%d=%d", p - LD, (int)in.exe2lsu->agu_req[p].uop.stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
-      if (wires->exe2lsu.agu_req[p].valid && wires->exe2lsu.agu_req[p].uop.op == UOP_LOAD)
-        std::fprintf(stderr, " G%d=%d", p, (int)wires->exe2lsu.agu_req[p].uop.ldq_idx);
+      if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_LOAD)
+        std::fprintf(stderr, " G%d=%d", p, (int)in.exe2lsu->agu_req[p].uop.ldq_idx);
     if (const char *si = std::getenv("LSU_PIPE_STQ")) {
       const PStq &q = pcur.stq[std::atoi(si)];  // registers at the start of the cycle (RTL prints the registers)
       std::fprintf(stderr, " Q[%s]: va=%d pa=%d dv=%d pf=%d wbp=%d wbd=%d cmt=%d iss=%d done=%d", si, (int)q.va_v, (int)q.pa_v, (int)q.data_v, (int)q.pf,

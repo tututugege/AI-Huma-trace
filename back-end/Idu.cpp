@@ -2,7 +2,7 @@
 #include "Pmu.h"
 #include "Idu.h"
 #include "RISCV.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "config.h"
 #include "ref.h"
 #include "util.h"
@@ -27,7 +27,6 @@ void Idu::init() {
 // the group is cut at that branch.
 void Idu::decode() {
   const Regs &q = q_;
-  Wires &w = *wires;
   bool alloc_valid[DECODE_WIDTH];
   int tags = 0;
   for (int i = 0; i < MAX_BR_NUM && tags < max_br_per_cycle; i++)
@@ -41,14 +40,14 @@ void Idu::decode() {
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    w.dec2ren.valid[i] = false;
-    w.dec2ren.uop[i] = {};
+    out.dec2ren.valid[i] = false;
+    out.dec2ren.uop[i] = {};
   }
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    const InstructionBufferEntry &e = w.pre_issue.entries[i];
+    const InstructionBufferEntry &e = in.pre_issue->entries[i];
     if (!e.valid) continue;
-    w.dec2ren.valid[i] = true;
-    Uop &u = w.dec2ren.uop[i];
+    out.dec2ren.valid[i] = true;
+    Uop &u = out.dec2ren.uop[i];
     u = {};
     u.id = e.uop_id;
     if (e.page_fault_inst) {  // a faulting fetch becomes a NOP that carries the fault
@@ -73,10 +72,10 @@ void Idu::decode() {
   int br_num = 0, i = 0;
   bool stall = false;
   for (; i < DECODE_WIDTH; i++) {
-    Uop &u = w.dec2ren.uop[i];
+    Uop &u = out.dec2ren.uop[i];
     u->br_id = 0;
     u.br_mask = running;
-    if (!w.dec2ren.valid[i] || !is_branch(u->type)) continue;
+    if (!out.dec2ren.valid[i] || !is_branch(u->type)) continue;
     if (!alloc_valid[br_num]) { stall = true; break; }
     u->br_id = alloc_tag[br_num];
     running |= wire<BR_MASK_WIDTH>(1) << alloc_tag[br_num];
@@ -85,16 +84,16 @@ void Idu::decode() {
   g_pmu_back.idu_no_brtag = stall;
   if (stall)
     for (; i < DECODE_WIDTH; i++) {
-      w.dec2ren.valid[i] = false;
-      w.dec2ren.uop[i]->br_id = 0;
-      w.dec2ren.uop[i].br_mask = 0;
+      out.dec2ren.valid[i] = false;
+      out.dec2ren.uop[i]->br_id = 0;
+      out.dec2ren.uop[i].br_mask = 0;
     }
 }
 
 // Broadcast last cycle's branch resolution (mispredict, tag, clear bits) to everyone; only comb_fire updates local state.
 void Idu::branch() {
   const Regs &q = q_;
-  DecBroadcastIO &b = wires->dec_bcast;
+  DecBroadcastIO &b = out.dec_bcast;
   b.mispred = q.br_latch.mispred;
   b.br_id = q.br_latch.mispred ? q.br_latch.br_id : 0;
   b.br_mask = q.br_latch.mispred ? wire<BR_MASK_WIDTH>(1) << q.br_latch.br_id : 0;
@@ -107,11 +106,10 @@ void Idu::branch() {
 // (and allocates nothing this cycle); otherwise fired branches take their tag and checkpoint the mask.
 void Idu::comb_fire() {
   const Regs &q = q_;
-  Wires &w = *wires;
-  for (int i = 0; i < DECODE_WIDTH; i++) w.idu_consume.fire[i] = false;
+  for (int i = 0; i < DECODE_WIDTH; i++) out.idu_consume.fire[i] = false;
 
-  d.br_latch = w.rob_bcast.flush ? ExuIdIO{} : w.exu2id;
-  if (w.rob_bcast.flush) {
+  d.br_latch = in.rob_bcast->flush ? ExuIdIO{} : (*in.exu2id);
+  if (in.rob_bcast->flush) {
     for (int i = 1; i < MAX_BR_NUM; i++) d.tag_vec[i] = true;
     d.tag_vec[0] = false;
     d.now_br_mask = 0;
@@ -137,9 +135,9 @@ void Idu::comb_fire() {
 
   int br_num = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    const bool fire = w.dec2ren.valid[i] && w.ren2dec.ready;  // every fired slot leaves the pre-decode queue
-    w.idu_consume.fire[i] = fire;
-    if (fire && is_branch(w.dec2ren.uop[i]->type)) {
+    const bool fire = out.dec2ren.valid[i] && in.ren2dec->ready;  // every fired slot leaves the pre-decode queue
+    out.idu_consume.fire[i] = fire;
+    if (fire && is_branch(out.dec2ren.uop[i]->type)) {
       const auto tag = alloc_tag[br_num++];
       d.tag_vec[tag] = false;
       d.now_br_mask |= wire<BR_MASK_WIDTH>(1) << tag;

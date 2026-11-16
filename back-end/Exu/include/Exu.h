@@ -43,7 +43,7 @@ struct FuUnit {
   }
 };
 
-// Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_exec      in: dec_bcast lsu2exe rob_bcast  out: exe2csr exe2iss exe2lsu exe2prf exu2id exu2rob prf_awake
 //   CONTRACT comb_pipeline  in: dec_bcast iss2prf rob_bcast  out: -
@@ -59,7 +59,23 @@ public:
   void comb_pipeline(); // issued uops enter the FU input slots
   void seq();           // the write-back register; the FU state is updated in place (each phase runs once per cycle, in order)
 
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    ExeCsrIO exe2csr;
+    ExeIssIO exe2iss;
+    ExeLsuIO exe2lsu;
+    ExePrfIO exe2prf;
+    ExuIdIO exu2id;
+    ExuRobIO exu2rob;
+    PrfAwakeIO prf_awake;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const IssPrfIO *iss2prf = nullptr;
+    const LsuExeIO *lsu2exe = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+  } in;
 
   const class PreIduQueue *ftq = nullptr;
   const class Csr *csr = nullptr;          // CSR read port (Csr::read): the CSR uop's result  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU

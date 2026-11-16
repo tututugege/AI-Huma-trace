@@ -9,7 +9,9 @@ class SimContext;
 
 static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
 
-// Pre-IDU queue (instruction buffer and FTQ). Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+struct BackIn;
+
+// Pre-IDU queue (instruction buffer and FTQ). Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_accept_front  in: idu_br_latch in.inst in.is_rvc in.meta in.page_fault_inst in.pc in.predict_dir in.predict_next_fetch_address in.valid  out: pre2front pre_issue
 //   CONTRACT comb_commit_info   in: rob_commit                                     out: ftq_commit_info
@@ -33,7 +35,20 @@ public:
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
   explicit PreIduQueue(SimContext * = nullptr) {}
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    PreFrontIO pre2front;
+    PreIssueIO pre_issue;
+    FtqCommitInfoIO ftq_commit_info;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const ExuIdIO *idu_br_latch = nullptr;
+    const IduConsumeIO *idu_consume = nullptr;
+    const BackIn *top_in = nullptr;   // the back end's inputs (SimCpu)
+    const RobBroadcastIO *rob_bcast = nullptr;
+    const RobCommitIO *rob_commit = nullptr;
+  } in;
 
   void init();
   void comb_accept_front();

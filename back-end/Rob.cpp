@@ -3,7 +3,7 @@
 #include "IO.h"
 #include "RealLsu.h"
 #include "SimCpu.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "config.h"
 #include "trace_hook.h"
 #include "util.h"
@@ -67,26 +67,25 @@ void Rob::begin_cycle() {
 void Rob::ready() {
   const Regs &q = q_;
   begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
-  Wires &w = *wires;
-  w.rob2dis.stall = false;
-  w.rob2csr.commit = false;
-  w.rob2csr.interrupt_resp = false;
+  out.rob2dis.stall = false;
+  out.rob2csr.commit = false;
+  out.rob2csr.interrupt_resp = false;
 
   bool found = false, mem = false, miss = false;
   for (int k = 0; k < ROB_BANK_NUM && k < q.c_count; k++) {   // the COMMIT_WIDTH oldest entries
     const int idx = (q.c_head + k) % ROB_NUM;
     const auto &e = q.cent(idx);
-    if (rob_is_flush_inst(e.uop)) w.rob2dis.stall = true;
+    if (rob_is_flush_inst(e.uop)) out.rob2dis.stall = true;
     if (!found && !rob_is_complete(e.uop)) {  // the oldest incomplete instruction is the bottleneck
       found = true;
       mem = rob_is_load(e.uop) || rob_is_store(e.uop);
-      miss = mem && w.lsu2rob.tma.miss_mask.test(idx);
+      miss = mem && in.lsu2rob->tma.miss_mask.test(idx);
     }
   }
-  w.rob2dis.tma.head_is_memory = found && mem;
-  w.rob2dis.tma.head_is_miss = found && miss;
-  w.rob2dis.empty = is_empty();
-  w.rob2dis.ready = !is_full();
+  out.rob2dis.tma.head_is_memory = found && mem;
+  out.rob2dis.tma.head_is_miss = found && miss;
+  out.rob2dis.empty = is_empty();
+  out.rob2dis.ready = !is_full();
 }
 
 
@@ -95,14 +94,13 @@ void Rob::ready() {
 // the head; one of them inside the prefix ends it. Commit slot k is the k-th oldest entry.
 void Rob::commit() {
   const Regs &q = q_;
-  Wires &w = *wires;
   // the pc of the head (a trap / interrupt / flushing instruction redirects to it): the FTQ read port
   head_pc_ = is_empty() ? FtqPc{} : ftq->ftq_pc(q.cent(q.c_head).uop->ftq_idx, q.cent(q.c_head).uop->ftq_offset);
-  auto &bc = w.rob_bcast;
+  auto &bc = out.rob_bcast;
   bc.flush = bc.exception = bc.mret = bc.sret = bc.ecall = bc.breakpoint = bc.fence = bc.fence_i = false;
   bc.interrupt = false;
   bc.page_fault_inst = bc.page_fault_load = bc.page_fault_store = bc.illegal_inst = false;
-  w.rob2csr.interrupt_resp = false;
+  out.rob2csr.interrupt_resp = false;
   // BPU commit credits: the control-flow instructions of the prefix may not exceed the free BPU update-queue entries and the
   // fetch-block ends may not exceed the free uBTB train-queue entries (the BPU queues drop instead of back-pressuring). Both
   // come from registers only: the BPU occupancy at the start of the cycle minus what this ROB committed last cycle (those
@@ -121,15 +119,15 @@ void Rob::commit() {
 
   for (int k = 0; k < COMMIT_WIDTH; k++) {
     const int idx = (q.c_head + k) % ROB_NUM;
-    w.rob_commit.commit_entry[k].uop = q.cent(idx).uop;
-    wires->rob_commit.commit_extra[k].src1_areg = q.cent(idx).uop->src1_areg;
-    wires->rob_commit.commit_extra[k].imm = q.cent(idx).uop->imm;
-    w.rob_commit.commit_entry[k].valid = false;
+    out.rob_commit.commit_entry[k].uop = q.cent(idx).uop;
+    out.rob_commit.commit_extra[k].src1_areg = q.cent(idx).uop->src1_areg;
+    out.rob_commit.commit_extra[k].imm = q.cent(idx).uop->imm;
+    out.rob_commit.commit_entry[k].valid = false;
   }
 
-  const bool front_stall = static_cast<bool>(w.in.front_stall);
-  const bool mispred = w.dec_bcast.mispred;
-  const bool intr = w.csr2rob.interrupt_req;
+  const bool front_stall = static_cast<bool>(in.top_in->front_stall);
+  const bool mispred = in.dec_bcast->mispred;
+  const bool intr = in.csr2rob->interrupt_req;
   int n = 0;
   bool single = false;
   if (q.c_count > 0 && !mispred) {
@@ -138,12 +136,12 @@ void Rob::commit() {
     if (intr) {
       single = true;  // the interrupt is taken on the head instruction (it retires with it)
     } else if (h_alone) {
-      single = rob_is_complete(h) && !(rob_is_fence(h) && w.lsu2rob.committed_store_pending);
+      single = rob_is_complete(h) && !(rob_is_fence(h) && in.lsu2rob->committed_store_pending);
     } else {
       const int lim = front_stall ? 1 : COMMIT_WIDTH;  // BPU update back-pressure: one per cycle
       int blocks = 0, ctl = 0;
-      const int upd_free = static_cast<int>(w.in.front_upd_free) - q.c_prev_ctl;
-      const int tq_free = static_cast<int>(w.in.front_tq_free) - q.c_prev_blk;
+      const int upd_free = static_cast<int>(in.top_in->front_upd_free) - q.c_prev_ctl;
+      const int tq_free = static_cast<int>(in.top_in->front_tq_free) - q.c_prev_blk;
       for (int k = 0; k < lim && k < q.c_count; k++) {
         const Uop &u = q.cent((q.c_head + k) % ROB_NUM).uop;
         if (!rob_is_complete(u) || rob_is_flush_inst(u) || rob_is_fence(u) || rob_is_wfi(u)) break;
@@ -161,13 +159,13 @@ void Rob::commit() {
   if (single) n = 1;
   if (single || n == 0) { d.c_prev_ctl = 0; d.c_prev_blk = 0; }
   if (single) { const Uop &h = q.cent(q.c_head).uop; const InstType ty = rob_type(h); d.c_prev_ctl = (ty == BR || ty == JAL || ty == JALR); d.c_prev_blk = h.ftq_is_last ? 1 : 0; }
-  w.rob2csr.interrupt_resp = single && intr;
+  out.rob2csr.interrupt_resp = single && intr;
   bc.interrupt = single && intr;
 
   for (int k = 0; k < n; k++) {
     const int idx = (q.c_head + k) % ROB_NUM;
     check_load_alignment(q.cent(idx).uop, "DUT: Load address misaligned at commit!");
-    w.rob_commit.commit_entry[k].valid = true;
+    out.rob_commit.commit_entry[k].valid = true;
     d.cent(idx).valid = false;
     ctouch(idx);
   }
@@ -182,9 +180,9 @@ void Rob::commit() {
 
   // the dispatch stage allocates from the tail of the registered state (entries freed this cycle are reused next cycle)
   const int tail = (q.c_head + q.c_count) % ROB_NUM;
-  w.rob2dis.enq_idx = tail;
-  w.rob2dis.rob_flag = q.c_hflag ^ (q.c_head + q.c_count >= ROB_NUM);
-  w.rob2dis.free_cnt = ROB_NUM - q.c_count;
+  out.rob2dis.enq_idx = tail;
+  out.rob2dis.rob_flag = q.c_hflag ^ (q.c_head + q.c_count >= ROB_NUM);
+  out.rob2dis.free_cnt = ROB_NUM - q.c_count;
 
   if (++d.stall_cycle > 50000) {
     std::fprintf(stderr, "ROB deadlock at cycle %llu: count=%d head=%d n=%d single=%d front_stall=%d\n",
@@ -195,9 +193,8 @@ void Rob::commit() {
 
 // What a single-retired instruction triggers: flush / trap / CSR / fence side effects.
 void Rob::single_actions(const Uop &u) {
-  Wires &w = *wires;
-  auto &bc = w.rob_bcast;
-  const bool flush_inst = rob_is_flush_inst(u), wfi = rob_is_wfi(u), intr = w.rob2csr.interrupt_resp;
+  auto &bc = out.rob_bcast;
+  const bool flush_inst = rob_is_flush_inst(u), wfi = rob_is_wfi(u), intr = out.rob2csr.interrupt_resp;
   if (flush_inst || intr || wfi) {
     xlen_t pc = 0;
     if (flush_inst || intr) {
@@ -221,7 +218,7 @@ void Rob::single_actions(const Uop &u) {
     else if (t == EBREAK && is_semihost_marker(pc)) { bc.breakpoint = true; bc.trap_val = pc; }  // breakpoint exception, cause 3, tval = pc
     else if (t == EBREAK) ctx->exit_reason = ExitReason::EBREAK;
     else if (wfi) { /* retires without leaving the simulator */ }
-    else if (t == CSR) w.rob2csr.commit = true;
+    else if (t == CSR) out.rob2csr.commit = true;
     else if (t == SFENCE_VMA) bc.fence = true;
     else if (t == FENCE_I) bc.fence_i = true;
     else if (u.flush_pipe) {  // memory-order violator (EXP-018): no CSR/MMU action, refetch from pc+4
@@ -233,10 +230,9 @@ void Rob::single_actions(const Uop &u) {
 
 // Execution results mark their issue port's completion bit; load/store ports also record the address or the fault.
 void Rob::complete() {
-  Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    if (!w.exu2rob.entry[i].valid) continue;
-    const Uop &wb = w.exu2rob.entry[i].uop;
+    if (!in.exu2rob->entry[i].valid) continue;
+    const Uop &wb = in.exu2rob->entry[i].uop;
     const int bank = get_rob_bank(wb.rob_idx), line = get_rob_line(wb.rob_idx);
     const auto bit = rob_cplt_mask_from_issue_port(i);
     Uop &u = d.entry[bank][line].uop;
@@ -275,10 +271,9 @@ void Rob::complete() {
 // Branch mispredict: the tail moves to the entry right after the branch; everything younger is invalidated.
 void Rob::branch() {
   const Regs &q = q_;
-  const Wires &w = *wires;
-  if (!w.dec_bcast.mispred || w.rob_bcast.flush) return;
-  tbhook::on_mispredict((uint64_t)q.entry[get_rob_bank(w.dec_bcast.redirect_rob_idx)][get_rob_line(w.dec_bcast.redirect_rob_idx)].uop->dbg.inst_idx);
-  const int bidx = static_cast<int>(w.dec_bcast.redirect_rob_idx);
+  if (!in.dec_bcast->mispred || out.rob_bcast.flush) return;
+  tbhook::on_mispredict((uint64_t)q.entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)][get_rob_line(in.dec_bcast->redirect_rob_idx)].uop->dbg.inst_idx);
+  const int bidx = static_cast<int>(in.dec_bcast->redirect_rob_idx);
   const int keep = (bidx - q.c_head + ROB_NUM) % ROB_NUM + 1;  // entries up to and including the branch
   Assert(keep <= q.c_count && "ROB: mispredicted branch outside the valid range");
   d.cent(bidx).uop.ftq_is_last = true;   // everything after the branch in its fetch block is flushed
@@ -293,16 +288,15 @@ void Rob::branch() {
 
 // Dispatch enqueues at the tail: the fired slots are the first m valid slots; Dispatch numbered them tail, tail+1, ...
 void Rob::fire() {
-  Wires &w = *wires;
-  if (!w.rob2dis.ready) return;
+  if (!out.rob2dis.ready) return;
   int m = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!w.dis2rob.dis_fire[i]) continue;
-    const int idx = (w.rob2dis.enq_idx + m) % ROB_NUM;
-    Assert(static_cast<int>(w.dis2rob.uop[i].rob_idx) == idx && "ROB: dispatch numbering mismatch");
+    if (!in.dis2rob->dis_fire[i]) continue;
+    const int idx = (out.rob2dis.enq_idx + m) % ROB_NUM;
+    Assert(static_cast<int>(in.dis2rob->uop[i].rob_idx) == idx && "ROB: dispatch numbering mismatch");
     auto &e = d.cent(idx);
     e.valid = true;
-    e.uop = w.dis2rob.uop[i];
+    e.uop = in.dis2rob->uop[i];
     e.uop.cplt_mask = 0;
     ctouch(idx);
     tbhook::on_dispatch((uint64_t)e.uop->dbg.inst_idx, e.uop->dbg.pc, e.uop->dbg.instruction, idx, ilen_of(e.uop->is_rvc));
@@ -314,7 +308,7 @@ void Rob::fire() {
 
 // A global flush empties the ROB and resets the pointers (overrides any recovery or enqueue above).
 void Rob::flush() {
-  if (!wires->rob_bcast.flush) return;
+  if (!out.rob_bcast.flush) return;
   for (int i = 0; i < ROB_BANK_NUM; i++)
     for (int j = 0; j < ROB_LINE_NUM; j++) d.entry[i][j].valid = false;
   touch_all();

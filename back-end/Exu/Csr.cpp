@@ -1,4 +1,4 @@
-#include "Wires.h"
+#include "BackPorts.h"
 #include "Csr.h"
 #include "config.h"
 #include "ref.h"
@@ -46,22 +46,22 @@ void Csr::init() {
 
 void Csr::comb_csr_status() {
   const Regs &q = q_;
-  wires->csr_status.mstatus = q.CSR_RegFile[csr_mstatus];
-  wires->csr_status.sstatus = q.CSR_RegFile[csr_sstatus];
-  wires->csr_status.satp = q.CSR_RegFile[csr_satp];
-  wires->csr_status.privilege = q.privilege;
+  out.csr_status->mstatus = q.CSR_RegFile[csr_mstatus];
+  out.csr_status->sstatus = q.CSR_RegFile[csr_sstatus];
+  out.csr_status->satp = q.CSR_RegFile[csr_satp];
+  out.csr_status->privilege = q.privilege;
 }
 
 void Csr::comb_interrupt() {
   const Regs &q = q_;
   const IrqState irq = eval_interrupts(q.CSR_RegFile[csr_mstatus], q.CSR_RegFile[csr_mie], q.CSR_RegFile[csr_mip],
                                        q.CSR_RegFile[csr_mideleg], q.privilege);
-  wires->csr2rob.interrupt_req = irq.to_m() || irq.to_s();
+  out.csr2rob.interrupt_req = irq.to_m() || irq.to_s();
 }
 
 // External interrupt lines set/clear their mip bit; sip mirrors the supervisor-visible bits.
 void Csr::comb_interrupt_inject() {
-  const CsrInterruptInjectIO &io = wires->csr_interrupt_inject_io;
+  const CsrInterruptInjectIO &io = (*in.csr_interrupt_inject_io);
   const struct { bool valid, pending; uint32_t bit; } lines[] = {
       {io.external_irq_pending_valid, io.external_irq_pending, MIP_MEIP},
       {io.supervisor_external_irq_pending_valid, io.supervisor_external_irq_pending, MIP_SEIP},
@@ -74,7 +74,7 @@ void Csr::comb_interrupt_inject() {
   }
   // FS = Dirty, SD (an FP instruction committed: top2csr.fs_dirty from BackTop::comb_outputs): on top of whatever else
   // changed mstatus this cycle; this is the CSR's last phase of the cycle
-  if (wires->top2csr.fs_dirty) {
+  if (in.top2csr->fs_dirty) {
     d.CSR_RegFile[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     d.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_mstatus] & kSstatusMask;
   }
@@ -84,7 +84,7 @@ void Csr::comb_interrupt_inject() {
 // over supervisor traps; a trap is delegated to S according to medeleg (interrupts: mideleg inside eval_interrupts).
 void Csr::exception() {
   const Regs &q = q_;
-  const RobBroadcastIO &rb = wires->rob_bcast;
+  const RobBroadcastIO &rb = (*in.rob_bcast);
   xlen_t mstatus = q.CSR_RegFile[csr_mstatus];
   xlen_t sstatus = q.CSR_RegFile[csr_sstatus];
   const xlen_t medeleg = q.CSR_RegFile[csr_medeleg];
@@ -99,7 +99,7 @@ void Csr::exception() {
              d_bp = deleg(3) && q.privilege != 3;  // a trap taken in M mode is never delegated
 
   const IrqState irq = eval_interrupts(mstatus, q.CSR_RegFile[csr_mie], q.CSR_RegFile[csr_mip], q.CSR_RegFile[csr_mideleg], q.privilege);
-  const bool resp = wires->rob2csr.interrupt_resp;
+  const bool resp = in.rob2csr->interrupt_resp;
   const bool m_irq = irq.to_m() && resp, s_irq = irq.to_s() && resp;
 
   const bool u_ecall = ecall && q.privilege == 0, s_ecall = ecall && q.privilege == 1, m_ecall = ecall && q.privilege == 3;
@@ -132,7 +132,7 @@ void Csr::exception() {
              : illegal ? 2
                        : 0;
     d.CSR_RegFile[csr_mcause] = cause;
-    wires->csr2front.trap_pc = trap_target(mtvec, cause);
+    out.csr2front.trap_pc = trap_target(mtvec, cause);
 
     mstatus = (mstatus & ~MSTATUS_MPP) | ((q.privilege & 0x3) << 11);  // MPP = q.privilege
     mstatus = (mstatus & MSTATUS_MIE) ? (mstatus | MSTATUS_MPIE) : (mstatus & ~MSTATUS_MPIE);  // MPIE = MIE
@@ -155,7 +155,7 @@ void Csr::exception() {
              : (illegal && d_illegal) ? 2
                                       : 0;
     d.CSR_RegFile[csr_scause] = cause;
-    wires->csr2front.trap_pc = trap_target(stvec, cause);
+    out.csr2front.trap_pc = trap_target(stvec, cause);
 
     sstatus = q.privilege == 1 ? (sstatus | MSTATUS_SPP) : (sstatus & ~MSTATUS_SPP);  // SPP = q.privilege
     sstatus = (sstatus & MSTATUS_SIE) ? (sstatus | MSTATUS_SPIE) : (sstatus & ~MSTATUS_SPIE);  // SPIE = SIE
@@ -171,7 +171,7 @@ void Csr::exception() {
     mstatus &= ~MSTATUS_MPP;  // MPP = U
     d.CSR_RegFile[csr_mstatus] = mstatus;
     d.CSR_RegFile[csr_sstatus] = mstatus & kSstatusMask;
-    wires->csr2front.epc = q.CSR_RegFile[csr_mepc];
+    out.csr2front.epc = q.CSR_RegFile[csr_mepc];
   } else if (rb.sret) {
     sstatus = (sstatus & MSTATUS_SPIE) ? (sstatus | MSTATUS_SIE) : (sstatus & ~MSTATUS_SIE);  // SIE = SPIE
     d.privilege = GET_SPP(sstatus);
@@ -179,7 +179,7 @@ void Csr::exception() {
     sstatus &= ~MSTATUS_SPP;  // SPP = U
     d.CSR_RegFile[csr_sstatus] = sstatus;
     d.CSR_RegFile[csr_mstatus] = (q.CSR_RegFile[csr_mstatus] & ~kSstatusWriteMask) | (sstatus & kSstatusWriteMask);
-    wires->csr2front.epc = q.CSR_RegFile[csr_sepc];
+    out.csr2front.epc = q.CSR_RegFile[csr_sepc];
   }
 }
 
@@ -187,13 +187,13 @@ void Csr::exception() {
 // effect). The aliases (sie/sip/sstatus) update the machine register and the derived supervisor view.
 void Csr::csr_write() {
   const Regs &q = q_;
-  if (wires->exe2csr.we) {
-    d.csr_we = wires->exe2csr.we;
-    d.csr_idx = wires->exe2csr.idx;
-    d.csr_wcmd = wires->exe2csr.wcmd;
-    d.csr_wdata = wires->exe2csr.wdata;
+  if (in.exe2csr->we) {
+    d.csr_we = in.exe2csr->we;
+    d.csr_idx = in.exe2csr->idx;
+    d.csr_wcmd = in.exe2csr->wcmd;
+    d.csr_wdata = in.exe2csr->wdata;
   }
-  if (!(wires->rob2csr.commit && q.csr_we)) return;
+  if (!(in.rob2csr->commit && q.csr_we)) return;
 
   const xlen_t old_val = q.CSR_RegFile[cvt_number_to_csr(q.csr_idx)];
   xlen_t wdata = q.csr_wdata;   // the value written (CSRRS / CSRRC: combined with the old value)

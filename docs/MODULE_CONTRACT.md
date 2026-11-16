@@ -216,3 +216,25 @@ static rotation), `g_regs`, `bpu_pipe`, `front_ctx`, the FE_IPF statics. Now:
 FrontComb keeps references to the modules (`bpu_pipe`, `fetch_addr_fifo`, ...): the scan resolves their method calls
 through these types (a method's non-const parameters are its outputs), so the contracts see the same signals; the
 FIFO / I-cache methods' pure outputs are now seen as writes only (read_fifos' declared reads shrank accordingly).
+
+## Back-end modules with their own ports (exp/back-ports)
+
+The back-end modules used to reach every signal through one shared struct (`Wires`, `wires->X`): by type any module
+could read or write any signal; only the contracts and the scan restricted it. Now each module has
+```
+struct In  { const DecRenIO *dec2ren; ... } in;    // what it reads: const pointers, bound by BackTop::init
+struct Out { RenDisIO ren2dis; RenDecIO ren2dec; } out;   // what it drives: its own members
+```
+* A module cannot write an input (const) and cannot reach another module's output except through an input bound to
+  it: one writer per signal holds by construction. All bindings are in BackTop::init (`dis->in.ren2dis =
+  &rename->out.ren2dis;`), which reads as the back end's data path.
+* The back end's interface stays in BackTop (`BackPorts`, back-end/include/BackPorts.h, formerly Wires): `in`, `out`
+  (SimCpu / front end / memory subsystem), `csr_status`, `csr_interrupt_inject_io`, and BackTop's own `top2csr`. The
+  modules that drive part of it have output pointers bound to it (the CSR: `csr_status`; the LSU: `out.lsu2dcache`,
+  `out.peripheral_req`); a module that reads it has an input (`in.top_in` = BackTop's `in`).
+* The pre-decode queue reads Idu's branch latch register through `in.idu_br_latch` (bound to `&idu->q().br_latch`).
+* Found on the way: the CSR writes `csr_status` (BackTop's comb_csr_status calls it), so it is the CSR's output, not
+  an input of it.
+The contracts keep the signal names (a port is named after its signal); the scan rewrites the port form into the
+signal form before reading (comb_graph.py `as_wires`), so the checks are unchanged. Done in two compile-checked passes:
+inputs first (a module's reads become `in.X->`), then the outputs moved into the modules.

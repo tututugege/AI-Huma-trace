@@ -32,8 +32,10 @@ struct LsuState {
   LrScUnit lrsc_unit;
 };
 
+struct BackIn;
+
 // Load / store unit (staged pipeline, docs/LSU_PIPE.md). Contract (checked by scripts/comb/comb_graph.py against the
-// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives (in / out: parts
+// code): the signals each phase reads (in) and writes (out), and the outputs only this module drives (in / out: parts
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs    in: -                                                    out: lsu2dis lsu2rob lsu_awake
 //   CONTRACT comb_writeback  in: dec_bcast rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: lsu2exe lsu_awake
@@ -54,7 +56,25 @@ public:
   LsuState nxt;
   const LsuState &cur() const { return cur_; }
   LsuState &cur_mut() { return cur_; }   // checkpoint restore only
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    LsuDisIO lsu2dis;
+    LsuRobIO lsu2rob;
+    LsuAwakeIO lsu_awake;
+    LsuExeIO lsu2exe;
+    LsuDcacheIO *lsu2dcache = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
+    PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const CsrStatusIO *csr_status = nullptr;
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const DisLsuIO *dis2lsu = nullptr;
+    const ExeLsuIO *exe2lsu = nullptr;
+    const BackIn *top_in = nullptr;   // the back end's inputs (SimCpu)
+    const RobBroadcastIO *rob_bcast = nullptr;
+    const RobCommitIO *rob_commit = nullptr;
+  } in;
   SimContext *ctx = nullptr;
   TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
 

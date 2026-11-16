@@ -4,7 +4,7 @@
 #include "config.h"
 class SimContext;
 
-// Decode. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// Decode. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_decode  in: pre_issue                 out: dec2ren dec_bcast
 //   CONTRACT comb_fire    in: exu2id ren2dec rob_bcast  out: idu_consume
@@ -29,7 +29,19 @@ public:
   }
   SimContext *ctx;
   int max_br_per_cycle;
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    DecRenIO dec2ren;
+    DecBroadcastIO dec_bcast;
+    IduConsumeIO idu_consume;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const ExuIdIO *exu2id = nullptr;
+    const PreIssueIO *pre_issue = nullptr;
+    const RenDecIO *ren2dec = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+  } in;
   void decode(Uop &uop, uint32_t inst);
 
   void init();

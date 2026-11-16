@@ -10,7 +10,7 @@ struct UopPacket {
   Uop uop; // in the issue wire format
 };
 
-// Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_alloc     in: dec_bcast lsu2dis rob2dis                                        out: dis2lsu dis2rob
 //   CONTRACT comb_dispatch  in: dec_bcast iss2dis iss_awake prf_awake ren2dis rob2dis rob_bcast  out: dis2iss dis2lsu dis2ren dis2rob
@@ -64,7 +64,24 @@ public:
   friend struct DisDigestAccess;  // lockstep test hook
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    DisIssIO dis2iss;
+    DisLsuIO dis2lsu;
+    DisRenIO dis2ren;
+    DisRobIO dis2rob;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const IssDisIO *iss2dis = nullptr;
+    const IssAwakeIO *iss_awake = nullptr;
+    const LsuDisIO *lsu2dis = nullptr;
+    const PrfAwakeIO *prf_awake = nullptr;
+    const RenDisIO *ren2dis = nullptr;
+    const RobDisIO *rob2dis = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+  } in;
 
   void init();
   void comb_alloc();

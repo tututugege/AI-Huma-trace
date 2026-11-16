@@ -1,14 +1,14 @@
 #include "Dispatch.h"
 #include "Rob.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "config.h"
 #include "util.h"
 
 bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
   for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++)
-    if (wires->prf_awake.wake[w].valid && wires->prf_awake.wake[w].preg == preg) return true;
+    if (in.prf_awake->wake[w].valid && in.prf_awake->wake[w].preg == preg) return true;
   for (int w = 0; w < WAKE_CH_ALL; w++)
-    if (wires->iss_awake.wake[w].valid && wires->iss_awake.wake[w].preg == preg) return true;
+    if (in.iss_awake->wake[w].valid && in.iss_awake->wake[w].preg == preg) return true;
   return false;
 }
 
@@ -35,18 +35,17 @@ void Dispatch::init() {
 // see (the stores before it); a load or store that finds no queue entry or port is marked invalid for the ROB.
 void Dispatch::comb_alloc() {
   const Regs &q = q_;
-  Wires &w = *wires;
-  const auto clear_mask = w.dec_bcast.clear_mask;
+  const auto clear_mask = in.dec_bcast->clear_mask;
   int stores = 0, loads = 0;
 
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    w.dis2lsu.alloc_req[k] = false;
-    w.dis2lsu.br_mask[k] = 0;
+    out.dis2lsu.alloc_req[k] = false;
+    out.dis2lsu.br_mask[k] = 0;
     stq_port_owner[k] = -1;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    w.dis2lsu.ldq_alloc_req[k] = false;
-    w.dis2lsu.ldq_br_mask[k] = 0;
+    out.dis2lsu.ldq_alloc_req[k] = false;
+    out.dis2lsu.ldq_br_mask[k] = 0;
     ldq_port_owner[k] = -1;
   }
 
@@ -57,39 +56,38 @@ void Dispatch::comb_alloc() {
     u = q.inst_r[i];
     u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
     {
-      const int pos = static_cast<int>(w.rob2dis.enq_idx) + rob_k;
+      const int pos = static_cast<int>(in.rob2dis->enq_idx) + rob_k;
       u.rob_idx = pos % ROB_NUM;
-      u.rob_flag = static_cast<bool>(w.rob2dis.rob_flag) ^ (pos >= ROB_NUM);
+      u.rob_flag = static_cast<bool>(in.rob2dis->rob_flag) ^ (pos >= ROB_NUM);
       if (q.inst_valid[i]) rob_k++;
     }
     u.expect_mask = 0;
     u.cplt_mask = 0;
-    w.dis2rob.valid[i] = q.inst_valid[i];
+    out.dis2rob.valid[i] = q.inst_valid[i];
 
     if (q.inst_valid[i] && is_load(q.inst_r[i])) {
-      const int pos = w.lsu2dis.stq_tail + stores;  // stores older than this load, allocated this cycle
+      const int pos = in.lsu2dis->stq_tail + stores;  // stores older than this load, allocated this cycle
       u.stq_idx = pos % STQ_SIZE;
-      u.stq_flag = w.lsu2dis.stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
-      if (loads < w.lsu2dis.ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH &&
-          w.lsu2dis.ldq_alloc_valid[loads]) {
-        u.ldq_idx = w.lsu2dis.ldq_alloc_idx[loads];
+      u.stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+      if (loads < in.lsu2dis->ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && in.lsu2dis->ldq_alloc_valid[loads]) {
+        u.ldq_idx = in.lsu2dis->ldq_alloc_idx[loads];
         ldq_port_owner[loads++] = i;
       } else {
-        if (loads < w.lsu2dis.ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
-        w.dis2rob.valid[i] = false;
+        if (loads < in.lsu2dis->ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
+        out.dis2rob.valid[i] = false;
       }
     }
     if (q.inst_valid[i] && is_store(q.inst_r[i])) {
-      if (stores < w.lsu2dis.stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
-        const int pos = w.lsu2dis.stq_tail + stores;
+      if (stores < in.lsu2dis->stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
+        const int pos = in.lsu2dis->stq_tail + stores;
         u.stq_idx = pos % STQ_SIZE;
-        u.stq_flag = w.lsu2dis.stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+        u.stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
         stq_port_owner[stores++] = i;
       } else {
-        w.dis2rob.valid[i] = false;
+        out.dis2rob.valid[i] = false;
       }
     }
-    w.dis2rob.uop[i] = u;
+    out.dis2rob.uop[i] = u;
   }
 }
 
@@ -97,16 +95,15 @@ void Dispatch::comb_alloc() {
 // stays busy (the older instruction has not issued yet).
 void Dispatch::wake() {
   const Regs &q = q_;
-  Wires &w = *wires;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!w.dis2rob.valid[i]) continue;
+    if (!out.dis2rob.valid[i]) continue;
     Uop &u = inst_alloc[i];
     u.src1_busy = u->src1_en ? q.busy_table[u->src1_preg] : false;
     u.src2_busy = u->src2_en ? q.busy_table[u->src2_preg] : false;
     u.src3_busy = u->src3_en ? q.busy_table[u->src3_preg] : false;
     apply_wakeup_to_uop(u);
     for (int j = 0; j < i; j++) {
-      if (!w.dis2rob.valid[j] || !inst_alloc[j].dest_en || (inst_alloc[j]->dest_areg == 0 && !inst_alloc[j]->dest_fp)) continue;
+      if (!out.dis2rob.valid[j] || !inst_alloc[j].dest_en || (inst_alloc[j]->dest_areg == 0 && !inst_alloc[j]->dest_fp)) continue;
       if (is_eliminated_move(inst_alloc[j])) continue;  // its register is its source's: no writer to wait for
       if (u->src1_en && u->src1_preg == inst_alloc[j].dest_preg) u.src1_busy = true;
       if (u->src2_en && u->src2_preg == inst_alloc[j].dest_preg) u.src2_busy = true;
@@ -119,9 +116,8 @@ void Dispatch::wake() {
 // instruction that does not fit stops the group. What was placed is remembered so comb_fire can take it back.
 void Dispatch::dispatch() {
   const Regs &q = q_;
-  Wires &w = *wires;
   for (int i = 0; i < IQ_NUM; i++)
-    for (int k = 0; k < MAX_IQ_DISPATCH_WIDTH; k++) w.dis2iss.req[i][k].valid = false;
+    for (int k = 0; k < MAX_IQ_DISPATCH_WIDTH; k++) out.dis2iss.req[i][k].valid = false;
 
   int usage[IQ_NUM] = {0};
   for (int i = 0; i < DECODE_WIDTH; i++) {
@@ -149,21 +145,21 @@ void Dispatch::dispatch() {
     bool fit = true;
     for (int k = 0; k < cnt && fit; k++) {
       const int q = uops[k].iq_id;
-      fit = usage[q] < GLOBAL_IQ_CONFIG[q].dispatch_width && usage[q] < w.iss2dis.ready_num[q];
+      fit = usage[q] < GLOBAL_IQ_CONFIG[q].dispatch_width && usage[q] < in.iss2dis->ready_num[q];
       if (!fit) {
         iq_blk[i] = q;
-        iq_blk_width[i] = usage[q] < w.iss2dis.ready_num[q];  // room left: the enqueue width is what stopped it
+        iq_blk_width[i] = usage[q] < in.iss2dis->ready_num[q];  // room left: the enqueue width is what stopped it
       }
     }
     if (!fit) break;
 
     dispatch_success_flags[i] = true;
-    w.dis2rob.uop[i].expect_mask = expect;
-    w.dis2rob.uop[i].cplt_mask = 0;
+    out.dis2rob.uop[i].expect_mask = expect;
+    out.dis2rob.uop[i].cplt_mask = 0;
     for (int k = 0; k < cnt; k++) {
       const int q = uops[k].iq_id;
-      w.dis2iss.req[q][usage[q]].valid = true;
-      w.dis2iss.req[q][usage[q]].uop = uops[k].uop;
+      out.dis2iss.req[q][usage[q]].valid = true;
+      out.dis2iss.req[q][usage[q]].uop = uops[k].uop;
       usage[q]++;
     }
   }
@@ -175,34 +171,33 @@ void Dispatch::dispatch() {
 // fire blocks the slots behind it.
 void Dispatch::fire() {
   const Regs &q = q_;
-  Wires &w = *wires;
-  const auto clear_mask = w.dec_bcast.clear_mask;
-  const bool global_flush = w.rob_bcast.flush || w.dec_bcast.mispred || w.rob2dis.stall;
+  const auto clear_mask = in.dec_bcast->clear_mask;
+  const bool global_flush = in.rob_bcast->flush || in.dec_bcast->mispred || in.rob2dis->stall;
 
   std::memcpy(d.busy_table, q.busy_table, sizeof(d.busy_table));
   for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
-    if (w.prf_awake.wake[k].valid) d.busy_table[w.prf_awake.wake[k].preg] = false;
+    if (in.prf_awake->wake[k].valid) d.busy_table[in.prf_awake->wake[k].preg] = false;
   for (int k = 0; k < WAKE_CH_ALL; k++)
-    if (w.iss_awake.wake[k].valid) d.busy_table[w.iss_awake.wake[k].preg] = false;
+    if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
 
   bool pre_stall = false, pre_fire = false;
   int rob_used = 0;  // ROB entries taken by the older slots of this group
   for (int i = 0; i < DECODE_WIDTH; i++) {
     const InstType type = q.inst_valid[i] ? decode_inst_type(q.inst_r[i]->type) : NOP;
     const bool atomic = type == AMO, wfi = type == WFI;
-    bool fire = w.dis2rob.valid[i] && dispatch_success_flags[i] && w.rob2dis.ready && !pre_stall && !global_flush;
-    if (q.inst_valid[i]) { if (rob_used >= w.rob2dis.free_cnt) fire = false; rob_used++; }
+    bool fire = out.dis2rob.valid[i] && dispatch_success_flags[i] && in.rob2dis->ready && !pre_stall && !global_flush;
+    if (q.inst_valid[i]) { if (rob_used >= in.rob2dis->free_cnt) fire = false; rob_used++; }
     // serializing instructions need an empty ROB and nothing older firing this cycle
-    if ((is_CSR(q.inst_r[i]->type) || atomic) && (!w.rob2dis.empty || pre_fire)) fire = false;
-    w.dis2rob.dis_fire[i] = fire;
+    if ((is_CSR(q.inst_r[i]->type) || atomic) && (!in.rob2dis->empty || pre_fire)) fire = false;
+    out.dis2rob.dis_fire[i] = fire;
     if (q.inst_valid[i] && !fire) pre_stall = true;
     if (fire && (atomic || wfi)) pre_stall = true;  // exclusive issue slot
     if (fire) pre_fire = true;
   }
   for (int i = 0; i < DECODE_WIDTH; i++)
-    if (w.dis2rob.dis_fire[i] && q.inst_r[i].dest_en && !is_eliminated_move(q.inst_r[i]))
+    if (out.dis2rob.dis_fire[i] && q.inst_r[i].dest_en && !is_eliminated_move(q.inst_r[i]))
       d.busy_table[q.inst_r[i].dest_preg] = true;
-  w.dis2ren.ready = !pre_stall;
+  out.dis2ren.ready = !pre_stall;
 
   // take back the issue requests of instructions that did not fire (ports were assigned in slot order)
   int next_slot[IQ_NUM] = {0};
@@ -211,33 +206,33 @@ void Dispatch::fire() {
     if (!dispatch_success_flags[i]) break;
     for (int k = 0; k < dispatch_cache[i].count; k++) {
       const int q = dispatch_cache[i].iq_ids[k];
-      if (!w.dis2rob.dis_fire[i]) w.dis2iss.req[q][next_slot[q]].valid = false;
+      if (!out.dis2rob.dis_fire[i]) out.dis2iss.req[q][next_slot[q]].valid = false;
       next_slot[q]++;
     }
   }
 
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
     const int i = stq_port_owner[k];
-    if (i < 0 || !w.dis2rob.dis_fire[i]) continue;
-    const Uop &u = w.dis2rob.uop[i];
-    w.dis2lsu.alloc_req[k] = true;
-    w.dis2lsu.br_mask[k] = u.br_mask & ~clear_mask;
-    w.dis2lsu.rob_idx[k] = u.rob_idx;
-    w.dis2lsu.rob_flag[k] = u.rob_flag;
-    w.dis2lsu.stq_flag[k] = u.stq_flag;
-    w.dis2lsu.func3[k] = u->func3;
-    w.dis2lsu.st_pc[k] = u->dbg.pc;
+    if (i < 0 || !out.dis2rob.dis_fire[i]) continue;
+    const Uop &u = out.dis2rob.uop[i];
+    out.dis2lsu.alloc_req[k] = true;
+    out.dis2lsu.br_mask[k] = u.br_mask & ~clear_mask;
+    out.dis2lsu.rob_idx[k] = u.rob_idx;
+    out.dis2lsu.rob_flag[k] = u.rob_flag;
+    out.dis2lsu.stq_flag[k] = u.stq_flag;
+    out.dis2lsu.func3[k] = u->func3;
+    out.dis2lsu.st_pc[k] = u->dbg.pc;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
     const int i = ldq_port_owner[k];
-    if (i < 0 || !w.dis2rob.dis_fire[i]) continue;
-    const Uop &u = w.dis2rob.uop[i];
-    w.dis2lsu.ldq_alloc_req[k] = true;
-    w.dis2lsu.ldq_idx[k] = u.ldq_idx;
-    w.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
-    w.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
-    w.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
-    w.dis2lsu.ldq_pc[k] = u->dbg.pc;
+    if (i < 0 || !out.dis2rob.dis_fire[i]) continue;
+    const Uop &u = out.dis2rob.uop[i];
+    out.dis2lsu.ldq_alloc_req[k] = true;
+    out.dis2lsu.ldq_idx[k] = u.ldq_idx;
+    out.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
+    out.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
+    out.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
+    out.dis2lsu.ldq_pc[k] = u->dbg.pc;
   }
 }
 
@@ -245,18 +240,17 @@ void Dispatch::fire() {
 // instructions that did not fire stay (with busy bits refreshed by this cycle's wakeups).
 void Dispatch::pipeline() {
   const Regs &q = q_;
-  Wires &w = *wires;
-  const auto clear_mask = w.dec_bcast.clear_mask;
-  const bool kill = w.rob_bcast.flush || w.dec_bcast.mispred;
+  const auto clear_mask = in.dec_bcast->clear_mask;
+  const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (kill) { d.inst_valid[i] = false; continue; }
-    if (w.dis2ren.ready) {
-      d.inst_valid[i] = w.ren2dis.valid[i];
-      d.inst_r[i] = w.ren2dis.uop[i];
+    if (out.dis2ren.ready) {
+      d.inst_valid[i] = in.ren2dis->valid[i];
+      d.inst_r[i] = in.ren2dis->uop[i];
       d.inst_r[i].br_mask &= ~clear_mask;
       continue;
     }
-    d.inst_valid[i] = q.inst_valid[i] && !w.dis2rob.dis_fire[i];
+    d.inst_valid[i] = q.inst_valid[i] && !out.dis2rob.dis_fire[i];
     if (d.inst_valid[i]) {
       d.inst_r[i].src1_busy = inst_alloc[i].src1_busy;
       d.inst_r[i].src2_busy = inst_alloc[i].src2_busy;

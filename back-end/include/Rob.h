@@ -13,7 +13,9 @@ struct RobStoredEntry {
   Uop uop;
 };
 
-// Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the Wires
+struct BackIn;
+
+// Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the signals
 // each phase reads (in) and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_commit  in: csr2rob dec_bcast lsu2rob in.front_stall in.front_tq_free in.front_upd_free  out: rob2csr rob2dis rob_bcast rob_commit
 //   CONTRACT comb_update  in: dec_bcast dis2rob exu2rob    out: -
@@ -29,7 +31,22 @@ public:
   // PMU (EXP-013): the oldest incomplete instruction of the head line (the one that blocks commit), if any
   bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    RobCsrIO rob2csr;
+    RobDisIO rob2dis;
+    RobBroadcastIO rob_bcast;
+    RobCommitIO rob_commit;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const CsrRobIO *csr2rob = nullptr;
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const DisRobIO *dis2rob = nullptr;
+    const ExuRobIO *exu2rob = nullptr;
+    const BackIn *top_in = nullptr;   // the back end's inputs (SimCpu)
+    const LsuRobIO *lsu2rob = nullptr;
+  } in;
   const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
 
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

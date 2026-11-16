@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static read/write sets of the back-end comb phases over the shared Wires (back-end/include/Wires.h).
+"""Static read/write sets of the back-end comb phases over the back end's signals (the modules' In / Out ports, back-end/include/BackPorts.h).
 
 For every phase called in BackTop::comb() (in call order) the body of the phase function is scanned for `wires->F` /
 `w.F` / `wires_->F` (F = a Wires field); an access is a write when the field expression is followed by an assignment
@@ -13,10 +13,41 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def rd(p): return open(os.path.join(ROOT, p), errors='ignore').read()
 
-wires_h = rd('back-end/include/Wires.h')
-m = re.search(r'struct Wires \{(.*?)\n\};', wires_h, re.S)
+wires_h = rd('back-end/include/BackPorts.h')
+m = re.search(r'struct BackPorts \{(.*?)\n\};', wires_h, re.S)
 FIELDS = re.findall(r'^\s*[\w:<>, ]+?\s\*?(\w+)(?:\s*=[^;]*)?;', m.group(1), re.M)
-FIELDS = [f for f in FIELDS if f not in ('in', 'out')] + ['in', 'out']
+# the back end's signals: those in BackTop (Wires: its interface and its own) and each module's outputs (struct Out)
+OUTS = {}   # signal -> owning module class
+for d0, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
+    for f0 in fs:
+        if not f0.endswith('.h'): continue
+        t0 = open(os.path.join(d0, f0), errors='ignore').read()
+        for cm in re.finditer(r'\nclass (\w+)[^;{]*\{', t0):
+            om = re.search(r'struct Out \{(.*?)\n\s*\} out;', t0[cm.end():cm.end() + 20000], re.S)
+            if not om or re.search(r'\nclass \w+', t0[cm.end():cm.end() + om.start()]): continue
+            for fm in re.finditer(r'^\s*[\w:<>, ]+?\s(\w+);', om.group(1), re.M): OUTS[fm.group(1)] = cm.group(1)
+FIELDS = [f for f in FIELDS if f not in ('in', 'out')] + sorted(OUTS) + ['idu_br_latch', 'in', 'out']   # (idu_br_latch: Idu's
+#   br_latch register, a port of the pre-decode queue)
+EXT_PORT = {'lsu2dcache': 'out.lsu2dcache', 'peripheral_req': 'out.peripheral_req', 'csr_status': 'csr_status'}   # module
+#   output ports bound to BackTop's interface
+
+def as_wires(cls, b):
+    """a body in the module-port form, rewritten to the Wires form the scan reads: a module's in.F-> / out.F, BackTop's
+    obj->out.F (the scan rules stay as they were)"""
+    if b is None: return b
+    if cls == 'BackTop':
+        return re.sub(r'\b\w+->out\.(' + '|'.join(sorted(OUTS, key=len, reverse=True)) + r')\b', r'\1', b)
+    b = re.sub(r'\bin\.top_in->', 'wires->in.', b)
+    b = re.sub(r'\(\*in\.top_in\)', 'wires->in', b)
+    for p, sig in EXT_PORT.items():
+        b = re.sub(r'\bout\.' + p + r'->', 'wires->' + sig + '.', b)
+        b = re.sub(r'\(\*out\.' + p + r'\)', 'wires->' + sig, b)
+    names = '|'.join(sorted(set(FIELDS) - {'in', 'out'}, key=len, reverse=True))
+    b = re.sub(r'(?<![\w.>])in\.(' + names + r')->', r'wires->\1.', b)
+    b = re.sub(r'\(\*in\.(' + names + r')\)', r'wires->\1', b)
+    b = re.sub(r'(?<![\w.>])in\.(' + names + r')\b', r'wires->\1', b)
+    b = re.sub(r'(?<![\w.>])out\.(' + names + r')\b', r'wires->\1', b)
+    return b
 
 srcs = {}
 for d, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
@@ -33,7 +64,7 @@ def body_of(cls, fn):
             if t[j] == '{': d += 1
             elif t[j] == '}':
                 d -= 1
-                if d == 0: return t[i:j + 1]
+                if d == 0: return as_wires(cls, t[i:j + 1])
     return None
 
 # phases in BackTop::comb() order (expanding the comb_stage_* helpers)

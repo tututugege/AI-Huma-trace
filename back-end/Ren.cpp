@@ -1,4 +1,4 @@
-#include "Wires.h"
+#include "BackPorts.h"
 #include "Ren.h"
 #include "Pmu.h"
 #include "MsData.h"
@@ -92,17 +92,17 @@ void Ren::alloc() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
     alloc_reg[i] = 0;
     elim[i] = false;
-    wires->ren2dis.valid[i] = false;
+    out.ren2dis.valid[i] = false;
     if (!q.inst_valid[i]) continue;
     if (is_move_shape(q.inst_r[i]) && elim_refs_ok(i)) {
       elim[i] = true;
-      wires->ren2dis.valid[i] = !stall;
+      out.ren2dis.valid[i] = !stall;
     } else if (!q.inst_r[i].dest_en) {
-      wires->ren2dis.valid[i] = !stall;
+      out.ren2dis.valid[i] = !stall;
     } else if (q.inst_r[i]->dest_fp) {  // each domain stalls on its own free list; everything behind a stalled slot waits
       if (!stall && fleft > 0) {
         alloc_reg[i] = q.fp_free_list[fhead];
-        wires->ren2dis.valid[i] = true;
+        out.ren2dis.valid[i] = true;
         LOOP_INC(fhead, FPRF_NUM);
         fleft--;
       } else {
@@ -110,7 +110,7 @@ void Ren::alloc() {
       }
     } else if (!stall && left > 0) {
       alloc_reg[i] = q.free_list[head];
-      wires->ren2dis.valid[i] = true;
+      out.ren2dis.valid[i] = true;
       LOOP_INC(head, PRF_NUM);
       left--;
     } else {
@@ -126,8 +126,8 @@ void Ren::rename() {
   const Regs &q = q_;
   wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination register of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    wires->ren2dis.uop[i] = q.inst_r[i];
-    wires->ren2dis.uop[i].dest_preg = alloc_reg[i];
+    out.ren2dis.uop[i] = q.inst_r[i];
+    out.ren2dis.uop[i].dest_preg = alloc_reg[i];
     dest_of[i] = alloc_reg[i];
     // Static fields live in the uop pool: an invalid slot still holds the handle of an instruction that has long
     // left the stage, so it must not be written.
@@ -144,13 +144,13 @@ void Ren::rename() {
       }
       return p;
     };
-    wires->ren2dis.uop[i]->src1_preg = lookup(q.inst_r[i]->src1_areg, q.inst_r[i]->src1_fp);
-    wires->ren2dis.uop[i]->src2_preg = lookup(q.inst_r[i]->src2_areg, q.inst_r[i]->src2_fp);
-    if (q.inst_r[i]->src3_en) wires->ren2dis.uop[i]->src3_preg = lookup(q.inst_r[i]->src3_areg, q.inst_r[i]->src3_fp);
-    wires->ren2dis.uop[i]->old_dest_preg = lookup(q.inst_r[i]->dest_areg, q.inst_r[i]->dest_fp);
+    out.ren2dis.uop[i]->src1_preg = lookup(q.inst_r[i]->src1_areg, q.inst_r[i]->src1_fp);
+    out.ren2dis.uop[i]->src2_preg = lookup(q.inst_r[i]->src2_areg, q.inst_r[i]->src2_fp);
+    if (q.inst_r[i]->src3_en) out.ren2dis.uop[i]->src3_preg = lookup(q.inst_r[i]->src3_areg, q.inst_r[i]->src3_fp);
+    out.ren2dis.uop[i]->old_dest_preg = lookup(q.inst_r[i]->dest_areg, q.inst_r[i]->dest_fp);
     if (elim[i]) {
-      dest_of[i] = wires->ren2dis.uop[i]->src1_preg;
-      wires->ren2dis.uop[i].dest_preg = dest_of[i];
+      dest_of[i] = out.ren2dis.uop[i]->src1_preg;
+      out.ren2dis.uop[i].dest_preg = dest_of[i];
     }
   }
 }
@@ -192,19 +192,19 @@ void count_commit(SimContext *ctx, const Uop &u) {
 // the next-cycle spec state.
 void Ren::handshake() {
   const Regs &q = q_;
-  const bool flush = wires->rob_bcast.flush, mispred = wires->dec_bcast.mispred;
-  for (int i = 0; i < DECODE_WIDTH; i++) fire[i] = wires->ren2dis.valid[i] && wires->dis2ren.ready;
+  const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
+  for (int i = 0; i < DECODE_WIDTH; i++) fire[i] = out.ren2dis.valid[i] && in.dis2ren->ready;
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!fire[i]) continue;
-    if (wires->ren2dis.uop[i].dest_en) {
+    if (out.ren2dis.uop[i].dest_en) {
       if (q.inst_r[i]->dest_fp) {
-        d.fp_spec_RAT[q.inst_r[i]->dest_areg] = wires->ren2dis.uop[i].dest_preg;
+        d.fp_spec_RAT[q.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
         Assert(d.fp_free_head != d.fp_free_tail && "Ren: allocate when the FP free list is empty");
         LOOP_INC(d.fp_free_head, FPRF_NUM);
       } else
       {
-        d.spec_RAT[q.inst_r[i]->dest_areg] = wires->ren2dis.uop[i].dest_preg;
+        d.spec_RAT[q.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
         if (!elim[i]) {
           Assert(d.free_head != d.free_tail && "Ren: allocate when free list is empty");
           LOOP_INC(d.free_head, PRF_NUM);
@@ -223,16 +223,16 @@ void Ren::handshake() {
     }
   }
 
-  wires->ren2dec.ready = !flush && !mispred;
-  for (int i = 0; i < DECODE_WIDTH; i++) wires->ren2dec.ready &= fire[i] || !q.inst_valid[i];
+  out.ren2dec.ready = !flush && !mispred;
+  for (int i = 0; i < DECODE_WIDTH; i++) out.ren2dec.ready &= fire[i] || !q.inst_valid[i];
 
-  const bool interrupt = wires->rob_bcast.interrupt;
+  const bool interrupt = in.rob_bcast->interrupt;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (!wires->rob_commit.commit_entry[i].valid) continue;
-    const auto &commit_uop = wires->rob_commit.commit_entry[i].uop;
+    if (!in.rob_commit->commit_entry[i].valid) continue;
+    const auto &commit_uop = in.rob_commit->commit_entry[i].uop;
     if (!interrupt) count_commit(ctx, commit_uop);
 
-    InstEntry commit_entry = commit_uop.to_inst_entry(wires->rob_commit.commit_entry[i].valid);
+    InstEntry commit_entry = commit_uop.to_inst_entry(in.rob_commit->commit_entry[i].valid);
     InstInfo *inst = &commit_entry.uop;
     // An exception instruction does not free its old destination: it looks as if it never committed.
     if (inst->dest_en && !is_exception(*inst) && !interrupt && (*inst)->dest_fp) {  // FP destination: no move elimination
@@ -268,7 +268,7 @@ void Ren::handshake() {
     memcpy(d.fp_spec_RAT, d.fp_arch_RAT, sizeof(d.fp_spec_RAT));
     d.fp_free_head = d.fp_free_head_commit;
   } else if (mispred) {  // never together with flush
-    const auto br = wires->dec_bcast.br_id;
+    const auto br = in.dec_bcast->br_id;
     Assert(br < MAX_BR_NUM && br != 0 && "Ren: mispred br_id out of range");
     memcpy(d.spec_RAT, q.RAT_checkpoint[br], sizeof(d.spec_RAT));
     d.free_head = q.alloc_checkpoint_head[br];
@@ -284,14 +284,14 @@ void Ren::handshake() {
 // Bits of branches resolved this cycle are cleared from every mask that stays.
 void Ren::pipeline() {
   const Regs &q = q_;
-  const wire<BR_MASK_WIDTH> clear = wires->dec_bcast.clear_mask;
-  const bool drain = wires->rob_bcast.flush || wires->dec_bcast.mispred;
+  const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
+  const bool drain = in.rob_bcast->flush || in.dec_bcast->mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (drain) {
       d.inst_valid[i] = false;
-    } else if (wires->ren2dec.ready) {
-      d.inst_valid[i] = wires->dec2ren.valid[i];
-      d.inst_r[i] = wires->dec2ren.uop[i];
+    } else if (out.ren2dec.ready) {
+      d.inst_valid[i] = in.dec2ren->valid[i];
+      d.inst_r[i] = in.dec2ren->uop[i];
       d.inst_r[i].br_mask &= ~clear;
     } else {
       d.inst_valid[i] = q.inst_valid[i] && !fire[i];

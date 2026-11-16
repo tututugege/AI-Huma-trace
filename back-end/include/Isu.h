@@ -31,7 +31,7 @@ constexpr int ISU_DIV_WAKE_SLOT_NUM =
 constexpr int ISU_FP_WAKE_SLOT_NUM = 24;
 
 // Issue unit (the issue queues and the wake-up network). Contract (checked by scripts/comb/comb_graph.py against the
-// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives.
+// code): the signals each phase reads (in) and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_issue  in: dec_bcast exe2iss lsu_awake prf_awake rob_bcast  out: iss2dis iss2prf iss_awake
 //   CONTRACT comb_enq    in: dec_bcast dis2iss rob_bcast                      out: -
 //   CONTRACT owns: iss2dis iss2prf iss_awake
@@ -72,7 +72,21 @@ private:
 
 public:
   uint32_t port_attributes[ISSUE_WIDTH];
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    IssDisIO iss2dis;
+    IssPrfIO iss2prf;
+    IssAwakeIO iss_awake;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const DisIssIO *dis2iss = nullptr;
+    const ExeIssIO *exe2iss = nullptr;
+    const LsuAwakeIO *lsu_awake = nullptr;
+    const PrfAwakeIO *prf_awake = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+  } in;
   Isu(SimContext *ctx);
   void init();
 

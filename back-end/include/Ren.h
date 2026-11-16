@@ -4,7 +4,7 @@
 
 class BackTop;
 
-// Rename. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in) and writes
+// Rename. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in) and writes
 // (out), and the outputs only this module drives.
 //   CONTRACT comb_rename  in: -                                               out: ren2dis
 //   CONTRACT comb_fire    in: dec2ren dis2ren dec_bcast rob_bcast rob_commit  out: ren2dec
@@ -15,7 +15,19 @@ public:
   void comb_fire();    // dispatch handshake: commit the rename, take the next group from decode (d.inst_r) -> ren2dec
   Ren(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    RenDisIO ren2dis;
+    RenDecIO ren2dec;
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const DecRenIO *dec2ren = nullptr;
+    const DecBroadcastIO *dec_bcast = nullptr;
+    const DisRenIO *dis2ren = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+    const RobCommitIO *rob_commit = nullptr;
+  } in;
 
   void init();
   void seq();

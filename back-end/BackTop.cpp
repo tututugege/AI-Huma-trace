@@ -31,19 +31,64 @@ void BackTop::init() {
       std::make_unique<TlbMmu>(ctx, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
   lsu->dtlb = dtlb_mmu.get();
 
-  pre->wires = this;
-  idu->wires = this;
-  rename->wires = this;
-  dis->wires = this;
-  isu->wires = this;
-  exu->wires = this;
-  rob->wires = this;
   exu->ftq = pre.get();
   exu->csr = csr.get();
   rob->ftq = pre.get();
-  csr->wires = this;
-  lsu->wires = this;
-  idu_br_latch = &idu->q().br_latch;
+  // the modules' outputs that are the back end's interface (kept here)
+  csr->out.csr_status = &csr_status;
+  lsu->out.lsu2dcache = &out.lsu2dcache;
+  lsu->out.peripheral_req = &out.peripheral_req;
+  // the modules' inputs: the other modules' outputs, or the back end's interface
+  pre->in.idu_br_latch = &idu->q().br_latch;
+  pre->in.idu_consume = &idu->out.idu_consume;
+  pre->in.top_in = &in;
+  pre->in.rob_bcast = &rob->out.rob_bcast;
+  pre->in.rob_commit = &rob->out.rob_commit;
+  idu->in.exu2id = &exu->out.exu2id;
+  idu->in.pre_issue = &pre->out.pre_issue;
+  idu->in.ren2dec = &rename->out.ren2dec;
+  idu->in.rob_bcast = &rob->out.rob_bcast;
+  rename->in.dec2ren = &idu->out.dec2ren;
+  rename->in.dec_bcast = &idu->out.dec_bcast;
+  rename->in.dis2ren = &dis->out.dis2ren;
+  rename->in.rob_bcast = &rob->out.rob_bcast;
+  rename->in.rob_commit = &rob->out.rob_commit;
+  dis->in.dec_bcast = &idu->out.dec_bcast;
+  dis->in.iss2dis = &isu->out.iss2dis;
+  dis->in.iss_awake = &isu->out.iss_awake;
+  dis->in.lsu2dis = &lsu->out.lsu2dis;
+  dis->in.prf_awake = &exu->out.prf_awake;
+  dis->in.ren2dis = &rename->out.ren2dis;
+  dis->in.rob2dis = &rob->out.rob2dis;
+  dis->in.rob_bcast = &rob->out.rob_bcast;
+  isu->in.dec_bcast = &idu->out.dec_bcast;
+  isu->in.dis2iss = &dis->out.dis2iss;
+  isu->in.exe2iss = &exu->out.exe2iss;
+  isu->in.lsu_awake = &lsu->out.lsu_awake;
+  isu->in.prf_awake = &exu->out.prf_awake;
+  isu->in.rob_bcast = &rob->out.rob_bcast;
+  exu->in.dec_bcast = &idu->out.dec_bcast;
+  exu->in.iss2prf = &isu->out.iss2prf;
+  exu->in.lsu2exe = &lsu->out.lsu2exe;
+  exu->in.rob_bcast = &rob->out.rob_bcast;
+  rob->in.csr2rob = &csr->out.csr2rob;
+  rob->in.dec_bcast = &idu->out.dec_bcast;
+  rob->in.dis2rob = &dis->out.dis2rob;
+  rob->in.exu2rob = &exu->out.exu2rob;
+  rob->in.top_in = &in;
+  rob->in.lsu2rob = &lsu->out.lsu2rob;
+  csr->in.csr_interrupt_inject_io = &csr_interrupt_inject_io;
+  csr->in.exe2csr = &exu->out.exe2csr;
+  csr->in.rob2csr = &rob->out.rob2csr;
+  csr->in.rob_bcast = &rob->out.rob_bcast;
+  csr->in.top2csr = &top2csr;
+  lsu->in.csr_status = &csr_status;
+  lsu->in.dec_bcast = &idu->out.dec_bcast;
+  lsu->in.dis2lsu = &dis->out.dis2lsu;
+  lsu->in.exe2lsu = &exu->out.exe2lsu;
+  lsu->in.top_in = &in;
+  lsu->in.rob_bcast = &rob->out.rob_bcast;
+  lsu->in.rob_commit = &rob->out.rob_commit;
 
   pre->init();
   idu->init();
@@ -84,27 +129,27 @@ void BackTop::clear_comb_inputs() { in = BackIn{}; }
 // Working copies and default outputs of every module.
 // Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
 void BackTop::comb_outputs() {
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.fire[i] = pre2front.fire[i];
-  out.flush = rob_bcast.flush;
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.fire[i] = pre->out.pre2front.fire[i];
+  out.flush = rob->out.rob_bcast.flush;
   if (out.flush) {
     int64_t committing = -1;
     for (int i = 0; i < COMMIT_WIDTH; i++) {
-      if (rob_commit.commit_entry[i].valid) {
-        committing = (int64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx;
+      if (rob->out.rob_commit.commit_entry[i].valid) {
+        committing = (int64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
         break;
       }
     }
-    tbhook::on_flush(committing, rob_bcast.interrupt);
+    tbhook::on_flush(committing, rob->out.rob_bcast.interrupt);
   }
-  out.fence_i = rob_bcast.fence_i;
-  out.itlb_flush = rob_bcast.fence;
+  out.fence_i = rob->out.rob_bcast.fence_i;
+  out.itlb_flush = rob->out.rob_bcast.fence;
 
   // 1. Normal case (No Rob flush)
-  if (!rob_bcast.flush) {
-    out.mispred = dec_bcast.mispred;
-    out.stall = !pre2front.ready;
+  if (!rob->out.rob_bcast.flush) {
+    out.mispred = idu->out.dec_bcast.mispred;
+    out.stall = !pre->out.pre2front.ready;
     out.redirect_pc = idu->q().br_latch.redirect_pc;
-    out.rf_valid = dec_bcast.mispred;
+    out.rf_valid = idu->out.dec_bcast.mispred;
     if (out.rf_valid) {
       const uint32_t fi = idu->q().br_latch.ftq_idx;
       out.rf_slot = idu->q().br_latch.ftq_off;
@@ -115,27 +160,27 @@ void BackTop::comb_outputs() {
     }
   } else {
     out.mispred = true;
-    if (rob_bcast.mret || rob_bcast.sret) {
-      out.redirect_pc = csr2front.epc;
-    } else if (rob_bcast.exception) {
-      out.redirect_pc = csr2front.trap_pc;
+    if (rob->out.rob_bcast.mret || rob->out.rob_bcast.sret) {
+      out.redirect_pc = csr->out.csr2front.epc;
+    } else if (rob->out.rob_bcast.exception) {
+      out.redirect_pc = csr->out.csr2front.trap_pc;
     } else {
-      out.redirect_pc = rob_bcast.pc + ilen_of(rob_bcast.is_rvc);
+      out.redirect_pc = rob->out.rob_bcast.pc + ilen_of(rob->out.rob_bcast.is_rvc);
     }
   }
 
   top2csr.fs_dirty = false;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     out.commit_entry[i] =
-        rob_commit.commit_entry[i].uop.to_inst_entry(
-            rob_commit.commit_entry[i].valid);
-    out.commit_extra[i] = rob_commit.commit_extra[i];
-    out.commit_ftq[i] = ftq_commit_info.resp[i];
-    if (rob_commit.commit_entry[i].valid &&
-        !rob_bcast.interrupt) {
-      if (tbhook::fs_dirty_at_commit((uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx)) top2csr.fs_dirty = true;
+        rob->out.rob_commit.commit_entry[i].uop.to_inst_entry(
+            rob->out.rob_commit.commit_entry[i].valid);
+    out.commit_extra[i] = rob->out.rob_commit.commit_extra[i];
+    out.commit_ftq[i] = pre->out.ftq_commit_info.resp[i];
+    if (rob->out.rob_commit.commit_entry[i].valid &&
+        !rob->out.rob_bcast.interrupt) {
+      if (tbhook::fs_dirty_at_commit((uint64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) top2csr.fs_dirty = true;
       tbhook::on_commit(
-          (uint64_t)rob_commit.commit_entry[i].uop->dbg.inst_idx);
+          (uint64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }
     if (out.commit_entry[i].valid && out.flush) {
       // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)

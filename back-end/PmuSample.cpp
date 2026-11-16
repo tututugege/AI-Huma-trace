@@ -5,7 +5,7 @@
 #include "BackTop.h"
 #include "DataPrefetcher.h"
 #include "Pmu.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "config.h"
 #include "util.h"
 
@@ -15,18 +15,17 @@
 // ones: the frontend could not have been used), and the cause is the first resource that stopped it.
 void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, int &be_slots) const {
   const Regs &q = q_;
-  const Wires &w = *wires;
   for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch)
-    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q), GLOBAL_IQ_CONFIG[q].size - w.iss2dis.ready_num[q]);
-  const bool kill = w.rob_bcast.flush || w.dec_bcast.mispred;
+    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q), GLOBAL_IQ_CONFIG[q].size - in.iss2dis->ready_num[q]);
+  const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
   const bool recov = recovering || kill;
-  const bool by_flush = kill ? static_cast<bool>(w.rob_bcast.flush) : recovering_by_flush;
+  const bool by_flush = kill ? static_cast<bool>(in.rob_bcast->flush) : recovering_by_flush;
   bool blocked = false, fired_before = false;
   PmuEvent cause = PMU_SLOT_BE_SERIAL;
   int iq_sub = -1;  // sub-event of an IQ stall
   be_slots = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (w.dis2rob.dis_fire[i]) {
+    if (out.dis2rob.dis_fire[i]) {
       e.add(PMU_SLOT_FIRE);
       fired_before = true;
       if (is_eliminated_move(q.inst_r[i])) e.add(PMU_MOVE_ELIMINATED);
@@ -36,12 +35,12 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
     if (!blocked && q.inst_valid[i]) {  // first slot the backend did not take: find out why
       blocked = true;
       const InstType type = decode_inst_type(q.inst_r[i]->type);
-      const bool serial = (is_CSR(type) || type == AMO) && (!w.rob2dis.empty || fired_before);
-      if (w.rob2dis.stall) cause = PMU_SLOT_BE_FLUSH_WAIT;
-      else if (!w.rob2dis.ready) cause = PMU_SLOT_BE_ROB_FULL;
+      const bool serial = (is_CSR(type) || type == AMO) && (!in.rob2dis->empty || fired_before);
+      if (in.rob2dis->stall) cause = PMU_SLOT_BE_FLUSH_WAIT;
+      else if (!in.rob2dis->ready) cause = PMU_SLOT_BE_ROB_FULL;
       else if (serial) cause = PMU_SLOT_BE_SERIAL;
-      else if (!w.dis2rob.valid[i] && is_load(q.inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
-      else if (!w.dis2rob.valid[i] && is_store(q.inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
+      else if (!out.dis2rob.valid[i] && is_load(q.inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
+      else if (!out.dis2rob.valid[i] && is_store(q.inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
       else if (!dispatch_success_flags[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
       else cause = PMU_SLOT_BE_SERIAL;  // behind an exclusive instruction (AMO/WFI) that fired this cycle
       if (cause == PMU_SLOT_BE_IQ_FULL && iq_blk[i] >= 0)
@@ -84,8 +83,8 @@ void BackTop::pmu_sample() {
   // ---- commit ----
   int committed = 0;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    const auto &ce = rob_commit.commit_entry[i];
-    if (!ce.valid || rob_bcast.interrupt) continue;
+    const auto &ce = rob->out.rob_commit.commit_entry[i];
+    if (!ce.valid || rob->out.rob_bcast.interrupt) continue;
     committed++;
     const Uop &u = ce.uop;
     const InstType t = decode_inst_type(u->type);
@@ -109,27 +108,27 @@ void BackTop::pmu_sample() {
 
   // ---- head-of-ROB view of the backend-stalled slots (and the per-PC blame) ----
   if (be_slots > 0) {
-    const bool mem = head_found && rob2dis.tma.head_is_memory, miss = head_found && rob2dis.tma.head_is_miss;
+    const bool mem = head_found && rob->out.rob2dis.tma.head_is_memory, miss = head_found && rob->out.rob2dis.tma.head_is_miss;
     e.add(miss ? PMU_SLOT_BE_HEAD_MISS : mem ? PMU_SLOT_BE_HEAD_MEM : head_found ? PMU_SLOT_BE_HEAD_CORE : PMU_SLOT_BE_HEAD_DONE, be_slots);
   }
   if (p.pcprof && head_found && committed < COMMIT_WIDTH) {
     PmuPcStat &s = p.pc_stat[head->dbg.pc];
     s.head_cycles++;
-    s.head_miss_cycles += rob2dis.tma.head_is_miss ? 1 : 0;
+    s.head_miss_cycles += rob->out.rob2dis.tma.head_is_miss ? 1 : 0;
     s.stall_slots += be_slots;
     s.type = static_cast<uint8_t>(decode_inst_type(head->type));
   }
 
   // ---- control flow / recovery ----
-  if (dec_bcast.mispred) e.add(PMU_BR_MISPRED);
-  if (rob_bcast.flush) e.add(rob_bcast.exception ? PMU_FLUSH_EXCEPTION : PMU_FLUSH_OTHER);
+  if (idu->out.dec_bcast.mispred) e.add(PMU_BR_MISPRED);
+  if (rob->out.rob_bcast.flush) e.add(rob->out.rob_bcast.exception ? PMU_FLUSH_EXCEPTION : PMU_FLUSH_OTHER);
   if (p.recovering) e.add(PMU_CYC_RECOVERING);
   // recovery state for the next cycle: a redirect starts it, the first valid instruction in the dispatch stage ends it
   bool any_valid = false;
   for (int i = 0; i < DECODE_WIDTH; i++) any_valid |= static_cast<bool>(dis->q().inst_valid[i]);
-  if (rob_bcast.flush || dec_bcast.mispred) {
+  if (rob->out.rob_bcast.flush || idu->out.dec_bcast.mispred) {
     p.recovering = true;
-    p.recov_by_flush = rob_bcast.flush;
+    p.recov_by_flush = rob->out.rob_bcast.flush;
   } else if (any_valid) {
     p.recovering = false;
   }
@@ -155,12 +154,12 @@ void BackTop::pmu_sample() {
   e.add(PMU_PF_USEFUL, pf.useful - prev_useful);
   e.add(PMU_PF_LATE, pf.late - prev_late);
   prev_hit = pf.demand_hit; prev_miss = pf.demand_miss; prev_issued = pf.issued; prev_useful = pf.useful; prev_late = pf.late;
-  const unsigned outstanding = static_cast<unsigned>(lsu2rob.tma.miss_mask.count());
+  const unsigned outstanding = static_cast<unsigned>(lsu->out.lsu2rob.tma.miss_mask.count());
   e.add(PMU_DC_LD_MISS_OUT, outstanding);
   if (outstanding) e.add(PMU_CYC_LD_MISS_OUT);
 
   // ---- occupancy ----
-  const int ldq_occ = LDQ_SIZE - static_cast<int>(lsu2dis.ldq_free), stq_occ = STQ_SIZE - static_cast<int>(lsu2dis.stq_free);
+  const int ldq_occ = LDQ_SIZE - static_cast<int>(lsu->out.lsu2dis.ldq_free), stq_occ = STQ_SIZE - static_cast<int>(lsu->out.lsu2dis.stq_free);
   e.add(PMU_OCC_ROB, rob_occ);
   e.add(PMU_OCC_LDQ, ldq_occ);
   e.add(PMU_OCC_STQ, stq_occ);

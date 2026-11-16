@@ -121,13 +121,7 @@ inline int cvt_number_to_csr(int csr_idx) {
   }
 }
 
-typedef struct {
-} CsrIn;
-
-typedef struct {
-} CsrOut;
-
-// CSR file. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// CSR file. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_interrupt         in: -                          out: csr2rob
 //   CONTRACT comb_commit            in: exe2csr rob2csr rob_bcast  out: csr2front
@@ -149,9 +143,20 @@ public:
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
   void comb_commit();  // exceptions and the CSR write of the committing instruction
-  struct Wires *wires = nullptr;  // signals shared with the other back-end modules
-  CsrIn in;
-  CsrOut out;
+  // Outputs: the signals this module drives (it alone).
+  struct Out {
+    CsrRobIO csr2rob;
+    CsrFrontIO csr2front;
+    CsrStatusIO *csr_status = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
+  } out;
+  // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
+  struct In {
+    const CsrInterruptInjectIO *csr_interrupt_inject_io = nullptr;
+    const ExeCsrIO *exe2csr = nullptr;
+    const RobCsrIO *rob2csr = nullptr;
+    const RobBroadcastIO *rob_bcast = nullptr;
+    const TopCsrIO *top2csr = nullptr;
+  } in;
 
   void init();
 

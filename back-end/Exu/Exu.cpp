@@ -1,7 +1,7 @@
 #include "Exu.h"
 #include "PreIduQueue.h"
 #include "Csr.h"
-#include "Wires.h"
+#include "BackPorts.h"
 #include "util.h"
 #include "config.h"
 #include "trace_hook.h"
@@ -57,89 +57,85 @@ void Exu::init() {
 
 // Default (idle) outputs.
 void Exu::begin_cycle() {
-  Wires &w = *wires;
-  w.exe2csr.we = w.exe2csr.re = false;
-  w.exe2csr.idx = 0;
-  w.exe2csr.wcmd = 0;
-  w.exe2csr.wdata = 0;
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) w.exe2prf.bypass[i].valid = false;
+  out.exe2csr.we = out.exe2csr.re = false;
+  out.exe2csr.idx = 0;
+  out.exe2csr.wcmd = 0;
+  out.exe2csr.wdata = 0;
+  for (int i = 0; i < TOTAL_FU_COUNT; i++) out.exe2prf.bypass[i].valid = false;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    w.exe2prf.entry[i].valid = false;
-    w.exu2rob.entry[i].valid = false;
-    w.exe2iss.fu_ready_mask[i] = 0;
+    out.exe2prf.entry[i].valid = false;
+    out.exu2rob.entry[i].valid = false;
+    out.exe2iss.fu_ready_mask[i] = 0;
   }
-  for (int i = 0; i < LSU_AGU_COUNT; i++) w.exe2lsu.agu_req[i].valid = false;
-  for (int i = 0; i < LSU_SDU_COUNT; i++) w.exe2lsu.sdu_req[i].valid = false;
-  w.exu2id.clear_mask = 0;
-  w.exu2id.mispred = false;
-  w.exu2id.redirect_pc = 0;
-  w.exu2id.redirect_rob_idx = 0;
-  w.exu2id.br_id = 0;
-  w.exu2id.ftq_idx = 0;
-  w.exu2id.ftq_off = 0;
-  w.exu2id.br_type = 0;
+  for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = false;
+  for (int i = 0; i < LSU_SDU_COUNT; i++) out.exe2lsu.sdu_req[i].valid = false;
+  out.exu2id.clear_mask = 0;
+  out.exu2id.mispred = false;
+  out.exu2id.redirect_pc = 0;
+  out.exu2id.redirect_rob_idx = 0;
+  out.exu2id.br_id = 0;
+  out.exu2id.ftq_idx = 0;
+  out.exu2id.ftq_off = 0;
+  out.exu2id.br_type = 0;
 }
 
 // Which operation classes each issue port can accept. After the collect phase an input slot is occupied only if its unit
 // could not take the uop, so a free slot is what makes a unit ready. Nothing is accepted during a flush.
 void Exu::ready() {
-  Wires &w = *wires;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     uint64_t mask = 0;
-    if (!w.rob_bcast.flush)
+    if (!in.rob_bcast->flush)
       for (int fu : port_fus[i])
         if (!units[fu].slot_valid) mask |= units[fu].support_mask;
-    w.exe2iss.fu_ready_mask[i] = mask;
+    out.exe2iss.fu_ready_mask[i] = mask;
   }
 }
 
 // The CSR uop sitting in port 0's FU slot drives the CSR file's read/write request.
 void Exu::to_csr() {
-  Wires &w = *wires;
-  if (w.rob_bcast.flush) return;
+  if (in.rob_bcast->flush) return;
   for (int fu : port_fus[0]) {
     const FuUnit &f = units[fu];
     if (!f.slot_valid) continue;
     const ExuInst &u = f.slot;
-    if (u.op != UOP_CSR || is_br_killed(u, w.dec_bcast)) continue;
+    if (u.op != UOP_CSR || is_br_killed(u, (*in.dec_bcast))) continue;
 
     const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;  // CSRRW / CSRRWI always write
-    w.exe2csr.we = rw_family || u->imm != 0;
-    w.exe2csr.re = !rw_family || u.dest_preg != 0;
-    w.exe2csr.idx = u->csr_idx;
-    w.exe2csr.wcmd = u->func3 & 0b11;
-    w.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
-    if (const tb::Fact *f2 = tbhook::fact_by_rob(u.rob_idx)) w.exe2csr.wdata = f2->csr_wdata;
+    out.exe2csr.we = rw_family || u->imm != 0;
+    out.exe2csr.re = !rw_family || u.dest_preg != 0;
+    out.exe2csr.idx = u->csr_idx;
+    out.exe2csr.wcmd = u->func3 & 0b11;
+    out.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
+    if (const tb::Fact *f2 = tbhook::fact_by_rob(u.rob_idx)) out.exe2csr.wdata = f2->csr_wdata;
     return;
   }
 }
 
 // Issued uops enter the FU input slots (killed ones are dropped, resolved branch bits are cleared); a flush empties them.
 void Exu::comb_pipeline() {
-  Wires &w = *wires;
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
   for (int i = 0; i < ISSUE_WIDTH; i++) {
-    const auto &e = w.exe2prf.entry[i];
+    const auto &e = out.exe2prf.entry[i];
     LoadWake &l = d.lwake_r[i];
-    l.valid = !w.rob_bcast.flush && e.valid && !is_br_killed(e.uop, w.dec_bcast) && e.uop.dest_en &&
+    l.valid = !in.rob_bcast->flush && e.valid && !is_br_killed(e.uop, (*in.dec_bcast)) && e.uop.dest_en &&
               decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
     if (!l.valid) continue;
     l.preg = e.uop.dest_preg;
-    l.br_mask = e.uop.br_mask & ~w.dec_bcast.clear_mask;
+    l.br_mask = e.uop.br_mask & ~in.dec_bcast->clear_mask;
   }
-  if (w.rob_bcast.flush) {
+  if (in.rob_bcast->flush) {
     for (auto &f : units) f.slot_valid = false;
     return;
   }
-  const auto clear = w.dec_bcast.clear_mask;
+  const auto clear = in.dec_bcast->clear_mask;
   for (auto &f : units) {
     if (!f.slot_valid) continue;
-    if (is_br_killed(f.slot, w.dec_bcast)) f.slot_valid = false;
+    if (is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
     else if (clear) f.slot.br_mask &= ~clear;
   }
   for (int p = 0; p < ISSUE_WIDTH; p++) {
-    if (!w.iss2prf.iss_entry[p].valid) continue;
-    Uop iu = w.iss2prf.iss_entry[p].uop;   // (there is no register file: the operand values are facts of the trace)
+    if (!in.iss2prf->iss_entry[p].valid) continue;
+    Uop iu = in.iss2prf->iss_entry[p].uop;   // (there is no register file: the operand values are facts of the trace)
     if (needs_ftq_pc(p, iu)) {
       const FtqPc r = ftq->ftq_pc(iu->ftq_idx, iu->ftq_offset);
       iu->pc = r.pc;
@@ -151,7 +147,7 @@ void Exu::comb_pipeline() {
       iu->ftq_next_pc = 0;
     }
     ExuInst uop = iu;
-    if (is_br_killed(uop, w.dec_bcast)) continue;
+    if (is_br_killed(uop, (*in.dec_bcast))) continue;
     if (clear) uop.br_mask &= ~clear;
     const uint64_t bit = 1ULL << uop.op;
     int target = -1;  // first FU of the port that supports the op and has a free input slot
@@ -168,13 +164,12 @@ void Exu::comb_pipeline() {
 // sends its LSU request, writes back (ALU ports) or takes part in the branch arbitration (the oldest mispredicted branch
 // redirects). LSU write-backs come in on their own ports.
 void Exu::exec() {
-  Wires &w = *wires;
   to_csr();   // the CSR uop in port 0's input slot: its read / write request (exe2csr, written at commit by Csr::comb_csr_write)
-  const bool flush_all = w.rob_bcast.flush, flush_br = !flush_all && w.dec_bcast.mispred;
+  const bool flush_all = in.rob_bcast->flush, flush_br = !flush_all && in.dec_bcast->mispred;
   const bool flush_any = flush_all || flush_br, flush = flush_all;  // (results are dead only on a global flush or when killed by the branch mask)
   const wire<BR_MASK_WIDTH> all = ~wire<BR_MASK_WIDTH>(0);
-  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? all : flush_br ? w.dec_bcast.br_mask : wire<BR_MASK_WIDTH>(0);
-  const wire<BR_MASK_WIDTH> clear = w.dec_bcast.clear_mask;
+  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? all : flush_br ? in.dec_bcast->br_mask : wire<BR_MASK_WIDTH>(0);
+  const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
   const int64_t now = sim_time;
 
   uint64_t cmask = 0;  // completing units
@@ -212,7 +207,7 @@ void Exu::exec() {
     // the input slot goes to the unit unless flushed or killed (that frees it)
     bool en = false;
     if (f.slot_valid) {
-      if (flush_all || is_br_killed(f.slot, w.dec_bcast)) f.slot_valid = false;
+      if (flush_all || is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
       else en = true;
     }
 
@@ -258,8 +253,8 @@ void Exu::exec() {
 
   for (uint64_t m = cmask; m; m &= m - 1) {
     const int i = __builtin_ctzll(m);
-    w.exe2prf.bypass[i].uop = *cinst[i];
-    w.exe2prf.bypass[i].valid = true;
+    out.exe2prf.bypass[i].uop = *cinst[i];
+    out.exe2prf.bypass[i].valid = true;
   }
 
   ExuEntry int_res[ALU_NUM] = {}, br_res[BRU_NUM] = {};
@@ -271,22 +266,22 @@ void Exu::exec() {
     const int fu = __builtin_ctzll(pm);  // first completing unit in write-back priority order
     FuUnit &winner = units[fu];
     ExuInst u = *cinst[fu];
-    const bool dead = flush || is_br_killed(u, w.dec_bcast);
+    const bool dead = flush || is_br_killed(u, (*in.dec_bcast));
 
-    if (u.op == UOP_CSR && w.exe2csr.re) u.result = csr->read(w.exe2csr.idx);
+    if (u.op == UOP_CSR && out.exe2csr.re) u.result = csr->read(out.exe2csr.idx);
     if (!dead) {
       if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back
-        w.exu2rob.entry[p].valid = true;
-        w.exu2rob.entry[p].uop = u;
+        out.exu2rob.entry[p].valid = true;
+        out.exu2rob.entry[p].uop = u;
       }
       if (u.op == UOP_STA || u.op == UOP_LOAD) {
         Assert(winner.lsu_agu_port >= 0 && winner.lsu_agu_port < LSU_AGU_COUNT);
-        w.exe2lsu.agu_req[winner.lsu_agu_port].valid = true;
-        w.exe2lsu.agu_req[winner.lsu_agu_port].uop = u;
+        out.exe2lsu.agu_req[winner.lsu_agu_port].valid = true;
+        out.exe2lsu.agu_req[winner.lsu_agu_port].uop = u;
       } else if (u.op == UOP_STD) {
         Assert(winner.lsu_sdu_port >= 0 && winner.lsu_sdu_port < LSU_SDU_COUNT);
-        w.exe2lsu.sdu_req[winner.lsu_sdu_port].valid = true;
-        w.exe2lsu.sdu_req[winner.lsu_sdu_port].uop = u;
+        out.exe2lsu.sdu_req[winner.lsu_sdu_port].valid = true;
+        out.exe2lsu.sdu_req[winner.lsu_sdu_port].uop = u;
       }
     }
     if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM && u.dest_en) {
@@ -315,23 +310,23 @@ void Exu::exec() {
 
   for (int i = 0; i < ALU_NUM; i++)
     if (int_res[i].valid) {
-      w.exe2prf.entry[IQ_ALU_PORT_BASE + i].valid = true;
-      w.exe2prf.entry[IQ_ALU_PORT_BASE + i].uop = int_res[i].uop;
+      out.exe2prf.entry[IQ_ALU_PORT_BASE + i].valid = true;
+      out.exe2prf.entry[IQ_ALU_PORT_BASE + i].uop = int_res[i].uop;
     }
   // LSU write-backs feed both the register file and the ROB
   auto lsu_writeback = [&](int port, const Uop &u) {
-    Assert(!w.exe2prf.entry[port].valid);
-    w.exe2prf.entry[port].valid = true;
-    w.exe2prf.entry[port].uop = u;
-    if (!(flush || is_br_killed(u, w.dec_bcast))) {
-      w.exu2rob.entry[port].valid = true;
-      w.exu2rob.entry[port].uop = u;
+    Assert(!out.exe2prf.entry[port].valid);
+    out.exe2prf.entry[port].valid = true;
+    out.exe2prf.entry[port].uop = u;
+    if (!(flush || is_br_killed(u, (*in.dec_bcast)))) {
+      out.exu2rob.entry[port].valid = true;
+      out.exu2rob.entry[port].uop = u;
     }
   };
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
-    if (w.lsu2exe.wb_req[i].valid) lsu_writeback(IQ_LD_PORT_BASE + i, w.lsu2exe.wb_req[i].uop);
+    if (in.lsu2exe->wb_req[i].valid) lsu_writeback(IQ_LD_PORT_BASE + i, in.lsu2exe->wb_req[i].uop);
   for (int i = 0; i < LSU_STA_COUNT; i++)
-    if (w.lsu2exe.sta_wb_req[i].valid) lsu_writeback(IQ_STA_PORT_BASE + i, w.lsu2exe.sta_wb_req[i].uop);
+    if (in.lsu2exe->sta_wb_req[i].valid) lsu_writeback(IQ_STA_PORT_BASE + i, in.lsu2exe->sta_wb_req[i].uop);
 
   // branch resolution: every resolved branch frees its mask bit, the oldest mispredict redirects
   bool mispred = false;
@@ -347,26 +342,26 @@ void Exu::exec() {
   }
 
   for (int p = 0; p < ISSUE_WIDTH; p++) {
-    if (!w.exu2rob.entry[p].valid) continue;
-    const auto &u = w.exu2rob.entry[p].uop;
+    if (!out.exu2rob.entry[p].valid) continue;
+    const auto &u = out.exu2rob.entry[p].uop;
     const int op = (int)decode_uop_type(u.op);
     if (op != UOP_LOAD && op != UOP_CSR) continue;
     tbhook::on_exec({(uint32_t)u.rob_idx, op, (xlen_t)u.result, (bool)(u.page_fault_inst || u.page_fault_load || u.page_fault_store)});
   }
 
-  w.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
-  w.exu2id.mispred = mispred;
-  w.exu2id.redirect_pc = mispred ? oldest->diag_val : 0;
-  w.exu2id.redirect_rob_idx = mispred ? oldest->rob_idx : 0;
-  w.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
-  w.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
-  w.exu2id.ftq_off = mispred ? (*oldest)->ftq_offset : 0;
+  out.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
+  out.exu2id.mispred = mispred;
+  out.exu2id.redirect_pc = mispred ? oldest->diag_val : 0;
+  out.exu2id.redirect_rob_idx = mispred ? oldest->rob_idx : 0;
+  out.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
+  out.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
+  out.exu2id.ftq_off = mispred ? (*oldest)->ftq_offset : 0;
   if (mispred) {   // type of the mispredicted branch in the BPU's encoding (0 cond, 1 call, 2 ret, 3 indirect, 5 jal, 6 indirect call)
     const auto &u = *oldest;
     int t = 0;
     if (u->type == JAL) t = (oldest->dest_en && u->dest_areg == 1) ? 1 : 5;
     else if (u->type == JALR) t = (u->src1_areg == 1 && u->dest_areg == 0 && u->imm == 0) ? 2 : (u->dest_areg == 1) ? 6 : 3;
-    w.exu2id.br_type = t;
+    out.exu2id.br_type = t;
   }
 }
 
@@ -376,14 +371,13 @@ void Exu::exec() {
 void Exu::load_wake() {
   const Regs &q = q_;
   begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
-  Wires &w = *wires;
-  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) w.prf_awake.wake[i].valid = false;
+  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) out.prf_awake.wake[i].valid = false;
   int n = 0;
   for (int i = 0; i < ISSUE_WIDTH && n < LSU_LOAD_WB_WIDTH; i++) {
     const LoadWake &l = q.lwake_r[i];
-    if (!l.valid || (w.dec_bcast.mispred && (l.br_mask & w.dec_bcast.br_mask))) continue;
-    w.prf_awake.wake[n].valid = true;
-    w.prf_awake.wake[n].preg = l.preg;
+    if (!l.valid || (in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask))) continue;
+    out.prf_awake.wake[n].valid = true;
+    out.prf_awake.wake[n].preg = l.preg;
     n++;
   }
 }
