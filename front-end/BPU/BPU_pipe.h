@@ -20,6 +20,10 @@
 #include <vector>
 #include <utility>
 
+struct FrontTopIn;
+struct FrontReadData;
+class SimContext;
+
 namespace bpuf {
 
 // Fixed design (the run-time sweeps BPU_* / BPO_* / FE_BFAST were removed; git history has them):
@@ -210,8 +214,25 @@ struct RecP {   // BPA_REPAIR: checkpoint record of one fetch block, written whe
   Ckpt ck; pc_t base = 0; uint8_t ptype[FW] = {}; uint16_t id = 0; uint8_t epoch = 0; bool valid = false;
 };
 
+// The front end's BPU phase (ports named after the front end's wires):
+//   CONTRACT comb_front  in: in.global_reset in.global_refetch in.in in.rd in.pipe_dec  out: out.bpu_output out.bpu_can_run out.bpu_seq_txn
 class BpuPipe {
  public:
+  struct In {
+    const bool *global_reset = nullptr;
+    const bool *global_refetch = nullptr;
+    const FrontTopIn *in = nullptr;          // the front end's inputs (redirect, training, reset)
+    const FrontReadData *rd = nullptr;       // the front end's registers (q)
+    const Decision *pipe_dec = nullptr;      // the last stage's decision of the cycle (FrontComb::control)
+    SimContext *ctx = nullptr;
+  } in;
+  struct SeqTxn { bool valid = false, reset = false; };   // the clock edge's transaction: seq() or reset()
+  struct Out {
+    OutputPayload bpu_output{};
+    bool bpu_can_run = false;
+    SeqTxn bpu_seq_txn{};
+  } out;
+  void comb_front();   // the next fetch group, unless the fetch-address FIFO is full (a flush always runs it)
   struct Trk {                         // commit-side block tracker + uBTB train queue
     bool tr_v = false;
     pc_t tr_start = 0, tr_expect = 0;

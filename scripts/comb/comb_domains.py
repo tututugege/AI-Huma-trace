@@ -215,6 +215,8 @@ def front_domain(root, ASSIGN, overlap):
             mb = re.sub(r'(?<![\w.>])in\.(\w+)\s*->', r'\1@@.', mb)
             mb = re.sub(r'(?<![\w.>@])(?:in|out)\.(\w+)\b', r'\1', mb).replace('@@', '')
             mb = re.sub(r'(?<![\w.>])out\s*=\s*\{\s*\}\s*;', '', mb)   # (the module's default outputs of the cycle)
+            own = fw.group(1)   # the module's calls of its own methods: as FrontComb made them (<member>.<method>)
+            mb = re.sub(r'(?<![\w.>:])(\w+)\s*\(', lambda m: (own + '.' + m.group(1) + '(') if (src.body(types[own], m.group(1)) or src.in_class(types[own], m.group(1))) and m.group(1) != fw.group(2) else m.group(0), mb)
             body = mb
         r, w = scan(body, names + persistent, ASSIGN, src, notes, p, types)
         rows.append((p, r, w))

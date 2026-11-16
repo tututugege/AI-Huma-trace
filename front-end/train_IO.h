@@ -86,7 +86,6 @@ struct FrontReadData {
 };
 
 struct FrontUpdateRequest {
-  PendingBpuSeqTxn bpu_seq_txn;
   PendingFrontState front_state;
   PendingIpf ipf;
   FetchAddrCombOut fetch_addr_fifo_req{};
@@ -96,7 +95,6 @@ struct FrontUpdateRequest {
 
   // The start of a cycle: only the enables and counts (the rest is read under them, or written before it is read).
   void clear_valid() {
-    bpu_seq_txn.valid = false;
     front_state.valid = false;
     ipf.ncand = 0;
     fetch_addr_fifo_req.clear_fifo = fetch_addr_fifo_req.push_en = fetch_addr_fifo_req.pop_en = false;
