@@ -52,3 +52,16 @@ Exu FU state: a q / d split with a copy at seq costs 8-13% of the run time (31 u
 them; rvc-alu 11.29 -> 12.79 s) for no change in behaviour. Every unit's state is read before it is written in a
 cycle, so the in-place update is the d-only form of a register (the q copy elided); a debug check of read-before-write
 would make that explicit without the cost.
+
+## ROB, ISU, LSU (90f5b9c, aaf593c, 962679f, 8e68d43)
+
+All eight back-end modules are under the contract now: 22 of the 23 phases of BackTop::comb() are declared and match the
+code (BackTop's own comb_outputs is the one left). Found on the way:
+* ROB: the deadlock watchdog counter was updated in comb (through d now); BackTop::comb_outputs patched the ROB's output
+  rob_commit after the ROB drove it, a write nothing read afterwards (removed; the ownership check found it);
+* ISU: a global flush cleared the wake-pipeline registers themselves in comb (clears d only now); the issue queues'
+  entries / count / wakeup matrices are Regs q_, d (in-class functions read const q; constructor and seq write q_);
+* LSU: it already had cur / nxt and pcur / pnxt; making cur_ / pcur_ private and const in comb compiled unchanged.
+Remaining exceptions: Exu's FU state (in-place, documented above), the issue queues' ready-bit cache recomputed in seq
+(a derived value of the new q), `out` / `in` (BackTop's output / input structs) shared by several writers.
+Gates RVC=0 62/62, RVC=1 67/67 identical, FPR identical at every commit; rv64gc Linux console identical up to b6bd4c4.
