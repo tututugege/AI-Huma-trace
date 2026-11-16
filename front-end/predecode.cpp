@@ -9,7 +9,7 @@ static inline pc_t sign_extend_u32(uint32_t value, int bits) {
 }
 
 static void predecode_into(inst_word_t inst_in, pc_t pc_in, PredecodeResult &output) {
-  std::memset(&output, 0, sizeof(PredecodeResult));
+  output = {};
   output.type = PREDECODE_NON_BRANCH;
   output.target_address = 0;
 

@@ -30,10 +30,10 @@ void FrontTop::init() {
   bind_ports();
   core_->ctx = ctx;
   core_->icache.set_context(ctx);
-  std::memset(&in, 0, sizeof(in));
-  std::memset(&out, 0, sizeof(out));
-  std::memset(&back2front, 0, sizeof(back2front));
-  std::memset(&back2front_1, 0, sizeof(back2front_1));
+  in = {};
+  out = {};
+  back2front = {};
+  back2front_1 = {};
   in.csr_status = bound_csr;
   back2front.csr_status = bound_csr;
   back2front_1.csr_status = bound_csr;

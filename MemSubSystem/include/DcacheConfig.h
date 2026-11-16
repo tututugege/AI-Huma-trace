@@ -57,7 +57,7 @@ struct MSHRDcacheIO {
     wire<DCACHE_MSHR_COUNT_BITS> free;
     wire<1> release_event; // an LLC-only prefetch entry was released this cycle (wakes loads waiting for a free MSHR)
     void clear() {
-        memset(this, 0, sizeof(MSHRDcacheIO));
+        *this = {};
     }
 };
 
@@ -67,7 +67,7 @@ struct DcacheMSHRIO {
     MSHRFillResp fill_resp;
     
     void clear() {
-        memset(this, 0, sizeof(DcacheMSHRIO));
+        *this = {};
     }
 };
 
@@ -102,7 +102,7 @@ struct DcacheWBIO{
     MergeReq merge_req[LSU_STA_COUNT];
 
     void clear() {
-        memset(this, 0, sizeof(DcacheWBIO));
+        *this = {};
     }
 };
 
@@ -113,7 +113,7 @@ struct WBDcacheIO{
     MergeResp merge_resp[LSU_STA_COUNT];
 
     void clear() {
-        memset(this, 0, sizeof(WBDcacheIO));
+        *this = {};
     }
 };
 struct PendingWrite {

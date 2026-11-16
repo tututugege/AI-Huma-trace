@@ -9,7 +9,7 @@ static uint16_t g_next = 1;
 uint16_t uop_alloc() {
   const uint16_t id = g_next;
   g_next = static_cast<uint16_t>(g_next + UOP_BLOCK + UOP_BLOCK > UOP_POOL_SIZE ? 1 : g_next + UOP_BLOCK);
-  std::memset(&uop_pool[id], 0, sizeof(UopS) * UOP_BLOCK);
+  std::fill_n(&uop_pool[id], UOP_BLOCK, UopS{});
   return id;
 }
 

@@ -120,42 +120,41 @@ extern UopS uop_pool[UOP_POOL_SIZE];
 uint16_t uop_alloc();                // fresh zeroed block of UOP_BLOCK pool entries (ring; entry 0 is the shared null entry)
 
 struct Uop {
-  uint16_t id;
+  uint16_t id{};
 
-  wire<XLEN> diag_val; // Hardware: Shared field for instruction or pc_next
-  wire<XLEN> result;     // register-width value: load/ALU result, AGU address, store data
-  wire<PRF_IDX_WIDTH> dest_preg;
-  wire<1> dest_en;
+  wire<XLEN> diag_val{};  // Hardware: Shared field for instruction or pc_next
+  wire<XLEN> result{};  // register-width value: load/ALU result, AGU address, store data
+  wire<PRF_IDX_WIDTH> dest_preg{};
+  wire<1> dest_en{};
 
-  wire<1> mispred;
-  wire<1> br_taken;
-  wire<1> src1_busy, src2_busy, src3_busy;
-  wire<BR_MASK_WIDTH> br_mask;
+  wire<1> mispred{};
+  wire<1> br_taken{};
+  wire<1> src1_busy{}, src2_busy{}, src3_busy{};
+  wire<BR_MASK_WIDTH> br_mask{};
 
-  wire<ROB_IDX_WIDTH> rob_idx;
-  wire<STQ_IDX_WIDTH> stq_idx;
-  wire<1> stq_flag;
-  wire<LDQ_IDX_WIDTH> ldq_idx;
+  wire<ROB_IDX_WIDTH> rob_idx{};
+  wire<STQ_IDX_WIDTH> stq_idx{};
+  wire<1> stq_flag{};
+  wire<LDQ_IDX_WIDTH> ldq_idx{};
 
-  wire<ROB_CPLT_MASK_WIDTH> expect_mask;
-  wire<ROB_CPLT_MASK_WIDTH> cplt_mask;
-  wire<1> rob_flag; // age comparison (ring wrap bit)
+  wire<ROB_CPLT_MASK_WIDTH> expect_mask{};
+  wire<ROB_CPLT_MASK_WIDTH> cplt_mask{};
+  wire<1> rob_flag{};  // age comparison (ring wrap bit)
 
-  wire<1> page_fault_inst;
-  wire<1> page_fault_load;
-  wire<1> page_fault_store;
-  wire<1> illegal_inst;
-  wire<1> flush_pipe;
-  wire<1> rob_defer;    // LSU memory-dependence speculation: PRF write / wake-up only, the ROB completion bit comes with a later write-back
-  wire<1> ftq_is_last;  // set on the mispredicting branch inside the ROB
-  wire<1> is_mmio;      // set when the LSU executes an MMIO access
-  wire<1> early_woken;  // the consumers of this load were already woken by the LSU (no PRF-register wake-up)
+  wire<1> page_fault_inst{};
+  wire<1> page_fault_load{};
+  wire<1> page_fault_store{};
+  wire<1> illegal_inst{};
+  wire<1> flush_pipe{};
+  wire<1> rob_defer{};  // LSU memory-dependence speculation: PRF write / wake-up only, the ROB completion bit comes with a later write-back
+  wire<1> ftq_is_last{};  // set on the mispredicting branch inside the ROB
+  wire<1> is_mmio{};  // set when the LSU executes an MMIO access
+  wire<1> early_woken{};  // the consumers of this load were already woken by the LSU (no PRF-register wake-up)
 
-  UopType op;
-  TmaMeta tma;
+  UopType op{};
+  TmaMeta tma{};
 
 
-  Uop() { std::memset(this, 0, sizeof(Uop)); }
 
   UopS *operator->() const { return &uop_pool[id]; }
 

@@ -129,12 +129,12 @@ struct TageUpd {
 };
 
 class Tage {
-  uint8_t base_[BASE_ENTRY_NUM];
-  tage_tag_t tag_[TN][TN_ENTRY_NUM];
-  uint8_t cnt_[TN][TN_ENTRY_NUM], useful_[TN][TN_ENTRY_NUM];
+  uint8_t base_[BASE_ENTRY_NUM]{};
+  tage_tag_t tag_[TN][TN_ENTRY_NUM]{};
+  uint8_t cnt_[TN][TN_ENTRY_NUM]{}, useful_[TN][TN_ENTRY_NUM]{};
   uint8_t lsfr_ = 8;  // bit i = LSFR[i]; reset value {0,0,0,1}
   uint32_t reset_cnt_ = 0;
-  tage_use_alt_ctr_t use_alt_[64];
+  tage_use_alt_ctr_t use_alt_[64]{};
 
   static uint8_t inc2(uint8_t v) { return v >= 3 ? 3 : v + 1; }
   static uint8_t dec2(uint8_t v) { return v == 0 ? 0 : v - 1; }
@@ -150,7 +150,7 @@ class Tage {
  public:
   struct Idx { uint32_t base; tage_idx_t idx[TN]; tage_tag_t tag[TN]; };
   struct Raw { uint8_t base_cnt; tage_tag_t tag[TN]; uint8_t cnt[TN], useful[TN]; };
-  Tage() { std::memset(this, 0, sizeof(*this)); lsfr_ = 8; for (auto &u : use_alt_) u = kUaInit; }
+  Tage() { lsfr_ = 8; for (auto &u : use_alt_) u = kUaInit; }
 
   void predict(pc_t pc, const uint32_t fh[FH_N_MAX][TN], TagePred &o) const {
     const uint32_t w = static_cast<uint32_t>(pc >> SLOT_SHIFT);   // index hashes use the low 32 bits of the word address
@@ -317,8 +317,8 @@ struct BtbWr {
 
 class Btb {
   struct Way { btb_tag_t tag; target_addr_t bta; bool valid; wire<3> useful; };
-  Way btb_[BTB_ENTRY_NUM][BTB_WAY_NUM];
-  IttEnt itt_[ITT_MAX][IttCfg::size];
+  Way btb_[BTB_ENTRY_NUM][BTB_WAY_NUM]{};
+  IttEnt itt_[ITT_MAX][IttCfg::size]{};
 
   static constexpr int width(uint32_t m) { int w = 0; while (m) { w++; m >>= 1; } return w; }
   static uint32_t hash(uint32_t pcw, uint32_t mask, uint32_t salt) {
@@ -346,7 +346,6 @@ class Btb {
   }
 
  public:
-  Btb() { std::memset(this, 0, sizeof(*this)); }
 
   // Pipelined access: one read of the BTB set and the ITT entries; select is pure compare.
   struct Raw { Way btb[BTB_WAY_NUM]; IttEnt it[ITT_MAX]; };
@@ -428,7 +427,7 @@ class TypePred {
   }
  public:
   TypePred() { reset(); }
-  void reset() { std::memset(t_, 0, sizeof(t_)); }
+  void reset() { for (auto &bank : t_) for (auto &set : bank) for (auto &e : set) e = {}; }
 
   br_type_t predict(pc_t pc) const {
     uint32_t b, s; type_pred_tag_t tg; locate(pc, b, s, tg);

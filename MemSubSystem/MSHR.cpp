@@ -40,8 +40,8 @@ static MSHR *g_dbg_mshr = nullptr;
 void MSHR::init()
 {
     g_dbg_mshr = this;
-    std::memset(&q_, 0, sizeof(q_));
-    std::memset(&d, 0, sizeof(d));
+    q_ = {};
+    d = {};
     axi_resp_accepted_this_cycle = false;
 }
 void MSHR::comb_outputs_dcache()

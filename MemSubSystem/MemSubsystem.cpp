@@ -429,8 +429,8 @@ void MemSubsystem::init() {
   wb_dcache_io_ = {};
   dcache_wb_io_ = {};
 
-  memset(dcache_line_read_req_, 0, sizeof(dcache_line_read_req_));
-  memset(dcache_line_read_resp_, 0, sizeof(dcache_line_read_resp_));
+  for (auto &r : dcache_line_read_req_) r = {};
+  for (auto &r : dcache_line_read_resp_) r = {};
   for (auto &entry : lru_updates_) {
     entry = {};
   }

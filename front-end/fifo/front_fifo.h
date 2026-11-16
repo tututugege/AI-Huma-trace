@@ -98,7 +98,7 @@ class FrontFifo {
 
  public:
   void read_q(typename F::Rd &rd) const {
-    std::memset(&rd, 0, sizeof(rd));
+    rd = {};
     rd.size = size_;
     rd.head_valid = size_ > 0;
     if (rd.head_valid) rd.head_entry = entries_[head_];
@@ -108,7 +108,7 @@ class FrontFifo {
   // the entry written in the same cycle, if any: bypass). Fills the cycle's request c (fresh at this point) and advances
   // the read data rd past it.
   void read(const typename F::In &in, typename F::Rd &rd, typename F::Out &out, typename F::Comb &c) const {
-    std::memset(&c, 0, sizeof(c));
+    c = {};
     c.out_regs.empty = true;
     if (in.reset) {
       c.clear_fifo = true;
@@ -183,7 +183,7 @@ class FrontFifo {
 class FetchAddrFifo {
 public:
   static void comb_impl(const FetchAddrFifoIn &inp, const FetchAddrFifoReadData &rd, FetchAddrCombOut &out) {
-    std::memset(&out, 0, sizeof(FetchAddrCombOut));
+    out = {};
 
     out.out_regs.full = false;
     out.out_regs.empty = true;
@@ -235,7 +235,7 @@ public:
   }
 
   void read_q(FetchAddrFifoReadData &rd) const {
-    std::memset(&rd, 0, sizeof(rd));
+    rd = {};
     rd.size = size_;
     rd.head_valid = (size_ > 0);
     if (rd.head_valid) {
@@ -315,9 +315,9 @@ public:
   void seq(const FetchAddrCombOut &req) {
     if (req.clear_fifo) {
       size_ = 0;
-      std::memset(entries_, 0, sizeof(entries_));
+      std::fill(std::begin(entries_), std::end(entries_), fetch_addr_t{});
       for (auto &q : pairs_) q = FetchPair{};
-      std::memset(ages_, 0, sizeof(ages_));
+      std::fill(std::begin(ages_), std::end(ages_), uint8_t{});
     }
     if (req.drop_tail_n) {
       const fetch_addr_fifo_size_t n = req.drop_tail_n < size_ ? req.drop_tail_n : size_;

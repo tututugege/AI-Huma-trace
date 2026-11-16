@@ -119,10 +119,10 @@ void RealDcache::comb_stage1() {
     }
 
 
-    memset(out.dcache2wb->bypass_req, 0, sizeof(out.dcache2wb->bypass_req));
-    memset(out.dcache2wb->merge_req, 0, sizeof(out.dcache2wb->merge_req));
-    memset(out.dcache2mshr->find_req, 0, sizeof(out.dcache2mshr->find_req));
-    memset(out.fillout, 0, sizeof(*out.fillout));
+    for (auto &r : out.dcache2wb->bypass_req) r = {};
+    for (auto &r : out.dcache2wb->merge_req) r = {};
+    for (auto &r : out.dcache2mshr->find_req) r = {};
+    *out.fillout = {};
 
     for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
         *out.dcachereadreq[i] = {};
@@ -333,11 +333,11 @@ void RealDcache::comb_stage1() {
 void RealDcache::comb_stage2() {
     const Regs &q = q_;
 
-    memset(out.dcache2lsu->resp_ports.load_resps, 0, sizeof(out.dcache2lsu->resp_ports.load_resps));
-    memset(out.dcache2lsu->resp_ports.store_resps, 0, sizeof(out.dcache2lsu->resp_ports.store_resps));
-    memset(out.dcache2mshr->mshr_req, 0, sizeof(out.dcache2mshr->mshr_req));
-    memset(&out.dcache2wb->dirty_info, 0, sizeof(out.dcache2wb->dirty_info));
-    memset(&out.dcache2mshr->fill_resp, 0, sizeof(out.dcache2mshr->fill_resp));
+    for (auto &r : out.dcache2lsu->resp_ports.load_resps) r = {};
+    for (auto &r : out.dcache2lsu->resp_ports.store_resps) r = {};
+    for (auto &r : out.dcache2mshr->mshr_req) r = {};
+    out.dcache2wb->dirty_info = {};
+    out.dcache2mshr->fill_resp = {};
     
     *out.fill_write = {};
     for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){

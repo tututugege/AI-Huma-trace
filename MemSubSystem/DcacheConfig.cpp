@@ -158,7 +158,7 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
     for (int i = 0; i < LSU_LDU_COUNT + LSU_STA_COUNT; i++) {
         const auto &req = read_req[i];
         if (!req.valid) {
-            memset(&resp[i], 0, sizeof(resp[i]));
+            resp[i] = {};
             continue;
         }
         check_data_bank_access(req.set_idx, "read", "read_req");
@@ -174,7 +174,7 @@ void Dcache_Read(const DcacheLineReadReq read_req[LSU_LDU_COUNT+LSU_STA_COUNT],D
         memcpy(fillin.plru_tree_state,plru_tree_state[fillout.set_idx], sizeof(plru_tree_state[fillout.set_idx]));
     }
     else{
-        memset(&fillin, 0, sizeof(fillin));
+        fillin = {};
     }
 }
 void Dcache_Write(const PendingWrite pws[LSU_LDU_COUNT+LSU_STA_COUNT], const LruUpdate lru_updates[LSU_LDU_COUNT+LSU_STA_COUNT], const FillWrite &fillwrite){

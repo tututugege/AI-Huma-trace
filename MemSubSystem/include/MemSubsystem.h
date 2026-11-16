@@ -36,9 +36,9 @@ struct AXI_LLC_TableOut_t;
 // the readers; the outputs / inputs split derived from dcache2lsu and the back end's / front end's requests; ties by
 // the priority):
 //   CONTRACT priority: wb_ mshr_ dcache_ mem_route_block ptw_block peripheral_axi_
-//   CONTRACT dcache_stage2 (dcache_)  in: dcache_line_read_resp_ dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_meta_cur_ dcache_resp_raw_ dcache_resp_route_ dcache_s1_q_ dcache_wb_io_.dirty_info fill_in_ fill_writes_ lru_updates_ mshr_dcache_io_ pending_writes_ wb_dcache_io_  out: dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_raw_ dcache_resp_route_ dcache_wb_io_.dirty_info fill_in_ fill_store_dirty_ fill_writes_ lru_updates_ pending_writes_
+//   CONTRACT dcache_stage2 (dcache_)  in: dcache_line_read_resp_ dcache_mshr_io_.mshr_req dcache_resp_meta_cur_ dcache_resp_raw_ dcache_resp_route_ dcache_s1_q_ fill_in_ fill_writes_ lru_updates_ mshr_dcache_io_ pending_writes_ wb_dcache_io_  out: dcache_mshr_io_.fill_resp dcache_mshr_io_.mshr_req dcache_resp_raw_ dcache_resp_route_ dcache_wb_io_.dirty_info fill_in_ fill_store_dirty_ fill_writes_ lru_updates_ pending_writes_
 //   CONTRACT ptw_request (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst  out: ptw_walk_req
-//   CONTRACT dcache_stage1 (dcache_)  in: dcache_mshr_io_.find_req dcache_req_mux_ dcache_resp_meta_nxt_ dcache_resp_route_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_ fill_store_dirty_ fill_writes_ mshr_dcache_io_  out: dcache_line_read_req_ dcache_mshr_io_.find_req dcache_resp_meta_nxt_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_
+//   CONTRACT dcache_stage1 (dcache_)  in: dcache_mshr_io_.find_req dcache_req_mux_ dcache_resp_meta_nxt_ dcache_resp_route_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_store_dirty_ fill_writes_ mshr_dcache_io_  out: dcache_line_read_req_ dcache_mshr_io_.find_req dcache_resp_meta_nxt_ dcache_wb_io_.bypass_req dcache_wb_io_.merge_req fill_out_
 //   CONTRACT ptw_feedback (ptw_block)  in: dtlb_walk_port_inst itlb_walk_port_inst ptw_events ptw_grant wakeup  out: -
 class MemSubsystem {
 public:

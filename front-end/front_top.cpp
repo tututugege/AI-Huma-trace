@@ -99,7 +99,7 @@ static void fpr_ptab(const PtabIn &p) {
 // PTAB write port from the BPU output.
 static void ptab_write_data(const bpuf::OutputPayload &bpu_output, wire<1> global_reset,
                                   wire<1> global_refetch, PtabIn &ptab_in) {
-  std::memset(&ptab_in, 0, sizeof(ptab_in));
+  ptab_in = {};
   ptab_in.reset = global_reset;
   ptab_in.refetch = global_refetch;
   ptab_in.read_enable = false;
@@ -114,7 +114,7 @@ static void ptab_write_data(const bpuf::OutputPayload &bpu_output, wire<1> globa
 
 static void checker_input(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
                                      PredecodeCheckerIn &checker_in) {
-  std::memset(&checker_in, 0, sizeof(checker_in));
+  checker_in = {};
   for (int i = 0; i < FETCH_WIDTH; i++) {
     checker_in.predict_dir[i] = ptab_out.predict_dir[i];
     checker_in.predecode_type[i] = fifo_out.predecode_type[i];
@@ -157,7 +157,7 @@ static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
 // Output toward the back end: the FIFO head, or the bypassed entry when the FIFO was empty.
 static void front_output(const F2bFifoOut &saved, const F2bFifoOut &bypass_out,
                               bool use_bypass, FrontTopOut &out) {
-  std::memset(&out, 0, sizeof(out));
+  out = {};
   const F2bFifoOut *src = &saved;
   if (!saved.front2back_FIFO_valid && use_bypass) src = &bypass_out;
 

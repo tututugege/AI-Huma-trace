@@ -7,7 +7,7 @@
 #include <cstring>
 
 void predecode_check(const PredecodeCheckerIn &in, PredecodeCheckerOut &output) {
-  std::memset(&output, 0, sizeof(PredecodeCheckerOut));
+  output = {};
   output.keep_n = FETCH_WIDTH;
 
   for (int i = 0; i < FETCH_WIDTH; i++) {

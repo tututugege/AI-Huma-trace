@@ -581,8 +581,7 @@ class BpuPipe {
       push_arch(n.arch, pc, dir, target, type);
       TypeWr tw; type_.update(pc, type, tw, rvc); type_.commit(tw);
       if (type == BR_DIRECT) {
-        TageUpd u;
-        std::memset(&u, 0, sizeof(u));
+        TageUpd u{};
         u.bank_pc = bpc; u.real_dir = dir; u.pred = pred; u.alt = tp.alt; u.pcpn = tp.pcpn;
         for (int k = 0; k < TN; k++) { u.tag[k] = tp.tag[k]; u.idx[k] = tp.idx[k]; }
         TageWr w; tage_[b].update(u, w); tage_[b].commit(w);
@@ -693,7 +692,7 @@ class BpuPipe {
   }
 
   void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) const {
-    std::memset(&out, 0, sizeof(out));
+    out = {};
     t = Txn{};
     State &n = *nxp_;
     copy_state_but_R(n, *stp_);

@@ -43,8 +43,8 @@ struct S1S2Reg {
 };
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/gen_mem_order.py checks these
 // against the code and orders MemSubsystem::comb_outputs / comb_inputs from them):
-//   CONTRACT comb_stage2  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
-//   CONTRACT comb_stage1  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write out.fillout  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
+//   CONTRACT comb_stage2  in: in.dcachelinereadresp in.fillin in.mshr2dcache in.wb2dcache out.dcache2lsu out.dcache2mshr out.fill_write  out: out.dcache2lsu out.dcache2mshr out.dcache2wb out.fill_write out.lru_updates out.pendingwrite
+//   CONTRACT comb_stage1  in: in.fill_store_dirty in.lsu2dcache in.mshr2dcache out.dcache2mshr out.dcache2wb out.fill_write  out: out.dcache2mshr out.dcache2wb out.dcachereadreq out.fillout
 class RealDcache {
 public:
     void init();

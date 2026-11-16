@@ -74,23 +74,19 @@ struct FtqPc {
 
 // what the BPU training needs of a committing instruction besides its uop (the return / call classification)
 struct RobCommitExtra {
-  wire<AREG_IDX_WIDTH> src1_areg;
-  wire<32> imm;
-
-  RobCommitExtra() { std::memset(this, 0, sizeof(RobCommitExtra)); }
+  wire<AREG_IDX_WIDTH> src1_areg{};
+  wire<32> imm{};
 };
 
 struct FtqCommitInfoResp {
-  wire<XLEN> pc;
-  wire<1> is_rvc;
-  wire<1> pred_taken;
-  wire<1> alt_pred;
-  pcpn_t pcpn;
-  tage_idx_t tage_idx[4];
-  tage_tag_t tage_tag[4];
-  wire<8> ps_info;  // statistics only (BPA_STATS)
-
-  FtqCommitInfoResp() { std::memset(this, 0, sizeof(FtqCommitInfoResp)); }
+  wire<XLEN> pc{};
+  wire<1> is_rvc{};
+  wire<1> pred_taken{};
+  wire<1> alt_pred{};
+  pcpn_t pcpn{};
+  tage_idx_t tage_idx[4]{};
+  tage_tag_t tage_tag[4]{};
+  wire<8> ps_info{};  // statistics only (BPA_STATS)
 };
 
 struct FtqCommitInfoIO {
@@ -340,15 +336,11 @@ struct PtwWalkResp {
 };
 
 struct MemReqMeta {
-  wire<ROB_IDX_WIDTH> rob_idx;
-
-  MemReqMeta() { std::memset(this, 0, sizeof(MemReqMeta)); }
+  wire<ROB_IDX_WIDTH> rob_idx{};
 };
 
 struct MemRespMeta {
-  wire<ROB_IDX_WIDTH> rob_idx;
-
-  MemRespMeta() { std::memset(this, 0, sizeof(MemRespMeta)); }
+  wire<ROB_IDX_WIDTH> rob_idx{};
 };
 
 struct PeripheralReqIO {
