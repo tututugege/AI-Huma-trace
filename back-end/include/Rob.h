@@ -25,7 +25,7 @@ struct RobStoredEntry {
 
 // Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the Wires
 // each phase reads (in) and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_commit  in: csr2rob dec_bcast in lsu2rob  out: rob2csr rob2dis rob_bcast rob_commit
+//   CONTRACT comb_commit  in: csr2rob dec_bcast lsu2rob in.front_stall in.front_tq_free in.front_upd_free  out: rob2csr rob2dis rob_bcast rob_commit
 //   CONTRACT comb_update  in: dec_bcast dis2rob exu2rob    out: -
 //   CONTRACT owns: rob2csr rob2dis rob_bcast rob_commit
 class Rob {

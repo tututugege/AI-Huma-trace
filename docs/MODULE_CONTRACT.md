@@ -65,3 +65,17 @@ code (BackTop's own comb_outputs is the one left). Found on the way:
 Remaining exceptions: Exu's FU state (in-place, documented above), the issue queues' ready-bit cache recomputed in seq
 (a derived value of the new q), `out` / `in` (BackTop's output / input structs) shared by several writers.
 Gates RVC=0 62/62, RVC=1 67/67 identical, FPR identical at every commit; rv64gc Linux console identical up to b6bd4c4.
+
+## BackTop::comb() generated from the contracts
+
+All 23 phases are declared (BackTop's own comb_outputs too; BackTop's shared in / out structs are named one level deeper,
+e.g. `out.lsu2dcache`, so the LSU and BackTop each own their part). `scripts/comb/gen_comb_order.py` derives the order:
+a module's phases in header order, a writer before every reader of its outputs in another module, the trace-bridge
+users in `TB_ORDER` (fact lookups and BackTop's commit / flush: side effects outside the Wires; comb_graph.py checks
+the scanned users equal that list). Direct reads of another module's registers (`ftq->ftq_pc`, `csr->read`,
+`idu->q()`) need no order: q does not change during comb. Ties follow a fixed module priority, not the old code, so the
+generated order is a different (valid) order from the hand-made one: gates RVC=0 62/62, RVC=1 67/67, FPR,
+TB_TRACE_COMMIT and LSU_PIPE_EVT are identical with it, i.e. the declarations hold everything the order depends on.
+The block in BackTop::comb() is between BEGIN / END GENERATED markers; `comb_graph.py --check` fails when it differs from
+the declarations (a hand swap of two lines is reported). To add or change a phase: edit the module and its CONTRACT
+line, run `scripts/comb/gen_comb_order.py --write`.

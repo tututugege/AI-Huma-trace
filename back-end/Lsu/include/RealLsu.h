@@ -33,13 +33,13 @@ struct LsuState {
 };
 
 // Load / store unit (staged pipeline, docs/LSU_PIPE.md). Contract (checked by scripts/comb/comb_graph.py against the
-// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives. (out: BackTop's
-// output struct, shared: the LSU drives its DCache / MMIO requests there.)
+// code): the Wires each phase reads (in) and writes (out), and the outputs only this module drives (in / out: parts
+// of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs    in: -                                                    out: lsu2dis lsu2rob lsu_awake
-//   CONTRACT comb_writeback  in: dec_bcast in rob_bcast rob_commit                     out: lsu2exe lsu_awake
+//   CONTRACT comb_writeback  in: dec_bcast rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: lsu2exe lsu_awake
 //   CONTRACT comb_translate  in: csr_status dec_bcast exe2lsu rob_bcast                out: -
-//   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu in out rob_bcast rob_commit out: out
-//   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe
+//   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: out.lsu2dcache out.peripheral_req
+//   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe out.lsu2dcache out.peripheral_req
 class RealLsu {
 public:
   void comb_outputs();  // outputs from the registers: wakeups, free counts to dispatch, completion to the ROB

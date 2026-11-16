@@ -139,15 +139,19 @@ all_hazards = list(hazards)
 # A phase's declared in / out must equal the Wires fields it reads / writes (reads of the module's own outputs are not
 # inputs); an owned field is written by no other module.
 contract_errors = []
+def cfield(k):   # a contract names a Wires field; BackTop's shared in / out structs one level deeper
+    p = k.split('.')
+    return '.'.join(p[:2]) if p[0] in ('in', 'out') and len(p) > 1 else p[0]
 hdr_text = {}
 for d0, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
     for f0 in fs:
         if f0.endswith('.h'): hdr_text[os.path.join(d0, f0)] = open(os.path.join(d0, f0), errors='ignore').read()
 cls_of = {o: c for o, c in member_cls.items()}
+cls_of['top'] = 'BackTop'
 row_of = {n: (r, w) for n, r, w in rows}
 writers = collections.defaultdict(set)
 for n, r, w in rows:
-    for k in w: writers[k.split('.')[0]].add(n.split('.')[0])
+    for k in w: writers[cfield(k)].add(n.split('.')[0])
 n_contract = 0
 for obj, cls in cls_of.items():
     t = None
@@ -162,14 +166,26 @@ for obj, cls in cls_of.items():
         name = f'{obj}.{ph}'
         if name not in row_of: contract_errors.append(f'{name}: declared but not a phase'); continue
         r, w = row_of[name]
-        sin = {k.split('.')[0] for k in r} - owns
-        sout = {k.split('.')[0] for k in w}
+        sin = {cfield(k) for k in r} - owns
+        sout = {cfield(k) for k in w}
         if sin != din: contract_errors.append(f'{name}: reads {sorted(sin)}, declared in {sorted(din)}')
         if sout != dout: contract_errors.append(f'{name}: writes {sorted(sout)}, declared out {sorted(dout)}')
         n_contract += 1
     for f0 in owns:
         other = writers[f0] - {obj}
         if other: contract_errors.append(f'{obj} owns {f0}, also written by {sorted(other)}')
+# the trace-bridge users (side effects outside the Wires) must be the ones gen_comb_order.py orders by TB_ORDER
+import gen_comb_order
+tb_users = set()
+for (obj, cls, fn) in phases:
+    if re.search(r'tbhook::|g_bridge', re.sub(r'//[^\n]*', '', body_closure(cls, fn))): tb_users.add(f'{obj}.{fn}')
+if tb_users != set(gen_comb_order.TB_ORDER):
+    contract_errors.append(f'trace-bridge users {sorted(tb_users)} != TB_ORDER {sorted(gen_comb_order.TB_ORDER)}')
+# BackTop::comb() must be the order generated from the contracts
+import subprocess
+if subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gen_comb_order.py'), '--check'],
+                  capture_output=True).returncode != 0:
+    contract_errors.append('BackTop::comb() differs from the order generated from the contracts (gen_comb_order.py --write)')
 print(f'contracts: {n_contract} phases declared, {len(contract_errors)} mismatches')
 for e in contract_errors: print('  contract: ' + e)
 all_hazards += contract_errors
