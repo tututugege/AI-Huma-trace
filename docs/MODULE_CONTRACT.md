@@ -433,3 +433,9 @@ name), the trace-bridge users in order. global_graph.py's derivation equals the 
 FPR (4), TB_TRACE_COMMIT, LSU_PIPE_EVT, the Linux and dhrystone checkpoints, FE_PAIR / FE_IPF, Linux from reset.
 The front end's phases are its modules' methods since fm6 (docs/FRONT_MODULES.md). BackTop, MemSubsystem and FrontCore
 still own their modules and bind their ports.
+
+## One form for every module (u2..u4)
+
+Contracts are in each module's own port names and one scanner (scripts/comb/modules.py) checks all modules; see
+docs/UNIFIED_MODULES.md. It replaces the per-domain generators and scans described above (gen_comb_order.py,
+gen_front_order.py, gen_mem_order.py, global_graph.py).
