@@ -2,7 +2,6 @@
 
 #include "IO.h"
 #include <type_traits>
-#include "PtwWalker.h"
 #include "PtwWalkPort.h"
 #include "config.h"
 #include <array>
@@ -11,7 +10,6 @@
 #include <vector>
 
 class SimContext;
-class PtwMemPort;
 
 // register-width virtual address / satp (Sv32 on rv32, Sv39 on rv64)
 using vaddr_t = uint64_t;
@@ -37,15 +35,6 @@ public:
     LOCAL_WALKER_BUSY = 4,
   };
 
-  enum class TraceSource : uint8_t {
-    NONE = 0,
-    IDENTITY,
-    TLB_HIT,
-    TLB_PERM_FAULT,
-    WALK_SHARED,
-    WALK_LOCAL,
-    FLUSH,
-  };
 
   static constexpr int kItlbTopPortCount = 1;
   static constexpr int kDtlbTopPortCount = LSU_LDU_COUNT + LSU_STA_COUNT;
@@ -141,9 +130,6 @@ public:
     PtwWalkReq walk_req{};
     wire<1> walk_resp_consumed = false;
 
-    wire<3> trace_source = 0;
-    wire<8> trace_level = 0xff;
-    wire<8> trace_perm = 0;
   };
 
   struct TopPortInput {
@@ -158,9 +144,6 @@ public:
     wire<2> result = 0;
     wire<32> p_addr = 0;
     wire<3> retry_reason = 0;
-    wire<3> trace_source = 0;
-    wire<8> trace_level = 0xff;
-    wire<8> trace_perm = 0;
   };
 
   struct TopInput {
@@ -199,8 +182,7 @@ public:
     wire<1> walk_client_flush = false;
   };
 
-  TlbMmu(SimContext *ctx, PtwMemPort *port = nullptr,
-         int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
+  TlbMmu(SimContext *ctx, int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
 
   Result translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
                    CsrStatusIO *status);
@@ -212,7 +194,6 @@ public:
   void cancel_pending_walk();
   // Fast-warmup replay (EXP-011): load a ready-made TLB state (entries in slot order, round-robin pointer).
   void warm_install(const TlbEntry *entries, int count, int repl_ptr);
-  void set_ptw_mem_port(PtwMemPort *port);
   void set_ptw_walk_port(PtwWalkPort *port);
   RetryReason last_retry_reason() const { return last_retry_reason_; }
 
@@ -227,7 +208,6 @@ private:
   SimContext *ctx;
   Kind kind_;
   PtwWalkPort *walk_port = nullptr;
-  PtwWalker walker;
   // Stable TLB register file. translate() only reads from this array; any
   // refill first lands in refill_comb_ and is committed in seq().
   std::vector<TlbEntry> tlb_entries_;
@@ -247,7 +227,6 @@ private:
   bool flush_pending_ = false;
 
   const WalkRegs &visible_walk_regs() const;
-  WalkRegs &ensure_walk_comb();
   void clear_tlb_entries();
   static TranslateContext build_translate_context(uint32_t type,
                                                   CsrStatusIO *status);
@@ -264,18 +243,10 @@ private:
   static uint32_t compose_paddr(vaddr_t v_addr, const TlbEntry &e);
   static bool check_perm(uint8_t perm, uint32_t type, int eff_priv, bool sum,
                          bool mxr);
-  Result translate_shared_via_io_generator(uint32_t &p_addr, vaddr_t v_addr,
-                                           uint32_t type,
-                                           CsrStatusIO *status);
   TopInput build_top_common_input(const CsrStatusIO *status) const;
-  TopOutput run_top_via_io_generator(const TopInput &in) const;
   void apply_top_output(const TopOutput &out);
   void run_control_via_top(bool flush, bool cancel);
   bool consume_completed_walk_refill(bool consume_fault);
-  Result walk_and_refill_shared(uint32_t &p_addr, vaddr_t v_addr,
-                                uint32_t type, CsrStatusIO *status);
-  Result walk_and_refill(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
-                         CsrStatusIO *status);
   void schedule_refill(vaddr_t v_addr, uint16_t asid, uint8_t level,
                        uint64_t pte, bool global);
 };

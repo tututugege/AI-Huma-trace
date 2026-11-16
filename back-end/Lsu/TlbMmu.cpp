@@ -1,5 +1,4 @@
 #include "TlbMmu.h"
-#include "PtwMemPort.h"
 #include "ref.h"
 
 namespace {
@@ -45,8 +44,8 @@ MMUResultType to_lsu_mmu_result(TlbMmu::Result result) {
 }
 } // namespace
 
-TlbMmu::TlbMmu(SimContext *ctx, PtwMemPort *port, int tlb_entries, Kind kind)
-    : ctx(ctx), kind_(kind), walker(port),
+TlbMmu::TlbMmu(SimContext *ctx, int tlb_entries, Kind kind)
+    : ctx(ctx), kind_(kind),
       tlb_entries_(tlb_entries > 0 ? tlb_entries : 1),
       tlb_capacity_(tlb_entries > 0 ? tlb_entries : 1), repl_ptr_(0) {
   (void)this->ctx;
@@ -54,7 +53,6 @@ TlbMmu::TlbMmu(SimContext *ctx, PtwMemPort *port, int tlb_entries, Kind kind)
   seq();
 }
 
-void TlbMmu::set_ptw_mem_port(PtwMemPort *port) { walker.set_mem_port(port); }
 void TlbMmu::set_ptw_walk_port(PtwWalkPort *port) { walk_port = port; }
 
 void TlbMmu::warm_install(const TlbEntry *entries, int count, int repl_ptr) {
@@ -65,17 +63,11 @@ void TlbMmu::warm_install(const TlbEntry *entries, int count, int repl_ptr) {
 
 void TlbMmu::cancel_pending_walk() {
   consume_completed_walk_refill(true);
-  walker.flush();
   run_control_via_top(false, true);
   last_retry_reason_ = RetryReason::NONE;
 }
 
 void TlbMmu::flush() {
-  const WalkRegs &walk = visible_walk_regs();
-  if (walk.active) {
-
-  }
-  walker.flush();
   run_control_via_top(true, false);
   last_retry_reason_ = RetryReason::NONE;
 }
@@ -109,16 +101,6 @@ void TlbMmu::seq() {
 const TlbMmu::WalkRegs &TlbMmu::visible_walk_regs() const {
   return walk_comb_valid_ ? walk_comb_ : walk_regs_;
 }
-
-TlbMmu::WalkRegs &TlbMmu::ensure_walk_comb() {
-  if (!walk_comb_valid_) {
-    walk_comb_ = walk_regs_;
-    walk_comb_valid_ = true;
-  }
-  return walk_comb_;
-}
-
-
 
 void TlbMmu::clear_tlb_entries() {
   for (auto &entry : tlb_entries_) {
@@ -266,8 +248,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   out.refill_next = in.refill;
   out.result = static_cast<uint32_t>(Result::OK);
   out.retry_reason = static_cast<uint32_t>(RetryReason::NONE);
-  out.trace_source = static_cast<uint32_t>(TraceSource::NONE);
-  out.trace_level = 0xff;
 
   if (!in.translate_valid) {
     return out;
@@ -283,12 +263,10 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
 
   if (eff_priv == 3 || !sv_enabled(satp)) {
     out.p_addr = identity_pa(in.v_addr);
-    out.trace_source = static_cast<uint32_t>(TraceSource::IDENTITY);
     return out;
   }
   if (!va_canonical(in.v_addr)) {   // Sv39: a non-canonical address is a page fault
     out.result = static_cast<uint32_t>(Result::FAULT);
-    out.trace_source = static_cast<uint32_t>(TraceSource::TLB_PERM_FAULT);
     return out;
   }
 
@@ -307,15 +285,9 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     const uint8_t perm = static_cast<uint8_t>(hit.perm);
     if (!check_perm(perm, type, eff_priv, ctx_view.sum, ctx_view.mxr)) {
       out.result = static_cast<uint32_t>(Result::FAULT);
-      out.trace_source = static_cast<uint32_t>(TraceSource::TLB_PERM_FAULT);
-      out.trace_level = hit.level;
-      out.trace_perm = perm;
       return out;
     }
     out.p_addr = compose_paddr(in.v_addr, hit);
-    out.trace_source = static_cast<uint32_t>(TraceSource::TLB_HIT);
-    out.trace_level = hit.level;
-    out.trace_perm = perm;
     return out;
   }
 
@@ -336,7 +308,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     if (walk_page != req_page || static_cast<vaddr_t>(walk.satp) != satp) {
       out.result = static_cast<uint32_t>(Result::RETRY);
       out.retry_reason = static_cast<uint32_t>(RetryReason::OTHER_WALK_ACTIVE);
-      out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
       out.walk_next = walk;
       return out;
     }
@@ -346,7 +317,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     if (!in.walk_req_ready) {
       out.result = static_cast<uint32_t>(Result::RETRY);
       out.retry_reason = static_cast<uint32_t>(RetryReason::WALK_REQ_BLOCKED);
-      out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
       out.walk_next = walk;
       return out;
     }
@@ -359,7 +329,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     walk.req_sent = true;
     out.result = static_cast<uint32_t>(Result::RETRY);
     out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
-    out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
     out.walk_next = walk;
     return out;
   }
@@ -367,7 +336,6 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
   if (!in.walk_resp_valid) {
     out.result = static_cast<uint32_t>(Result::RETRY);
     out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
-    out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
     out.walk_next = walk;
     return out;
   }
@@ -378,16 +346,12 @@ TlbMmu::CoreOutput TlbMmu::core_comb(const CoreInput &in) {
     out.walk_resp_consumed = true;
     out.result = static_cast<uint32_t>(Result::RETRY);
     out.retry_reason = static_cast<uint32_t>(RetryReason::WAIT_WALK_RESP);
-    out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
     out.walk_next = walk;
     return out;
   }
 
   out.walk_resp_consumed = true;
   out.walk_next = {};
-  out.trace_source = static_cast<uint32_t>(TraceSource::WALK_SHARED);
-  out.trace_level = wr.leaf_level;
-  out.trace_perm = static_cast<uint8_t>(wr.leaf_pte & 0xFFu);
 
   if (wr.fault) {
     out.result = static_cast<uint32_t>(Result::FAULT);
@@ -474,9 +438,6 @@ TlbMmu::TopOutput TlbMmu::top_comb(const TopInput &in, int entries) {
     port_out.result = core_out.result;
     port_out.p_addr = core_out.p_addr;
     port_out.retry_reason = core_out.retry_reason;
-    port_out.trace_source = core_out.trace_source;
-    port_out.trace_level = core_out.trace_level;
-    port_out.trace_perm = core_out.trace_perm;
 
     shadow_walk = core_out.walk_next;
     shadow_refill = core_out.refill_next;
@@ -499,36 +460,6 @@ TlbMmu::TopOutput TlbMmu::top_comb(const TopInput &in, int entries) {
 
 
 
-
-TlbMmu::Result TlbMmu::translate_shared_via_io_generator(
-    uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) {
-  TopInput in = build_top_common_input(status);
-  int port_idx = 0;
-  if (kind_ == Kind::DTLB && type == 2) {
-    port_idx = LSU_LDU_COUNT;
-  }
-  in.port[port_idx].valid = true;
-  in.port[port_idx].v_addr = v_addr;
-  in.port[port_idx].type = type;
-  in.port[port_idx].lookup = lookup_table_access(v_addr, sv_asid(in.satp));
-
-  const TopOutput out = run_top_via_io_generator(in);
-  apply_top_output(out);
-
-  const TopPortOutput &port_out = out.port[port_idx];
-  last_retry_reason_ = static_cast<RetryReason>(
-      static_cast<uint32_t>(port_out.retry_reason) & 0x7u);
-
-  p_addr = port_out.p_addr;
-  const Result result =
-      static_cast<Result>(static_cast<uint32_t>(port_out.result) & 0x3u);
-  const TraceSource trace_source = static_cast<TraceSource>(
-      static_cast<uint32_t>(port_out.trace_source) & 0x7u);
-  if (trace_source != TraceSource::NONE) {
-
-  }
-  return result;
-}
 
 TlbMmu::TopInput
 TlbMmu::build_top_common_input(const CsrStatusIO *status) const {
@@ -559,10 +490,6 @@ TlbMmu::build_top_common_input(const CsrStatusIO *status) const {
   return in;
 }
 
-TlbMmu::TopOutput TlbMmu::run_top_via_io_generator(const TopInput &in) const {
-  return top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
-}
-
 void TlbMmu::apply_top_output(const TopOutput &out) {
   if (out.walk_client_flush && walk_port != nullptr) {
     walk_port->flush_client();
@@ -588,7 +515,7 @@ void TlbMmu::run_control_via_top(bool flush, bool cancel) {
   TopInput in = build_top_common_input(nullptr);
   in.flush = flush;
   in.cancel = cancel;
-  const TopOutput out = run_top_via_io_generator(in);
+  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
 }
 
@@ -660,7 +587,7 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     }
   }
 
-  const TopOutput out = run_top_via_io_generator(in);
+  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
   apply_top_output(out);
 
   int last_valid_port = -1;
@@ -678,11 +605,6 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     ld_resp.entry_idx = req.ldq_req[i].entry_idx;
     ld_resp.wait_idx = req.ldq_req[i].wait_idx;
     last_valid_port = i;
-    const TraceSource trace_source = static_cast<TraceSource>(
-        static_cast<uint32_t>(port.trace_source) & 0x7u);
-    if (trace_source != TraceSource::NONE) {
-
-    }
   }
   for (int i = 0; i < LSU_STA_COUNT; ++i) {
     if (!req.stq_req[i].valid) {
@@ -699,11 +621,6 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     st_resp.entry_idx = req.stq_req[i].entry_idx;
     st_resp.wait_idx = req.stq_req[i].wait_idx;
     last_valid_port = port_idx;
-    const TraceSource trace_source = static_cast<TraceSource>(
-        static_cast<uint32_t>(port.trace_source) & 0x7u);
-    if (trace_source != TraceSource::NONE) {
-
-    }
   }
   if (last_valid_port >= 0) {
     last_retry_reason_ = static_cast<RetryReason>(
@@ -730,149 +647,6 @@ void TlbMmu::schedule_refill(vaddr_t v_addr, uint16_t asid, uint8_t level,
   refill_comb_ = refill;
 }
 
-TlbMmu::Result TlbMmu::walk_and_refill(uint32_t &p_addr, vaddr_t v_addr,
-                                       uint32_t type, CsrStatusIO *status) {
-  const TranslateContext ctx_view = build_translate_context(type, status);
-  WalkRegs &walk = ensure_walk_comb();
-
-  if (!walk.active) {
-    if (!walker.start(v_addr, ctx_view.satp)) {
-      last_retry_reason_ = RetryReason::LOCAL_WALKER_BUSY;
-      return Result::RETRY;
-    }
-    walk = {};
-    walk.active = true;
-    walk.v_addr = v_addr;
-    walk.type = type;
-    walk.satp = ctx_view.satp;
-    walk.eff_priv = ctx_view.eff_priv;
-    walk.mxr = ctx_view.mxr;
-    walk.sum = ctx_view.sum;
-  } else {
-    if (walk.v_addr != v_addr || walk.type != type || walk.satp != ctx_view.satp) {
-      last_retry_reason_ = RetryReason::LOCAL_WALKER_BUSY;
-      return Result::RETRY;
-    }
-  }
-
-  auto st = walker.tick();
-  if (st != PtwWalker::State::DONE) {
-    if (st == PtwWalker::State::FAULT) {
-      walker.flush();
-      walk = {};
-      last_retry_reason_ = RetryReason::NONE;
-
-      return Result::FAULT;
-    }
-    last_retry_reason_ = RetryReason::WAIT_WALK_RESP;
-
-    return Result::RETRY;
-  }
-
-  uint64_t leaf_pte = walker.leaf_pte();
-  uint8_t leaf_level = walker.leaf_level();
-  uint8_t perm = leaf_pte & 0xFF;
-  if (!check_perm(perm, walk.type, walk.eff_priv, walk.sum, walk.mxr)) {
-    walker.flush();
-    walk = {};
-    last_retry_reason_ = RetryReason::NONE;
-
-    return Result::FAULT;
-  }
-
-  const bool global = (leaf_pte & PTE_G) != 0;
-  const uint16_t asid = sv_asid(walk.satp);
-  schedule_refill(walk.v_addr, asid, leaf_level, leaf_pte, global);
-  TlbEntry refill_hit{};
-  const bool hit = lookup(walk.v_addr, asid, refill_hit);
-  Assert(hit && "Local PTW refill must be visible through same-cycle bypass");
-  p_addr = compose_paddr(walk.v_addr, refill_hit);
-  walker.flush();
-  walk = {};
-  last_retry_reason_ = RetryReason::NONE;
-
-  return Result::OK;
-}
-
-TlbMmu::Result TlbMmu::walk_and_refill_shared(uint32_t &p_addr, vaddr_t v_addr,
-                                              uint32_t type,
-                                              CsrStatusIO *status) {
-  const TranslateContext ctx_view = build_translate_context(type, status);
-  WalkRegs &walk = ensure_walk_comb();
-
-  if (!walk.active) {
-    walk = {};
-    walk.active = true;
-    walk.req_sent = false;
-    walk.v_addr = v_addr;
-    walk.type = type;
-    walk.satp = ctx_view.satp;
-    walk.eff_priv = ctx_view.eff_priv;
-    walk.mxr = ctx_view.mxr;
-    walk.sum = ctx_view.sum;
-  } else {
-    const uint64_t walk_page = static_cast<uint64_t>(walk.v_addr) >> 12;
-    const uint64_t req_page = static_cast<uint64_t>(v_addr) >> 12;
-    if (walk_page != req_page || walk.satp != ctx_view.satp) {
-      last_retry_reason_ = RetryReason::OTHER_WALK_ACTIVE;
-      return Result::RETRY;
-    }
-  }
-
-  if (!walk.req_sent) {
-    PtwWalkReq req{};
-    req.vaddr = walk.v_addr;
-    req.satp = walk.satp;
-    req.access_type = walk.type;
-    if (!walk_port->send_walk_req(req)) {
-      last_retry_reason_ = RetryReason::WALK_REQ_BLOCKED;
-
-      return Result::RETRY;
-    }
-    walk.req_sent = true;
-  }
-
-  if (!walk_port->resp_valid()) {
-    last_retry_reason_ = RetryReason::WAIT_WALK_RESP;
-
-    return Result::RETRY;
-  }
-
-  PtwWalkResp wr = walk_port->resp();
-  if ((static_cast<uint64_t>(wr.vaddr) >> 12) != (static_cast<uint64_t>(walk.v_addr) >> 12)) {
-    walk_port->consume_resp();
-    last_retry_reason_ = RetryReason::WAIT_WALK_RESP;
-
-    return Result::RETRY;
-  }
-  walk_port->consume_resp();
-  walk = {};
-
-  if (wr.fault) {
-    last_retry_reason_ = RetryReason::NONE;
-
-    return Result::FAULT;
-  }
-
-  uint8_t perm = wr.leaf_pte & 0xFF;
-  if (!check_perm(perm, type, ctx_view.eff_priv, ctx_view.sum, ctx_view.mxr)) {
-    last_retry_reason_ = RetryReason::NONE;
-
-    return Result::FAULT;
-  }
-
-  const bool global = (wr.leaf_pte & PTE_G) != 0;
-  const uint16_t asid = sv_asid(ctx_view.satp);
-  schedule_refill(v_addr, asid, wr.leaf_level, wr.leaf_pte, global);
-  TlbEntry refill_hit{};
-  const bool hit = lookup(v_addr, asid, refill_hit);
-  Assert(hit && "Shared PTW refill must be visible through same-cycle bypass");
-  p_addr = compose_paddr(v_addr, refill_hit);
-  last_retry_reason_ = RetryReason::NONE;
-
-  return Result::OK;
-}
-
 bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) const {
   const TranslateContext ctx_view = build_translate_context(type, status);
   const vaddr_t satp = ctx_view.satp;
@@ -885,41 +659,20 @@ bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, Csr
   return true;
 }
 
-TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr,
-                                 uint32_t type, CsrStatusIO *status) {
-  last_retry_reason_ = RetryReason::NONE;
-  if (walk_port != nullptr) {
-    const Result ret =
-        translate_shared_via_io_generator(p_addr, v_addr, type, status);
-    return ret;
-  }
-
-  const TranslateContext ctx_view = build_translate_context(type, status);
-  const vaddr_t satp = ctx_view.satp;
-  const int eff_priv = ctx_view.eff_priv;
-
-  if (eff_priv == 3 || !sv_enabled(satp)) {
-    p_addr = identity_pa(v_addr);
-
-    return Result::OK;
-  }
-
-  const uint16_t asid = sv_asid(satp);
-
-  TlbEntry hit = {};
-  if (lookup(v_addr, asid, hit)) {
-    const bool perm_ok =
-        check_perm(hit.perm, type, eff_priv, ctx_view.sum, ctx_view.mxr);
-    if (!perm_ok) {
-
-      return Result::FAULT;
-    }
-    p_addr = compose_paddr(v_addr, hit);
-
-    return Result::OK;
-  }
-  if (walk_port != nullptr) {
-    return walk_and_refill_shared(p_addr, v_addr, type, status);
-  }
-  return walk_and_refill(p_addr, v_addr, type, status);
+// Every TLB has a shared page-table walker port (MemPtwBlock): lookup, permission check and walk request / response all go
+// through top_comb, the same function the LSU's ports use.
+TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) {
+  Assert(walk_port != nullptr && "TlbMmu: no page-table walker port bound");
+  TopInput in = build_top_common_input(status);
+  const int port_idx = (kind_ == Kind::DTLB && type == 2) ? LSU_LDU_COUNT : 0;
+  in.port[port_idx].valid = true;
+  in.port[port_idx].v_addr = v_addr;
+  in.port[port_idx].type = type;
+  in.port[port_idx].lookup = lookup_table_access(v_addr, sv_asid(in.satp));
+  const TopOutput out = top_comb(in, kind_ == Kind::ITLB ? ITLB_ENTRIES : DTLB_ENTRIES);
+  apply_top_output(out);
+  const TopPortOutput &port_out = out.port[port_idx];
+  last_retry_reason_ = static_cast<RetryReason>(static_cast<uint32_t>(port_out.retry_reason) & 0x7u);
+  p_addr = port_out.p_addr;
+  return static_cast<Result>(static_cast<uint32_t>(port_out.result) & 0x3u);
 }

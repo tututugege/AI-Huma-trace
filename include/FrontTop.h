@@ -28,7 +28,6 @@ public:
   front_top_in in;
   front_top_out out;
   SimContext *ctx = nullptr;
-  PtwMemPort *icache_ptw_mem_port = nullptr;
   PtwWalkPort *icache_ptw_walk_port = nullptr;
   ICacheMemPortReq *icache_mem_req_port = nullptr;
   ICacheMemPortResp *icache_mem_resp_port = nullptr;

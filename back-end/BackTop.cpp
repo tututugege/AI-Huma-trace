@@ -27,7 +27,7 @@ void BackTop::init() {
   rob = new Rob(ctx);
   lsu = new RealLsu(ctx);
   dtlb_mmu =
-      std::make_unique<TlbMmu>(ctx, nullptr, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
+      std::make_unique<TlbMmu>(ctx, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
 
   out.fire = pre2front.fire;
 
@@ -56,12 +56,6 @@ void BackTop::init() {
   if (dtlb_mmu != nullptr) {
     dtlb_mmu->flush();
     dtlb_mmu->seq();
-  }
-}
-
-void BackTop::set_lsu_ptw_mem_port(PtwMemPort *port) {
-  if (dtlb_mmu != nullptr) {
-    dtlb_mmu->set_ptw_mem_port(port);
   }
 }
 

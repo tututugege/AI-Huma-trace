@@ -272,7 +272,6 @@ void SimCpu::init() {
   front.ctx = &ctx;
 
   back.set_lsu_ptw_walk_port(mem_subsystem.dtlb_walk_port);
-  back.set_lsu_ptw_mem_port(mem_subsystem.dtlb_ptw_port);
 
   mem_subsystem.lsu2dcache = &back.out.lsu2dcache;
   mem_subsystem.dcache2lsu = &back.in.dcache2lsu;
@@ -281,7 +280,6 @@ void SimCpu::init() {
   mem_subsystem.icache_resp = &icache_resp;
 
   front.icache_ptw_walk_port = mem_subsystem.itlb_walk_port;
-  front.icache_ptw_mem_port = mem_subsystem.itlb_ptw_port;
   front.icache_mem_req_port = &icache_req;
   front.icache_mem_resp_port = &icache_resp;
   // Keep a single active SoC memory topology. DCache/PTW/peripheral already use

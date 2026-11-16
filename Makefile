@@ -73,7 +73,6 @@ endif
 # (Using find to locate all cpp files)
 CXXSRC := $(shell find ./back-end -name "*.cpp") \
           ./MemSubSystem/MemSubsystem.cpp \
-          ./MemSubSystem/PtwWalker.cpp \
           ./MemSubSystem/PeripheralAxi.cpp \
           ./MemSubSystem/RealDcache.cpp \
           ./MemSubSystem/MSHR.cpp \

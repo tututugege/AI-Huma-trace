@@ -9,7 +9,6 @@
 #include "AXI_Interconnect_IO.h"
 #include "Csr.h"
 #include "GenericTable.h"
-#include "PtwMemPort.h"
 #include "FrontTop.h"
 #include "PtwWalkPort.h"
 #include "RISCV.h"
@@ -21,7 +20,6 @@
 
 // ---- ports bound by FrontTop::init (front_module.h) ----------------------------------------------------------------------------------
 icache_module_n::ICache icache;
-PtwMemPort *icache_ptw_mem_port = nullptr;
 PtwWalkPort *icache_ptw_walk_port = nullptr;
 ICacheMemPortReq *icache_mem_req_port = nullptr;
 ICacheMemPortResp *icache_mem_resp_port = nullptr;
@@ -46,23 +44,9 @@ struct LookupResp {
   bool valid[ICACHE_WAY_NUM] = {};
 } g_lookup;
 
-// Without a PTW port the ITLB walks the page tables in the functional memory, one access per cycle.
-class BlockingPtwPort : public PtwMemPort {
- public:
-  bool send_read_req(uint32_t paddr) override { data_ = tbhook::mem_read(paddr); valid_ = true; return true; }
-  bool resp_valid() const override { return valid_; }
-  uint32_t resp_data() const override { return data_; }
-  void consume_resp() override { valid_ = false; }
-
- private:
-  bool valid_ = false;
-  uint32_t data_ = 0;
-};
-
 // What the I-cache is bound to: the context, the ports (taken from the globals at the first cycle that uses them), the ITLB.
 struct Binding {
   SimContext *ctx = nullptr, *ctx_set = nullptr;   // ctx_set: icache_set_context(); ctx: bound at the next cycle
-  PtwMemPort *ptw_mem = nullptr;
   PtwWalkPort *ptw_walk = nullptr;
   axi_interconnect::ReadMasterPort_t *read = nullptr;
   ICacheMemPortReq *probe_req = nullptr;
@@ -70,7 +54,6 @@ struct Binding {
   TlbMmu *itlb = nullptr;
 
   void bind() {
-    if (ptw_mem != icache_ptw_mem_port) { ptw_mem = icache_ptw_mem_port; if (itlb) itlb->set_ptw_mem_port(ptw_mem); }
     if (ptw_walk != icache_ptw_walk_port) { ptw_walk = icache_ptw_walk_port; if (itlb) itlb->set_ptw_walk_port(ptw_walk); }
     read = icache_mem_read_port;
     probe_req = icache_mem_req_port;
@@ -78,9 +61,8 @@ struct Binding {
     ctx = ctx_set;
   }
   TlbMmu *mmu() {
-    static BlockingPtwPort blocking;
     if (!itlb && ctx) {
-      itlb = new TlbMmu(ctx, ptw_mem ? ptw_mem : &blocking, ITLB_ENTRIES, TlbMmu::Kind::ITLB);
+      itlb = new TlbMmu(ctx, ITLB_ENTRIES, TlbMmu::Kind::ITLB);
       if (ptw_walk) itlb->set_ptw_walk_port(ptw_walk);
     }
     return itlb;

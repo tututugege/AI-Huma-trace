@@ -12,7 +12,6 @@ struct ICacheMemPortResp;
 namespace axi_interconnect {
 struct ReadMasterPort_t;
 }
-extern PtwMemPort *icache_ptw_mem_port;
 extern PtwWalkPort *icache_ptw_walk_port;
 extern ICacheMemPortReq *icache_mem_req_port;
 extern ICacheMemPortResp *icache_mem_resp_port;
