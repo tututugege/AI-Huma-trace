@@ -46,7 +46,8 @@ struct State {
 inline State &st() { static State s; return s; }
 inline bool on() { return st().on; }
 inline void set_cycle(uint64_t model_cycle) { st().cycle = model_cycle ? model_cycle - 1 : 0; }
-inline void set_raw_cycle(uint64_t rtl_cycle) { st().cycle = rtl_cycle; }   // the RTL testbench: its PMU cycle counter, 0 in the first cycle after reset
+
+// the RTL testbench: its PMU cycle counter, 0 in the first cycle after reset
 inline void pt(uint32_t base, uint32_t next, uint32_t dir) {
   State &s = st(); if (!s.on) return;
   const uint32_t c = static_cast<uint32_t>(s.cycle);

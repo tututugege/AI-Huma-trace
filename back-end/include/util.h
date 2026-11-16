@@ -116,7 +116,6 @@ static inline bool is_amo_lr_uop(const MicroOp &uop) {
   return uop->is_atomic && ((uop->func7 >> 2) == AmoOp::LR);
 }
 
-
 inline bool is_CSR(InstType type) {
   return (type == CSR || type == MRET || type == ECALL || type == EBREAK);
 }
@@ -132,35 +131,12 @@ inline bool is_branch_uop(wire<UOP_TYPE_WIDTH> op) {
   return is_branch_uop(decode_uop_type(op));
 }
 
-inline bool is_CSR_uop(UopType op) {
-  return (op == UOP_CSR || op == UOP_MRET || op == UOP_ECALL ||
-          op == UOP_EBREAK);
-}
-inline bool is_CSR_uop(wire<UOP_TYPE_WIDTH> op) {
-  return is_CSR_uop(decode_uop_type(op));
-}
-
 inline bool cmp_inst_age(InstInfo inst1, InstInfo inst2) {
   if (inst1.rob_flag == inst2.rob_flag) {
     return inst1.rob_idx > inst2.rob_idx;
   } else {
     return inst1.rob_idx < inst2.rob_idx;
   }
-}
-
-inline bool is_sta_uop(UopType op) { return op == UOP_STA; }
-inline bool is_sta_uop(wire<UOP_TYPE_WIDTH> op) {
-  return is_sta_uop(decode_uop_type(op));
-}
-
-inline bool is_std_uop(UopType op) { return op == UOP_STD; }
-inline bool is_std_uop(wire<UOP_TYPE_WIDTH> op) {
-  return is_std_uop(decode_uop_type(op));
-}
-
-inline bool is_load_uop(UopType op) { return op == UOP_LOAD; }
-inline bool is_load_uop(wire<UOP_TYPE_WIDTH> op) {
-  return is_load_uop(decode_uop_type(op));
 }
 
 inline bool is_exception(InstInfo uop) {

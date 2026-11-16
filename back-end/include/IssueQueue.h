@@ -110,17 +110,7 @@ private:
     }
   }
 #ifdef IQ_SELFCHECK
-  void selfcheck(const char *where) const {
-    bool ok = q_.entry.size() == d.entry.size() && q_.count == d.count &&
-              q_.wake_matrix_src1 == d.wake_matrix_src1 &&
-              q_.wake_matrix_src2 == d.wake_matrix_src2 &&
-              std::memcmp(q_.entry.data(), d.entry.data(),
-                          q_.entry.size() * sizeof(IqStoredEntry)) == 0;
-    if (!ok) {
-      std::fprintf(stderr, "[IQ_SELFCHECK] committed != working at %s\n", where);
-      std::abort();
-    }
-  }
+
 #endif
 
 public:
@@ -421,7 +411,6 @@ private:
     std::vector<std::pair<int, int>> &result = sched_result;
     result.clear();
     int num_ports = ports.size();
-
 
     // 1. Gather all ready instructions
     ready_indices.clear();

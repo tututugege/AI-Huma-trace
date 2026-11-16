@@ -190,7 +190,6 @@ public:
       return;
     }
 
-
     const uint32_t shift = (paddr & 0x3u) * 8u;
     const uint32_t store_data = mask_store_data(data, func3);
     const uint32_t mask = mask_store_mask(func3) << shift;
@@ -242,8 +241,6 @@ public:
     update_timer_irq();
     update_external_irq();
   }
-  bool timer_irq_level() const { return effective_timer_value() >= timer_cmp_; }
-
 
 private:
   static uint64_t current_sim_time_u64() {
@@ -312,7 +309,6 @@ private:
     csr_interrupt_inject->supervisor_external_irq_pending =
         external_irq_delay_.delivered;
   }
-
 
   static constexpr uint32_t kXpsIsr = 0x00;
   static constexpr uint32_t kXpsIpr = 0x04;
@@ -396,7 +392,6 @@ private:
     return 0xffffffffu;
   }
 
-
   void xps_intc_reset() {
     xps_intc_isr_ = 0;
     xps_intc_ier_ = 0;
@@ -467,11 +462,5 @@ private:
     }
     update_external_irq();
   }
-
-
-
-
-
-
 
 };

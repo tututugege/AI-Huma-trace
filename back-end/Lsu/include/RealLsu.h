@@ -56,7 +56,7 @@ public:
   // Registers: cur_ / pcur_ (q: read in comb through const references, written only by seq) and nxt / pnxt (d: written
   // by comb; d == q at the start of every cycle); pw holds the wires between the LSU's phases of one cycle.
   LsuState nxt;
-  const LsuState &cur() const { return cur_; }
+
   LsuState &cur_mut() { return cur_; }   // checkpoint restore only
   // Outputs: the signals this module drives (it alone).
   struct Out {
@@ -92,7 +92,7 @@ public:
 
   // Staged LSU: the comb phases above are in RealLsuPipe.cpp, design in docs/LSU_PIPE.md.
   lp::LsuPipeState pnxt;
-  const lp::LsuPipeState &pcur() const { return pcur_; }
+
   lp::PCycle pw;
 
   StqEntry get_stq_entry(int idx, bool flag);

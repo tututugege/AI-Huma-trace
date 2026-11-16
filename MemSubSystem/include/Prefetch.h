@@ -72,13 +72,7 @@ class Table {
   }
   const E &rd(int i) { p.rd_n++; return e[i % N]; }
   void wr(int i, E v) { p.wr_n++; v.trunc(); e[i % N] = v; }
-  // CAM: returns index of the first entry for which pred(entry) holds, or -1. cam_bits = compared width per entry.
-  template <class F>
-  int cam(F pred, int cam_bits) {
-    p.cam_n++; cam_w = cam_bits;
-    for (int i = 0; i < N; i++) if (pred(e[i])) return i;
-    return -1;
-  }
+
   void tick() { p.tick(name); }
   E e[N];
   const char *name;
@@ -91,7 +85,7 @@ template <class E, int N>
 class Fifo {
  public:
   Fifo(const char *nm, int enq_ports) : name(nm), enq_max(enq_ports) {}
-  bool full() const { return cnt == N; }
+
   bool empty() const { return cnt == 0; }
   int count() const { return cnt; }
   const E &front() const { return e[head]; }

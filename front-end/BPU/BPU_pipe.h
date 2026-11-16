@@ -642,7 +642,7 @@ class BpuPipe {
   // seq() commits it at the clock edge; txn() is this cycle's transaction (PMU attribution).
   void comb_cycle(const InputPayload &in, const Decision &d, OutputPayload &out) { comb(in, d, out, txn_d_); txn_d_valid_ = true; }
   void seq() { if (txn_d_valid_) commit(txn_d_); txn_d_valid_ = false; }
-  const Txn &txn() const { return txn_d_; }
+
   static constexpr int depth() { return MAIN_LAT; }
 
   void reset() {
