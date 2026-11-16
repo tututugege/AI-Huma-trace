@@ -149,7 +149,6 @@ struct ICache_in_t {
   // Input from the IFU (Instruction Fetch Unit)
   wire<XLEN> pc = 0;        // Program Counter
   wire<1> ifu_req_valid = false;  // Fetch enable signal
-  wire<1> ifu_resp_ready = true;  // actually always true in current design
   wire<1> refetch = false;        // Refetch signal from Top
   wire<1> flush = false;          // fence.i flush signal from Top
 
@@ -169,7 +168,6 @@ struct ICache_in_t {
   wire<1> dcache_resp_valid = false;
   wire<1> dcache_resp_retry = false;
   wire<1> dcache_resp_miss = true;
-  wire<ICACHE_WORD_BITS> dcache_resp_data = 0;
 };
 
 struct ICache_out_t {

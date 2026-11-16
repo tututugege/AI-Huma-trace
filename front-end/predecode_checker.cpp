@@ -42,7 +42,7 @@ void predecode_checker_comb(const predecode_checker_read_data &input,
     // next fetch address); a branch that does not is a predecode flush and drops everything after it.  RVC=1: a segment may contain slots that are not
     // instruction starts (in_range but not valid), and the sequential continuation of a segment is behind its last instruction.
     const predecode_checker_in &in = input.inp_regs;
-    int i = 0, segno = 0;
+    int i = 0;
     while (i < FETCH_WIDTH && in.in_range[i]) {
       int e = i;
       while (e + 1 < FETCH_WIDTH && in.in_range[e + 1] && !in.seg_first[e + 1]) e++;
@@ -63,12 +63,10 @@ void predecode_checker_comb(const predecode_checker_read_data &input,
         output.predict_next_fetch_address_corrected = corrected;
         output.predecode_flush_enable = true;
         output.keep_n = keep;
-        output.seg = segno;
-        output.reason = last ? 3 : (ft >= 0 ? 1 : 2);
         return;
       }
       if (last) { output.predict_next_fetch_address_corrected = corrected; return; }
-      i = e + 1; segno++;
+      i = e + 1;
     }
     output.predict_next_fetch_address_corrected = in.predict_next_fetch_address;
     return;

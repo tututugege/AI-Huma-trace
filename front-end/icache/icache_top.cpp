@@ -167,7 +167,6 @@ void comb(icache_in *in, icache_out *out) {
   hin.flush = in->fence_i;
   hin.pc = in->fetch_address;
   hin.ifu_req_valid = req_valid;
-  hin.ifu_resp_ready = true;
   hin.ppn = 0;
   hin.ppn_valid = false;
   hin.page_fault = false;
@@ -180,7 +179,6 @@ void comb(icache_in *in, icache_out *out) {
   hin.dcache_resp_valid = pr ? pr->resp_valid : false;
   hin.dcache_resp_retry = pr ? pr->resp_retry : false;
   hin.dcache_resp_miss = pr ? pr->resp_miss : true;
-  hin.dcache_resp_data = pr ? pr->resp_data : 0;
 
   fill_lookup_meta();
   icache.comb_lookup_meta();

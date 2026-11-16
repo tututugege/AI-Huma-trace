@@ -625,8 +625,6 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     LrScUnit &r = nxt.lrsc_unit;
     r.reserve_valid = true;
     r.reserve_addr = l.paddr;
-    r.reserve_rob_idx = l.rob_idx;
-    r.reserve_rob_flag = l.rob_flag;
     r.reserve_br_mask = l.br_mask;
   }
   // every load write-back leaves its register without a stale value unless the paths below set one (MMIO / LR-SC loads and the faulting ones do not go there)

@@ -27,7 +27,6 @@ struct predecode_checker_out {
     wire1_t predict_dir_corrected[FETCH_WIDTH];
     fetch_addr_t predict_next_fetch_address_corrected;
     wire1_t predecode_flush_enable;
-    uint8_t reason, seg;   // multi-block groups: why the checker flushed (1 branch ending a non-last segment leads elsewhere, 2 no branch where one was predicted, 3 last segment mismatch) and in which segment
     uint8_t keep_n;   // multi-block groups: number of leading slots that stay valid (everything after the flushing branch is dropped)
 };
 
