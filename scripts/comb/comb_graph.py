@@ -41,7 +41,7 @@ bt = rd('back-end/BackTop.cpp')
 member_cls = {'pre': 'PreIduQueue', 'rename': 'Ren', 'dis': 'Dispatch', 'idu': 'Idu', 'isu': 'Isu', 'exu': 'Exu',
               'rob': 'Rob', 'csr': 'Csr', 'lsu': 'RealLsu', 'dtlb_mmu': 'TlbMmu'}
 def expand(fn, out):
-    b = body_of('BackTop', fn)
+    b = re.sub(r'//[^\n]*', '', body_of('BackTop', fn))   # (a call named in a comment is not a phase)
     for call in re.finditer(r'(?:(\w+)->)?(\w+)\(\)\s*;', b):
         obj, f = call.groups()
         if obj in member_cls: out.append((obj, member_cls[obj], f))
@@ -51,7 +51,7 @@ phases = []
 expand('comb', phases)
 
 ASSIGN = r'\s*(?:\[[^\]]*\]|\.\w+|\(\))*\s*(?:=(?!=)|\|=|&=|\+=|-=|\^=|<<=|>>=|\+\+|--)'
-def accesses(body):
+def accesses(body, unqualified=False):
     """read / write sets of `field` or `field.sub` (one level below the Wires field)"""
     r, w = set(), set()
     if not body: return r, w
@@ -60,7 +60,7 @@ def accesses(body):
         if not m2: return f
         return f + '.' + m2.group(1) + ((m2.group(2) or '') if f in ('in', 'out') else '')
     for f in FIELDS:
-        pref = r'(?:\bwires->|\bw\.|\bwires_->|\bwires\.)' + f + r'\b'
+        pref = (r'(?:(?<![\w.>:])|\bwires->|\bw\.|\bwires_->|\bwires\.)' if unqualified else r'(?:\bwires->|\bw\.|\bwires_->|\bwires\.)') + f + r'\b'
         for mm in re.finditer(pref, body):
             tail = body[mm.end():mm.end() + 200]
             k = key(f, tail)
@@ -103,18 +103,21 @@ def body_closure(cls, fn, depth=3, seen=None):
 
 rows = []
 for obj, cls, fn in phases:
-    r, w = accesses(body_closure(cls, fn))
+    r, w = accesses(body_closure(cls, fn), unqualified=(cls == 'BackTop'))   # BackTop is the Wires: unqualified fields
     rows.append((f'{obj}.{fn}', r, w))
 
 # reviewed false positives of the static scan (reader, field, writer): reason
 KNOWN = {
     ('lsu.comb_cal', 'lsu_awake.wake', 'lsu.comb_lsu2exe'): 'comb_cal clears the wake slots (a write through a range-for alias)',
 }
-hazards = []
+hazards, staged = [], 0
 for i, (n, r, w) in enumerate(rows):
     for j in range(i + 1, len(rows)):
         for f in overlap(r, rows[j][2]):
-            if (n, f, rows[j][0]) not in KNOWN: hazards.append((n, f, rows[j][0]))
+            if (n, f, rows[j][0]) in KNOWN: continue
+            # an earlier phase of the cycle writes it too: the read sees this cycle's value (staged), not a register
+            if any(overlap({f}, rows[k][2]) for k in range(i)): staged += 1; continue
+            hazards.append((n, f, rows[j][0]))
 edges = collections.Counter()
 for i, (n, r, w) in enumerate(rows):
     for j, (n2, r2, w2) in enumerate(rows):
@@ -127,7 +130,7 @@ out = []
 out.append(f'phases: {len(rows)}, module-to-module wire edges: {modx}, read-before-later-write hazards: {len(hazards)}')
 out.append('phases per module: ' + ', '.join(f'{k} {v}' for k, v in reentry.most_common()))
 for n, r, w in rows: out.append(f'{n:32s} R: {" ".join(sorted(r))} | W: {" ".join(sorted(w))}')
-out.append('hazards (reader, field, later writer):')
+out.append(f'hazards (reader, field, later writer; {staged} staged reads not listed):')
 for h in hazards: out.append('  %s reads %s, written later by %s' % h)
 print('\n'.join(out))
 all_hazards = list(hazards)
