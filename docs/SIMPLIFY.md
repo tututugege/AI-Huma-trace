@@ -23,7 +23,7 @@ Goal: much less code, somewhat faster, fewer cross-module combinational calls; c
 | | base 75c8141 | now |
 | --- | --- | --- |
 | model C/C++ lines | 37,269 | 32,712 (-12.2%) |
-| environment variables read | 77 (ENV_VARS.md) | 12 |
+| environment variables read | 77 (ENV_VARS.md) | 14 |
 | rvc-alu / rvc-mem / fd-rvc-mem wall time | 14.7 / 15.4 / 14.2 s | 12.2 / 12.7 / 11.7 s (1.2x) |
 | back-end comb order hazards (scripts/comb/comb_graph.py) | 1 real (+2 false positives) | 0 |
 | gates run_gate.sh / run_gate_c.sh | 62 / 67 | 62 / 67 identical after every commit |
@@ -32,11 +32,12 @@ What was removed, by kind:
 * frozen experiment switches (BPU 15, LSU memory speculation / value path, front-end fast paths, FP write ports, DRAMsim3 run-time
   overrides) and the compile-time variants nobody builds any more (FP=0, line ROB, no move elimination, no LLC, fixed-latency SimDDR);
 * statistics and debug output that no script reads ([BPU_*], [PD_CHK], [RVC_FE], [LSU_PIPE_STATS], [MS_DATA], [TB_CHECK], [FP*], ...),
-  the TB_CHECK value compare and its positive / negative controls, the RTL alignment fingerprints (FPR), compiled-out logs;
+  the TB_CHECK value compare and its positive / negative controls, compiled-out logs;
 * dead code: 370+ unused constants / macros / types, ~60 functions nothing calls, the SD card controller model, the TAGE-SC-L / loop
   predictor metadata that still travelled front end -> FTQ -> back end -> BPU;
 * duplication: the instruction FIFO / PTAB / front-to-back FIFO are one template.
-Kept on purpose: PMU / TMA, FE_PAIR, FE_IPF, PF_ENABLE (nopf gate), LSU_PIPE_NOWD (RTL cycle comparisons), DS3_OUT (parallel runs).
+Kept on purpose: PMU / TMA, FE_PAIR, FE_IPF, PF_ENABLE (nopf gate), LSU_PIPE_NOWD (RTL cycle comparisons), FPR / FPR_DUMP (RTL
+alignment fingerprints, rtl/scripts/align_check.py; removed by mistake and restored), DS3_OUT (parallel runs).
 
 Speed: the BPU's per-stage register no longer carries the 2.7 KB array-read buffer (it is one register next to S2), the statistics
 counters are gone.

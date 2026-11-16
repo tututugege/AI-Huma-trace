@@ -1,6 +1,6 @@
 # trace-model 环境变量
 
-`build/simulator` 运行时读取的全部环境变量，共 12 个（exp/tm-simplify，2026-11-16；之前是 77 个）。写法：`NAME=值 build/simulator prog.bin`。
+`build/simulator` 运行时读取的全部环境变量，共 14 个（exp/tm-simplify，2026-11-16；之前是 77 个）。写法：`NAME=值 build/simulator prog.bin`。
 
 > **和 RTL 比周期必须设 `LSU_PIPE_NOWD=1`。** RTL 的参考周期是关掉 63 周期看门狗标定的；不设时模型会在 load / store 停住 63 周期后重发，`crc32` 这类程序会差几十周期。
 
@@ -17,12 +17,14 @@
 | `FE_IPF` | 0 | 设 `1`：I$ 预取（实验特性） | `front-end/front_top.cpp` |
 | `FE_IPF_LAT` | 12 | I$ 预取的固定延迟（周期） | 同上 |
 | `PF_ENABLE` | 1 | 设 `0` 关掉 L1D 预取器（nopf 门禁 / RTL 的 nopf 表用） | `MemSubSystem/include/DataPrefetcher.h` |
+| `FPR` | 关 | 设 bin 周期数：打印 BPU 的对齐指纹（`FPR PT/UP bin= n= h=`），`rtl/scripts/align_check.py` 和 RTL 的同名输出比对 | `front-end/BPU/fpr.h` |
+| `FPR_DUMP` | 关 | `<from>:<to>`：再逐条打印这段周期里的事件（`FPRRAW`） | 同上 |
 | `DS3_OUT` | `ds3_out` | DRAMsim3 输出目录（并行运行时每个运行一个） | `axi-interconnect-kit/sim_ddr/include/SimDDR_DS3.h` |
 
 ## 已删除（2026-11-16，exp/tm-simplify）
 
 全部冻结为当时的默认值，非默认分支删除（git 历史里有）：
-- BPU：`BPU_S0_ENTRIES` / `BPU_S0_WAYS` / `BPU_MAIN_LAT` / `BPU_UPDQ` / `BPU_UPD_PORTS`、`BPO_BANKBLK` / `BPO_L1_ENTRIES` / `BPO_L1_WAYS` / `BPO_UB_TAG` / `BPO_LOOP`（loop 出口预测器删除）/ `BPO_TQ` / `BPO_HSYM`、`BPA_HLEN` / `BPA_ITTH` / `BPA_ITTN`、`FE_RFAST`（15）/ `FE_BFAST`（0，连同 config.h 的 `CFG_FE_*`）；调试打印 `BPU_OVR_DBG` / `BPU_OVR_DBG2`、`FE_TRACE`、对齐指纹 `FPR` / `FPR_DUMP`（`BPU/fpr.h`）。
+- BPU：`BPU_S0_ENTRIES` / `BPU_S0_WAYS` / `BPU_MAIN_LAT` / `BPU_UPDQ` / `BPU_UPD_PORTS`、`BPO_BANKBLK` / `BPO_L1_ENTRIES` / `BPO_L1_WAYS` / `BPO_UB_TAG` / `BPO_LOOP`（loop 出口预测器删除）/ `BPO_TQ` / `BPO_HSYM`、`BPA_HLEN` / `BPA_ITTH` / `BPA_ITTN`、`FE_RFAST`（15）/ `FE_BFAST`（0，连同 config.h 的 `CFG_FE_*`）；调试打印 `BPU_OVR_DBG` / `BPU_OVR_DBG2`、`FE_TRACE`（对齐指纹 `FPR` / `FPR_DUMP` 曾误删，已恢复）。
 - LSU：`LSU_MEMSPEC`（1）、`LSU_MS_DATA`（7，含自检位 8）连同 `CFG_LSU_MEMSPEC` / `CFG_LSU_MS_DATA`；统计 `LSU_PIPE_STATS`（含 `[MS_PENALTY]` / `[MS_DATA]`）；调试 `LSU_PIPE_DUMP` / `LSU_PIPE_EVT` / `LSU_PIPE_STQ` / `LSU_PIPE_WBTRACE` / `LSU_MS_TRACE` / `LSU_MS_DTRACE`。
 - 桥接：`TB_CHECK`（逐条值比较）、`TB_TRACE_COMMIT` / `TB_TRACE_PATCH` / `TB_TRACE_TRAP` / `TB_SAMPLE_PC` / `TB_PCTRACE`、阳性 / 阴性对照 `TB_PERTURB_BR` / `TB_PERTURB_ADDR` / `TB_NEG_NO_REWIND` / `TB_NEG_NO_MEMWRITE` / `TB_NEG_NO_TRAP_STATE`。
 - 其它：`ME_CHECK`、`RVC_ILL_DBG`、`FE_COMMIT_TRACE`、`FP_WB_PORTS`（2）、`PF_STATS`、`TB_TIMER_DBG`、`DS3_CONFIG` / `DS3_EXTRA_NS` / `CPU_FREQ_MHZ`（运行时覆盖；编译期 `gmake CPU_FREQ_MHZ=` 仍在）/ `DS3_STATS`。
