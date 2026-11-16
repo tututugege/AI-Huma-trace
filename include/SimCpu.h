@@ -23,7 +23,7 @@
 //   PORT dcache2lsu         = back.in.dcache2lsu
 //   PORT lsu2dcache         = back.out.lsu2dcache
 //   PORT mmio_req           = back.out.peripheral_req
-//   PORT mmio_resp          = back.in_d.peripheral_resp
+//   PORT mmio_resp          = back.lsu.mmio_resp_d
 //   PORT commit_store       = back.out.commit_store
 //   PORT csr_inject         = back.csr_interrupt_inject_io
 //   PORT periph             = mem_subsystem.peripheral_model_      (the peripheral model's device state)

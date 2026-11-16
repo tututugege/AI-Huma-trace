@@ -27,12 +27,12 @@ void RealLsu::stq_commit() {
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::mmio_in() {
   const LsuState &cur = cur_;
-  if (!(in.top_in->peripheral_resp.is_mmio && cur.uncached_unit.valid)) return;
+  if (!(mmio_resp_q_.is_mmio && cur.uncached_unit.valid)) return;
   const uint32_t idx = cur.uncached_unit.idx;
   if (cur.uncached_unit.is_load) {
     PLdq &e = pnxt.ldq[idx];
     if (e.st == L_MMR) {
-      e.result = in.top_in->peripheral_resp.mmio_rdata;
+      e.result = mmio_resp_q_.mmio_rdata;
       e.st = L_WBP;
       pw.mmio_ld = idx;
     }

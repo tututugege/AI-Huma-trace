@@ -39,9 +39,9 @@ struct BackIn;
 // code): the signals each phase reads (in) and writes (out), and the outputs only this module drives (in / out: parts
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs    in: -                                                    out: lsu2dis lsu2rob lsu_awake
-//   CONTRACT comb_writeback  in: dec_bcast rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: lsu2exe lsu_awake
+//   CONTRACT comb_writeback  in: dec_bcast rob_bcast rob_commit in.dcache2lsu  out: lsu2exe lsu_awake
 //   CONTRACT comb_translate  in: csr_status dec_bcast exe2lsu rob_bcast                out: -
-//   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu rob_bcast rob_commit in.dcache2lsu in.peripheral_resp  out: out.lsu2dcache out.peripheral_req
+//   CONTRACT comb_requests   in: dec_bcast dis2lsu exe2lsu rob_bcast rob_commit in.dcache2lsu  out: out.lsu2dcache out.peripheral_req
 //   CONTRACT comb_commit_store  in: rob_bcast rob_commit                            out: out.commit_store
 //   CONTRACT owns: lsu2dis lsu2rob lsu_awake lsu2exe out.lsu2dcache out.peripheral_req out.commit_store
 class RealLsu {
@@ -69,6 +69,7 @@ public:
     PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     CommitStoreIO *commit_store = nullptr;       // in BackTop (the back end's interface), bound by BackTop::init
   } out;
+  PeripheralRespIO mmio_resp_d{};   // the MMIO response (the memory subsystem drives it after the LSU's phases); q: mmio_resp_q_
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
   struct In {
     const CsrStatusIO *csr_status = nullptr;
@@ -86,6 +87,7 @@ public:
   void seq() {
     cur_ = nxt;
     seq_pipe();
+    mmio_resp_q_ = mmio_resp_d;
   }
 
   // Staged LSU: the comb phases above are in RealLsuPipe.cpp, design in docs/LSU_PIPE.md.
@@ -97,6 +99,7 @@ public:
   void seq_pipe();  // pcur = pnxt, copying only the live LDQ / STQ entries (see RealLsuPipe.cpp)
 
 private:
+  PeripheralRespIO mmio_resp_q_{};   // the MMIO response of the previous cycle (loaded by seq)
   // phases of one cycle, run in the order of the methods above
   void cal();
   void lsu2dis();

@@ -12,7 +12,8 @@ void Front2Back::comb() {
   const auto &q = q_;
   auto &o = *to_back;
   const auto &out = *front_out;
-  if (q.hold_valid) o = q.hold;   // the held group (back.in is cleared otherwise)
+  if (q.hold_valid) o = q.hold;   // the held group
+  else for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) o.valid[j] = false;   // (no group unless the front end delivers)
   if (*can_read) {
     bool no_taken = true;
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {

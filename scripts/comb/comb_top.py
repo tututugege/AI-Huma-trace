@@ -150,8 +150,6 @@ def top_domain(root, ASSIGN, back_rows, back_cls=None):
         return 'mem_subsystem.' + k
 
     S = {}
-    S['back.comb_in_regs'] = ({'back.in_q_'}, {'back.in.valid', 'back.in.dcache2lsu', 'back.in.peripheral_resp'})
-    S['back.comb_csr_status'] = ({'back.csr'}, {'back.csr_status', 'back.out.sstatus', 'back.out.mstatus', 'back.out.satp', 'back.out.privilege'})
     S['front.read_core_q'] = (set(), set())
     fr, fw = from_rows(FRONT_ROWS, front_key)
     # the I-cache ports (icache_top.cpp, ICacheTop's methods over bind_)

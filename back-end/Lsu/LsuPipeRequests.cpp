@@ -3,7 +3,7 @@
 
 void RealLsu::mmio_out() {
   out.peripheral_req->is_mmio = false;
-  if (!in.top_in->peripheral_resp.ready) return;
+  if (!mmio_resp_q_.ready) return;
   const UncachedUnit &u = nxt.uncached_unit;
   out.peripheral_req->is_mmio = u.valid;
   if (u.valid) {

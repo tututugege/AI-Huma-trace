@@ -39,7 +39,7 @@ def unit_of(label, group, inner_of):
     """the object whose state a row's phase touches beyond the scanned signals"""
     base = label.split(':')[0].split('#')[0]
     p = base.split('.')
-    if inner_of and inner_of.startswith('back.') and base != 'back.comb_csr_status':
+    if inner_of and inner_of.startswith('back.'):
         return 'back.' + (p[1] if len(p) >= 3 else 'top')
     if inner_of == 'front.comb_core': return 'front.core'
     if inner_of and inner_of.startswith('mem_subsystem.'): return 'mem_subsystem.' + (p[1] if len(p) > 2 else 'top')

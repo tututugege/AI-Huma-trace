@@ -352,6 +352,70 @@ void Rob::comb_commit() {
   commit();
 }
 
+// the back end's outputs of the cycle: the redirect (a branch mispredict from the IDU, a flush from the commit, its
+// target from the CSR), the fetch-group handshake, the commit with its BPU training data, the commit / flush reported to
+// the trace bridge, the FS-dirty request to the CSR
+void Rob::comb_redirect() {
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.top_out->fire[i] = in.pre2front->fire[i];
+  out.top_out->flush = out.rob_bcast.flush;
+  if (out.top_out->flush) {
+    int64_t committing = -1;
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      if (out.rob_commit.commit_entry[i].valid) {
+        committing = (int64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
+        break;
+      }
+    }
+    tbhook::on_flush(committing, out.rob_bcast.interrupt);
+  }
+  out.top_out->fence_i = out.rob_bcast.fence_i;
+  out.top_out->itlb_flush = out.rob_bcast.fence;
+
+  // 1. Normal case (No Rob flush)
+  if (!out.rob_bcast.flush) {
+    out.top_out->mispred = in.dec_bcast->mispred;
+    out.top_out->stall = !in.pre2front->ready;
+    out.top_out->redirect_pc = in.idu_br_latch->redirect_pc;
+    out.top_out->rf_valid = in.dec_bcast->mispred;
+    if (out.top_out->rf_valid) {
+      const uint32_t fi = in.idu_br_latch->ftq_idx;
+      out.top_out->rf_slot = in.idu_br_latch->ftq_off;
+      out.top_out->rf_blk = ftq->ftq_blk_id(fi, out.top_out->rf_slot);
+      out.top_out->rf_type = in.idu_br_latch->br_type;
+      out.top_out->rf_pc = ftq->ftq_slot_pc(fi, out.top_out->rf_slot);
+      out.top_out->rf_is_rvc = ftq->ftq_slot_rvc(fi, out.top_out->rf_slot);
+    }
+  } else {
+    out.top_out->mispred = true;
+    if (out.rob_bcast.mret || out.rob_bcast.sret) {
+      out.top_out->redirect_pc = in.csr2front->epc;
+    } else if (out.rob_bcast.exception) {
+      out.top_out->redirect_pc = in.csr2front->trap_pc;
+    } else {
+      out.top_out->redirect_pc = out.rob_bcast.pc + ilen_of(out.rob_bcast.is_rvc);
+    }
+  }
+
+  out.top2csr->fs_dirty = false;
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    out.top_out->commit_entry[i] =
+        out.rob_commit.commit_entry[i].uop.to_inst_entry(
+            out.rob_commit.commit_entry[i].valid);
+    out.top_out->commit_extra[i] = out.rob_commit.commit_extra[i];
+    out.top_out->commit_ftq[i] = in.ftq_commit_info->resp[i];
+    if (out.rob_commit.commit_entry[i].valid &&
+        !out.rob_bcast.interrupt) {
+      if (tbhook::fs_dirty_at_commit((uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) out.top2csr->fs_dirty = true;
+      tbhook::on_commit(
+          (uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx);
+    }
+    if (out.top_out->commit_entry[i].valid && out.top_out->flush) {
+      // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)
+      out.top_out->commit_entry[i].uop.diag_val = out.top_out->redirect_pc;
+    }
+  }
+}
+
 // completions, branch recovery, enqueue, flush
 void Rob::comb_update() {
   complete();

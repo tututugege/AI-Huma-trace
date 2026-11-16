@@ -83,6 +83,12 @@ void BackTop::init() {
   csr->in.rob2csr = &rob->out.rob2csr;
   csr->in.rob_bcast = &rob->out.rob_bcast;
   csr->in.top2csr = &top2csr;
+  rob->in.pre2front = &pre->out.pre2front;
+  rob->in.ftq_commit_info = &pre->out.ftq_commit_info;
+  rob->in.csr2front = &csr->out.csr2front;
+  rob->in.idu_br_latch = &idu->q().br_latch;
+  rob->out.top_out = &out;
+  rob->out.top2csr = &top2csr;
   lsu->in.csr_status = &csr_status;
   lsu->in.dec_bcast = &idu->out.dec_bcast;
   lsu->in.dis2lsu = &dis->out.dis2lsu;
@@ -112,91 +118,15 @@ void BackTop::set_lsu_ptw_walk_port(PtwWalkPort *port) {
   }
 }
 
-void BackTop::comb_csr_status() {
-  csr->comb_csr_status();
-  out.sstatus = csr_status.sstatus;
-  out.mstatus = csr_status.mstatus;
-  out.satp = csr_status.satp;
-  out.privilege = csr_status.privilege;
-}
 
-void BackTop::comb_in_regs() {
-  // the fetch group: valid only (Front2Back drives the other fields with it); the D-cache response is filled in parts
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) in.valid[i] = false;
-  in.dcache2lsu = {};
-  in.peripheral_resp = in_q_.peripheral_resp;
-}
 
 // ---------------------------------------------------------------------------------------------
 // One back-end cycle is evaluated in dependency order: every stage reads only signals that an
 // earlier stage (or registered state) already produced. The call order in BackTop::comb() is that order.
 // ---------------------------------------------------------------------------------------------
 
-// Working copies and default outputs of every module.
-// Branch/decode results, free resources (rename registers, issue queues, LDQ/STQ) and the wakeups/write-backs completing this cycle.
-void BackTop::comb_outputs() {
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.fire[i] = pre->out.pre2front.fire[i];
-  out.flush = rob->out.rob_bcast.flush;
-  if (out.flush) {
-    int64_t committing = -1;
-    for (int i = 0; i < COMMIT_WIDTH; i++) {
-      if (rob->out.rob_commit.commit_entry[i].valid) {
-        committing = (int64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
-        break;
-      }
-    }
-    tbhook::on_flush(committing, rob->out.rob_bcast.interrupt);
-  }
-  out.fence_i = rob->out.rob_bcast.fence_i;
-  out.itlb_flush = rob->out.rob_bcast.fence;
-
-  // 1. Normal case (No Rob flush)
-  if (!rob->out.rob_bcast.flush) {
-    out.mispred = idu->out.dec_bcast.mispred;
-    out.stall = !pre->out.pre2front.ready;
-    out.redirect_pc = idu->q().br_latch.redirect_pc;
-    out.rf_valid = idu->out.dec_bcast.mispred;
-    if (out.rf_valid) {
-      const uint32_t fi = idu->q().br_latch.ftq_idx;
-      out.rf_slot = idu->q().br_latch.ftq_off;
-      out.rf_blk = pre->ftq_blk_id(fi, out.rf_slot);
-      out.rf_type = idu->q().br_latch.br_type;
-      out.rf_pc = pre->ftq_slot_pc(fi, out.rf_slot);
-      out.rf_is_rvc = pre->ftq_slot_rvc(fi, out.rf_slot);
-    }
-  } else {
-    out.mispred = true;
-    if (rob->out.rob_bcast.mret || rob->out.rob_bcast.sret) {
-      out.redirect_pc = csr->out.csr2front.epc;
-    } else if (rob->out.rob_bcast.exception) {
-      out.redirect_pc = csr->out.csr2front.trap_pc;
-    } else {
-      out.redirect_pc = rob->out.rob_bcast.pc + ilen_of(rob->out.rob_bcast.is_rvc);
-    }
-  }
-
-  top2csr.fs_dirty = false;
-  for (int i = 0; i < COMMIT_WIDTH; i++) {
-    out.commit_entry[i] =
-        rob->out.rob_commit.commit_entry[i].uop.to_inst_entry(
-            rob->out.rob_commit.commit_entry[i].valid);
-    out.commit_extra[i] = rob->out.rob_commit.commit_extra[i];
-    out.commit_ftq[i] = pre->out.ftq_commit_info.resp[i];
-    if (rob->out.rob_commit.commit_entry[i].valid &&
-        !rob->out.rob_bcast.interrupt) {
-      if (tbhook::fs_dirty_at_commit((uint64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) top2csr.fs_dirty = true;
-      tbhook::on_commit(
-          (uint64_t)rob->out.rob_commit.commit_entry[i].uop->dbg.inst_idx);
-    }
-    if (out.commit_entry[i].valid && out.flush) {
-      // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)
-      out.commit_entry[i].uop.diag_val = out.redirect_pc;
-    }
-  }
-}
 
 void BackTop::seq() {
-  in_q_ = in_d;
   // rename -> isu/stq/rob
   pre->seq();
   rename->seq();
@@ -229,5 +159,5 @@ void BackTop::restart_at(pc_t pc) {
   out.flush = true;
   out.mispred = true;
   out.redirect_pc = pc;
-  comb_csr_status();
+  csr->comb_csr_status();
 }

@@ -29,7 +29,7 @@ for d0, _, fs in os.walk(os.path.join(ROOT, 'back-end')):
 FIELDS = [f for f in FIELDS if f not in ('in', 'out')] + sorted(OUTS) + ['idu_br_latch', 'in', 'out']   # (idu_br_latch: Idu's
 #   br_latch register, a port of the pre-decode queue)
 EXT_PORT = {'lsu2dcache': 'out.lsu2dcache', 'peripheral_req': 'out.peripheral_req', 'commit_store': 'out.commit_store',
-            'csr_status': 'csr_status'}   # module
+            'csr_status': 'csr_status', 'top_out': 'out', 'top2csr': 'top2csr'}   # module
 #   output ports bound to BackTop's interface
 
 def as_wires(cls, b):

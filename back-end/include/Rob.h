@@ -1,4 +1,5 @@
 #pragma once
+#include "BackPorts.h"
 #include "IO.h"
 #include "config.h"
 #include <cstdlib>
@@ -18,11 +19,13 @@ struct BackIn;
 // Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the signals
 // each phase reads (in) and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_commit  in: csr2rob dec_bcast lsu2rob in.front_stall in.front_tq_free in.front_upd_free  out: rob2csr rob2dis rob_bcast rob_commit
+//   CONTRACT comb_redirect  in: csr2front dec_bcast ftq_commit_info idu_br_latch pre2front  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 //   CONTRACT comb_update  in: dec_bcast dis2rob exu2rob    out: -
-//   CONTRACT owns: rob2csr rob2dis rob_bcast rob_commit
+//   CONTRACT owns: rob2csr rob2dis rob_bcast rob_commit top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 class Rob {
 public:
   void comb_commit();  // the head: commit and its broadcasts
+  void comb_redirect();
   void comb_update();  // completions, branch recovery, enqueue, flush
   Rob(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
@@ -37,6 +40,8 @@ public:
     RobDisIO rob2dis;
     RobBroadcastIO rob_bcast;
     RobCommitIO rob_commit;
+    BackOut *top_out = nullptr;    // the back end's outputs (BackTop's interface), bound by BackTop::init
+    TopCsrIO *top2csr = nullptr;   // the FS-dirty request to the CSR, bound by BackTop::init
   } out;
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
   struct In {
@@ -46,6 +51,10 @@ public:
     const ExuRobIO *exu2rob = nullptr;
     const BackIn *top_in = nullptr;   // the back end's inputs (SimCpu)
     const LsuRobIO *lsu2rob = nullptr;
+    const PreFrontIO *pre2front = nullptr;
+    const FtqCommitInfoIO *ftq_commit_info = nullptr;
+    const CsrFrontIO *csr2front = nullptr;
+    const ExuIdIO *idu_br_latch = nullptr;   // the IDU's branch latch (its register): the mispredict target
   } in;
   const class PreIduQueue *ftq = nullptr;  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
 

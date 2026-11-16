@@ -6,10 +6,9 @@
 
 struct BackIn : FrontPreIO {
   // from MemSubsystem
-  PeripheralRespIO peripheral_resp;
   DcacheLsuIO dcache2lsu;
 
-  BackIn() : FrontPreIO(), peripheral_resp{}, dcache2lsu{} {}
+  BackIn() : FrontPreIO(), dcache2lsu{} {}
 };
 
 struct BackOut {

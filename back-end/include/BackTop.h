@@ -30,13 +30,7 @@ class Csr;
 class AbstractMMU;
 class MemSubsystem;
 
-// The back end's own phase: its outputs to the front end and the memory side (redirect, commit, stall) and the CSR's
-// FS-dirty request. Contract (checked by scripts/comb/comb_graph.py against the code):
-//   CONTRACT comb_outputs  in: csr2front dec_bcast ftq_commit_info pre2front rob_bcast rob_commit  out: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
-//   CONTRACT owns: top2csr out.commit_entry out.commit_extra out.commit_ftq out.fence_i out.fire out.flush out.itlb_flush out.mispred out.redirect_pc out.rf_blk out.rf_is_rvc out.rf_pc out.rf_slot out.rf_type out.rf_valid out.stall
 // SimCpu-level phases (include/SimCpu.h, scripts/comb/gen_top_order.py):
-//   EXPORT comb_in_regs     default: back_in
-//   EXPORT comb_csr_status  out: csr_status
 // The modules' comb phases (their CONTRACT lines and comb_outputs above) are SimCpu-level phases themselves:
 // scripts/comb/gen_top_order.py schedules them with the other tops' phases (back.<module>.<phase>).
 class BackTop : public BackPorts {
@@ -63,20 +57,6 @@ public:
   std::unique_ptr<RealLsu> lsu;
 
   void init();
-  // back.in at the start of the cycle: no fetch group (valid cleared), no D-cache response, the MMIO response of the
-  // previous cycle (its register)
-  void comb_in_regs();
-  struct InRegs {
-    PeripheralRespIO peripheral_resp{};   // the MMIO response (the memory subsystem drives it after BackTop::comb())
-  };
-  InRegs in_d;   // written by the memory subsystem (mem_subsystem.peripheral_resp); q: in_q_
-
-private:
-  InRegs in_q_;   // loaded by seq()
-
-public:
-  void comb_csr_status();
-  void comb_outputs();   // the back end's own phase (CONTRACT above); SimCpu::cycle() calls it with the modules' phases
   void pmu_sample();     // PMU (EXP-013): one cycle of the event bus, after the comb phases of the cycle
   void seq();
   void set_lsu_ptw_walk_port(PtwWalkPort *port);
