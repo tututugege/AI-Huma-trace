@@ -239,7 +239,7 @@ for name, (drows, dhaz, notes) in (('front', front_domain(ROOT, ASSIGN, overlap)
     all_hazards += dhaz
 # top level: SimCpu::cycle() (see comb_top.py)
 from comb_top import top_domain
-trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows)
+trows, tnotes, toverlap, texcl, tprior = top_domain(ROOT, ASSIGN, rows, back_cls=cls_of)
 # reviewed: the AXI interconnect keeps some of its own last-cycle outputs in the shared port structs (the downstream
 # AR / AW / W valid it drove, the write-port req.ready) and reads them in comb_outputs: registers inside the AXI kit,
 # to become explicit when the AXI kit is reworked (docs/REG_WIRE.md)
@@ -261,6 +261,10 @@ print('hazards (reader, signal, later writer):')
 for h in thaz: print('  %s reads %s, written later by %s' % h)
 for x in sorted(tnotes): print('  note: ' + x)
 all_hazards += thaz
+# all levels in one dependence graph (global_graph.py)
+from comb_top import TOP_DETAIL
+import global_graph
+print(global_graph.report(TOP_DETAIL, toverlap)[0])
 # SimCpu::cycle() must be the order generated from the tops' EXPORT declarations, and the declarations must match the code
 if '--check' in sys.argv:
     p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gen_top_order.py'), '--check'],

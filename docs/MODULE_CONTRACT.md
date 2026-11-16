@@ -319,3 +319,16 @@ Checks: a function-model special checkpoint of dhrystone (back door 400k instruc
 program) and of rv64 Linux at 40M instructions (back door 3M instructions, 2,126,672 cycles): output identical to
 the previous binary but for the restore messages. Gates RVC=0 62/62, RVC=1 67/67. Not checked: SPEC checkpoints
 (server). Found: tools/ckpt2stub.py gives pc 0x0 for these format-5 checkpoints (the restore program jumps to 0).
+
+## Global schedule, step 1: one dependence graph of all levels (exp/global-sched)
+
+`scripts/comb/global_graph.py` (printed by `comb_graph.py`, section `== global`): the rows of SimCpu::cycle() with each
+summarised sub-object call (back.comb, front.comb_core, mem_subsystem.comb_outputs / comb_inputs) replaced by that
+domain's own phases as SimCpu paths (comb_top.py keeps them in TOP_DETAIL), 203 phases. From the current order it
+derives the edges every schedule must keep: data (read-after-write, write-after-read, write-after-write), the order of
+phases inside one object (a back-end module, the front core, one memory block, one AXI object: their state is not a
+signal in the scans) and global side effects as pseudo-signals: the trace bridge (tbhook::, the functional memory:
+front.run_icache / write_instruction_fifo / finish, mem_route_block.comb_response, the back end's TB_ORDER) and each PMU
+event bus (g_pmu_front: front -> back.pmu_sample; g_pmu_back: rename / idu -> pmu_sample). It prints the current runs per
+top module (14), a greedy schedule's runs (13), every cross-module data edge (161) and the side-effect users. No code
+changed; the schedule is still generated per level.

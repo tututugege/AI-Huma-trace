@@ -28,6 +28,8 @@ INLINE = {'front.comb': ('FrontTop', r'back2front_stall_1|back2front_stall|back2
           'axi.comb_outputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart'),
           'axi.comb_inputs': ('AxiSubsystem', r'interconnect|ddr|mmio|uart')}
 TOP_PHASES = []   # filled by top_domain: the SimCpu-level phases with their read / write sets
+TOP_DETAIL = []   # filled by top_domain: per row of cycle() (label, R, W, group, tag, inner); inner: for a sub-object call
+                  # summarised from a domain, that domain's phases [label, R, W, source text] as SimCpu paths, else None
 DEPTH = 4                                   # path components kept below the root
 
 
@@ -100,7 +102,7 @@ def scan_paths(body, ASSIGN, src, notes, owner, roots=ROOTS, prefix='', types=No
     return r, w
 
 
-def top_domain(root, ASSIGN, back_rows):
+def top_domain(root, ASSIGN, back_rows, back_cls=None):
     src = Src(root, ['back-end', 'front-end', 'MemSubSystem', 'axi-interconnect-kit', 'include'])
     for fn in os.listdir(root):
         if fn.endswith('.cpp'): src.t[os.path.join(root, fn)] = open(os.path.join(root, fn), errors='ignore').read()
@@ -173,6 +175,71 @@ def top_domain(root, ASSIGN, back_rows):
     S['mem_subsystem.comb_inputs'] = (mr | {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'},
                                       mw | ({'mem_subsystem.dtlb_walk.out', 'mem_subsystem.itlb_walk.out'} if syncs else set()))
 
+    # ---- the same calls phase by phase (global_graph.py): each domain's rows as SimCpu paths, with their source text ----
+    SUB = {}
+    def mapped(rows, mapk, prefix):
+        out = []
+        for n, rr, ww in rows:
+            r, w = set(), set()
+            for k in rr:
+                mk = mapk(k)
+                if mk: r |= mk if isinstance(mk, set) else {mk}
+            for k in ww:
+                mk = mapk(k, True)
+                if mk: w |= mk if isinstance(mk, set) else {mk}
+            out.append([prefix + n, r, w, ''])
+        return out
+    SUB['back.comb'] = mapped(back_rows, back_key, 'back.')
+    for row in SUB['back.comb']:
+        obj, fn = row[0].split('.')[1:3]
+        if back_cls and obj in back_cls: row[3] = closure(src, back_cls[obj], fn) or ''
+        if row[0] == 'back.lsu.comb_translate':
+            row[1].add('mem_subsystem.dtlb_walk.out'); row[2].add('mem_subsystem.dtlb_walk.in')
+    SUB['back.comb'].append(['back.pmu_sample', set(), set(), closure(src, 'BackTop', 'pmu_sample') or ''])
+    for row in SUB['back.comb']:   # calls into the other back-end modules (obj->f(...)): their text too
+        for o2, f2 in set(re.findall(r'\b(\w+)->(\w+)\s*\(', row[3])):
+            if back_cls and o2 in back_cls: row[3] += closure(src, back_cls[o2], f2) or ''
+    def front_key2(k, write=False):   # FrontComb locals: front.c.*
+        if k.split('.')[0] in ('in', 'out'): return front_key(k, write)
+        return 'front.c.' + k
+    SUB['front.comb_core'] = mapped(FRONT_ROWS, front_key2, 'front.')
+    IC_PHASE = {'comb': 'run_icache', 'step': 'run_icache', 'comb_calc': 'run_icache', 'clear_outputs': 'run_icache',
+                'invalidate_step': 'finish', 'read_ready': 'read_fifos'}
+    def ic_ports(t1):
+        t1 = re.sub(r'(?:const\s+)?auto\s*\*\s*\w+\s*=\s*bind_\.\w+\s*;', '', t1)
+        t1 = re.sub(r'\bif\s*\(\s*(?:rp|rq|pr|bind_\.\w+)\s*\)', 'if (1)', t1)
+        t1 = re.sub(r'\b(?:rp|rq|pr|bind_\.\w+)\s*\?', '1 ?', t1)
+        t1 = re.sub(r'\bbind_\.read_q\b|\brq\b', fb_.get('icache_mem_read_q', '?read_q'), t1)
+        t1 = re.sub(r'\bbind_\.read\b|\brp\b', 'axi.interconnect.read_ports[MASTER_ICACHE]', t1)
+        t1 = re.sub(r'\bbind_\.probe_resp\b|\bpr\b', fb_.get('icache_mem_resp_port', '?probe_resp'), t1)
+        t1 = re.sub(r'\bbind_\.probe_req\b', fb_.get('icache_mem_req_port', '?probe_req'), t1)
+        return scan_paths(t1, ASSIGN, src, notes, 'icache')
+    for row in SUB['front.comb_core']:
+        ph = row[0].split('.', 1)[1]
+        txt = closure(src, 'FrontComb', ph) or ''
+        for cm2 in set(re.findall(r'\bicache\.(\w+)\s*\(', txt)): txt += closure(src, 'ICacheTop', cm2) or ''
+        row[3] = txt
+        for fn, phx in IC_PHASE.items():
+            if phx != ph: continue
+            mm = re.search(r'\n[\w:<>&*\s]*?\b' + fn + r'\s*\([^)]*\)\s*(?:const\s*)?\{', ict)
+            if not mm: continue
+            r1, w1 = ic_ports(Src.block(ict, mm.end() - 1))
+            row[1] |= r1; row[2] |= w1
+        if ph == 'run_icache':
+            row[1].add('mem_subsystem.itlb_walk.out'); row[2].add('mem_subsystem.itlb_walk.in')
+    memh = src.t.get(os.path.join(root, 'MemSubSystem', 'include', 'MemSubsystem.h'), '')
+    def mem_text(n):
+        if '.' in n:
+            obj, meth = n.split('.', 1)
+            tm = re.search(r'([\w:<>]+)\s+' + re.escape(obj) + r'\s*[;{=]', memh)
+            return (closure(src, tm.group(1).split('::')[-1], meth) or '') if tm else ''
+        return closure(src, 'MemSubsystem', n) or ''
+    for grp in ('comb_outputs', 'comb_inputs'):
+        SUB['mem_subsystem.' + grp] = mapped(MEM_GROUPS[grp], mem_key, 'mem_subsystem.')
+        for row in SUB['mem_subsystem.' + grp]: row[3] = mem_text(row[0].split('.', 1)[1])
+    for row in SUB['mem_subsystem.comb_inputs']:
+        if row[0] == 'mem_subsystem.ptw_request': row[1] |= {'mem_subsystem.dtlb_walk.in', 'mem_subsystem.itlb_walk.in'}
+
     def class_summary(obj, cls, meth, members):
         b = closure(src, cls, meth)
         if not b:
@@ -201,8 +268,10 @@ def top_domain(root, ASSIGN, back_rows):
     groups = []        # per row: the top-level call of cycle() it belongs to (a SimCpu-level phase)
     cur_group = ['']
 
-    def emit(label, r, w):
-        rows.append((label, r, w)); tags.append(tuple(cur_tag)); groups.append(cur_group[0])
+    inners = []        # per row: the sub-object's phases (SUB) or None
+
+    def emit(label, r, w, inner=None):
+        rows.append((label, r, w)); tags.append(tuple(cur_tag)); groups.append(cur_group[0]); inners.append(inner)
 
     def subst(text, mp):
         for a, e in mp.items(): text = re.sub(r'(?<![\w.>])' + a + r'\b', e, text)
@@ -242,7 +311,7 @@ def top_domain(root, ASSIGN, back_rows):
                 if key in S:
                     r, w = S[key]
                     ra, wa = scan_paths(cm.group(3), ASSIGN, src, notes, key)   # arguments
-                    emit(key, r | ra, w | wa); continue
+                    emit(key, r | ra, w | wa, SUB.get(key)); continue
                 notes.add(f'no summary for {key}()')
                 emit(key, *scan_paths(st, ASSIGN, src, notes, key)); continue
             fm = re.match(r'(\w+)\s*\(([^;]*)\)\s*;$', st)
@@ -313,6 +382,7 @@ def top_domain(root, ASSIGN, back_rows):
     def exclusive(i, j):
         di = dict(tags[i]); dj = dict(tags[j])
         return any(k in dj and dj[k] != b for k, b in di.items())
+    TOP_DETAIL[:] = [(n, r, w, g, t, inn) for (n, r, w), g, t, inn in zip(out, groups, tags, inners)]
     TOP_PHASES[:] = []   # (phase, R, W) per SimCpu-level phase, in the order of cycle()
     for g, (n, r, w) in zip(groups, rows):
         if not TOP_PHASES or TOP_PHASES[-1][0] != g: TOP_PHASES.append((g, set(), set()))
