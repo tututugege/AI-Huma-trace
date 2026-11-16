@@ -249,6 +249,8 @@ class BpuPipe {
   };
 
  private:
+  Txn txn_d_;
+  bool txn_d_valid_ = false;
   static constexpr int hsym_ = HSYM_BITS;
   // The pipeline registers are double-buffered: comb() builds the next value in *nxp_ (from *stp_), commit() flips the two.
   State sb_[2];
@@ -612,6 +614,11 @@ class BpuPipe {
   void warm_finish() { (*stp_).spec = (*stp_).arch; (*stp_).sras = RasQ::from_commit((*stp_).aras); }
 
   BpuPipe() { reset(); }
+  // One cycle as a module: comb_cycle() builds this cycle's transaction (the d of the pipeline's registers and arrays),
+  // seq() commits it at the clock edge; txn() is this cycle's transaction (PMU attribution).
+  void comb_cycle(const InputPayload &in, const Decision &d, OutputPayload &out) { comb(in, d, out, txn_d_); txn_d_valid_ = true; }
+  void seq() { if (txn_d_valid_) commit(txn_d_); txn_d_valid_ = false; }
+  const Txn &txn() const { return txn_d_; }
   static constexpr int depth() { return MAIN_LAT; }
 
   void reset() {

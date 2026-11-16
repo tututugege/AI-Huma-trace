@@ -64,13 +64,17 @@ struct FrontRegs {
   wire1_t pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
   fetch_addr_t pend_addr = 0;
   FetchPair pend_pair{};
+  uint64_t pmu_last_refetch = ~0ull;   // PMU: the cycle of the last refetch (front-end delivery attribution)
 };
 
 struct PendingFrontState {
   wire1_t valid = false;
   FrontRegs d;
-  int ipf_ncand = 0;                 // FE_IPF: fetch addresses the BPU pushed this cycle (prefetch candidates)
-  uint32_t ipf_cand[2] = {0, 0};
+};
+
+struct PendingIpf {   // FE_IPF: fetch addresses the BPU pushed this cycle (prefetch candidates, started at the edge)
+  int ncand = 0;
+  uint32_t cand[2] = {0, 0};
 };
 
 struct FrontReadData {
@@ -84,6 +88,7 @@ struct FrontReadData {
 struct FrontUpdateRequest {
   PendingBpuSeqTxn bpu_seq_txn;
   PendingFrontState front_state;
+  PendingIpf ipf;
   FetchAddrCombOut fetch_addr_fifo_req{};
   InstructionCombOut fifo_req{};
   PtabCombOut ptab_req{};

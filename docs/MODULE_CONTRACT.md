@@ -147,3 +147,34 @@ response phase depending on lsu2dcache, two generated lines swapped) are reporte
 
 Known: the walk-port adapters (`dtlb_walk_port_inst` / `itlb_walk_port_inst`) are declared as whole objects: the PTW
 request reads the TLBs' requests from them, the feedback clears them after use.
+
+## Front end under the contract
+
+The front end already had the q / d form: the registers are read through `rd` (FrontRegs and the FIFOs' snapshots, taken
+at the edge), every update is a request in `req` applied by seq. What was left:
+* the BPU pipeline's transaction and decision of the cycle lived in file statics written by comb (`g_pipe_txn`,
+  `g_pipe_dec`, `g_pipe_txn_valid`): the transaction is BpuPipe's own d now (`comb_cycle()` builds it, `seq()` commits
+  it), the decision is a FrontComb wire (`pipe_dec`);
+* the BPU ran either inside read_fifos (when the PTAB is bypassed) or after it (`bpu_done`): it reads nothing the FIFO
+  reads produce, so the phases are control (flush / refetch, the pipeline's decision) -> run_bpu -> read_fifos; the
+  PTAB's write port and the head fix-ups (FE_PAIR slot cut, RVC=1 carry) are part of read_fifos, so each FIFO head has
+  one writer; the predecode check is check_group;
+* the I-cache's invalidate step K wrote over the fetch step's outputs (`ic_out`): it writes `ic_k`, finish reads the
+  outputs of the last step;
+* writes through local reference aliases (`pd`, `txn`, `state`) are direct; the FE_IPF prefetch candidates are their own
+  request (`req.ipf`) instead of a second writer of `req.front_state`; the PMU's "last refetch" cycle, a function-local
+  static updated in comb, is a front-end register (`FrontRegs::pmu_last_refetch`).
+
+Checked beyond the gates: FE_IPF=1 identical on all 67 RVC programs; FE_PAIR=1 identical (fact, which never finishes with
+FE_PAIR even on the base, has the same commit stream over 2M cycles). FE_PAIR caught one slip on the way: the
+multi-block slot masks must be taken after the FE_PAIR cut and before the RVC=1 head fix (they are part of fix_heads).
+
+The 9 phases are declared above struct FrontComb (front_top.cpp); `scripts/comb/gen_front_order.py` checks them against
+the front-domain scan (exact read / write sets) and generates front_comb_calc(). A FIFO's state (its _in struct, its
+read data and its request) is declared once with its ports in order (`CONTRACT fifo <name>: ... ports: read_fifos
+write_...`): the only signals with two writers. The generated order equals the hand-made one. Mutations (an input
+dropped, two generated lines swapped, a phase made to read a later phase's output) are reported.
+
+With this, every comb schedule of the CPU is generated from declarations: SimCpu::cycle() (the tops' EXPORTs),
+BackTop::comb(), MemSubsystem::comb_outputs / comb_inputs, front_comb_calc(). Not covered: the AXI kit's internals, the
+I-cache module's own steps (icache_top.cpp, written per the RTL), Exu's FU state (in place).
