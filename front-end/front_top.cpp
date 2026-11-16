@@ -280,60 +280,16 @@ static void accumulate_fetch_addr_req(FetchAddrCombOut &acc,
     }
 }
 
-static void accumulate_instruction_fifo_req(InstructionCombOut &acc,
-                                            const InstructionCombOut &step) {
+// (instruction FIFO, PTAB, front-to-back FIFO: the same request layout)
+template <class C>
+static void accumulate_fifo_req(C &acc, const C &step) {
     acc.clear_fifo |= step.clear_fifo;
     if (step.pop_en) {
-        if (acc.pop_en) {
-            std::printf("[front_top] ERROR: instruction_FIFO pop requested multiple times in one cycle\n");
-            std::exit(1);
-        }
+        if (acc.pop_en) { std::printf("[front_top] ERROR: FIFO pop requested multiple times in one cycle\n"); std::exit(1); }
         acc.pop_en = true;
     }
     if (step.push_en) {
-        if (acc.push_en) {
-            std::printf("[front_top] ERROR: instruction_FIFO push requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.push_en = true;
-        acc.push_entry = step.push_entry;
-    }
-}
-
-static void accumulate_ptab_req(PtabCombOut &acc, const PtabCombOut &step) {
-    acc.clear_ptab |= step.clear_ptab;
-    if (step.pop_en) {
-        if (acc.pop_en) {
-            std::printf("[front_top] ERROR: PTAB pop requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.pop_en = true;
-    }
-    if (step.push_write_en) {
-        if (acc.push_write_en) {
-            std::printf("[front_top] ERROR: PTAB write push requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.push_write_en = true;
-        acc.push_write_entry = step.push_write_entry;
-    }
-}
-
-static void accumulate_front2back_req(Front2BackCombOut &acc,
-                                      const Front2BackCombOut &step) {
-    acc.clear_fifo |= step.clear_fifo;
-    if (step.pop_en) {
-        if (acc.pop_en) {
-            std::printf("[front_top] ERROR: front2back_FIFO pop requested multiple times in one cycle\n");
-            std::exit(1);
-        }
-        acc.pop_en = true;
-    }
-    if (step.push_en) {
-        if (acc.push_en) {
-            std::printf("[front_top] ERROR: front2back_FIFO push requested multiple times in one cycle\n");
-            std::exit(1);
-        }
+        if (acc.push_en) { std::printf("[front_top] ERROR: FIFO push requested multiple times in one cycle\n"); std::exit(1); }
         acc.push_en = true;
         acc.push_entry = step.push_entry;
     }
@@ -460,15 +416,15 @@ void FrontComb::read_fifos() {
 
   InstructionCombOut fifo_step{};
   instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &fifo_head, &fifo_rd, &fifo_step);
-  accumulate_instruction_fifo_req(req.fifo_req, fifo_step);
+  accumulate_fifo_req(req.fifo_req, fifo_step);
 
   PtabCombOut ptab_step{};
   PTAB_comb_calc(&ptab_in, &ptab_rd, &ptab_head, &ptab_rd, &ptab_step);
-  accumulate_ptab_req(req.ptab_req, ptab_step);
+  accumulate_fifo_req(req.ptab_req, ptab_step);
 
   Front2BackCombOut f2b_step{};
   front2back_FIFO_comb_calc(&f2b_in, &f2b_rd, &f2b_head, &f2b_rd, &f2b_step);
-  accumulate_front2back_req(req.front2back_fifo_req, f2b_step);
+  accumulate_fifo_req(req.front2back_fifo_req, f2b_step);
 }
 
 // The BPU predicts the next fetch group unless the fetch-address FIFO or PTAB is full (a flush always runs it).
@@ -646,7 +602,7 @@ void FrontComb::write_instruction_fifo() {
   instruction_FIFO_out unused_out{};
   InstructionCombOut step{};
   instruction_FIFO_comb_calc(&fifo_in, &fifo_rd, &unused_out, &fifo_rd, &step);
-  accumulate_instruction_fifo_req(req.fifo_req, step);
+  accumulate_fifo_req(req.fifo_req, step);
 }
 
 // The BPU's prediction enters the PTAB; the predecode checker compares the FIFO head against the PTAB head and may ask
@@ -659,7 +615,7 @@ void FrontComb::write_ptab_and_check(bool &predecode_flush, pc_t &flush_address)
     PTAB_out unused_out{};
     PtabCombOut step{};
     PTAB_comb_calc(&ptab_in, &ptab_rd, &unused_out, &ptab_rd, &step);
-    accumulate_ptab_req(req.ptab_req, step);
+    accumulate_fifo_req(req.ptab_req, step);
   }
 
   if (!fifo_read_enable) return;
@@ -764,7 +720,7 @@ void FrontComb::write_front2back() {
     front2back_FIFO_out unused_out{};
     Front2BackCombOut step{};
     front2back_FIFO_comb_calc(&f2b_in, &f2b_rd, &unused_out, &f2b_rd, &step);
-    accumulate_front2back_req(req.front2back_fifo_req, step);
+    accumulate_fifo_req(req.front2back_fifo_req, step);
   }
 }
 
