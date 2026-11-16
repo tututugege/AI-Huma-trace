@@ -41,7 +41,6 @@ class BackTop : public BackPorts {
 private:
   std::unique_ptr<TlbMmu> dtlb_mmu;
   void comb_outputs();
-  void install_arch_state(const CPU_state &state, uint8_t privilege);
 
 public:
   void warm_dtlb(const TlbMmu::TlbEntry *entries, int count, int repl_ptr) {  // fast-warmup replay (EXP-011)
@@ -76,14 +75,10 @@ public:
   ~BackTop();
 
   wire<XLEN> restored_pc = 0;   // the pc of the last install_arch_state (the driver restarts the fetch there)
-  uint64_t ckpt_interval_inst_count = 0;
 
-  void load_image(const std::string &filename);
-  void restore_checkpoint(const std::string &filename);
-  // Front-door restore: only the memory of the checkpoint is loaded and the restore program (stub) is put in the boot
-  // window; the DUT and the reference core start from reset and execute it. ckpt_interval_inst_count is still read.
-  void restore_checkpoint_front_door(const std::string &filename, const std::string &stub_file);
-  void restore_from_ref();
+  // Architectural state the timing model itself keeps (privilege, CSRs, the LR/SC reservation), from a checkpoint or
+  // the reference core; the pipeline starts with a refetch from state.pc.
+  void install_arch_state(const CPU_state &state, uint8_t privilege);
   // between cycles (a switch from fast mode): the redirect outputs as if the back end redirected to pc, the CSR
   // status refreshed (satp, privilege: the MMU mode)
   void restart_at(pc_t pc);

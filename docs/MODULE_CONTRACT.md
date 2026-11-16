@@ -304,3 +304,18 @@ other tops:
   delay it a cycle.
 Gates RVC=0 62/62, RVC=1 67/67 identical, FPR / TB_TRACE_COMMIT / LSU_PIPE_EVT identical; the restore path: a
 function-model special checkpoint of dhrystone (instruction 300000) run for 400000 instructions, log identical.
+
+## Checkpoints read by the function model (exp/simcpu; function-model exp/step-access 55affa0)
+
+The trace model parsed the checkpoint file itself (driver/BackTopLoad.cpp: header, CPU_state layout, sparse memory,
+MMIO ranges), a second copy of the function model's restore_checkpoint. Now the function model reads it
+(`refcpu_restore_checkpoint`; it got the page-sparse reader and accepts a smaller RAM image, as the trace model did)
+and the trace model only does what is its own: the timing model's architectural registers (`BackTop::install_arch_state`:
+privilege, CSRs, LR/SC reservation, the refetch from the pc), the device registers as stored into the model's IO
+backing (`refcpu_get_io_backing_word`), the restore program of a front-door restore, the warm-up. The loaders are
+driver functions (driver/Load.cpp: load_image, restore_checkpoint, restore_checkpoint_front_door, restore_from_ref),
+not BackTop methods; BackTop's ckpt_interval_inst_count is gone (the restore returns the interval).
+Checks: a function-model special checkpoint of dhrystone (back door 400k instructions; front door with the restore
+program) and of rv64 Linux at 40M instructions (back door 3M instructions, 2,126,672 cycles): output identical to
+the previous binary but for the restore messages. Gates RVC=0 62/62, RVC=1 67/67. Not checked: SPEC checkpoints
+(server). Found: tools/ckpt2stub.py gives pc 0x0 for these format-5 checkpoints (the restore program jumps to 0).

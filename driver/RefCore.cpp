@@ -90,6 +90,30 @@ void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege) {
   (void)refcpu_probe_pc_translation(c);
 }
 
+uint64_t refcore_restore_ckpt(const std::string &path, CPU_state &state, uint8_t &privilege) {
+  RefCpuContext *c = core();
+  RefCpuState restored{};
+  const uint64_t interval = refcpu_restore_checkpoint(c, path.c_str(), false, &restored);
+  state = from_ref_state(restored);
+  privilege = restored.privilege;
+  state.instruction = 0;   // fields a checkpoint does not have
+  state.page_fault_inst = state.page_fault_load = state.page_fault_store = false;
+  state.inst_idx = 0;
+  // the checkpoint's device registers, as stored, into the model's IO backing (the timing model's devices read them)
+  for (const auto &range : kCheckpointMmioRanges) {
+    for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
+      const uint32_t addr = range.base + off;
+      pmem_write(addr, refcpu_get_io_backing_word(c, addr));
+    }
+  }
+  refcore_init_ckpt(state, privilege);
+  return interval;
+}
+
+uint64_t refcore_restore_ckpt_memory(const std::string &path) {
+  return refcpu_restore_checkpoint(core(), path.c_str(), true, nullptr);
+}
+
 // Architectural state of the core for the timing model; its device registers go back to the model's IO backing (the
 // RAM is shared, nothing to copy).
 void refcore_get_state(CPU_state &dut_state, uint8_t &privilege) {

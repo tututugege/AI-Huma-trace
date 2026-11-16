@@ -147,7 +147,7 @@ rv32: FLEN is 64 too; `fld` / `fsd` are 8-byte accesses (the LSU width helpers r
   (a committed instruction whose fact says it turned FS to Dirty sets it at the end of the cycle). `csrr`/`csrw` of fflags / frm / fcsr are still NOPs with no
   serialization (the model computes no values, so a dynamic rounding mode has no effect; fcsr writes dirty FS through the same fact).
 - **Interface.** `Fact` has `rd_is_fp`, `fs_dirty`, `trap_cause`; the bridge decodes opcodes 0x07 / 0x27 (address, size, store data from `fpr`), undoes FP register and fcsr writes,
-  `FastWarm` replays FP loads/stores, checkpoint format 5 (`CPU_state.fpr`, fcsr after it) is read by `driver/BackTopLoad.cpp`.
+  `FastWarm` replays FP loads/stores, checkpoint format 5 (`CPU_state.fpr`, fcsr after it) is read by the function model (`refcpu_restore_checkpoint`, called from `driver/Load.cpp`).
 - **Checks.** `scripts/fp_check.sh <sim> <workdir>`: the function model's directed FP tests, trap/status test, compiler-generated kernels and the 23 official riscv-tests
   `rv64uf`/`rv64ud` all run to the end (difftest Success, every instruction committed); `tests/fp/fpmicro.c` micro-benchmarks show the configured latencies (4 dependent fadd.d: 16 cycles,
   8 independent: 4 cycles = both FMA pipes, dependent fdiv.d 20, fcvt.l.d + addi + fcvt.d.l 7). Small `CFG_FPRF_NUM=36`, `CFG_FP_IQ_SIZE=8`, `CFG_FP_FMA_LAT=8` runs without deadlock

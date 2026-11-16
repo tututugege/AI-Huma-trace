@@ -237,3 +237,22 @@ void BackTop::seq() {
   lsu->seq();
 }
 
+// Architectural state taken from the reference model / a checkpoint that the timing model itself uses: PC, privilege,
+// CSRs (address translation, interrupts, traps) and the LR/SC reservation.
+void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
+  restored_pc = state.pc;
+  csr->q_mut().privilege = csr->d.privilege = privilege;
+  for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = csr->d.CSR_RegFile[i] = state.csr[i];
+  lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
+  lsu->cur_mut().lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
+  // the pipeline starts with a refetch from the restored pc
+  out.flush = true;
+  out.redirect_pc = state.pc;
+}
+
+void BackTop::restart_at(pc_t pc) {
+  out.flush = true;
+  out.mispred = true;
+  out.redirect_pc = pc;
+  comb_csr_status();
+}

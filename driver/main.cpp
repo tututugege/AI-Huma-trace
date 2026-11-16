@@ -7,6 +7,7 @@
 #include "RISCV.h"
 #include "config.h"
 #include "RefCore.h"
+#include "Load.h"
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -299,20 +300,20 @@ int main(int argc, char *argv[]) {
   if (config.mode == SimConfig::RUN) {
     std::cout << "[Mode] RUN: Loading Execution Image..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
-    cpu.back.load_image(config.target_file);
+    load_image(config.target_file);
   } else if (config.mode == SimConfig::CKPT) {
     std::cout << "[Mode] CKPT: Restoring from Snapshot..." << std::endl;
     std::cout << "[File] " << config.target_file << std::endl;
     const bool front_door = !config.restore_stub_file.empty();
+    uint64_t ckpt_interval = 0;
     if (front_door) {
       std::cout << "[CKPT] front-door restore, restore program: " << config.restore_stub_file << std::endl;
-      cpu.back.restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
+      ckpt_interval = restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
     } else {
-      cpu.back.restore_checkpoint(config.target_file);
+      ckpt_interval = restore_checkpoint(cpu.back, config.target_file);
       cpu.sync_mmio_devices_from_backing();
     }
 
-    const uint64_t ckpt_interval = cpu.back.ckpt_interval_inst_count;
     if (ckpt_interval == 0) {
       if (!config.ckpt_warmup_target_set) {
         config.ckpt_warmup_target = 0;
@@ -400,7 +401,7 @@ int main(int argc, char *argv[]) {
     if (ref_prewarm_target > 0) refcore_end_warmup();
     if (!front_door || fast_warm_active) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
-      cpu.back.restore_from_ref();
+      restore_from_ref(cpu.back);
       cpu.sync_mmio_devices_from_backing();
       cpu.restore_pc(cpu.back.restored_pc); // restart the fetch at the restored pc
       if (fast_warm_active) fast_warm_install(cpu);

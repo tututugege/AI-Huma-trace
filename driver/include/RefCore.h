@@ -5,9 +5,15 @@
 #include "refcpu_api.h"
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 void refcore_seed_devices();
 void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege);
+// A checkpoint into the core (refcpu_restore_checkpoint): memory, devices, CPU state; the device registers also into
+// the model's IO backing. state / privilege: as the checkpoint has them. Returns the interval length.
+uint64_t refcore_restore_ckpt(const std::string &path, CPU_state &state, uint8_t &privilege);
+// Only the checkpoint's memory (a front-door restore). Returns the interval length.
+uint64_t refcore_restore_ckpt_memory(const std::string &path);
 void refcore_get_state(CPU_state &dut_state, uint8_t &privilege);
 void refcore_step();
 void refcore_end_warmup();

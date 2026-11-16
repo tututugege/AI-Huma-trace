@@ -10,7 +10,7 @@ trace bridge (`bridge/TraceBridge.*`), a functional core (the sibling `function-
 `function-model/` here is a symlink to `../function-model`) that follows the model's dispatch stream including wrong paths.
 Layout: the timing model is `front-end/`, `back-end/`, `MemSubSystem/`, `axi-interconnect-kit/` and `SimCpu.cpp` (the
 core top, `SimCpu::cycle`); `bridge/` is its input (the trace bridge and the model's taps into it); `driver/` runs it (command
-line and run modes in `main.cpp`, image / checkpoint loading in `BackTopLoad.cpp`, the reference core setup and prewarm in
+line and run modes in `main.cpp`, image / checkpoint loading in `Load.cpp` (the checkpoint file is read by the function model), the reference core setup and prewarm in
 `RefCore.cpp`, the functional warm-up of caches / TLBs / BPU in `FastWarm.cpp`).
 Every change must keep the gate's cycle counts (`results/baseline/baseline.csv`) unless it is an intentional configuration change
 merged to main. Project-wide rules (branches, merge procedure, `MAIN_RECORDS.md`, `EXPLORATION.md`, TODO) live in the AI-Huma
