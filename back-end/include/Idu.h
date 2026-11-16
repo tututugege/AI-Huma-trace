@@ -4,6 +4,11 @@
 #include "config.h"
 class SimContext;
 
+// Decode. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// and writes (out), and the outputs only this module drives.
+//   CONTRACT comb_decode  in: pre_issue                 out: dec2ren dec_bcast
+//   CONTRACT comb_fire    in: exu2id ren2dec rob_bcast  out: idu_consume
+//   CONTRACT owns: dec2ren dec_bcast idu_consume
 class Idu {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

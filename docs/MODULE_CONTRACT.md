@@ -33,3 +33,17 @@ from the header and checked by tools; cycles stay identical to the RTL-aligned m
 
 Rollout order if adopted: the small modules first (Dispatch, Idu, PreIduQueue, Csr, Exu), then Rob and Isu, LSU last;
 once most modules declare their phases, `BackTop::comb()` can be generated from the declarations (comb_order.py).
+
+## Rollout to the small modules (1515840, e5015d3, this commit)
+
+Dispatch, Idu, PreIduQueue, Csr and Exu (its load write-back wake register) have `Regs q_, d` and a declared, checked
+interface; 14 phases of six modules are declared, 0 mismatches. The const `q` and "seq is a pure copy" found four more
+places where a register changed outside the edge or seq held logic:
+* PreIduQueue `flush_q` was set in seq from a wire (`rob_bcast.flush`): comb_fire sets `d.flush_q`;
+* Csr applied the FS / SD dirty update to mstatus in seq: done at the end of `comb_interrupt_inject`, the CSR's last
+  phase;
+* Csr `csr_write` used the register `csr_wdata` as a scratch variable (CSRRS / CSRRC): a local;
+* (Rename, before) `arch_cnt` written in comb: through `d`.
+Not yet under the contract: Exu's FU state (`units`, updated in place in comb), BackTop setting `csr->fs_dirty_req`
+directly (a cross-module write; should be a port), Rob, Isu, the LSU. Gates RVC=0 62/62, RVC=1 67/67 identical, FPR
+identical at every commit.

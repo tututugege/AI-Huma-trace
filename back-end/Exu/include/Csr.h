@@ -127,6 +127,12 @@ typedef struct {
 typedef struct {
 } CsrOut;
 
+// CSR file. Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// and writes (out), and the outputs only this module drives.
+//   CONTRACT comb_interrupt         in: -                          out: csr2rob
+//   CONTRACT comb_commit            in: exe2csr rob2csr rob_bcast  out: csr2front
+//   CONTRACT comb_interrupt_inject  in: csr_interrupt_inject_io    out: -
+//   CONTRACT owns: csr2rob csr2front
 class Csr {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

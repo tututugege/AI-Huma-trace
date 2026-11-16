@@ -9,6 +9,12 @@ class SimContext;
 
 static_assert(FTQ_SIZE <= 64, "ftq_alloc_mask is a 64-bit slot mask");
 
+// Pre-IDU queue (instruction buffer and FTQ). Contract (checked by scripts/comb/comb_graph.py against the code): the Wires each phase reads (in)
+// and writes (out), and the outputs only this module drives.
+//   CONTRACT comb_accept_front  in: idu_br_latch in                                out: pre2front pre_issue
+//   CONTRACT comb_commit_info   in: rob_commit                                     out: ftq_commit_info
+//   CONTRACT comb_fire          in: idu_br_latch idu_consume rob_bcast rob_commit  out: -
+//   CONTRACT owns: pre2front pre_issue ftq_commit_info
 class PreIduQueue {
 public:
   // Registers: q (read in comb through const Regs &q, written only by seq) and d (their next value, written by comb;

@@ -150,7 +150,10 @@ for n, r, w in rows:
     for k in w: writers[k.split('.')[0]].add(n.split('.')[0])
 n_contract = 0
 for obj, cls in cls_of.items():
-    t = next((t for t in hdr_text.values() if re.search(r'\bclass ' + cls + r'\b', t) and 'CONTRACT' in t), None)
+    t = None
+    for txt in hdr_text.values():   # the comment block directly above the class definition
+        m = re.search(r'((?:^//[^\n]*\n)+)class ' + cls + r'\s*(?::[^{;]*)?\{', txt, re.M)
+        if m and 'CONTRACT' in m.group(1): t = m.group(1); break
     if not t: continue
     owns = set()
     for m in re.finditer(r'CONTRACT owns:([^\n]*)', t): owns |= set(m.group(1).split())
