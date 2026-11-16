@@ -27,12 +27,15 @@ public:
     const bool *global_refetch = nullptr;
     const FrontTopIn *in = nullptr;                 // the front end's inputs (redirect / fence / csr_status)
     const FetchAddrFifoOut *fetch_addr_head = nullptr;
+    const bool *predecode_flush = nullptr;          // the checker's refetch (the invalidate step)
   } in;
   struct Out {
     ICacheIn ic_in{};
     ICacheOut ic_out{};
+    ICacheOut ic_k{};      // the outputs of the invalidate step K (a predecode flush), which replace ic_out
   } out;
-  void comb_fetch();   // the address popped from the fetch-address FIFO into the I-cache
+  void comb_fetch();
+  void comb_invalidate();   // a predecode flush: the invalidate step K   // the address popped from the fetch-address FIFO into the I-cache
   // The ports, bound by FrontTop (they take effect at the I-cache's next step).
   struct Ports {
     PtwWalkPort *ptw_walk = nullptr;

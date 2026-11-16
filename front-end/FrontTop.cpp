@@ -103,5 +103,6 @@ void FrontTop::run_icache() { core_->run_icache(); }
 void FrontTop::write_instruction_fifo() { core_->write_instruction_fifo(); }
 void FrontTop::check_group() { core_->check_group(); }
 void FrontTop::write_front2back() { core_->write_front2back(); }
+void FrontTop::invalidate_icache() { core_->invalidate_icache(); }
 void FrontTop::finish() { core_->finish(); }
 

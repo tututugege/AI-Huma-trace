@@ -86,11 +86,9 @@ struct FrontReadData {
 };
 
 struct FrontUpdateRequest {
-  PendingFrontState front_state;
 
   // The start of a cycle: only the enables and counts (the rest is read under them, or written before it is read).
   void clear_valid() {
-    front_state.valid = false;
   }
 };
 

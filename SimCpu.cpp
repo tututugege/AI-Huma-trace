@@ -117,6 +117,7 @@ void SimCpu::cycle() {
   front.write_instruction_fifo();
   front.check_group();
   front.write_front2back();
+  front.invalidate_icache();
   front.finish();
   axi.comb_outputs();
   f2b.comb();

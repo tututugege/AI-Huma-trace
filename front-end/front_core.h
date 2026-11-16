@@ -7,6 +7,7 @@
 #include "fifo/front_fifo.h"
 #include "front_checker.h"
 #include "front_fifo_ports.h"
+#include "front_ctrl.h"
 #include "icache/icache_top.h"
 #include "train_IO.h"
 #include <cstdlib>
@@ -66,6 +67,7 @@ public:
   FrontFifo<F2bFifo> f2b_fifo;
   ICacheTop icache;
   FrontChecker checker;   // the predecode check
+  FrontControl ctrl;      // the front end's control (front_ctrl.h)
   FetchAddrPort fa_port;  // the FIFOs' ports (front_fifo_ports.h)
   InstPort inst_port;
   PtabPort ptab_port;
@@ -88,6 +90,7 @@ public:
   void write_instruction_fifo();
   void check_group();
   void write_front2back();
+  void invalidate_icache();
   void finish();
 
   void seq(const FrontTopIn &in, const FrontUpdateRequest &req);   // the clock edge

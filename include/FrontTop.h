@@ -62,6 +62,7 @@ public:
   void write_instruction_fifo();
   void check_group();
   void write_front2back();
+  void invalidate_icache();
   void finish();
   // between cycles (a switch from fast mode): the fetch restarts at pc next cycle
   void restart_at(pc_t pc);

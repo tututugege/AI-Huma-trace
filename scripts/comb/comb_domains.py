@@ -213,7 +213,8 @@ def front_domain(root, ASSIGN, overlap):
             mb = (src.body(types[fw.group(1)], fw.group(2)) or ('', ''))[1]   # (its own body: the module's internals are its state)
             mb = re.sub(r'\n\s*const [^;]*=\s*\*?\s*in\.\w+(?:\s*,\s*\*?\s*\w+\s*=\s*\*?\s*in\.\w+)*\s*;', '\n', mb)   # local aliases of inputs
             mb = re.sub(r'\*\s*in\.(\w+)\b', r'\1', mb)
-            mb = re.sub(r'(?<![\w.>])in\.(\w+)\s*->', r'\1@@.', mb)
+            mb = re.sub(r'\*\s*out\.(\w+)\b', r'\1', mb)
+            mb = re.sub(r'(?<![\w.>])(?:in|out)\.(\w+)\s*->', r'\1@@.', mb)
             mb = re.sub(r'(?<![\w.>@])(?:in|out)\.(\w+)\b', r'\1', mb).replace('@@', '')
             mb = re.sub(r'(?<![\w.>])out\s*=\s*\{\s*\}\s*;', '', mb)   # (the module's default outputs of the cycle)
             FIFO_OF = {'FetchAddrPort': 'fetch_addr_fifo', 'InstPort': 'inst_fifo', 'PtabPort': 'ptab', 'F2bPort': 'f2b_fifo'}
