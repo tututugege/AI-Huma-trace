@@ -52,5 +52,16 @@ Not done yet (next steps): the icache stack (ICacheTop / icache_module / icache.
 one cache), the AXI interconnect's remaining generality (2k lines), the two UART models (PeripheralModel and the AXI kit's), the
 front end / memory subsystem in the comb checker, and the table-driven scheduler (declared reads / writes per phase, generated order).
 
+## I-cache (2026-11-16, 4a5474d..cdc504c)
+
+The I-cache stack was 2,961 lines (icache.cpp, ICacheTop.cpp / .h, icache_module, GenericTable) and is 1,689 now:
+* GenericTable.h keeps the two table models in use (register file for the I-cache tag / valid arrays, a fixed-latency SRAM for the
+  LLC arrays); the other two policy combinations and the random read delay are gone.
+* icache.cpp + ICacheTop.cpp + ICacheTop.h are one file, icache/icache_top.cpp: the virtual base and the template had one instance,
+  the glue structs (TrueGlueInput / Output, MMU / memory "views") only copied fields; the ports and the ITLB are bound in one struct.
+* the always-empty second fetch port (`*_2` fields of icache_in / icache_out), icache_seq_read / seq_write, the miss-penalty / AXI-read
+  latency bookkeeping nothing read, the focus-address traces and the deadlock dump are gone.
+Gates identical at every step; FPR fingerprints identical on rvc-mem / rvc-flow; rv64gc Linux after 099143b: see below.
+
 ## Log
 See `git log 75c8141..` (one commit per step, each with its gate result).
