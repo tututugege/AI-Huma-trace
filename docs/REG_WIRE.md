@@ -74,3 +74,24 @@ Not covered yet:
   `pmu_ptab_stall`, which `run_bpu()` writes only when the BPU runs; in a stall cycle the PMU sees the previous
   cycle's flags. PMU attribution only, not cycles; not changed. Finding these needs the `Wire<T>` type (step 2):
   a debug build can check that each wire is written in the cycle before it is read.
+
+## Step 2: fewer comb phases (trace-driven reductions)
+
+The values already come from the trace (`fu::compute` takes the AGU address and the store data from the fact, the PRF
+reads no operands), so what is left to remove is structure: same-cycle request / response wire pairs, stages that are
+only a one-cycle delay, phases split in two, the cache-line data path. Plan (each item one commit, cycles identical):
+
+| | change | back-end phases |
+| --- | --- | --- |
+| A | FTQ PC read ports -> a direct read of the FTQ array | 69 -> 65 (f13f6d2) |
+| B | PRF stage: comb_read / comb_pipeline into one | |
+| C | LSU ldq / stq phase pairs merged | |
+| D | CSR read chain (exu.comb_to_csr -> csr.comb_csr_read -> result) | |
+| E | comb_pipeline into seq, comb_begin into the first phase | |
+| F | the cache-line data path (AXI resp.data / wdata, DCache / LLC / DDR line data) | (top level) |
+| G | the DCache response buffering (capture / forward / publish) | (mem) |
+
+A (f13f6d2): `PreIduQueue::ftq_pc(idx, off)` reads the registered `ftq_lookup_entries`; `Prf::comb_read` (ALU pc
+operand, BRU) and `Rob::comb_commit` (the head's redirect pc) call it through `const PreIduQueue *ftq`. Removed:
+`ftq_prf_pc_req / resp`, `ftq_rob_pc_req / resp` and the phases `Prf::comb_req_ftq`, `Rob::comb_ftq_pc_req`,
+`PreIduQueue::comb_ftq_lookup_prf / rob`. Module-to-module wire edges 44 -> 41.
