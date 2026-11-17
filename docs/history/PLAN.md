@@ -1,75 +1,75 @@
-# Distillation plan: execution-driven model -> trace-driven timing model
+# 蒸馏计划:execution-driven 模型 -> trace-driven 时序模型
 
-> Historical record of the pre-P3 migration (2026-11-04); may be outdated, see [README.md](README.md).
+> 历史记录:P3 迁移之前的状态(2026-11-04),可能已过时,现状见 [README.md](README.md)。
 
-Goal: a standalone timing model, cycle-identical to the execution-driven baseline on the gate set, much faster.
-Later: generated RTL + this model, so the event/fact interface must not depend on the old model's internals.
+目标:一个独立的时序模型,在 gate 集合上与 execution-driven 基线 cycle 完全一致,且快得多。
+之后:生成的 RTL + 本模型,所以 event/fact 接口不能依赖旧模型的内部实现。
 
 ## Gate
-- 56 tests (scripts/build_tests.sh, LLVM riscv32), results/baseline/baseline.csv, total 311,725 cycles, 13 of them interrupt/exception/CSR/fence.i.
-- Pass = every test's cycle count equal to baseline (no pipeline-detail check).
-- Excluded: memory-stress (long), load-store (misaligned UB under clang), matmul_soft/mersenne/string (need libc).
-- Weakness: tests are tiny (most <1k cycles). Add 2-3 longer programs later (timer-mmio is the longest, 206k).
-- Every pruning step needs a negative control: perturb a deleted value -> cycles must stay equal;
-  perturb a kept fact (branch outcome, address) -> cycles must change. Otherwise the gate may be vacuous.
+- 56 个测试(scripts/build_tests.sh,LLVM riscv32),results/baseline/baseline.csv,总计 311,725 cycles,其中 13 个是 interrupt/exception/CSR/fence.i。
+- 通过 = 每个测试的 cycle 数都与基线相等(不检查流水线细节)。
+- 排除:memory-stress(太长)、load-store(clang 下非对齐 UB)、matmul_soft/mersenne/string(需要 libc)。
+- 弱点:测试很小(大多 <1k cycles)。以后再加 2-3 个更长的程序(timer-mmio 最长,206k)。
+- 每个剪枝步骤都需要负对照:扰动被删除的值 -> cycle 必须保持相等;
+  扰动保留的 fact(分支结果、地址)-> cycle 必须变化。否则 gate 可能是空的。
 
-## P0 Profile the baseline (before deleting anything)
-Where does host time go: FPU/ALU values, PRF/DCache data arrays, PTW/MMU, AXI/DDR, BPU, comb/seq call overhead?
-Rank by share so we delete the biggest first and know the ceiling. Use `sample` (needs get-task-allow) and an
-instruction-retired counter; do not trust wall-clock alone (layout-sensitive).
+## P0 对基线做 profile(在删除任何东西之前)
+host 时间花在哪里:FPU/ALU 数值、PRF/DCache 数据数组、PTW/MMU、AXI/DDR、BPU、comb/seq 调用开销?
+按占比排序,先删最大的,并了解上限。使用 `sample`(需要 get-task-allow)和退休指令计数器;
+不要只相信 wall-clock(对布局敏感)。
 
-P0 result (docs/history/P0_PROFILE.md): ~68% of host time is memmove in AXI_LLC::comb/AXI_Interconnect::seq (whole-state copy);
-value logic (FPU/ALU) is ~0%. So the first speed step is P3a below, before the bridge.
+P0 结果(docs/history/P0_PROFILE.md):约 68% 的 host 时间是 AXI_LLC::comb/AXI_Interconnect::seq 中的 memmove(整体状态拷贝);
+数值逻辑(FPU/ALU)约 0%。所以第一个提速步骤是下面的 P3a,先于 bridge。
 
-## P3a (moved first) LLC/AXI state: no whole-state copy, drop line data payloads; gate 56/56 equal.
+## P3a(提前到最前)LLC/AXI 状态:不做整体状态拷贝,去掉 line 数据 payload;gate 56/56 相等。
 
-## P1 Bridge in check mode (nothing injected)
-- A functional core (librefcpu) follows the model's fetched PCs, wrong paths included:
-  forced jump when the decoded pc differs from the core's next pc; checkpoint/undo log per instruction;
-  mispredict -> rewind to first instruction younger than the branch; flush -> rewind to oldest in-flight;
-  speculative stores in a store buffer, published at commit; values the core cannot know (timer, MMIO) patched.
-- Identity: a uid per fetched instruction, carried in the instruction record.
-- Check: for every executed instruction (wrong path too) compare the core's fact with the model's own value:
-  result, branch taken/target, load/store vaddr/paddr/size, exception cause, div/FP latency inputs.
-- Done when 56/56 have 0 mismatches and cycles unchanged.
-- Open: librefcpu's API (get/set state, undo). If it lacks rewind, add it in function-model (it is the user's code).
+## P1 check 模式下的 Bridge(不注入)
+- 一个功能 core(librefcpu)跟随模型取到的 PC,包括错误路径:
+  当 decode 出的 pc 与 core 的下一个 pc 不同时强制跳转;每条指令一份 checkpoint/undo log;
+  mispredict -> 回滚到比该分支更年轻的第一条指令;flush -> 回滚到最老的 in-flight 指令;
+  推测性 store 放在 store buffer 中,commit 时发布;core 无法得知的值(timer、MMIO)做 patch。
+- 标识:每条被取指的指令一个 uid,放在指令记录里携带。
+- 检查:对每条被执行的指令(包括错误路径)比较 core 的 fact 与模型自己的值:
+  结果、branch taken/target、load/store vaddr/paddr/size、exception cause、div/FP latency 的输入。
+- 完成标准:56/56 个 0 不一致,且 cycle 不变。
+- 待定:librefcpu 的 API(获取/设置状态、undo)。如果它缺少 rewind,就在 function-model 中添加(那是用户自己的代码)。
 
-## P2 Inject facts
-Per-instruction Fact record (from the bridge, keyed by uid) replaces computation at the point of use:
-branch resolve (taken/target -> mispred), AGU (vaddr, paddr, size), exception/page-fault, CSR read value
-class, mul/div/FP latency, MMIO read. Keep timing structures (ROB, IQ, rename, LSU queues, BPU, caches).
-Done when 56/56 equal with Facts driving everything and the old value path still present but unread.
+## P2 注入 fact
+每条指令一个 Fact 记录(来自 bridge,以 uid 为键),在使用点替换计算:
+branch resolve(taken/target -> mispred)、AGU(vaddr、paddr、size)、exception/page-fault、CSR 读值
+类别、mul/div/FP latency、MMIO 读。保留时序结构(ROB、IQ、rename、LSU 队列、BPU、cache)。
+完成标准:Fact 驱动一切、旧的数值路径仍在但不被读取时,56/56 相等。
 
-## P3 Delete (largest first, one step per gate run)
-1. FPU (fadd.h 12k + fmul.h 9.7k lines): latency only.
-2. ALU/mul/div result datapath, PRF data arrays, bypass data.
-3. CSR file values, store data, STQ data, DCache/ICache data arrays (keep tags, MSHR, replacement).
-4. TlbMmu/PTW: translations come as facts; keep walk timing (PTE addresses from the bridge).
-5. Bit-level: field widths via struct edit; find dead bits by taint, validate with the gate.
-Order is by dependency: comb order is already fixed in the model, so a field change is a compile-checked edit.
+## P3 删除(最大的先删,每次 gate 运行一步)
+1. FPU(fadd.h 12k + fmul.h 9.7k 行):只保留 latency。
+2. ALU/mul/div 结果 datapath、PRF 数据数组、bypass 数据。
+3. CSR 文件的值、store data、STQ data、DCache/ICache 数据数组(保留 tag、MSHR、replacement)。
+4. TlbMmu/PTW:翻译作为 fact 提供;保留 walk 时序(PTE 地址来自 bridge)。
+5. bit 级:通过修改 struct 来缩减字段宽度;用 taint 找出死 bit,用 gate 验证。
+顺序按依赖关系排:模型中 comb 顺序已经固定,所以字段改动是编译器检查的编辑。
 
-## P4 Speed
-Profile again. Expect the structure (comb/seq phases, 22 issue ports, wire<N> structs with memset, AXI/DDR
-kit) to dominate once values are gone; restructure the hot clusters (frontend, ROB+LSU, IQ) to plain C++,
-cycle count held by the gate.
+## P4 提速
+再次 profile。预计数值消失后,结构本身(comb/seq 阶段、22 个 issue port、带 memset 的 wire<N> struct、AXI/DDR
+kit)会成为主要开销;把热点簇(frontend、ROB+LSU、IQ)重构为朴素 C++,
+cycle 数由 gate 保证不变。
 
-## P5 Freeze the interface for RTL pairing
-Event + Fact protocol (decode fire, dispatch, commit, mispredict, flush, fact fields) documented in docs/;
-the same bridge must work from an RTL tap. Gate source switches from the old model to RTL.
+## P5 为 RTL 配对冻结接口
+Event + Fact 协议(decode fire、dispatch、commit、mispredict、flush、fact 字段)记录在 docs/ 中;
+同一个 bridge 必须能在 RTL tap 上工作。gate 的来源从旧模型切换为 RTL。
 
-## Risks
-- Interrupt/timer timing is cycle-based: random IRQ delay (seed 1, 8..64 cycles) must be reproduced exactly.
-- Wrong-path loads pollute caches: their addresses need the bridge's wrong-path values (P1).
-- Gate is small: negative controls are mandatory.
-- Speed-up is unknown until P0: if values are a small share of host time, the win comes from P4, not P3.
+## 风险
+- 中断/timer 时序基于 cycle:随机 IRQ 延迟(seed 1,8..64 cycles)必须精确复现。
+- 错误路径的 load 会污染 cache:它们的地址需要 bridge 提供的错误路径值(P1)。
+- gate 很小:负对照是必须的。
+- 提速幅度在 P0 之前未知:如果数值只占 host 时间的一小部分,收益来自 P4,而不是 P3。
 
-## Status table (updated at the end of P3)
-| step | state |
+## 状态表(在 P3 结束时更新)
+| 步骤 | 状态 |
 |---|---|
-| P0 profile | done (docs/history/P0_PROFILE.md) |
-| P3a LLC copy, P3b IQ/PreIdu copies | done, exact (patches 0001, 0002) |
-| P1 bridge (check mode) | done (0003) |
-| P2 fact injection + commit-time events in the bridge | done (0004, 0005) |
-| P3 delete values | done: FU compute+FPU (0006), PRF (0007), cache data (0008), unified Uop (0009), wide payloads (0010) |
-| P4 speed (idle-tick skip, front end, back end) | not started |
-| P5 interface freeze for RTL | not started |
+| P0 profile | 完成(docs/history/P0_PROFILE.md) |
+| P3a LLC 拷贝,P3b IQ/PreIdu 拷贝 | 完成,exact(patches 0001、0002) |
+| P1 bridge(check 模式) | 完成(0003) |
+| P2 fact 注入 + bridge 中的 commit 时事件 | 完成(0004、0005) |
+| P3 删除数值 | 完成:FU 计算+FPU(0006)、PRF(0007)、cache 数据(0008)、统一 Uop(0009)、宽 payload(0010) |
+| P4 提速(idle-tick skip、前端、后端) | 未开始 |
+| P5 为 RTL 冻结接口 | 未开始 |
