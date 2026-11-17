@@ -37,6 +37,10 @@ inline bool rob_is_flush_inst(const Uop &u) {
   return t == CSR || t == ECALL || t == MRET || t == SRET || t == SFENCE_VMA || t == FENCE_I || t == EBREAK ||
          rob_is_exception(u) || u.flush_pipe;
 }
+// ROBTR=<lo>:<hi> prints the ROB's dispatches and flushes of the cycles in the range (debug)
+static long robtr_lo() { static long v = [] { long lo = -1, hi = -1; if (const char *e = std::getenv("ROBTR")) std::sscanf(e, "%ld:%ld", &lo, &hi); return lo; }(); return v; }
+static long robtr_hi() { static long v = [] { long lo = -1, hi = -1; if (const char *e = std::getenv("ROBTR")) std::sscanf(e, "%ld:%ld", &lo, &hi); return hi; }(); return v; }
+#define ROBTR_ON() (robtr_lo() >= 0 && (long)ctx->perf.cycle >= robtr_lo() && (long)ctx->perf.cycle <= robtr_hi())
 // A completed load's address must be naturally aligned (only checked when the load did not fault).
 inline void check_load_alignment(const Uop &u, const char *msg) {
   if (!rob_is_load(u) || !rob_is_complete(u) || rob_is_page_fault(u)) return;
@@ -190,6 +194,12 @@ void Rob::commit() {
   if (cw_.stall_cycle > 50000) {
     std::fprintf(stderr, "ROB deadlock at cycle %llu: count=%d head=%d n=%d single=%d front_stall=%d\n",
                  (unsigned long long)ctx->perf.cycle, q.c_count, q.c_head, n, (int)single, (int)front_stall);
+    for (int k = 0; k < q.c_count && k < 3; k++) {   // the oldest entries: what they wait for
+      const Uop &h = q.cent((q.c_head + k) % ROB_NUM).uop;
+      std::fprintf(stderr, "  rob[%d] idx=%d type=%d pc=%llx expect=%x cplt=%x flush_pipe=%d valid=%d\n", k, (q.c_head + k) % ROB_NUM, (int)rob_type(h),
+                   (unsigned long long)h.diag_val, (unsigned)h->expect_mask, (unsigned)h.cplt_mask, (int)h.flush_pipe,
+                   (int)q.entry[(q.c_head + k) % ROB_NUM % ROB_BANK_NUM][(q.c_head + k) % ROB_NUM / ROB_BANK_NUM].valid);
+    }
     std::exit(1);   // (the watchdog: no commit for 50000 cycles)
   }
 }
@@ -304,6 +314,7 @@ void Rob::fire(int &c_count) {
     e.uop = in.dis2rob->uop[i];
     e.uop.cplt_mask = 0;
     tbhook::on_dispatch((uint64_t)e.uop->dbg.inst_idx, e.uop->dbg.pc, e.uop->dbg.instruction, idx, ilen_of(e.uop->is_rvc));
+    if (ROBTR_ON()) std::fprintf(stderr, "ROBTR %llu fire idx=%d type=%d pc=%llx\n", (unsigned long long)ctx->perf.cycle, idx, (int)rob_type(e.uop), (unsigned long long)e.uop->dbg.pc);
     m++;
   }
   c_count += m;
@@ -313,6 +324,7 @@ void Rob::fire(int &c_count) {
 // A global flush empties the ROB and resets the pointers (overrides any recovery or enqueue above).
 void Rob::flush(int &c_head, int &c_count, bool &c_hflag) {
   if (!out.rob_bcast.flush) return;
+  if (ROBTR_ON()) std::fprintf(stderr, "ROBTR %llu FLUSH count=%d head=%d\n", (unsigned long long)ctx->perf.cycle, c_count, c_head);
   for (int i = 0; i < ROB_BANK_NUM; i++)
     for (int j = 0; j < ROB_LINE_NUM; j++) q_.entry[i][j].valid = false;
   c_head = c_count = 0;
@@ -353,14 +365,19 @@ bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
 }
 
 // the head: commit and its broadcasts
+uint64_t g_dbg_cycle = 0;   // (debug: the cycle number for the other modules' ROBTR traces)
 void Rob::comb_commit() {
+  g_dbg_cycle = ctx->perf.cycle;
   ready();
   commit();
+  out.rob_bcast.flush_now = out.rob_bcast.flush;
   if (CFG_FLUSH_REG) {   // the flush / trap fields of the previous cycle, with the head information of this one
     RobBroadcastIO d = bc_prev_;
     const RobBroadcastIO &bc = out.rob_bcast;
     d.head_rob_idx = bc.head_rob_idx; d.head_valid = bc.head_valid;
     d.head_incomplete_rob_idx = bc.head_incomplete_rob_idx; d.head_incomplete_valid = bc.head_incomplete_valid;
+    d.interrupt = bc.interrupt;   // (qualifies this cycle's commit: an instruction retiring with an interrupt does not commit)
+    d.flush_now = bc.flush;
     out.rob_bcast_d = d;
   } else {
     out.rob_bcast_d = out.rob_bcast;
@@ -409,6 +426,8 @@ void Rob::redirect() {
   o.mispred = in.dec_bcast->mispred;
   o.stall = !in.pre2front->ready;
   o.redirect_pc = in.idu_br_latch->redirect_pc;
+  { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
+    if (tr && o.mispred) std::fprintf(stderr, "[MP] cyc=%lld redirect_pc=%llx\n", (long long)sim_time, (unsigned long long)o.redirect_pc); }
   o.rf_valid = in.dec_bcast->mispred;
   if (o.rf_valid) {
     const uint32_t fi = in.idu_br_latch->ftq_idx;

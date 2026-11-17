@@ -26,6 +26,12 @@ void Isu::clear_wake_state() {
   for_each_wake_slot([](auto &e) { e = {}; });
 }
 
+extern uint64_t g_dbg_cycle;
+static bool isutr_on() {
+  static long lo = -1, hi = -1; static bool init = false;
+  if (!init) { init = true; if (const char *e = std::getenv("ROBTR")) std::sscanf(e, "%ld:%ld", &lo, &hi); }
+  return lo >= 0 && (long)g_dbg_cycle >= lo && (long)g_dbg_cycle <= hi;
+}
 // One issue queue per GLOBAL_IQ_CONFIG entry (the order matches the IQ enum); each claims its range of physical issue ports.
 void Isu::init() {
   iqs.clear();
@@ -89,6 +95,7 @@ void Isu::enq() {
       if (!in.dis2iss->req[i][w].valid) continue;
       slot.uop = in.dis2iss->req[i][w].uop;
       apply_wakeup_to_uop(slot.uop);
+      if (isutr_on() && slot.uop->rob_idx == 14) std::fprintf(stderr, "ISUTR %llu ENQ q=%d op=%d rob=%d src1=%d(en%d busy%d) src2=%d(en%d busy%d) dest=%d\n", (unsigned long long)g_dbg_cycle, i, (int)slot.uop.op, (int)slot.uop->rob_idx, (int)slot.uop->src1_preg, (int)slot.uop->src1_en, (int)slot.uop.src1_busy, (int)slot.uop->src2_preg, (int)slot.uop->src2_en, (int)slot.uop.src2_busy, (int)slot.uop->dest_preg);
       slot.valid = true;
     }
   }
@@ -130,6 +137,7 @@ void Isu::issue() {
     for (int p = q.port_lo; p < q.port_hi; p++) {
       const auto &grant = q.out.issue_grants[p];
       if (!grant.valid) continue;
+      if (isutr_on() && grant.uop->rob_idx == 14) std::fprintf(stderr, "ISUTR %llu GRANT port=%d op=%d rob=%d\n", (unsigned long long)g_dbg_cycle, p, (int)grant.uop.op, (int)grant.uop->rob_idx);
       Assert(!out.iss2prf.iss_entry[p].valid);
       out.iss2prf.iss_entry[p].valid = true;
       out.iss2prf.iss_entry[p].uop = grant.uop;

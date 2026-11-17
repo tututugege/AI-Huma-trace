@@ -5,6 +5,12 @@
 // ---------------------------------------------------------------------------------------------------------------
 // AGU arrivals: STD write, STA (va), load (L1 input)
 // ---------------------------------------------------------------------------------------------------------------
+extern uint64_t g_dbg_cycle;
+static bool lsutr_on() {
+  static long lo = -1, hi = -1; static bool init = false;
+  if (!init) { init = true; if (const char *e = std::getenv("ROBTR")) std::sscanf(e, "%ld:%ld", &lo, &hi); }
+  return lo >= 0 && (long)g_dbg_cycle >= lo && (long)g_dbg_cycle <= hi;
+}
 void RealLsu::exe2lsu() {
   const lp::LsuPipeState &pcur = pcur_;
   ExeLsuIO x = (*in.exe2lsu);
@@ -25,6 +31,7 @@ void RealLsu::exe2lsu() {
     const MicroOp &inst = x.sdu_req[i].uop;
     if (inst->stq_idx >= STQ_SIZE) continue;
     PStq &e = pnxt.stq[inst->stq_idx];
+    if (lsutr_on()) std::fprintf(stderr, "LSUTR %llu STD stq=%d rob=%d/%d entry_rob=%d/%d %s\n", (unsigned long long)g_dbg_cycle, (int)inst->stq_idx, (int)inst->rob_idx, (int)inst->rob_flag, (int)e.rob_idx, (int)e.rob_flag, (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) ? "REJECT" : "ok");
     if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
     e.data = inst.result;
     e.data_v = 1;
@@ -45,6 +52,7 @@ void RealLsu::exe2lsu() {
     const MicroOp &inst = x.agu_req[i].uop;
     if (inst->stq_idx >= STQ_SIZE) continue;
     PStq &e = pnxt.stq[inst->stq_idx];
+    if (lsutr_on()) std::fprintf(stderr, "LSUTR %llu STA stq=%d rob=%d/%d entry_rob=%d/%d %s\n", (unsigned long long)g_dbg_cycle, (int)inst->stq_idx, (int)inst->rob_idx, (int)inst->rob_flag, (int)e.rob_idx, (int)e.rob_flag, (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) ? "REJECT" : "ok");
     if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
     e.va_v = 1;
     e.vaddr = inst.result;

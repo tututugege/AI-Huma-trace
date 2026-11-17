@@ -13,7 +13,7 @@ void RealLsu::stq_commit() {
     if (idx != pnxt.stq_commit || !pnxt.stq[idx].wbd) continue;
     PStq &s = pnxt.stq[idx];
     s.cmt = 1;
-    if (static_cast<bool>(in.rob_bcast->flush) || (s.lrsc && !s.sc_pass)) {
+    if (static_cast<bool>(in.rob_bcast->flush_now) || (s.lrsc && !s.sc_pass)) {   // (the flush of this cycle's commit)
       s.suppress = 1;  // flushed or failed SC: retire without writing
       s.done = 1;
     }

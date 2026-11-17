@@ -195,6 +195,7 @@ struct IssAwakeIO {
 struct RobBroadcastIO {
 
   wire<1> flush = {};
+  wire<1> flush_now = {};   // the flush decided in this cycle, also when `flush` is delayed (CFG_FLUSH_REG): the qualifier of this cycle's commit
   wire<1> mret = {};
   wire<1> sret = {};
   wire<1> ecall = {};

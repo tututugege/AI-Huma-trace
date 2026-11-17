@@ -167,13 +167,24 @@ void Dispatch::comb_dispatch() {
 // The clock edge. Busy table: this cycle's wakeups clear, the fired destinations set. Stage register: cleared by a flush or
 // mispredict, refilled from rename when the stage is free, otherwise the instructions that did not fire stay (with busy
 // bits refreshed by this cycle's wakeups).
+extern uint64_t g_dbg_cycle;
+static bool distr_on() {
+  static long lo = -1, hi = -1; static bool init = false;
+  if (!init) { init = true; if (const char *e = std::getenv("ROBTR")) std::sscanf(e, "%ld:%ld", &lo, &hi); }
+  return lo >= 0 && (long)g_dbg_cycle >= lo && (long)g_dbg_cycle <= hi;
+}
 void Dispatch::seq() {
   Regs &d = q_;   // updated in place (each slot reads only its own old value first)
-  for (int k = 0; k < WAKE_CH_ALL; k++)
+  for (int k = 0; k < WAKE_CH_ALL; k++) {
     if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
-  for (int i = 0; i < DECODE_WIDTH; i++)
+    if (distr_on() && in.iss_awake->wake[k].valid && in.iss_awake->wake[k].preg == 123) std::fprintf(stderr, "DISTR %llu WAKE123 ch=%d\n", (unsigned long long)g_dbg_cycle, k);
+  }
+  for (int i = 0; i < DECODE_WIDTH; i++) {
     if (out.dis2rob.dis_fire[i] && d.inst_r[i].dest_en && !is_eliminated_move(d.inst_r[i]))
       d.busy_table[d.inst_r[i]->dest_preg] = true;
+    if (distr_on() && out.dis2rob.dis_fire[i] && d.inst_r[i].dest_en && d.inst_r[i]->dest_preg == 123)
+      std::fprintf(stderr, "DISTR %llu SET123 lane=%d rob=%d pc=%llx elim=%d\n", (unsigned long long)g_dbg_cycle, i, (int)d.inst_r[i]->rob_idx, (unsigned long long)d.inst_r[i]->dbg.pc, (int)is_eliminated_move(d.inst_r[i]));
+  }
   const Regs &q = q_;
   const auto clear_mask = in.dec_bcast->clear_mask;
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
