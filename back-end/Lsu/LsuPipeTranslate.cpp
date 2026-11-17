@@ -1,5 +1,6 @@
 // The staged LSU: translate phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
 #include "LsuPipeInternal.h"
+#include "AguCfg.h"
 
 // ---------------------------------------------------------------------------------------------------------------
 // AGU arrivals: STD write, STA (va), load (L1 input)
@@ -138,6 +139,16 @@ void RealLsu::tlb() {
   // handles as a retry (load: l.tlb = 1 through the replay register, STA: trp).
   static const int cap_ld = getenv("TLB_LD_PORTS") ? atoi(getenv("TLB_LD_PORTS")) : LD;
   static const int cap_st = getenv("TLB_ST_PORTS") ? atoi(getenv("TLB_ST_PORTS")) : STA;
+  {  // the AGU shape also limits the DTLB requests of the cycle (new and replay), loads first
+    const AguCfg &ac = AguCfg::get();
+    if (ac.on) {
+      int ld = 0, st = 0;
+      for (int k = 0; k < LD; k++)
+        if (tlb_req_[k].valid) { if (ac.ok_ld(ld, st)) ld++; else tlb_req_[k] = {}; }
+      for (int k = 0; k < STA; k++)
+        if (tlb_req_[LD + k].valid) { if (ac.ok_st(ld, st)) st++; else tlb_req_[LD + k] = {}; }
+    }
+  }
   // TLB_TOT_PORTS: load and STA requests share N ports (loads first, then STAs, in port order)
   static const int cap_tot = getenv("TLB_TOT_PORTS") ? atoi(getenv("TLB_TOT_PORTS")) : LD + STA;
   if (cap_tot < LD + STA) {
