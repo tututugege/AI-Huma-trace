@@ -52,19 +52,26 @@ void RealLsu::dcache2lsu() {
   dcache2lsu_stq();
 }
 
+// a load waits for a replay: its cause, the STQ entry it waits for, the countdown
+static void park(PLdq &e, uint8_t cause, uint32_t blk, uint32_t wait) {
+  e.st = L_RPW;
+  e.rcause = cause;
+  e.blk_idx = blk;
+  e.rwait = wait;
+}
+
 void RealLsu::dcache2lsu_ldq() {
-  const lp::LsuPipeState &pcur = pcur_;
   const DcacheLsuIO &dc = in.top_in->dcache2lsu;
   pw.fill = dc.mshr_fill && LSU_WAIT_MSHR_FILL;
   pw.fill_addr = dc.mshr_fill_addr;
+  l2_decide();
+  dcache_load_responses();
+  l3_register();
+}
 
-  auto park = [&](PLdq &e, uint8_t cause, uint32_t blk, uint32_t wait) {
-    e.st = L_RPW;
-    e.rcause = cause;
-    e.blk_idx = blk;
-    e.rwait = wait;
-  };
-
+// L2 of each load port: page fault, DTLB miss, MMIO, a port taken by a hidden retry, the DCache read, or the STLF confirm against the candidate store
+void RealLsu::l2_decide() {
+  const lp::LsuPipeState &pcur = pcur_;
   for (int i = 0; i < LD; i++) {
     const PL12 &sl = pcur.l12[i];
     if (!sl.v) continue;
@@ -107,7 +114,11 @@ void RealLsu::dcache2lsu_ldq() {
       break;
     }
   }
+}
 
+// the DCache's load responses (same port as the request, also late bank-conflict retries): a hit completes, a replay parks the load
+void RealLsu::dcache_load_responses() {
+  const DcacheLsuIO &dc = in.top_in->dcache2lsu;
   for (int i = 0; i < LD; i++) {  // DCache responses (same port as the request, also late bank-conflict retries)
     const auto &r = dc.resp_ports.load_resps[i];
     if (!r.valid || (r.req_id & (1u << 31))) continue;
@@ -129,7 +140,10 @@ void RealLsu::dcache2lsu_ldq() {
       park(e, RC_DC, 0, replay_wait(r.replay));
     }
   }
+}
 
+// a: the direct completions go through the L3 register (written back in the next cycle)
+void RealLsu::l3_register() {
   // a: the direct completions go through the L3 register (written back in the next cycle)
   for (int i = 0; i < LD; i++) {
     if (!pw.wbd_v[i]) continue;
@@ -139,6 +153,7 @@ void RealLsu::dcache2lsu_ldq() {
     pw.wbd_v[i] = false;
   }
 }
+
 
 void RealLsu::dcache2lsu_stq() {
   const DcacheLsuIO &dc = in.top_in->dcache2lsu;

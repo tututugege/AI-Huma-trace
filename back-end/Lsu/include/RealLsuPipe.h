@@ -1,5 +1,23 @@
 // RealLsuPipe.h -- state of the staged LSU. Design: docs/LSU_PIPE.md.
 // Every field has a declared width (wire<N>); registers live in LsuPipeState (pcur = registered value, pnxt = next value).
+//
+// Reading the code: pcur is the state at the start of the cycle, pnxt the state as this cycle's earlier steps left it (the
+// steps change pnxt in place; seq copies it to pcur). A step that must not see this cycle's changes reads pcur; the letters
+// in the comments (B, R, D, F, G, H, a, S, M) name these places (the list: LsuPipeInternal.h, docs/LSU_PIPE.md sections 6-7).
+// pw holds values that travel between the steps of one cycle and are not registers.
+//
+// Names (they follow the RTL's lp_*.sv):
+//   PLdq / PStq  an LDQ / STQ entry            PL1   a load port at L1 (pw.l1)       PL12  the L1 -> L2 register of a load port
+//   PL3  the L3 register (cut a)               PSta  an STA port at L1 (pw.s1)       PRp   a replay register (rp: loads, srp: STA)
+//   PWbE a write-buffer entry (EXP-024)        PCycle this cycle's wires (pw)        MsLdq / MsStq  LSU_MS_DATA beside the queues
+//   LDQ: st (PLd state below), pa_v / paddr translated, rcause / blk_idx / rwait the replay's cause / store / countdown,
+//        rtype last DCache replay type, epoch request tag (drops stale responses), snap_idx / snap_flag the STQ tail at dispatch
+//        (the older stores), spec passed an unknown-address store, vio a later store address overlaps, second the
+//        completion / re-execution pass, wait predicted to wait (MDP), wd_t watchdog start
+//   STQ: va_v / pa_v / data_v address (partial) / translated / data known, trp DTLB retry pending, wbp / wbd completion to
+//        the ROB pending / sent, cmt committed, iss sent to the DCache, mmw on the MMIO bus, wbi / wbe write-buffer state /
+//        entry, mf / ml merged follower of leader ml, done written or cancelled (may retire), suppress cancelled (no write),
+//        sc_pass the SC succeeds
 #pragma once
 
 #include "IO.h"

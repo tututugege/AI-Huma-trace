@@ -130,6 +130,18 @@ private:
   void lsu2dcache_stq();
   void dcache2lsu_ldq();
   void dcache2lsu_stq();
+  // steps of the phases above (named by what they do)
+  void l2_decide();
+  void dcache_load_responses();
+  void l3_register();
+  void drain_countdown(uint32_t n, bool *rdy);
+  void mmio_store_issue(uint32_t n, const bool *rdy);
+  void wb_drain(uint32_t n, const bool *rdy);
+  void stq_retire();
+  void watchdog();
+  void print_events();
+  void wake_loads();
+  void fill_replay_registers();
   // this cycle's DTLB requests and responses, the load ports then the STA ports (also printed by LSU_PIPE_EVT)
   TlbMmu::Req tlb_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   TlbMmu::Resp tlb_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
