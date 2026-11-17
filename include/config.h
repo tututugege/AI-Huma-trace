@@ -637,6 +637,15 @@ enum class IssueSchedulePolicy : int {
 
 // 1: a slot freed by an issue can be taken by an enqueue of the same cycle (the slot allocation sees this cycle's issue);
 // 0: the allocation sees only the registered valid bits (the enqueue does not wait for the issue)
+// 2: the INT queue is two clusters of half the slots, each with three of the six ports (cluster 0: ports 0, 1, 4; cluster 1: ports
+// 2, 3, 5): a uop is steered to a cluster when it enters (CSR to cluster 0, I2F to cluster 1, the others alternate) and only the
+// ports of its cluster can issue it. Dispatch sees min(free slots of the clusters).
+#ifndef CFG_INT_CLUSTERS
+#define CFG_INT_CLUSTERS 1
+#endif
+#ifndef CFG_INT_STEER
+#define CFG_INT_STEER 0   // 0: unconstrained uops alternate between the clusters; 1: they go to the cluster with fewer valid slots (ties alternate)
+#endif
 #ifndef CFG_IQ_SAME_CYCLE_REUSE
 #define CFG_IQ_SAME_CYCLE_REUSE 1
 #endif
