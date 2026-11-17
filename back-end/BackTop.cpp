@@ -27,9 +27,6 @@ void BackTop::init() {
   csr = std::make_unique<Csr>();
   rob = std::make_unique<Rob>(ctx);
   lsu = std::make_unique<RealLsu>(ctx);
-  dtlb_mmu =
-      std::make_unique<TlbMmu>(ctx, DTLB_ENTRIES, TlbMmu::Kind::DTLB);
-  lsu->dtlb = dtlb_mmu.get();
 
   exu->ftq = pre.get();
   exu->csr = csr.get();
@@ -104,10 +101,6 @@ void BackTop::init() {
   csr->init();
   rob->init();
   lsu->init();
-  if (dtlb_mmu != nullptr) {
-    dtlb_mmu->flush();
-    dtlb_mmu->seq();
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -126,9 +119,6 @@ void BackTop::seq() {
   exu->seq();
   rob->seq();
   csr->seq();
-  if (dtlb_mmu != nullptr) {
-    dtlb_mmu->seq();
-  }
   lsu->seq();
 }
 

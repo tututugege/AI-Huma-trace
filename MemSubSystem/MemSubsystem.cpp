@@ -251,7 +251,7 @@ private:
 
 void MemSubsystem::sync_ptw_port_outputs() {
   const auto &ptw_out = ptw_block.comb_outputs();
-  if (dtlb_walk_port_inst != nullptr) {
+  {
     PtwWalkPortCombOut out{};
     const auto &src =
         ptw_out.walk_clients[static_cast<size_t>(PtwClient::DTLB)];
@@ -260,7 +260,7 @@ void MemSubsystem::sync_ptw_port_outputs() {
     out.resp = src.resp;
     dtlb_walk_port_inst->set_comb_output(out);
   }
-  if (itlb_walk_port_inst != nullptr) {
+  {
     PtwWalkPortCombOut out{};
     const auto &src =
         ptw_out.walk_clients[static_cast<size_t>(PtwClient::ITLB)];

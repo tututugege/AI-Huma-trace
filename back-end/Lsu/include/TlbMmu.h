@@ -173,7 +173,7 @@ public:
     wire<1> walk_client_flush = false;
   };
 
-  TlbMmu(SimContext *ctx, int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
+  explicit TlbMmu(int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
 
   Result translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
                    CsrStatusIO *status);
@@ -195,7 +195,6 @@ public:
 
 private:
 
-  SimContext *ctx;
   Kind kind_;
   PtwWalkPort *walk_port = nullptr;
   // Stable TLB register file. translate() only reads from this array; any

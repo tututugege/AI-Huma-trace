@@ -119,7 +119,7 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   if (ci->reset) {   // (the module itself is reset at the edge: icache_seq)
     out.axi->req.valid = false; out.axi->req.addr = 0; out.axi->req.total_size = 0; out.axi->req.id = 0; out.axi->req.bypass = false; out.axi->resp.ready = false;
     out.probe_req->req_valid = false; out.probe_req->req_addr = 0;
-    if (TlbMmu *m = bind_.mmu()) m->flush();
+    itlb.flush();
     co->icache_read_ready = true;
     return;
   }
@@ -150,14 +150,14 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   // ITLB
   bool itlb_invoked = false;
   TlbMmu::Result itlb_ret = TlbMmu::Result::OK;
-  if (TlbMmu *m = bind_.mmu()) {
-    if (ci->itlb_flush) m->flush();
-    if (ci->refetch) m->cancel_pending_walk();
+  {
+    if (ci->itlb_flush) itlb.flush();
+    if (ci->refetch) itlb.cancel_pending_walk();
     if (!ci->refetch && mod_.io.out.mmu_req_valid) {
       if (edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
       itlb_invoked = true;
       uint32_t pa = 0;
-      itlb_ret = m->translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, ci->csr_status);
+      itlb_ret = itlb.translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, ci->csr_status);
       if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = pa >> 12; }
       else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
     }
@@ -242,7 +242,7 @@ void ICacheTop::seq() {
   if (edge_.n == 0) return;   // (no I-cache step this cycle)
   if (edge_.reset) { tags_.reset(); valid_.reset(); mod_.reset(); }
   else mod_.seq();
-  if (bind_.itlb) bind_.itlb->seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
+  itlb.seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
   for (int s = 0; s < edge_.n; ++s) {
     const auto &tw = edge_.tw[s];
     TagTable::WriteReq tag_write{};
@@ -285,7 +285,7 @@ bool ICacheTop::fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, i
 
 // FE_IPF: ITLB lookup without side effects.
 bool ICacheTop::peek_translate(uint32_t v_addr, CsrStatusIO *status, uint32_t &p_addr) {
-  return bind_.itlb && bind_.itlb->peek_translate(p_addr, v_addr, 0, status);
+  return itlb.peek_translate(p_addr, v_addr, 0, status);
 }
 
 // FE_IPF: install a prefetched line (tag + valid only). An invalid way is used first, else a rotating victim.
@@ -324,5 +324,5 @@ void ICacheTop::warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM],
   }
 }
 void ICacheTop::warm_install_itlb(const void *entries, int count, int repl_ptr) {
-  if (TlbMmu *m = bind_.mmu()) m->warm_install(static_cast<const TlbMmu::TlbEntry *>(entries), count, repl_ptr);
+  itlb.warm_install(static_cast<const TlbMmu::TlbEntry *>(entries), count, repl_ptr);
 }

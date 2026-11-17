@@ -44,11 +44,10 @@ MMUResultType to_lsu_mmu_result(TlbMmu::Result result) {
 }
 } // namespace
 
-TlbMmu::TlbMmu(SimContext *ctx, int tlb_entries, Kind kind)
-    : ctx(ctx), kind_(kind),
+TlbMmu::TlbMmu(int tlb_entries, Kind kind)
+    : kind_(kind),
       tlb_entries_(tlb_entries > 0 ? tlb_entries : 1),
       tlb_capacity_(tlb_entries > 0 ? tlb_entries : 1), repl_ptr_(0) {
-  (void)this->ctx;
   flush_pending_ = true;
   seq();
 }

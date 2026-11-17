@@ -52,8 +52,8 @@ ALIASES = {'mem_subsystem.dtlb_walk_port': 'mem_subsystem.dtlb_walk_port_inst', 
 # A module's submodule (not scheduled itself: its parent calls it) uses some of its parent's ports: the scan follows the
 # parent's calls into it (<call pattern>, its class, {its member: the parent's port}).
 SUBMODULES = {
-    'RealLsu': [(r'\bdtlb\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.dtlb_walk'})],
-    'ICacheTop': [(r'\bm\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.itlb_walk'})],
+    'RealLsu': [(r'\bdtlb\s*\.\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.dtlb_walk'})],
+    'ICacheTop': [(r'\bitlb\s*\.\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.itlb_walk'})],
     'PeripheralAxi': [(r'\bperipheral_model\s*->\s*(\w+)\s*\(', 'PeripheralModel', {'csr_interrupt_inject': 'out.csr_interrupt_inject'})],
     'AxiSubsystem': [(r'\binterconnect\s*\.\s*(\w+)\s*\(', 'AXI_Interconnect',
                       {'read_ports': 'out.read_ports', 'write_ports': 'out.write_ports'})],

@@ -110,11 +110,9 @@ void RealLsu::exe2lsu() {
 void RealLsu::tlb() {
   tlb_out();
   tlb_resp_ = {};
-  if (dtlb != nullptr) {
-    if (in.rob_bcast->fence) dtlb->flush();
-    else if (in.rob_bcast->flush || in.dec_bcast->mispred) dtlb->cancel_pending_walk();
-    else dtlb->translate_lsu_ports(tlb_req_, tlb_resp_);
-  }
+  if (in.rob_bcast->fence) dtlb.flush();
+  else if (in.rob_bcast->flush || in.dec_bcast->mispred) dtlb.cancel_pending_walk();
+  else dtlb.translate_lsu_ports(tlb_req_, tlb_resp_);
   tlb_in_ldq();
   tlb_in_stq();
 }

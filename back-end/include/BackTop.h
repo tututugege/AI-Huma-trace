@@ -35,11 +35,10 @@ class MemSubsystem;
 // scripts/comb/gen_top_order.py schedules them with the other tops' phases (back.<module>.<phase>).
 class BackTop : public BackPorts {
 private:
-  std::unique_ptr<TlbMmu> dtlb_mmu;
 
 public:
   void warm_dtlb(const TlbMmu::TlbEntry *entries, int count, int repl_ptr) {  // fast-warmup replay (EXP-011)
-    if (dtlb_mmu) dtlb_mmu->warm_install(entries, count, repl_ptr);
+    lsu->dtlb.warm_install(entries, count, repl_ptr);
   }
 private:
 

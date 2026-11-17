@@ -45,7 +45,7 @@ public:
   void comb_invalidate();   // a predecode flush: the invalidate step K   // the address popped from the fetch-address FIFO into the I-cache
   void set_context(SimContext *ctx) { bind_.ctx_set = ctx; }
   // the ITLB's walk port is the I-cache's out.itlb_walk (FrontTop::init, after SimCpu bound it)
-  void bind_walk() { bind_.ptw_walk = out.itlb_walk; if (bind_.itlb) bind_.itlb->set_ptw_walk_port(bind_.ptw_walk); }
+  void bind_walk() { itlb.set_ptw_walk_port(out.itlb_walk); }
   std::function<void(uint32_t index, uint32_t tag)> fill_hook;   // FE_IPF: demand fills are reported to the prefetcher
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
@@ -77,18 +77,10 @@ private:
   // What the I-cache is bound to: the context (taken at the next step), the ITLB and its walk port.
   struct Binding {
     SimContext *ctx = nullptr, *ctx_set = nullptr;   // ctx_set: icache_set_context(); ctx: bound at the next cycle
-    PtwWalkPort *ptw_walk = nullptr;
-    std::unique_ptr<TlbMmu> itlb;
 
     void bind() { ctx = ctx_set; }
-    TlbMmu *mmu() {
-      if (!itlb && ctx) {
-        itlb = std::make_unique<TlbMmu>(ctx, ITLB_ENTRIES, TlbMmu::Kind::ITLB);
-        if (ptw_walk) itlb->set_ptw_walk_port(ptw_walk);
-      }
-      return itlb.get();
-    }
   } bind_;
+  TlbMmu itlb{ITLB_ENTRIES, TlbMmu::Kind::ITLB};   // the ITLB (looked up in the fetch step, its edge in seq)
 
   // One I-cache cycle as in the RTL (rtl/frontend/icache/icache_ctl.sv): the fetch step R1 = N(R0) (comb_calc), on a
   // predecode flush R2 = K(R1) on top of it (invalidate_step); the module registers, the ITLB and the tag / valid arrays

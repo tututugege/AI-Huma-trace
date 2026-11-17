@@ -81,10 +81,11 @@ public:
     const RobCommitIO *rob_commit = nullptr;
   } in;
   SimContext *ctx = nullptr;
-  TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
+  TlbMmu dtlb{DTLB_ENTRIES, TlbMmu::Kind::DTLB};   // the DTLB (looked up in comb_translate, its edge in seq)
 
   void init();
   void seq() {
+    dtlb.seq();
     cur_ = nxt;
     seq_pipe();
     mmio_resp_q_ = mmio_resp_d;

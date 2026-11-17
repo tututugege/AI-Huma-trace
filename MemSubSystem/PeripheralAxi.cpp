@@ -6,9 +6,7 @@
 
 void PeripheralAxi::init() {   // (in / out are the port bindings, set by MemSubsystem::init)
   q_ = {};
-  if (out.resp != nullptr) {
-    *out.resp = {};
-  }
+  *out.resp = {};
 }
 
 uint8_t PeripheralAxi::access_size_bytes(uint8_t func3) {
@@ -70,7 +68,7 @@ void PeripheralAxi::comb_outputs() {
   out.write->req.wdata.clear();
   out.read->req.bypass = out.write->req.bypass = true;   // MMIO: never through the LLC
 
-  if (out.resp != nullptr) {
+  {
     out.resp->is_mmio = false;
     out.resp->ready = !q.busy && !q.resp_valid;
     if (q.resp_valid) {
