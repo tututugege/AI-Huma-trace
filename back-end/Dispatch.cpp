@@ -118,7 +118,7 @@ void Dispatch::comb_dispatch() {
     // SC returns its 0/1 result through the load-like write-back and still completes an STD
     if (type == AMO && (u->func7 >> 2) == AmoOp::SC) expect = ROB_CPLT_G0 | ROB_CPLT_G2;
     for (int k = 0; k < cnt && fit_[i]; k++) {
-      const int iq = uops[k].iq_id;
+      const int iq = route_iq(uops[k].iq_id);
       fit_[i] = usage[iq] < GLOBAL_IQ_CONFIG[iq].dispatch_width && usage[iq] < in.iss2dis->ready_num[iq];
       if (!fit_[i]) {
         iq_blk[i] = iq;
@@ -135,7 +135,7 @@ void Dispatch::comb_dispatch() {
     fired = true;
     u->expect_mask = expect;
     for (int k = 0; k < cnt; k++) {
-      const int iq = uops[k].iq_id;
+      const int iq = route_iq(uops[k].iq_id);
       out.dis2iss.req[iq][usage[iq]].valid = true;
       out.dis2iss.req[iq][usage[iq]].uop = uops[k].uop;
       usage[iq]++;

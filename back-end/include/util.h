@@ -32,6 +32,10 @@ inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
   return static_cast<uint8_t>(__builtin_popcount(static_cast<unsigned>(mask)));
 }
 
+// The queue a uop of logical queue `iq` is enqueued in: with one memory queue (CFG_MEM_MERGE) the store addresses go to the load queue.
+// (The ROB completion group stays the logical queue's.)
+inline int route_iq(int iq) { return (CFG_MEM_MERGE && iq == IQ_STA) ? IQ_LD : iq; }
+
 inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_iq(int iq_id) {
   switch (iq_id) {
   case IQ_INT:
