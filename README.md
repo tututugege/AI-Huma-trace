@@ -17,11 +17,42 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(同级�
 ISA:rv64imafd(F/D 自 2026-11-12,EXP-030;Zfinx 已删除;`RVC=1` 加入 C,EXP-038);`FP=0` 构建无浮点的 core。rv32 已从 main 移除(分支 `rv32-legacy`);源码里残留的 `XLEN==32` 条件是死代码。未做:C,SPEC rv64 流程,
 FastWarm 重放里的 Sv39。
 
+## 建模方式
+
+* **只算时序，不算值。** 指令的结果、分支方向和目标、访存地址、store 数据、CSR 写入值都是功能模型给出的事实（trace bridge）。
+  模型只决定"哪一拍发生什么"。例外是 RTL 的时序确实依赖、而事实给不出的值：访存推测时 load 读到的旧值（LSU_MS_DATA，
+  `back-end/include/MsData.h`），以及设备寄存器的值（外设模型，`IoBacking`）。
+* **形状照着 RTL。** 模块和 RTL 的模块一一对应，信号有声明的位宽（`wire<N>` / `reg<N>`）；合入 main 时 RTL 必须逐程序复现本模型的周期数。
+  整理代码时周期必须完全不变（门禁、FPR、TB / LSU 逐拍轨迹、Linux 检查点和 Linux 窗口逐字节比较）。
+* **一拍 = comb 阶段 + 时钟沿。** comb 阶段的顺序由各模块声明的读写关系自动生成（`SimCpu::cycle()` 的生成块），
+  寄存器只在时钟沿更新。详见 [docs/SCHEDULING.md](docs/SCHEDULING.md)。
+* **uop 只带 id。** 一条指令的静态和只写一次的字段（译码结果、物理寄存器、ROB / LSQ 位置）在 uop 池 `uop_pool[id]`，
+  流水线里传的是 id 加上每份拷贝自己的动态位（busy、`br_mask`、`dest_en`、结果）。
+* **CPU 级共享状态。** CSR 文件是 `SimCpu::csr`，全 CPU 通过 `csr_state()` 只读访问、只在时钟沿改；功能内存就是功能模型的 RAM
+  （`driver/RefCore.cpp`），模型自己只保存设备寄存器（`IoBacking`）。
+
+## 代码风格
+
+* **模块的统一写法**：`struct In`（只读的 const 指针）、`struct Out`（自己驱动的信号），头文件里每个 comb 阶段一行
+  `CONTRACT`（用自己的端口名写读写哪些端口），父模块一行绑定一个端口。工具检查契约和代码是否一致，并据此生成调度。
+* **comb 算输出和线信号，seq 原地更新寄存器**：comb 只读寄存器、写自己的输出和几个具名的线信号（成员名以 `_` 结尾），
+  seq 用这些线信号和本拍输入原地改寄存器。D-cache、MSHR、写缓冲、PTW、LSU（`pcur_` / `pnxt`）和 FrontControl
+  仍是 q / d 两份，因为它们的 d 在同一拍里被多个步骤读写；BPU 的寄存器在 `comb_front` 里原地写（这一拍之后没有阶段再读它）。
+* **每拍默认值只清 valid / 使能位**，其它字段只在 valid 下读；写 valid 的一方写满整个条目。
+* **没有文件级的可变状态**，例外和它们为什么顺序安全列在 docs/SCHEDULING.md 第 5 节；环境变量只经 `sim_env()` 读。
+* **命名**：类型 CamelCase，函数和变量 snake_case，comb 阶段叫 `comb_<做什么>`，时钟沿叫 `seq`，辅助函数按它算什么命名。
+* **错误**：模型不变量用 `Assert` / `fatal`；代码注释用英文，项目文档用中文；不留注释掉的代码。
+
+完整规则：[docs/STYLE.md](docs/STYLE.md)。
+
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
 | [docs/PROJECT.md](docs/PROJECT.md) | 架构、配置开关(`include/config.h`)、gate、验证手段、常见坑 |
+| [docs/SCHEDULING.md](docs/SCHEDULING.md) | 一拍的调度：模块契约、自动生成的 `SimCpu::cycle()`、改了模块之后怎么做、工具看不见的共享状态 |
+| [docs/STYLE.md](docs/STYLE.md) | 代码风格的完整规则 |
+| [docs/NEXT_STATE.md](docs/NEXT_STATE.md), [docs/MODULE_CLEANUP.md](docs/MODULE_CLEANUP.md), [docs/UNIFIED_MODULES.md](docs/UNIFIED_MODULES.md) | 现行模块结构的由来：统一写法、下一状态放到 seq、各模块的整理 |
 | [docs/ENV_VARS.md](docs/ENV_VARS.md) | 全部运行期环境变量及默认值(**与 RTL 比较周期时用 `LSU_PIPE_NOWD=1`**) |
 | [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | 分级 LSU:规格、近似、结果、IPC 研究 |
 | [docs/history/](docs/history/) | 历史记录:2026-11-04 的蒸馏(P0-P3)、FRONTEND_NOTES / INTEG_NOTES / MS_DATA_NOTES(前端快速路径、memspec 集成、memspec 值通路);可能已过时 |

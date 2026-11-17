@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The modules: one form for every module of the CPU (docs/MODULE_CONTRACT.md).
+"""The modules: one form for every module of the CPU (docs/SCHEDULING.md).
 
 A module has `struct In` (const pointers: what it reads), `struct Out` (what it drives: its own fields, or pointers bound
 to a signal its parent owns), its comb phases as methods, and their contracts above its class, in its own port names:

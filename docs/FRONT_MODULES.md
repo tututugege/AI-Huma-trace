@@ -1,5 +1,7 @@
 # Front end as modules (exp/global-sched, fm1..fm6)
 
+> **Historical record.** The current rules and tools are in [SCHEDULING.md](SCHEDULING.md); this file records how they came about (tools and the q / d register pairs named here may no longer exist).
+
 The front end is written like the back end: modules with `struct In` (const pointers, named after the wires they read)
 and `struct Out` (the wires they drive), phases as methods, ports bound once. FrontComb (the per-cycle working struct
 whose members were the wires and whose methods were the phases) and FrontUpdateRequest are gone.

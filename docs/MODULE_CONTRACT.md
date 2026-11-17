@@ -1,5 +1,7 @@
 # Module contract (pilot: Rename, exp/module-contract)
 
+> **Historical record.** The current rules and tools are in [SCHEDULING.md](SCHEDULING.md); this file records how they came about (tools and the q / d register pairs named here may no longer exist).
+
 Goal: every module has the same shape, so its behaviour across a clock edge, its interface and its comb order can be read
 from the header and checked by tools; cycles stay identical to the RTL-aligned model.
 

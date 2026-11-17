@@ -1,5 +1,7 @@
 # One form for every module (exp/global-sched, u2..u4)
 
+> How to change a module and keep the generated schedule right: [SCHEDULING.md](SCHEDULING.md).
+
 Every comb module of the CPU is written the same way, and one tool checks and schedules all of them.
 
 ## The form

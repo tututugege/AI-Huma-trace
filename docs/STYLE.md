@@ -1,7 +1,7 @@
 # trace-model code style
 
-The rules the model follows (exp/style, 2026-11-16). Module structure, contracts and generated schedules:
-[MODULE_CONTRACT.md](MODULE_CONTRACT.md).
+The rules the model follows (exp/style 2026-11-16, updated 2026-11-17). Module structure, contracts and the generated
+schedule: [SCHEDULING.md](SCHEDULING.md); the modelling approach in short: the README.
 
 ## Names
 
@@ -13,9 +13,12 @@ The rules the model follows (exp/style, 2026-11-16). Module structure, contracts
 * A module's comb phase methods: `comb_<what>` (`comb_outputs`, `comb_stage1`); its clock edge: `seq`; reading its
   registers' q (a snapshot for the cycle): `read_q`. Helper functions are named after what they compute (`predecode`,
   `predecode_check`, `front_output`), without a `_comb` suffix.
-* Registers: `Regs q_` / `Regs d` (MODULE_CONTRACT.md), SimCpu's own registers too (the fetch-group and MMIO-response
-  holds). Exception: the I-cache port registers `icache_axi_q` / `icache_resp_q`, loaded at the start of the cycle from
-  the interconnect's port (REG_WIRE.md). No `_1` suffix for next-state values.
+* Registers: one `Regs q_` per module. Comb reads them (`const Regs &q = q_;`) and computes its outputs and a few named
+  wires (members ending in `_`, e.g. Rob's `cw_`); `seq()` updates `q_` in place from the wires and this cycle's inputs,
+  with a local snapshot where an old value is still needed (NEXT_STATE.md). Kept as q / d (their d is a real same-cycle
+  value read by several steps): the D-cache, MSHR, write buffer, PTW block, the LSU (`pcur_` / `pnxt`) and FrontControl.
+  The I-cache port registers `icache_axi_q` / `icache_resp_q` are loaded at the start of the cycle (REG_WIRE.md). No `_1`
+  suffix for next-state values.
 
 ## Types
 
@@ -31,13 +34,16 @@ The rules the model follows (exp/style, 2026-11-16). Module structure, contracts
 
 ## Ownership
 
-* A module owns its submodules by value or `std::unique_ptr` (BackTop's modules, the ITLB, FastWarm's state); raw
+* A module owns its submodules by value or `std::unique_ptr` (BackTop's modules, the LSU's DTLB, the I-cache's ITLB,
+  FastWarm's state); raw
   pointers are non-owning bindings (ports, `ctx`). Exception: TraceBridge's entry chain, whose entries are
   referenced by in-flight uops.
 * No file-scope mutable state in the model: state lives in the module that owns it (the front end: FrontCore; Isu's
   write-back busy tables; the LSU's memory-dependence predictor; the D-cache arrays: DcacheArrays in RealDcache).
-  Exceptions: the uop pool (UopPool, shared storage of the in-flight uops), the functional memory binding (PhysMemory),
-  the cycle counter `sim_time`, PMU event buses (`g_pmu_*`).
+  Exceptions (each listed with its ordering argument in SCHEDULING.md section 5): the CSR file (`SimCpu::csr`, read
+  through `csr_state()`, written only at the edge), the uop pool (UopPool: the in-flight uops' write-once fields), the
+  device registers (`IoBacking`), LSU_MS_DATA's taint table (`msd::taint`), the cycle counter `sim_time`, PMU event buses
+  (`g_pmu_*`). A uop travels as an id plus its per-copy bits; its static fields are read from the pool (`u->field`).
 * Environment variables are read in one place: `sim_env()` (include/env.h); docs/ENV_VARS.md lists them.
 * No `memset` on struct / class objects: `x = {}`, `{}` member initializers, or a loop over an array of structs.
   Plain integer arrays may be cleared with memset; the LSU's 0xA5 poison fill (a debug aid) and memory pages keep it.

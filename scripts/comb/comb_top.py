@@ -11,8 +11,8 @@ and local `auto &` aliases substituted).  A call into a sub-object is one phase 
   mem_subsystem.comb_outputs / comb_inputs   the mem rows of that function, pointer members through SimCpu::init()
   axi.interconnect.* / axi.ddr.* / axi.mmio.* / mem_subsystem.llc_*   a scan of that class's member function closure
 FrontTop's comb / comb_from_back and AxiSubsystem's comb phases are inlined like SimCpu's methods (members -> front.* / axi.*).
-A PtwWalkPort is two signals: <port>.in (the TLB's request / consume, read by MemSubsystem::comb_inputs) and
-<port>.out (the response the TLB reads, written by sync_ptw_port_outputs in comb_inputs and in MemSubsystem::seq).
+A TLB's walk port is the TLB's request struct (mem_subsystem.dtlb_walk_req / itlb_walk_req, read by the walker) and the
+walker's outputs latched at the edge (mem_subsystem.ptw_block.dtlb_q / itlb_q, a register for the TLB). Rules: docs/SCHEDULING.md.
 """
 import re, os
 from comb_domains import Src, strip_comments, statements, split_top, enclosing_call, closure

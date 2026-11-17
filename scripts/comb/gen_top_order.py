@@ -14,6 +14,8 @@ covers every index. Ties: the top of the previous phase if it has a ready phase 
 TOP_PRIORITY, then the module table's order. A cycle in the contracts is reported: the fix is a split of a phase, never a
 hand-made order.
 
+How to use it when a module changes: docs/SCHEDULING.md.
+
 usage: gen_top_order.py          print the generated order
        gen_top_order.py --write  rewrite the generated blocks of SimCpu::cycle() (SimCpu.cpp) and FrontCore::comb()
        gen_top_order.py --check  exit 1 if a contract and the code or a generated block differ

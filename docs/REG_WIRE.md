@@ -1,5 +1,7 @@
 # Reg / Wire refactor (exp/tm-reg-wire, from main fb471da)
 
+> **Historical record.** The current rules and tools are in [SCHEDULING.md](SCHEDULING.md); this file records how they came about (tools and the q / d register pairs named here may no longer exist).
+
 Goal: every value that lives across a clock edge is an explicit register (written in seq, or `d` in comb copied to `q`
 in seq), every combinational signal is written before it is read in the cycle, and the comb order is derived from
 declared read / write sets instead of hand-written call chains. Cycles identical at every commit (run_gate 62,
