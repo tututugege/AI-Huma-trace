@@ -186,6 +186,10 @@ struct IssDisIO {
 struct IssAwakeIO {
 
   WakeInfo wake[WAKE_CH_ALL] = {};
+  // the same bus as a lookup: preg p is on it iff woke_at[p] == epoch (each drive of the bus starts a new epoch)
+  uint64_t epoch = 1;
+  uint64_t woke_at[TAG_NUM] = {};
+  bool woken(uint32_t preg) const { return preg < TAG_NUM && woke_at[preg] == epoch; }
 };
 
 struct RobBroadcastIO {

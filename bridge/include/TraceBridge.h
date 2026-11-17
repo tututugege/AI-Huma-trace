@@ -86,6 +86,11 @@ private:
   std::deque<Entry *> chain_;
   std::vector<Entry *> pool_;   // released entries, reused by alloc_entry (no allocation per instruction)
   Entry *alloc_entry();
+  // uid -> entry, direct mapped (uid & mask); a slot holds the entry most recently pushed with that index, cleared when it is freed
+  static constexpr uint64_t kSlotMask = 4095;
+  Entry *slot_[kSlotMask + 1] = {};
+  void push(Entry *e);
+  const Fact *find_slow(uint64_t uid) const;
   void free_entry(Entry *e);
   bool in_ram(uint32_t addr, uint32_t size) const;
 };

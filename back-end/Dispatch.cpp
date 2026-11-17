@@ -7,9 +7,7 @@
 bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
   for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++)
     if (in.prf_awake->wake[w].valid && in.prf_awake->wake[w].preg == preg) return true;
-  for (int w = 0; w < WAKE_CH_ALL; w++)
-    if (in.iss_awake->wake[w].valid && in.iss_awake->wake[w].preg == preg) return true;
-  return false;
+  return in.iss_awake->woken(preg);
 }
 
 void Dispatch::apply_wakeup_to_uop(Uop &uop) const {

@@ -223,9 +223,11 @@ void RealLsu::lsu2dcache_stq() {
       p.req_id = w.mem[0];
       p.replay = lead.rtype != (uint8_t)ReplayType::HIT;
       lead.mf = 0;
+      if (!lead.iss) wd_arm(lead.wd_t);
       lead.iss = 1;
       for (int x = 1; x < w.cnt; x++) {
         PStq &f = pnxt.stq[w.mem[x]];
+        if (!f.iss) wd_arm(f.wd_t);
         f.iss = 1;
         f.mf = 1;
         f.ml = w.mem[0];
@@ -256,16 +258,24 @@ void RealLsu::check() {
 
   // DCache response watchdog: a request whose response never arrives (lost bank-retry latch in the DCache) is replayed.
   // The RTL has none: LSU_PIPE_NOWD=1 turns it off (needed to match the RTL's cycles, e.g. crc32).
-  const bool nowd = sim_env().lsu_pipe_nowd;
-  for (int i = 0; i < LDQ_SIZE; i++) {
-    PLdq &e = pnxt.ldq[i];
-    if (e.st != L_DCW) { if (e.wd) e.wd = 0; continue; }   // (no store to an idle entry: it would dirty the line every cycle)
-    if (++e.wd == 63 && !nowd) { e.wd = 0; e.st = L_RDY; }
-  }
-  for (int j = 0; j < STQ_SIZE; j++) {
-    PStq &t = pnxt.stq[j];
-    if (!t.iss) { if (t.wd) t.wd = 0; continue; }
-    if (++t.wd == 63 && !nowd) { t.wd = 0; t.iss = 0; t.rwait = 0; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } }
+  // An entry waits from the cycle it was sent (wd_t, set by wd_arm); it is replayed 62 cycles later. Only the cycle of the earliest
+  // deadline scans the queues (a deadline of an entry that got its response meanwhile only costs that scan).
+  if (sim_time >= wd_next_) {
+    const bool nowd = sim_env().lsu_pipe_nowd;
+    long long nx = 0x7fffffffffffffffLL;
+    for (int i = 0; i < LDQ_SIZE; i++) {
+      PLdq &e = pnxt.ldq[i];
+      if (e.st != L_DCW) continue;
+      if (e.wd_t + 62 > sim_time) nx = std::min(nx, e.wd_t + 62);
+      else if (!nowd) e.st = L_RDY;
+    }
+    for (int j = 0; j < STQ_SIZE; j++) {
+      PStq &t = pnxt.stq[j];
+      if (!t.iss) continue;
+      if (t.wd_t + 62 > sim_time) nx = std::min(nx, t.wd_t + 62);
+      else if (!nowd) { t.iss = 0; t.rwait = 0; if (lp_wbuf > 0 && t.wbi == 1) { PWbE &w = pnxt.wb[t.wbe]; if (w.v && w.mem[0] == (uint8_t)j) w.st = 0; } }
+    }
+    wd_next_ = nx;
   }
   if (sim_env().lsu_pipe_evt) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);

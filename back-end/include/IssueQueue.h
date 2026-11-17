@@ -131,10 +131,6 @@ public:
   void comb_begin() {
     const Regs &q = q_;
     out.free_slots = size - q.count;
-    if (grants_live) {   // the grants are all-zero unless the last comb_issue() filled one
-      for (auto &grant : out.issue_grants) grant = {};
-      grants_live = false;
-    }
     // (the wake-up inputs, the enqueue requests and the FU ready masks are written by the Isu phases every cycle before they are read)
     in.issue_block = 0;
     in.flush_all = 0;
@@ -204,10 +200,8 @@ public:
   void comb_issue() {
     const Regs &q = q_;
     // Grants are all-zero unless the previous call filled one, and most cycles have nothing ready.
-    if (grants_live) {
-      for (auto &grant : out.issue_grants) {
-        grant = {};
-      }
+    if (grants_live) {   // only the valid bits: a payload is read only under its valid bit, and only the queue's own ports
+      for (int p = port_lo; p < port_hi; p++) out.issue_grants[p].valid = false;
       grants_live = false;
     }
     bool any_ready = false;

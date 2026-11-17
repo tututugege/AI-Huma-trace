@@ -68,7 +68,7 @@ struct PLdq {
   wire<RWAIT_W> rwait = 0;
   wire<2> rtype = 0;                 // ReplayType of the last DCache response
   wire<EPOCH_W> epoch = 0;
-  wire<6> wd = 0;             // DCache response watchdog (cycles in DCW)
+  long long wd_t = 0;         // DCache response watchdog: cycle it entered DCW (replayed 62 cycles later)
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
   wire<32> pc = 0;            // load PC (memory-dependence predictor)
@@ -107,7 +107,7 @@ struct PStq {
   wire<BR_MASK_WIDTH> br_mask = 0;
   wire<2> rtype = 0;
   wire<RWAIT_W> rwait = 0;
-  wire<6> wd = 0;             // DCache response watchdog (cycles in iss)
+  long long wd_t = 0;         // DCache response watchdog: cycle it was sent (re-sent 62 cycles later)
   // LSU_MS_DATA: what the trace says this store writes (captured the cycle after dispatch, the fact leaves the bridge at commit)
   bool m_init = false, m_v = false, m_amo = false, m_atnt = false;
   uint32_t m_w = 0;                                    // physical unit address (XLEN/8 bytes aligned)

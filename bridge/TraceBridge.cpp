@@ -115,7 +115,7 @@ bool Bridge::read_word(uint32_t paddr, uint32_t &word) const {
 }
 
 // The chain is in dispatch order, which is ascending uid (a uid is dispatched once): binary search.
-const Fact *Bridge::find(uint64_t uid) const {
+const Fact *Bridge::find_slow(uint64_t uid) const {
   size_t lo = 0, hi = chain_.size();
   while (lo < hi) {
     const size_t mid = (lo + hi) / 2;
@@ -137,7 +137,21 @@ Bridge::Entry *Bridge::alloc_entry() {
   return e;
 }
 
-void Bridge::free_entry(Entry *e) { pool_.push_back(e); }
+void Bridge::free_entry(Entry *e) {
+  Entry *&s = slot_[e->f.uid & kSlotMask];
+  if (s == e) s = nullptr;
+  pool_.push_back(e);
+}
+
+void Bridge::push(Entry *e) {
+  slot_[e->f.uid & kSlotMask] = e;
+  chain_.push_back(e);
+}
+
+const Fact *Bridge::find(uint64_t uid) const {
+  const Entry *s = slot_[uid & kSlotMask];
+  return s && s->f.uid == uid ? &s->f : find_slow(uid);
+}
 
 const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t len) {
   Entry *e = alloc_entry();
@@ -237,7 +251,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     if (eval_control(pc, inst, gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; npc = nx; }
     refcpu_set_pc(ctx_, npc);
     e->f.next_pc = npc;
-    chain_.push_back(e);
+    push(e);
     return e->f;
   }
 
@@ -278,7 +292,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     refcpu_set_state(ctx_, &after);
     e->rd = 0;
     e->f.next_pc = after.pc;
-    chain_.push_back(e);
+    push(e);
     return e->f;
   }
 
@@ -316,7 +330,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
       }
     }
   }
-  chain_.push_back(e);
+  push(e);
   return e->f;
 }
 

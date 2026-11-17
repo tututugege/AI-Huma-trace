@@ -1,6 +1,7 @@
 #include "Isu.h"
 #include "BackPorts.h"
 #include "config.h"
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -15,12 +16,8 @@ void Isu::add_iq(const IssueQueueConfig &cfg) {
 
 // A register woken by this cycle's broadcast is no longer busy for an entering uop.
 void Isu::apply_wakeup_to_uop(Uop &uop) const {
-  for (int k = 0; k < WAKE_CH_ALL; k++) {
-    if (!out.iss_awake.wake[k].valid) continue;
-    const uint32_t preg = out.iss_awake.wake[k].preg;
-    if (uop->src1_en && uop->src1_preg == preg) uop.src1_busy = false;
-    if (uop->src2_en && uop->src2_preg == preg) uop.src2_busy = false;
-  }
+  if (uop->src1_en && out.iss_awake.woken(uop->src1_preg)) uop.src1_busy = false;
+  if (uop->src2_en && out.iss_awake.woken(uop->src2_preg)) uop.src2_busy = false;
 }
 
 // Empties the wake slots (a global flush at the edge; init).
@@ -189,9 +186,11 @@ void Isu::awake() {
     bus[ch].preg = preg;
   };
 
-  int fast_ch[ISSUE_WIDTH];
-  int next_fast = fast_base;
-  for (int i = 0; i < ISSUE_WIDTH; i++) fast_ch[i] = (get_port_capability(i) & OP_MASK_ALU) ? next_fast++ : -1;
+  static const auto fast_ch = [](int next_fast) {   // the fast channel of each ALU port (a constant of the configuration)
+    std::array<int, ISSUE_WIDTH> f{};
+    for (int i = 0; i < ISSUE_WIDTH; i++) f[i] = (get_port_capability(i) & OP_MASK_ALU) ? next_fast++ : -1;
+    return f;
+  }(fast_base);
 
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++)
     if (in.prf_awake->wake[i].valid) {
@@ -229,8 +228,12 @@ void Isu::awake() {
   }
   uint32_t woken[WAKE_CH_ALL];
   int n_woken = 0;
+  const uint64_t ep = ++out.iss_awake.epoch;
   for (int i = 0; i < WAKE_CH_ALL; i++)
-    if (bus[i].valid) woken[n_woken++] = bus[i].preg;
+    if (bus[i].valid) {
+      woken[n_woken++] = bus[i].preg;
+      if (bus[i].preg < TAG_NUM) out.iss_awake.woke_at[bus[i].preg] = ep;
+    }
   for (auto &q : iqs) q.set_wakeup(woken, n_woken);   // (applied at the edge)
 }
 
