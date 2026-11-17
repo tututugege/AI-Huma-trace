@@ -396,6 +396,12 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #endif
 //  CFG_LSU_FREEPORT_RAW=1 a DTLB port counts as taken by a replay's competitor when its AGU request is valid, accepted or not (the replay port
 //                      allocation does not wait for the LDQ / STQ acceptance check of the new request)
+//  CFG_LSU_SLOT_FIXED=1 slot k of L1 is AGU port k: a new load / STA sits in the slot of its AGU (no compress by acceptance), the replays take
+//                      the free slots (a slot is free when its AGU has no valid request) and the free DTLB ports; the acceptance check is off the
+//                      replay allocation (implies the port rule of CFG_LSU_FREEPORT_RAW)
+#ifndef CFG_LSU_SLOT_FIXED
+#define CFG_LSU_SLOT_FIXED 0
+#endif
 #ifndef CFG_LSU_FREEPORT_RAW
 #define CFG_LSU_FREEPORT_RAW 0
 #endif
