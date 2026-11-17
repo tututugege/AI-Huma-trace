@@ -7,7 +7,19 @@
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::exe2lsu() {
   const lp::LsuPipeState &pcur = pcur_;
-  const ExeLsuIO &x = (*in.exe2lsu);
+  ExeLsuIO x = (*in.exe2lsu);
+  if (CFG_LSU_AGU_REG) {   // the AGU results go through a register: this cycle's L1 input is last cycle's AGU output (if still alive)
+    for (int i = 0; i < LSU_AGU_COUNT; i++) {
+      agu_d_[i] = x.agu_req[i];
+      x.agu_req[i] = agu_q_[i];
+      if (!x.agu_req[i].valid) continue;
+      const MicroOp &u = x.agu_req[i].uop;
+      bool alive = false;
+      if (u.op == UOP_LOAD) alive = u->ldq_idx < LDQ_SIZE && pcur.ldq[u->ldq_idx].st == L_ALLOC;
+      else if (u.op == UOP_STA) alive = u->stq_idx < STQ_SIZE && stq_rank(u->stq_idx, pcur.stq_head) < pcur.stq_count;
+      if (!alive || in.rob_bcast->flush) x.agu_req[i].valid = false;
+    }
+  }
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
     const MicroOp &inst = x.sdu_req[i].uop;

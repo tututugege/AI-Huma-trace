@@ -88,6 +88,8 @@ public:
     cur_ = nxt;
     seq_pipe();
     mmio_resp_q_ = mmio_resp_d;
+    for (int i = 0; i < LSU_AGU_COUNT; i++) agu_q_[i] = agu_d_[i];
+    ev_q_ = ev_d_;
   }
 
   // Staged LSU: the comb phases above are in RealLsuPipe.cpp, design in docs/LSU_PIPE.md.
@@ -168,6 +170,8 @@ private:
       pend.clear();
     }
   };
+  ExeLsuIO::ExeLsuReqEntry agu_q_[LSU_AGU_COUNT] = {}, agu_d_[LSU_AGU_COUNT] = {};   // CFG_LSU_AGU_REG: the AGU stage register
+  struct EvReg { lp::stq_mask_t sta = 0, data = 0; } ev_q_, ev_d_;                    // CFG_LSU_STAEV_REG: registered wake events
   MemDepPred mdp_;
   LsuState cur_;
   lp::LsuPipeState pcur_;

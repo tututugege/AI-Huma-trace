@@ -396,6 +396,10 @@ void RealLsu::wake_loads() {
   const lp::LsuPipeState &pcur = pcur_;
   // wake-up pass
   uint32_t full_wakes = 0;
+  // CFG_LSU_STAEV_REG: the address / data events reach the parked loads one cycle later (retire / SC events are not delayed)
+  const stq_mask_t ev_sta = CFG_LSU_STAEV_REG ? ev_q_.sta : pw.ev_sta, ev_data = CFG_LSU_STAEV_REG ? ev_q_.data : pw.ev_data;
+  ev_d_.sta = pw.ev_sta;
+  ev_d_.data = pw.ev_data;
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_RPW) continue;
@@ -418,7 +422,7 @@ void RealLsu::wake_loads() {
       if (e.rwait == 0) e.st = L_RDY;
       break;
     case RC_ADDR:
-      if ((pw.ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)
+      if ((ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)
         const PStq &s = pnxt.stq[e.blk_idx];
         const Conf c = stlf_confirm(e, s, stq_rank(e.blk_idx, pcur.stq_head) < pcur.stq_count && !(pw.ev_ret & b));  // B
         if (c == CF_REPLAY) e.st = L_RDY;
@@ -431,7 +435,7 @@ void RealLsu::wake_loads() {
       if ((pw.ev_ret | pw.ev_sc) & b) e.st = L_RDY;
       break;
     case RC_DATA:
-      if (pw.ev_data & b)
+      if (ev_data & b)
         e.st = L_WBP;  // the STD write is forwarded straight to the write-back (decision was already made at L2)
       else if (pw.ev_ret & b)
         e.st = L_RDY;
