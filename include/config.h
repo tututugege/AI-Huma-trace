@@ -644,7 +644,7 @@ enum class IssueSchedulePolicy : int {
 #define CFG_INT_CLUSTERS 1
 #endif
 #ifndef CFG_INT_STEER
-#define CFG_INT_STEER 0   // 0: unconstrained uops alternate between the clusters; 1: they go to the cluster with fewer valid slots (ties alternate); 2: by the parity of the ROB index (position)
+#define CFG_INT_STEER 0   // 0: unconstrained uops alternate between the clusters; 1: they go to the cluster with fewer valid slots (ties alternate)
 #endif
 #ifndef CFG_IQ_SAME_CYCLE_REUSE
 #define CFG_IQ_SAME_CYCLE_REUSE 1

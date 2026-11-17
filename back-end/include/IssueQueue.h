@@ -252,7 +252,6 @@ private:
       const bool fixed = (op == UOP_CSR || op == UOP_I2F);
       if (op == UOP_CSR) c = 0;
       else if (op == UOP_I2F) c = 1;
-      else if (CFG_INT_STEER == 2) c = inst.uop->rob_idx & 1;   // by position: even / odd instruction (dispatch lane parity)
       else if (CFG_INT_STEER == 1) {
         const int n0 = cluster_count(0), n1 = cluster_count(1);
         c = n0 < n1 ? 0 : (n1 < n0 ? 1 : steer_toggle_);
