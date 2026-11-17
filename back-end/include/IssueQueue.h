@@ -29,8 +29,6 @@ struct IssueQueueConfig {
   int dispatch_width;             // max enqueues per cycle (write ports)
   uint64_t supported_ops;         // operations the IQ accepts
   std::vector<PortBinding> ports; // its issue ports
-  int clusters = 1;               // 2: the slots are split in two halves, each served by the ports listed in port_cluster
-  std::vector<int> port_cluster;  // cluster of each port (clusters = 2)
 };
 
 struct IqStoredEntry {
@@ -66,9 +64,6 @@ public:
   IssueQueueOut out;
 
 private:
-  int clusters_ = 1;
-  std::vector<int> port_cluster_;
-  int steer_toggle_ = 0;   // the next unconstrained uop goes to this cluster
   int id_ = 0;   // IQ id (IQ_INT, IQ_LD, ...)
   int size;
   int dispatch_width;
@@ -113,8 +108,6 @@ public:
   IssueQueue(const IssueQueueConfig &cfg)
       : id_(cfg.id), size(cfg.size), dispatch_width(cfg.dispatch_width),
         ports(cfg.ports) {
-    clusters_ = cfg.clusters;
-    port_cluster_ = cfg.port_cluster;
     if (!ports.empty()) {
       port_lo = port_hi = ports[0].port_idx;
       for (const auto &pb : ports) { port_lo = std::min(port_lo, pb.port_idx); port_hi = std::max(port_hi, pb.port_idx + 1); }
@@ -140,7 +133,6 @@ public:
   void comb_begin() {
     const Regs &q = q_;
     out.free_slots = size - q.count;
-    if (clusters_ == 2) out.free_slots = std::min(size / 2 - cluster_count(0), size / 2 - cluster_count(1));
     // (the wake-up inputs, the enqueue requests and the FU ready masks are written by the Isu phases every cycle before they are read)
     in.issue_block = 0;
     in.flush_all = 0;
@@ -235,49 +227,10 @@ public:
   }
 
 private:
-  // valid slots of cluster c (clusters = 2: the lower / upper half of the slots)
-  int cluster_count(int c) const {
-    int n = 0;
-    for (int i = c * (size / 2); i < (c + 1) * (size / 2); i++) n += (d_vmask[i >> 6] >> (i & 63)) & 1;
-    return n;
-  }
-
   // enqueue (returns the number enqueued)
   int enqueue(const IqStoredEntry &inst) {
     if (q_.count >= size)
       return 0;
-    if (clusters_ == 2) {   // steer to a cluster, lowest free slot of its half
-      const uint32_t op = inst.uop.op;
-      int c;
-      const bool fixed = (op == UOP_CSR || op == UOP_I2F);
-      if (op == UOP_CSR) c = 0;
-      else if (op == UOP_I2F) c = 1;
-      else if (CFG_INT_STEER == 1) {
-        const int n0 = cluster_count(0), n1 = cluster_count(1);
-        c = n0 < n1 ? 0 : (n1 < n0 ? 1 : steer_toggle_);
-      } else c = steer_toggle_;
-      auto free_in = [&](int cl) {
-        for (int i = cl * (size / 2); i < (cl + 1) * (size / 2); i++) {
-          const bool used = CFG_IQ_SAME_CYCLE_REUSE ? ((d_vmask[i >> 6] >> (i & 63)) & 1)
-                                                    : (((alloc_mask_[i >> 6] | d_vmask[i >> 6]) >> (i & 63)) & 1);
-          if (!used) return i;
-        }
-        return -1;
-      };
-      int i = free_in(c);
-      if (i < 0 && !fixed) { c ^= 1; i = free_in(c); }
-      if (i < 0) return 0;
-      if (!fixed) steer_toggle_ = c ^ 1;
-#ifndef IQ_NEG_CONTROL
-      mark_slot(i);
-#endif
-      q_.entry[i] = inst;
-      q_.entry[i].valid = true;
-      d_vmask[i >> 6] |= 1ull << (i & 63);
-      set_dep_bits_for_slot(q_.entry[i], i);
-      q_.count++;
-      return 1;
-    }
     for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
       const uint64_t freebits = CFG_IQ_SAME_CYCLE_REUSE ? ~d_vmask[w] : ~(alloc_mask_[w] | d_vmask[w]);
       if (!freebits) continue;
@@ -447,7 +400,6 @@ private:
         if (inst_issued[idx]) {
           continue;
         }
-        if (clusters_ == 2 && (idx >= size / 2 ? 1 : 0) != port_cluster_[p]) continue;   // the port serves only its own cluster
         
         uint32_t op_type = q_.entry[idx].uop.op;
         uint64_t op_bit = (1ULL << op_type);

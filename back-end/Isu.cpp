@@ -43,11 +43,6 @@ void Isu::init() {
       const int port = iq.port_start_idx + p;
       cfg.ports.push_back({port, GLOBAL_ISSUE_PORT_CONFIG[port].support_mask});
     }
-    if (CFG_INT_CLUSTERS == 2 && iq.id == IQ_INT) {   // two INT clusters: ports 0, 1, 4 and 2, 3, 5 (queue port order)
-      Assert(iq.port_num == 6);
-      cfg.clusters = 2;
-      cfg.port_cluster = {0, 0, 1, 1, 0, 1};
-    }
     add_iq(cfg);
   }
   for (auto &q : iqs) q.in.grant_gate = [this](const Uop &u, int port) { return grant_gate(u, port); };
