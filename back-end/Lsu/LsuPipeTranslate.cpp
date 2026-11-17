@@ -164,7 +164,11 @@ void RealLsu::tlb() {
       if (tlb_req_[LD + k].valid && n++ >= cap_st) tlb_req_[LD + k] = {};
   }
   const bool fence = in.rob_bcast->fence, cancel = !fence && (in.rob_bcast->flush || in.dec_bcast->mispred);
-  dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : LD + STA);
+  // AGU_PORTS: the DTLB has one port per physical AGU (a request is on the port of its AGU, a replay on the free port it took);
+  // the ports are served in port order (the priority of the walk picks), the type of a request is its own
+  const AguCfg &acp = AguCfg::get();
+  const int nports = acp.phys ? acp.nl + acp.nm + acp.ns : LD + STA;
+  dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : nports);
   if (fence || cancel) for (auto &r : tlb_resp_) r = {};
   tlb_in_ldq();
   tlb_in_stq();
@@ -213,7 +217,7 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
-    tlb_req_[k] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};
+    tlb_req_[ac.phys ? pw.l1[k].phys : k] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};
   }
 
   int ns = 0;
@@ -237,7 +241,7 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < STA; k++) {
     if (!pw.s1[k].v) continue;
-    tlb_req_[LD + k] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
+    tlb_req_[ac.phys ? pw.s1[k].phys : LD + k] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
   }
 }
 
@@ -252,7 +256,7 @@ void RealLsu::tlb_in_ldq() {
       l.paddr = e.paddr;
       continue;
     }
-    const TlbMmu::Resp &resp = tlb_resp_[k];
+    const TlbMmu::Resp &resp = tlb_resp_[AguCfg::get().phys ? l.phys : k];
     if (!resp.valid) {
       l.tlb = 1;
     } else if (resp.result == TlbMmu::Result::OK) {
@@ -278,7 +282,7 @@ void RealLsu::tlb_in_stq() {
     PSta &s1 = pw.s1[k];
     if (!s1.v) continue;
     PStq &s = pnxt.stq[s1.stq];
-    const TlbMmu::Resp &resp = tlb_resp_[LD + k];
+    const TlbMmu::Resp &resp = tlb_resp_[AguCfg::get().phys ? s1.phys : LD + k];
     if (!resp.valid || resp.result == TlbMmu::Result::RETRY) {
       s.trp = 1;  // retry through the STA replay register
       continue;

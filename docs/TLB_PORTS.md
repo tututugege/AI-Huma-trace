@@ -12,6 +12,8 @@
 | `AGU_CFG=nL,nS,nM` | 专用 load / 专用 store / 共用口（load 优先）的计数上限版，发射端和 DTLB 入口同形状 |
 | `AGU_PORTS=nL,nS,nM` | **端口精确版**：物理 AGU 口 nL+nM+nS 个；LD 队列的口 k 就是物理口 k（k < nL+nM），STA 队列的口依次是专用 store 口、再是共用口；STA 在共用口上的授权要求该口没被 load 占用；重发的 load / STA 需要 DTLB 时占一个自己能用的空闲口，没有就留在重发寄存器里。要求构建的 `CFG_LD_PORTS = nL+nM`、`CFG_STA_PORTS = nS+nM`（212 正好是 4 / 3） |
 
+`AGU_PORTS` / `CFG_AGU_SHARED` 下 DTLB 的口数 = 物理 AGU 数（212：5 个），请求在自己 AGU 的口上（重发在它抢到的空闲口上），请求自带 load / store 类型，walk 的优先级按口序；67 个程序的周期和按槽序时完全相同。
+
 实现：`back-end/include/AguCfg.h`（形状）、`Isu.cpp` `grant_gate`（发射授权）、`Lsu/LsuPipeTranslate.cpp`（新请求带物理口，重发占口）。
 
 ## 测量方法
@@ -39,7 +41,15 @@ eda 上 rv64gc SPEC06 检查点（`/nfs_global/S/houruyao/spec06_rv64gc`），8 
 ## 选定：212（2 专用 load、1 专用 store、2 共用，load 优先）
 
 AGU 7 → 5，DTLB 口 7 → 5，PRF 的 AGU 读口 7 → 5。
-RTL 改动清单（还没做）：
+RTL（`rtl` 仓库 `exp/agu-share`）：三个阶段都已做完，fm_gate 67/67、周期和 `scripts/ref_cycles_agu212.txt` 逐个相等、lint_chip 0：
+
+1. 发射：STA 在共用口上的授权要求对应 load 口没被授权（`isu.sv`）。
+2. `lp_l1`：重发占自己能用的空闲物理口；请求按物理口输出、响应按口分回槽。
+3. PRF：共用的 STA 口借用 load 口的 src1 读口（`prf.sv`）。
+4. DTLB：`tlb_mmu` 5 个口（`LSU_AGU_PHYS`），类型随请求走（`tlb_mmu_lane` 的访问类型由参数改为输入）。
+未做：AGU 加法器合并（每个约 200 个单元）、LD/STA 队列合并。时序影响（AGU 到 TLB 的路径、PRF 读口前的两路选择）还没有综合量过。
+
+原来的改动清单（供参考）：
 
 1. `isu`：LD 队列绑物理口 0、1、3、4，STA 队列绑 2、3、4；两个队列在共用口 3、4 上加冲突与门（STA 授权要求 LD 没占用）；口号映射代替“每个队列占连续区间”的假设（`isu.sv` 的布局断言）。
 2. `exu` / `exu_ctrl_*`：AGU 7 → 5，共用口的输出按 uop 类型分给 `ldu` 或 `sta`（`exu_ctrl_lsu_out.sv` 现在按下标固定映射）；FU 列表和写回映射跟着改。
