@@ -634,8 +634,11 @@ enum class IssueSchedulePolicy : int {
   ROB_OLDEST_FIRST = 1, // Compare by (rob_flag, rob_idx)
 };
 
+#ifndef CFG_ISSUE_OLDEST_FIRST
+#define CFG_ISSUE_OLDEST_FIRST 0   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot
+#endif
 constexpr IssueSchedulePolicy ISSUE_SCHEDULE_POLICY =
-    IssueSchedulePolicy::IQ_SLOT_PRIORITY;
+    CFG_ISSUE_OLDEST_FIRST ? IssueSchedulePolicy::ROB_OLDEST_FIRST : IssueSchedulePolicy::IQ_SLOT_PRIORITY;
 
 // ============================================================
 // Derived Port Bases
