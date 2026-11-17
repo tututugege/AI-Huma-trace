@@ -246,13 +246,13 @@ class BpuPipe {
     bool tr_v = false;
     pc_t tr_start = 0, tr_expect = 0;
     uint8_t tr_nd = 0;
-    UbEv tq[TQ_N];
-    uint8_t tq_n = 0;
+    UbEv tq[TQ_N];                     // a ring: tq_n events from tq_h
+    uint8_t tq_h = 0, tq_n = 0;
   };
   struct State : Trk {
     pc_t pc = RESET_PC;
-    Ckpt pq[PQ];                       // checkpoints of the blocks in the PTAB, oldest first (BPO_PDCKPT)
-    uint8_t pq_n = 0;
+    Ckpt pq[PQ];                       // checkpoints of the blocks in the PTAB, oldest first from pq_h (a ring, BPO_PDCKPT)
+    uint8_t pq_h = 0, pq_n = 0;
     uint16_t blk_seq = 0;              // BPA_REPAIR: next block sequence number
     uint8_t epoch = 0;                 // BPA_REPAIR: bumped whenever spec is overwritten by arch (the history ring is re-based: older checkpoints no longer index it)
     Blk R[MAIN_LAT];                   // R[0] = S1, R[1] = S2
@@ -278,15 +278,26 @@ class BpuPipe {
     uint32_t ty_lane = 0;              // banks whose type lane an update of the queue used this cycle
     PortUse p_ty[NB], p_tg[NB], p_bt[NB];
     bool pmu_l1_ovr = false, pmu_ptab_stall = false;   // PMU (front-end loss cause) only
+    // Only the enables and counters: every record is read under its enable (tage[b].upd, btb[b] write enables, ub_wmask,
+    // n_type, rec_v) and is written whole by the update that sets it.
+    void clear() {
+      ub_wmask[0] = ub_wmask[1] = 0;
+      std::memset(bb_rd, 0, sizeof bb_rd); std::memset(bb_wr, 0, sizeof bb_wr);
+      rec_v = rec2_v = false;
+      for (int b = 0; b < NB; b++) { tage[b].upd = false; btb[b].itt_we = 0; btb[b].btb_we = false; }
+      n_type = 0; ty_lane = 0;
+      std::memset(p_ty, 0, sizeof p_ty); std::memset(p_tg, 0, sizeof p_tg); std::memset(p_bt, 0, sizeof p_bt);
+      pmu_l1_ovr = pmu_ptab_stall = false;
+    }
   };
 
  private:
   Txn txn_d_;
   bool txn_d_valid_ = false;
   static constexpr int hsym_ = HSYM_BITS;
-  // The pipeline registers are double-buffered: comb() builds the next value in *nxp_ (from *stp_), commit() flips the two.
-  State sb_[2];
-  State *stp_ = &sb_[0], *nxp_ = &sb_[1];
+  // The pipeline registers: comb() writes their next value in place (see comb), commit() writes the arrays.
+  State st_;
+  State *const stp_ = &st_;
   UbTab ub0_, ub1_;
   Tage tage_[NB];
   Btb btb_[NB];
@@ -435,7 +446,7 @@ class BpuPipe {
 
   // ---- uBTB training --------------------------------------------------------------------------------------------------------
   static void ub_event(Trk &n, const UbEv &e) {
-    if (n.tq_n < TQ_N) n.tq[n.tq_n++] = e;   // a full train queue drops the event
+    if (n.tq_n < TQ_N) { n.tq[(n.tq_h + n.tq_n) % TQ_N] = e; n.tq_n++; }   // a full train queue drops the event
   }
   // Commit-order block tracker: reconstructs the fetch block each committed instruction belonged to.
   static void ub_track(const InputPayload &in, Trk &n) {
@@ -559,25 +570,24 @@ class BpuPipe {
 
   // Update queue: control updates only; an entry is written when its bank has no S1 read this cycle (reads win), at most P_ writes
   // per cycle, one per bank. A full queue drops the new entry.
-  void update_queue(const InputPayload &in, State &n, Txn &t) const {
-    uint8_t bbr[BANKBLK] = {};
-    if ((*stp_).R[0].valid) { const Blk &b = (*stp_).R[0]; bbr[win_of(b.base) % BANKBLK] = 1; bbr[win_of(b.bnd - SLOT_BYTES) % BANKBLK] = 1; }
+  void update_queue(const InputPayload &in, const uint8_t (&bbr)[BANKBLK], State &n, Txn &t) const {
     uint32_t wrm = 0;
     int nw = 0, kn = 0;
     UpdEnt keep[UQ_N];
     bool done[UQ_N] = {};
-    for (int qi = 0; qi < (*stp_).uq_n; qi++) {
+    const int uq_n = n.uq_n;   // (the kept entries are written back below, after the loop)
+    for (int qi = 0; qi < uq_n; qi++) {
       if (done[qi]) continue;
-      const UpdEnt &e = (*stp_).uq[qi];
+      const UpdEnt &e = n.uq[qi];
       const uint32_t b = bank_of(e.pc);
       // block banks: one row write per (window bank) and cycle, reads win, entries of the same row (same window, same TAGE index set) share the write
       const uint32_t wb = bb_of(e.pc, BANKBLK);
       if (nw < UPD_PORTS && !bbr[wb] && !t.bb_wr[wb] && !((wrm >> b) & 1)) {
         apply_table_update(e, t); type_update(e, t);
         wrm |= 1u << b; nw++; t.bb_wr[wb] = 1;
-        for (int qj = qi + 1; qj < (*stp_).uq_n; qj++) {   // entries of the same row (same window, same TAGE index set) share the write
+        for (int qj = qi + 1; qj < uq_n; qj++) {   // entries of the same row (same window, same TAGE index set) share the write
           if (done[qj]) continue;
-          const UpdEnt &f = (*stp_).uq[qj];
+          const UpdEnt &f = n.uq[qj];
           const uint32_t fb = bank_of(f.pc);
           if (win_of(f.pc) != win_of(e.pc) || ((wrm >> fb) & 1) || std::memcmp(f.idx, e.idx, sizeof(e.idx)) != 0) continue;
           apply_table_update(f, t); type_update(f, t);
@@ -632,7 +642,7 @@ class BpuPipe {
     for (int i = 1; i < CW; i++) in.in_upd_valid[i] = false;
     State &n = (*stp_);
     Trk tmp = n;
-    tmp.tq_n = 0;
+    tmp.tq_h = tmp.tq_n = 0;
     ub_track(in, tmp);
     for (int i = 0; i < tmp.tq_n; i++)
       for (UbTab *tb : {&ub0_, &ub1_}) {
@@ -656,7 +666,7 @@ class BpuPipe {
     for (auto &r : rec_) r.valid = false;
     ub0_.init(S0_N, S0_W, UB_TAGB);
     ub1_.init(L1_N, L1_W, UB_TAGB);
-    sb_[0] = State{}; sb_[1] = State{}; stp_ = &sb_[0]; nxp_ = &sb_[1];
+    st_ = State{};
     type_.reset();
   }
 
@@ -668,7 +678,6 @@ class BpuPipe {
     d.squash_n = 0;
     const Blk &b = (*stp_).R[MAIN_LAT - 1];
     if (refetch || !b.valid) return;
-    d.out = MainOut{}; d.outB = MainOut{}; d.oout = MainOut{}; d.ock = Ckpt{}; d.obase = 0; d.og = S0Guess{};
     d.valid = true;
     d.blk = &b;
     main_select(b, (*stp_).raw, d.out);
@@ -709,66 +718,55 @@ class BpuPipe {
     return true;
   }
 
-  // n = s except R, raw and pq (the caller rebuilds R and raw; only pq[0..pq_n) are live)
-  static void copy_state_but_R(State &n, const State &s) {
-    static_assert(std::is_trivially_copyable_v<State>);
-    char *dp = reinterpret_cast<char *>(&n);
-    const char *sp = reinterpret_cast<const char *>(&s);
-    const size_t a1 = reinterpret_cast<char *>(&n.pq) - dp, b1 = a1 + sizeof(n.pq);
-    const size_t a2 = reinterpret_cast<char *>(&n.R) - dp, b2 = reinterpret_cast<char *>(&n.raw_b) - dp + sizeof(n.raw_b);   // R, raw, raw_b are adjacent
-    std::memcpy(dp, sp, a1);
-    std::memcpy(dp + a1, sp + a1, size_t(s.pq_n) * sizeof(Ckpt));
-    std::memcpy(dp + b1, sp + b1, a2 - b1);
-    std::memcpy(dp + b2, sp + b2, sizeof(State) - b2);
-  }
-
-  void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) const {
+  // One cycle: the outputs, the transaction of the arrays (written at seq) and the next value of the registers. The registers
+  // are updated here, in place: nothing reads them later in the cycle (decide() runs before this phase; the arrays, which
+  // other phases read, change only at seq). Every read of a register below happens before the write of that register.
+  void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) {
+    static_assert(MAIN_LAT >= 2, "the S1 block moves to R[1] before it is read");
     out = {};
-    t = Txn{};
-    State &n = *nxp_;
-    copy_state_but_R(n, *stp_);
-    const bool refetch = in.refetch;
+    t.clear();
+    State &n = st_;
+    const uint8_t uq_n0 = n.uq_n, tq_n0 = n.tq_n;
+    const uint16_t seq0 = n.blk_seq;
+    const uint8_t epoch0 = n.epoch;
     // BPO_PDCKPT: the checker consumed the PTAB head in the previous cycle -> its checkpoint leaves the record queue
     Ckpt pd_rec; bool pd_have = false;
-    if (in.pd.valid && (*stp_).pq_n > 0) {
-      pd_rec = (*stp_).pq[0]; pd_have = true;
-      for (int i = 1; i < (*stp_).pq_n; i++) n.pq[i - 1] = (*stp_).pq[i];
-      n.pq_n = (*stp_).pq_n - 1;
+    if (in.pd.valid && n.pq_n > 0) {
+      pd_rec = n.pq[n.pq_h]; pd_have = true;
+      n.pq_h = uint8_t((n.pq_h + 1) % PQ); n.pq_n--;
     }
 
-    // S0: look up the block starting at pc with the given speculative history / RAS, enter it into S1 and push the fetch address
-    auto s0_issue = [&](pc_t pc, const HistRing &sp, const RasQ &sr) {
-      Blk &b = n.R[0];   // n.R[0] is Blk{} here (cleared above; at most one block is issued per cycle)
+    // S0: look up the block starting at pc with the speculative history / RAS of n, enter it into S1 and push the fetch address
+    auto s0_issue = [&](pc_t pc) {
+      Blk &b = n.R[0];   // invalid here (at most one block is issued per cycle)
       b.valid = true;
+      b.pair = false;
       b.base = pc;
       b.bnd = block_bnd(b.base);
-      b.g = s0_lookup(ub0_, b.base, b.bnd, sr.cnt, sr.top());
-      b.ck = take_ckpt(sp, sr);
-      main_index(b, sp);
+      b.g = s0_lookup(ub0_, b.base, b.bnd, n.sras.cnt, n.sras.top());
+      b.ck = take_ckpt(n.spec, n.sras);
+      main_index(b, n.spec);
       push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       n.pc = b.g.next;
       out.icache_read_valid = true;
       out.fetch_address = b.base;
-      // FE_PAIR: the guess is a taken branch -> also look up the block at its target (spec history / RAS as left by the first block)
+      // FE_PAIR: the guess is a taken branch -> also look up the block at its target (spec history / RAS as left by the first block, i.e. n now)
       const int pm = cfg_pair();   // FE_PAIR bits: 1 on; 2 = not after a return; 4 = not after a call; 8 = not after an indirect jump; 16 = not after a conditional branch
       const bool ty_ok = !((pm & 2) && b.g.type == BR_RET) && !((pm & 4) && br_call(b.g.type)) && !((pm & 8) && br_ind(b.g.type)) && !((pm & 16) && b.g.type == BR_DIRECT) && !((pm & 32) && b.g.type == BR_JAL);
       if (pm && ty_ok && b.g.hit && b.g.taken && int(b.g.slot) + 1 < FW) {
         const int lenA = b.g.slot + 1;
         const pc_t T = b.g.next;
         if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
-          HistRing sp2 = sp; RasQ sr2 = sr;
-          push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, sp2, sr2);
-          BlkB c;   // the second block is a normal fetch block (natural end), it must fit into the slots the first one leaves
+          BlkB &c = b.b2;   // the second block is a normal fetch block (natural end), it must fit into the slots the first one leaves
           c.valid = true; c.base = T; c.bnd = block_bnd(T);
-          c.g = s0_lookup(ub0_, T, c.bnd, sr2.cnt, sr2.top());
+          c.g = s0_lookup(ub0_, T, c.bnd, n.sras.cnt, n.sras.top());
           const int room = FW - lenA, natlen = int((c.bnd - T) >> SLOT_SHIFT);
           const int lenB = c.g.taken ? c.g.slot + 1 : natlen;
           if (lenB <= room) {
-            c.ck = take_ckpt(sp2, sr2);
-            main_index(c, sp2);
+            c.ck = take_ckpt(n.spec, n.sras);
+            main_index(c, n.spec);
             push_bits(c.g.nbits, c.g.bits, c.g.ras_op, c.g.ras_val, n.spec, n.sras);
-            n.R[0].b2 = c;
-            n.R[0].pair = true;
+            b.pair = true;
             n.pc = c.g.next;
             out.pair_valid = true; out.pair_addr2 = T; out.pair_a_len = lenA; out.pair_b_len = natlen < room ? natlen : room;
           }
@@ -776,9 +774,9 @@ class BpuPipe {
       }
     };
 
-    // PTAB write: the block leaving S_D with the final prediction
+    // PTAB write: the block leaving S_D with the final prediction (d.blk points at R[MAIN_LAT - 1]: read before the shift below)
     if (d.valid) {
-      if (n.pq_n < PQ) n.pq[n.pq_n++] = d.blk->ck;
+      if (n.pq_n < PQ) { n.pq[(n.pq_h + n.pq_n) % PQ] = d.blk->ck; n.pq_n++; }
       out.PTAB_write_enable = true;
       out.out_pred_base_pc = d.blk->base;
       for (int i = 0; i < FW; i++) out.out_pred_dir[i] = d.out.dir[i];
@@ -800,47 +798,51 @@ class BpuPipe {
       }
       {
         t.rec_v = true;
-        t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = (*stp_).blk_seq; t.rec.epoch = (*stp_).epoch; t.rec.valid = true;
-        for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = (*stp_).blk_seq; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
-        n.blk_seq = (*stp_).blk_seq + 1;
+        t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
+        for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = seq0; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
+        n.blk_seq = seq0 + 1;
         if (d.pair) {
           const int lenA = d.out.slot + 1;
           t.rec2_v = true;
-          t.rec2.ck = d.blk->b2.ck; t.rec2.base = d.blk->b2.base; t.rec2.id = (*stp_).blk_seq + 1; t.rec2.epoch = (*stp_).epoch; t.rec2.valid = true;
+          t.rec2.ck = d.blk->b2.ck; t.rec2.base = d.blk->b2.base; t.rec2.id = seq0 + 1; t.rec2.epoch = epoch0; t.rec2.valid = true;
           for (int i = 0; i < FW; i++) t.rec2.ptype[i] = d.outB.meta.ps_info[i] & 7;
-          for (int i = lenA; i < FW; i++) out.meta.blk_id[i] = (*stp_).blk_seq + 1;
-          n.blk_seq = (*stp_).blk_seq + 2;
+          for (int i = lenA; i < FW; i++) out.meta.blk_id[i] = seq0 + 1;
+          n.blk_seq = seq0 + 2;
         }
       }
     }
 
-    // shift; the block in S1 is read this cycle and its raw array data rides along into the next stage register
-    for (int k = MAIN_LAT - 1; k >= 1; k--) n.R[k] = (*stp_).R[k - 1];
-    n.R[0] = Blk{};
-    if ((*stp_).R[0].valid) {
-      count_reads((*stp_).R[0], t);
-      bb_reads((*stp_).R[0], t);
-      main_read((*stp_).R[0], n.raw);
-      if ((*stp_).R[0].pair) main_read((*stp_).R[0].b2, n.raw_b);
+    // shift; the block in S1 (now R[1]) is read this cycle and its raw array data rides along into the next stage register
+    int inflight = 0;
+    for (int k = 0; k < MAIN_LAT; k++) inflight += n.R[k].valid;
+    uint8_t bbr[BANKBLK] = {};   // block-bank rows read by the S1 block (the update queue's writes yield to them)
+    if (n.R[0].valid) { bbr[win_of(n.R[0].base) % BANKBLK] = 1; bbr[win_of(n.R[0].bnd - SLOT_BYTES) % BANKBLK] = 1; }
+    for (int k = MAIN_LAT - 1; k >= 1; k--) n.R[k] = n.R[k - 1];
+    n.R[0].valid = false; n.R[0].pair = false;
+    const Blk &s1 = n.R[1];
+    if (s1.valid) {
+      count_reads(s1, t);
+      bb_reads(s1, t);
+      main_read(s1, n.raw);
+      if (s1.pair) main_read(s1.b2, n.raw_b);
     }
 
-    if (refetch) {
-      for (int k = 0; k < MAIN_LAT; k++) n.R[k] = Blk{};
+    auto clear_R = [&] { for (int k = 0; k < MAIN_LAT; k++) { n.R[k].valid = false; n.R[k].pair = false; } };
+    if (in.refetch) {
+      clear_R();
       n.pc = in.refetch_address;
     } else if (d.ovr) {
-      for (int k = 0; k < MAIN_LAT; k++) n.R[k] = Blk{};
+      clear_R();
       restore(d.ock, n.spec, n.sras);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
-    } else if (l1_override((*stp_).R[0], n, t)) {
+    } else if (l1_override(n.R[1], n, t)) {
       // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
-      int inflight = 0;
-      for (int k = 0; k < MAIN_LAT; k++) inflight += (*stp_).R[k].valid;
       const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
       t.pmu_ptab_stall = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) s0_issue((*stp_).pc, (*stp_).spec, (*stp_).sras);
+      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
     }
 
     // ---- commit side ---------------------------------------------------------------------------------------------------------
@@ -851,15 +853,15 @@ class BpuPipe {
       if (br_call(ty)) n.aras.push(in.in_update_base_pc[i] + ilen_of(in.in_update_is_rvc[i]));
       else if (ty == BR_RET) n.aras.pop();
     }
-    if (refetch) {
+    if (in.refetch) {
       if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {   // predecode flush: exact repair from the checked block's checkpoint
         restore(pd_rec, n.spec, n.sras);
         push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
-      } else if (!(in.rf_valid && repair_blk(in, n))) { n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = (*stp_).epoch + 1; }
+      } else if (!(in.rf_valid && repair_blk(in, n))) { n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1; }
       n.pq_n = 0;
-      if (in.icache_read_ready) { const HistRing sp = n.spec; const RasQ sr = n.sras; s0_issue(in.refetch_address, sp, sr); }   // S0 issues the redirect target in the refetch cycle
+      if (in.icache_read_ready) s0_issue(in.refetch_address);   // S0 issues the redirect target in the refetch cycle
     }
-    update_queue(in, n, t);
+    update_queue(in, bbr, n, t);
     // predecode found no branch where the type predictor claimed one: the entry is stale (a non-control commit never trains the table).  It is cleared when no
     // update of the queue uses the bank's type lane this cycle (otherwise the stale entry causes another predecode flush and the clear is retried).
     if (in.pd.valid && in.pd.nb_valid && !((t.ty_lane >> bank_of(in.pd.nb_pc)) & 1)) {
@@ -868,16 +870,15 @@ class BpuPipe {
       if (w.en) { t.p_ty[w.bank].wr++; t.n_type++; }
     }
     // uBTB training: head of the train queue is written, new events are appended behind it
-    if ((*stp_).tq_n > 0) {
-      const UbEv &e = (*stp_).tq[0];
+    if (n.tq_n > 0) {
+      const UbEv &e = n.tq[n.tq_h];
       ub_rmw(ub0_, e, t.ub_v[0], t.ub_wmask[0]); t.ub_set[0] = ub0_.index(e.start);
       ub_rmw(ub1_, e, t.ub_v[1], t.ub_wmask[1]); t.ub_set[1] = ub1_.index(e.start);
-      for (int i = 1; i < (*stp_).tq_n; i++) n.tq[i - 1] = (*stp_).tq[i];
-      n.tq_n = (*stp_).tq_n - 1;
+      n.tq_h = uint8_t((n.tq_h + 1) % TQ_N); n.tq_n--;
     }
     ub_track(in, n);
-    out.upd_free = uint8_t(UQ_N - (*stp_).uq_n);   // EXP-028 compact ROB commit credits (registered)
-    out.tq_free = uint8_t(TQ_N - (*stp_).tq_n);
+    out.upd_free = uint8_t(UQ_N - uq_n0);   // EXP-028 compact ROB commit credits (registered)
+    out.tq_free = uint8_t(TQ_N - tq_n0);
   }
 
   void commit(const Txn &t) {
@@ -901,7 +902,6 @@ class BpuPipe {
     for (int i = 0; i < t.n_type; i++) type_.commit(t.type[i]);
     for (int w = 0; w < ub0_.W; w++) if ((t.ub_wmask[0] >> w) & 1) ub0_.e[t.ub_set[0] * ub0_.W + w] = t.ub_v[0][w];
     for (int w = 0; w < ub1_.W; w++) if ((t.ub_wmask[1] >> w) & 1) ub1_.e[t.ub_set[1] * ub1_.W + w] = t.ub_v[1][w];
-    std::swap(stp_, nxp_);
   }
 };
 
