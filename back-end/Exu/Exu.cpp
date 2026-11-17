@@ -330,6 +330,7 @@ void Exu::exec() {
     const auto &u = out.exu2rob.entry[p].uop;
     const int op = (int)decode_uop_type(u.op);
     if (op != UOP_LOAD && op != UOP_CSR) continue;
+    if (in.rob_bcast->flush_now) continue;   // a flush decided in this cycle (CFG_FLUSH_REG delays its effect): everything completing now is younger than the flush point, dead; its uid is about to be re-used by the refetch
     tbhook::on_exec({(uint32_t)u->rob_idx, op, (xlen_t)u.result, (bool)(u.page_fault_inst || u.page_fault_load || u.page_fault_store)});
   }
 

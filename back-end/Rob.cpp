@@ -304,6 +304,7 @@ void Rob::branch(int head, int count, int &c_count) {
 // Dispatch enqueues at the tail: the fired slots are the first m valid slots; Dispatch numbered them tail, tail+1, ...
 void Rob::fire(int &c_count) {
   if (!out.rob2dis.ready) return;
+  if (out.rob_bcast.flush) return;   // the flush of this cycle empties the ROB anyway; what dispatch fires now (CFG_FLUSH_REG delays the flush reaching it) must not register with the trace bridge, which has just rewound (flush() overrides the enqueue)
   int m = 0;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!in.dis2rob->dis_fire[i]) continue;
@@ -402,9 +403,10 @@ void Rob::redirect() {
       int64_t committing = -1;
       for (int i = 0; i < COMMIT_WIDTH && committing < 0; i++)
         if (out.rob_commit.commit_entry[i].valid) committing = (int64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
-      tbhook::on_flush(committing, bc.interrupt);
+      tbhook::on_flush(committing, bc.interrupt);   // (the trace bridge rewinds in the cycle of the decision)
       const Csr::TrapOut trap = csr_state().trap_out();
       pend_nxt_.v = true; pend_nxt_.fence_i = bc.fence_i; pend_nxt_.itlb = bc.fence;
+      pend_nxt_.committing = committing; pend_nxt_.interrupt = bc.interrupt;
       pend_nxt_.pc = (bc.mret || bc.sret) ? trap.epc : bc.exception ? trap.trap_pc : bc.pc + ilen_of(bc.is_rvc);
       o.mispred = false; o.rf_valid = false; o.stall = !in.pre2front->ready; o.redirect_pc = 0;
       return;

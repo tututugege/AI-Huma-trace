@@ -65,6 +65,10 @@ inline void compute(FuKind kind, ExuInst &inst) {
     break;
   case FuKind::BRU:
     resolve_branch(inst);
+    { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
+      if (tr) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
+        std::fprintf(stderr, "[BRU] cyc=%lld rob=%d pc=%llx mispred=%d taken=%d fact_pc=%llx fact_taken=%d rs1=%llx rs2=%llx src1=p%d src2=p%d\n", (long long)sim_time, (int)inst->rob_idx, (unsigned long long)inst->pc, (int)inst.mispred, (int)inst.br_taken,
+                     f ? (unsigned long long)f->pc : 0ull, f ? (int)f->br_taken : -1, f ? (unsigned long long)f->rs1_value : 0ull, f ? (unsigned long long)f->rs2_value : 0ull, (int)inst->src1_preg, (int)inst->src2_preg); } }
     break;
   default:
     break;

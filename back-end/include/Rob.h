@@ -32,7 +32,7 @@ public:
   bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
   RobBroadcastIO bc_prev_;   // the broadcast of the previous cycle (CFG_FLUSH_REG)
-  struct PendFlush { bool v = false, fence_i = false, itlb = false; uint64_t pc = 0; } pend_, pend_nxt_;   // the front-end redirect, delivered one cycle later
+  struct PendFlush { bool v = false, fence_i = false, itlb = false, interrupt = false; uint64_t pc = 0; int64_t committing = -1; } pend_, pend_nxt_;   // the front-end redirect, delivered one cycle later
   // Outputs: the signals this module drives (it alone).
   struct Out {
     RobCsrIO rob2csr;

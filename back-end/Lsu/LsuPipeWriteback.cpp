@@ -365,6 +365,11 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
   const tb::Fact *f = tbhook::fact_by_rob(l.uop().rob_idx);
   const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
   xlen_t v = 0;
+  if (msd::trace_on() && plain) {
+    xlen_t sv = 0; const bool got = ms_load_value(pnxt, ms_stq_, l, ml, defer, sv);
+    std::fprintf(stderr, "[MSL] cyc=%lld rob=%d p%u pc=%llx defer=%d atnt=%d stale_calc=%d v=%llx true=%llx\n", (long long)sim_time, (int)l.uop().rob_idx, (unsigned)dst,
+                 (unsigned long long)f->pc, (int)defer, (int)ml.atnt, (int)got, (unsigned long long)sv, (unsigned long long)f->rd_value);
+  }
   if (ml.atnt) {
     msd::taint[dst] = msd::TV{};
     if (plain && ms_load_value(pnxt, ms_stq_, l, ml, defer, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
