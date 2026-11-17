@@ -4,17 +4,14 @@
 
 ## 开关
 
-| 环境变量 | 含义 |
-|---|---|
-| `TLB_HIST_OUT=<文件>` | 退出时写出每周期 DTLB 请求数直方图（load 数 × store 数） |
-| `TLB_LD_PORTS` / `TLB_ST_PORTS` / `TLB_TOT_PORTS` | DTLB 入口每周期最多服务的 load / STA / 总请求数，其余走已有的“无响应”重试路径 |
-| `AGU_TOT=N` | load 与 STA 共用 N 个 AGU（发射端计数上限，load 队列先调度所以 load 赢） |
-| `AGU_CFG=nL,nS,nM` | 专用 load / 专用 store / 共用口（load 优先）的计数上限版，发射端和 DTLB 入口同形状 |
-| `AGU_PORTS=nL,nS,nM` | **端口精确版**：物理 AGU 口 nL+nM+nS 个；LD 队列的口 k 就是物理口 k（k < nL+nM），STA 队列的口依次是专用 store 口、再是共用口；STA 在共用口上的授权要求该口没被 load 占用；重发的 load / STA 需要 DTLB 时占一个自己能用的空闲口，没有就留在重发寄存器里。要求构建的 `CFG_LD_PORTS = nL+nM`、`CFG_STA_PORTS = nS+nM`（212 正好是 4 / 3） |
+只有一个编译期开关：`CFG_AGU_SHARED = NM`（默认 0，周期不变；`make EXTRA_CXXFLAGS=-DCFG_AGU_SHARED=2`）。load 队列和 STA 队列的口数不变（`CFG_LD_PORTS`、`CFG_STA_PORTS`），AGU / DTLB 的物理口数是 `LSU_AGU_PHYS = LD + STA - NM`。形状定义在 `back-end/include/AguPorts.h`：
 
-`AGU_PORTS` / `CFG_AGU_SHARED` 下 DTLB 的口数 = 物理 AGU 数（212：5 个），请求在自己 AGU 的口上（重发在它抢到的空闲口上），请求自带 load / store 类型，walk 的优先级按口序；67 个程序的周期和按槽序时完全相同。
+- 口 0 到 NL-1 只给 load，NL 到 NL+NM-1 两者共用（load 优先），再往后只给 store 地址（NL = LD - NM）。
+- load 队列的发射口 k 就是物理口 k；STA 队列的口依次是专用 store 口、再是共用口。
+- 发射（`Isu::grant_gate`）：STA 授权要求它的物理口这一拍没被 load 占用，输了就留在队列里。
+- DTLB（`LsuPipeTranslate.cpp`）：每个物理口一个请求，请求在自己 AGU 的口上，重发的 load / STA 需要 DTLB 时占自己能用的空闲口（没有就留在重发寄存器里），请求自带类型，walk 优先级按口序。
 
-实现：`back-end/include/AguCfg.h`（形状）、`Isu.cpp` `grant_gate`（发射授权）、`Lsu/LsuPipeTranslate.cpp`（新请求带物理口，重发占口）。
+测量时（下面的结果表）用过一批环境变量版本的实验开关（`AGU_TOT`、`AGU_CFG`、`AGU_PORTS`、`TLB_*_PORTS`、`TLB_HIST_OUT`）：它们在分支历史里（`b1e3b90` 及更早），清理后的代码不再有，只保留上面的编译期形状；清理前后 67 个程序的周期完全相同。
 
 ## 测量方法
 

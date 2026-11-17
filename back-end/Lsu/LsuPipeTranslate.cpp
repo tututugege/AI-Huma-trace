@@ -1,6 +1,6 @@
 // The staged LSU: translate phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
 #include "LsuPipeInternal.h"
-#include "AguCfg.h"
+#include "AguPorts.h"
 
 // ---------------------------------------------------------------------------------------------------------------
 // AGU arrivals: STD write, STA (va), load (L1 input)
@@ -44,7 +44,7 @@ void RealLsu::exe2lsu() {
     LP_PORT_CHECK(ns + 1, LSU_STA_COUNT, "sta_agu");
     pw.s1[ns].v = true;
     pw.s1[ns].stq = inst->stq_idx;
-    pw.s1[ns].phys = AguCfg::get().phys ? AguCfg::get().st_phys(i - LSU_LDU_COUNT) : -1;
+    pw.s1[ns].phys = agu::st_port(i - LSU_LDU_COUNT);
     ns++;
     pw.ev_sta |= (stq_mask_t)1 << inst->stq_idx;  // the partial address is known from now on
     {  // memory-order check: younger loads that passed this store while its address was unknown
@@ -98,7 +98,7 @@ void RealLsu::exe2lsu() {
     pw.l1[nl].v = true;
     pw.l1[nl].need_tlb = true;
     pw.l1[nl].ldq = inst->ldq_idx;
-    pw.l1[nl].phys = AguCfg::get().phys ? AguCfg::get().ld_phys(i) : -1;
+    pw.l1[nl].phys = agu::ld_port(i);
     nl++;
   }
 }
@@ -108,67 +108,12 @@ void RealLsu::exe2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 address translation, one phase: the requests of the load / STA pipes, the DTLB lookup (a fence flushes it, a flush
 // or mispredict cancels its pending walk and returns nothing), the responses.
-// EXP-TLBPORTS: per-cycle DTLB request count histogram [loads][stores], written at exit to $TLB_HIST_OUT (experiment only).
-namespace {
-struct TlbHist {
-  uint64_t h[16][16] = {};
-  uint64_t cyc = 0;
-  ~TlbHist() {
-    const char *o = getenv("TLB_HIST_OUT");
-    if (!o) return;
-    FILE *f = fopen(o, "w");
-    if (!f) return;
-    fprintf(f, "cycles %llu\n", (unsigned long long)cyc);
-    for (int l = 0; l < 16; l++)
-      for (int s = 0; s < 16; s++)
-        if (h[l][s]) fprintf(f, "%d %d %llu\n", l, s, (unsigned long long)h[l][s]);
-    fclose(f);
-  }
-} g_tlb_hist;
-}  // namespace
-
 void RealLsu::tlb() {
   tlb_out();
-  {
-    int nl = 0, ns = 0;
-    for (int k = 0; k < LD; k++) nl += tlb_req_[k].valid;
-    for (int k = 0; k < STA; k++) ns += tlb_req_[LD + k].valid;
-    g_tlb_hist.h[nl][ns]++;
-    g_tlb_hist.cyc++;
-  }
-  // EXP-TLBPORTS: DTLB port sharing. TLB_LD_PORTS / TLB_ST_PORTS cap how many load / STA requests are served per cycle
-  // (the first ones in port order win); a request that is not served comes back with no response, which the LSU already
-  // handles as a retry (load: l.tlb = 1 through the replay register, STA: trp).
-  static const int cap_ld = getenv("TLB_LD_PORTS") ? atoi(getenv("TLB_LD_PORTS")) : LD;
-  static const int cap_st = getenv("TLB_ST_PORTS") ? atoi(getenv("TLB_ST_PORTS")) : STA;
-  {  // the AGU shape also limits the DTLB requests of the cycle (new and replay), loads first
-    const AguCfg &ac = AguCfg::get();
-    if (ac.on) {
-      int ld = 0, st = 0;
-      for (int k = 0; k < LD; k++)
-        if (tlb_req_[k].valid) { if (ac.ok_ld(ld, st)) ld++; else tlb_req_[k] = {}; }
-      for (int k = 0; k < STA; k++)
-        if (tlb_req_[LD + k].valid) { if (ac.ok_st(ld, st)) st++; else tlb_req_[LD + k] = {}; }
-    }
-  }
-  // TLB_TOT_PORTS: load and STA requests share N ports (loads first, then STAs, in port order)
-  static const int cap_tot = getenv("TLB_TOT_PORTS") ? atoi(getenv("TLB_TOT_PORTS")) : LD + STA;
-  if (cap_tot < LD + STA) {
-    for (int k = 0, n = 0; k < LD + STA; k++)
-      if (tlb_req_[k].valid && n++ >= cap_tot) tlb_req_[k] = {};
-  }
-  if (cap_ld < LD || cap_st < STA) {
-    for (int k = 0, n = 0; k < LD; k++)
-      if (tlb_req_[k].valid && n++ >= cap_ld) tlb_req_[k] = {};
-    for (int k = 0, n = 0; k < STA; k++)
-      if (tlb_req_[LD + k].valid && n++ >= cap_st) tlb_req_[LD + k] = {};
-  }
   const bool fence = in.rob_bcast->fence, cancel = !fence && (in.rob_bcast->flush || in.dec_bcast->mispred);
-  // AGU_PORTS: the DTLB has one port per physical AGU (a request is on the port of its AGU, a replay on the free port it took);
-  // the ports are served in port order (the priority of the walk picks), the type of a request is its own
-  const AguCfg &acp = AguCfg::get();
-  const int nports = acp.phys ? acp.nl + acp.nm + acp.ns : LD + STA;
-  dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : nports);
+  // the DTLB has one port per physical AGU: a request is on the port of its AGU, a replay on the free port it took; the ports are
+  // served in port order (the priority of the walk picks) and every request carries its own type
+  dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : agu::PORTS);
   if (fence || cancel) for (auto &r : tlb_resp_) r = {};
   tlb_in_ldq();
   tlb_in_stq();
@@ -178,17 +123,14 @@ void RealLsu::tlb_out() {
   const lp::LsuPipeState &pcur = pcur_;
   for (auto &r : tlb_req_) r = {};
 
-  // AGU_PORTS (port-accurate shared AGUs): the physical DTLB ports the new requests of this cycle hold; a replay that needs the
-  // DTLB takes a free one it may use, otherwise its replay register keeps it for the next cycle
-  const AguCfg &ac = AguCfg::get();
+  // The DTLB ports the new requests of this cycle hold; a replay that needs the DTLB takes a free port it may use, otherwise its
+  // replay register keeps it for the next cycle
   uint32_t used = 0;
-  if (ac.phys) {
-    for (int k = 0; k < LD; k++) if (pw.l1[k].v && pw.l1[k].phys >= 0) used |= 1u << pw.l1[k].phys;
-    for (int k = 0; k < STA; k++) if (pw.s1[k].v && pw.s1[k].phys >= 0) used |= 1u << pw.s1[k].phys;
-  }
-  auto free_phys = [&](bool ld) {
-    for (int q = 0; q < ac.nl + ac.nm + ac.ns; q++)
-      if (!(used >> q & 1) && (ld ? ac.ld_can(q) : ac.st_can(q))) return q;
+  for (int k = 0; k < LD; k++) if (pw.l1[k].v) used |= 1u << pw.l1[k].phys;
+  for (int k = 0; k < STA; k++) if (pw.s1[k].v) used |= 1u << pw.s1[k].phys;
+  auto free_port = [&](bool ld) {
+    for (int q = 0; q < agu::PORTS; q++)
+      if (!(used >> q & 1) && (ld ? agu::ld_can(q) : agu::st_can(q))) return q;
     return -1;
   };
   int n = 0;
@@ -198,8 +140,8 @@ void RealLsu::tlb_out() {
     int src = -1, ph = -1;
     if (pcur.rp[r].v) {
       src = pcur.rp[r].ldq;
-      if (ac.phys && pnxt.ldq[src].st == L_PIPE && !pnxt.ldq[src].pa_v) {
-        ph = free_phys(true);
+      if (pnxt.ldq[src].st == L_PIPE && !pnxt.ldq[src].pa_v) {
+        ph = free_port(true);
         if (ph < 0) continue;   // no free DTLB port this cycle
         used |= 1u << ph;
       }
@@ -217,15 +159,15 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
-    tlb_req_[ac.phys ? pw.l1[k].phys : k] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};
+    tlb_req_[pw.l1[k].phys] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};
   }
 
   int ns = 0;
   while (ns < STA && pw.s1[ns].v) ns++;
   int sph = -1;
   bool take_srp = ns < STA && pcur.srp.v;
-  if (take_srp && ac.phys) {
-    sph = free_phys(false);
+  if (take_srp) {
+    sph = free_port(false);
     if (sph < 0) take_srp = false;   // no free DTLB port: the replay register keeps the store
   }
   if (take_srp) {  // STA replay register takes a free STA port
@@ -241,7 +183,7 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < STA; k++) {
     if (!pw.s1[k].v) continue;
-    tlb_req_[ac.phys ? pw.s1[k].phys : LD + k] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
+    tlb_req_[pw.s1[k].phys] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
   }
 }
 
@@ -256,7 +198,7 @@ void RealLsu::tlb_in_ldq() {
       l.paddr = e.paddr;
       continue;
     }
-    const TlbMmu::Resp &resp = tlb_resp_[AguCfg::get().phys ? l.phys : k];
+    const TlbMmu::Resp &resp = tlb_resp_[l.phys];
     if (!resp.valid) {
       l.tlb = 1;
     } else if (resp.result == TlbMmu::Result::OK) {
@@ -282,7 +224,7 @@ void RealLsu::tlb_in_stq() {
     PSta &s1 = pw.s1[k];
     if (!s1.v) continue;
     PStq &s = pnxt.stq[s1.stq];
-    const TlbMmu::Resp &resp = tlb_resp_[AguCfg::get().phys ? s1.phys : LD + k];
+    const TlbMmu::Resp &resp = tlb_resp_[s1.phys];
     if (!resp.valid || resp.result == TlbMmu::Result::RETRY) {
       s.trp = 1;  // retry through the STA replay register
       continue;
