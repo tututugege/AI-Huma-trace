@@ -181,15 +181,15 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop->func7 = r.f7;
   uop->csr_idx = r.csr;
   uop->imm = r.imm;
-  uop.tma.is_ret = uop.tma.mem_commit_is_load = uop.tma.mem_commit_is_store = false;
+  uop->tma.is_ret = uop->tma.mem_commit_is_load = uop->tma.mem_commit_is_store = false;
   static uint64_t global_inst_idx = 0;   // the instruction's identity in the trace bridge
   uop->dbg.inst_idx = global_inst_idx++;
 
   const InstType type = decode_inst_type(uop->type);
   const uint32_t amo = uop->func7 >> 2;
-  uop.tma.is_ret = type == JALR && uop->src1_areg == 1 && uop->dest_areg == 0 && uop->imm == 0;
-  uop.tma.mem_commit_is_load = type == LOAD || (type == AMO && amo != AmoOp::SC);
-  uop.tma.mem_commit_is_store = type == STORE || (type == AMO && amo != AmoOp::LR);
+  uop->tma.is_ret = type == JALR && uop->src1_areg == 1 && uop->dest_areg == 0 && uop->imm == 0;
+  uop->tma.mem_commit_is_load = type == LOAD || (type == AMO && amo != AmoOp::SC);
+  uop->tma.mem_commit_is_store = type == STORE || (type == AMO && amo != AmoOp::LR);
   // an AMO that discards its result still writes through a dedicated register (it keeps the load's destination)
   if (type == AMO && uop->dest_areg == 0 && amo != AmoOp::LR && amo != AmoOp::SC) uop->dest_areg = 32;
   if (uop->dest_areg == 0 && !uop->dest_fp) uop.dest_en = false;   // x0 is not written (f0 is a register)

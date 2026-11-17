@@ -124,11 +124,11 @@ void Ren::rename() {
   wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination register of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
     out.ren2dis.uop[i] = q.inst_r[i];
-    out.ren2dis.uop[i].dest_preg = alloc_reg[i];
     dest_of[i] = alloc_reg[i];
     // Static fields live in the uop pool: an invalid slot still holds the handle of an instruction that has long
     // left the stage, so it must not be written.
     if (!q.inst_valid[i]) continue;
+    out.ren2dis.uop[i]->dest_preg = alloc_reg[i];
     // EXP-020: a newly allocated physical register holds no stale value; the taint of a squashed wrong-path producer (a mispredict does not clear the table) must not leak to its next owner
     if (q.inst_r[i].dest_en && !elim[i] && alloc_reg[i] != 0 && alloc_reg[i] < TAG_NUM) msd::taint[alloc_reg[i]] = msd::TV{};
     auto lookup = [&](int areg, bool fp) {
@@ -147,7 +147,7 @@ void Ren::rename() {
     out.ren2dis.uop[i]->old_dest_preg = lookup(q.inst_r[i]->dest_areg, q.inst_r[i]->dest_fp);
     if (elim[i]) {
       dest_of[i] = out.ren2dis.uop[i]->src1_preg;
-      out.ren2dis.uop[i].dest_preg = dest_of[i];
+      out.ren2dis.uop[i]->dest_preg = dest_of[i];
     }
   }
 }
@@ -224,12 +224,12 @@ void Ren::seq() {
     if (!fire[i]) continue;
     if (out.ren2dis.uop[i].dest_en) {
       if (d.inst_r[i]->dest_fp) {
-        d.fp_spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
+        d.fp_spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i]->dest_preg;
         Assert(d.fp_free_head != d.fp_free_tail && "Ren: allocate when the FP free list is empty");
         LOOP_INC(d.fp_free_head, FPRF_NUM);
       } else
       {
-        d.spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i].dest_preg;
+        d.spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i]->dest_preg;
         if (!elim[i]) {
           Assert(d.free_head != d.free_tail && "Ren: allocate when free list is empty");
           LOOP_INC(d.free_head, PRF_NUM);
@@ -257,7 +257,7 @@ void Ren::seq() {
       d.fp_free_list[d.fp_free_tail] = (*inst)->old_dest_preg;
       LOOP_INC(d.fp_free_tail, FPRF_NUM);
       LOOP_INC(d.fp_free_head_commit, FPRF_NUM);
-      d.fp_arch_RAT[(*inst)->dest_areg] = inst->dest_preg;
+      d.fp_arch_RAT[(*inst)->dest_areg] = (*inst)->dest_preg;
     } else
     if (inst->dest_en && !is_exception(*inst) && !interrupt) {
       // move elimination: the old register is freed when no architectural register names it any more; an eliminated
@@ -267,13 +267,13 @@ void Ren::seq() {
         Assert(d.free_head_commit != d.free_head && "Ren: commit reclaim when no pending spec allocation");
         LOOP_INC(d.free_head_commit, PRF_NUM);
       }
-      d.arch_cnt[inst->dest_preg]++;
+      d.arch_cnt[(*inst)->dest_preg]++;
       const auto old = (*inst)->old_dest_preg;
       if (--d.arch_cnt[old] == 0) {
         d.free_list[d.free_tail] = old;
         LOOP_INC(d.free_tail, PRF_NUM);
       }
-      d.arch_RAT[(*inst)->dest_areg] = inst->dest_preg;
+      d.arch_RAT[(*inst)->dest_areg] = (*inst)->dest_preg;
     }
   }
 

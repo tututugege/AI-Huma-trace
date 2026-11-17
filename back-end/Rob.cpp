@@ -13,15 +13,15 @@
 
 
 namespace {
-inline bool rob_is_store(const Uop &u) { return u.tma.mem_commit_is_store; }
-inline bool rob_is_load(const Uop &u) { return u.tma.mem_commit_is_load; }
+inline bool rob_is_store(const Uop &u) { return u->tma.mem_commit_is_store; }
+inline bool rob_is_load(const Uop &u) { return u->tma.mem_commit_is_load; }
 inline bool rob_is_page_fault(const Uop &u) { return u.page_fault_inst || u.page_fault_load || u.page_fault_store; }
 // RISC-V semihosting marker: slli x0,x0,0x1f ; ebreak ; srai x0,x0,7. OpenSBI's generic platform probes it and expects a breakpoint
 // trap into M mode; every other ebreak still ends the simulation (the bare-metal tests' exit). Same rule as the function model.
 inline bool is_semihost_marker(xlen_t pc) {
   return tbhook::mem_read(pc - 4) == 0x01f01013u && tbhook::mem_read(pc + 4) == 0x40705013u;
 }
-inline bool rob_is_complete(const Uop &u) { return u.cplt_mask == u.expect_mask; }
+inline bool rob_is_complete(const Uop &u) { return u.cplt_mask == u->expect_mask; }
 inline InstType rob_type(const Uop &u) { return decode_inst_type(u->type); }
 inline bool rob_is_exception(const Uop &u) { return rob_is_page_fault(u) || u.illegal_inst || rob_type(u) == ECALL; }
 inline bool rob_is_wfi(const Uop &u) { return rob_type(u) == WFI; }
@@ -215,14 +215,14 @@ void Rob::complete() {
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     if (!in.exu2rob->entry[i].valid) continue;
     const Uop &wb = in.exu2rob->entry[i].uop;
-    const int bank = get_rob_bank(wb.rob_idx), line = get_rob_line(wb.rob_idx);
+    const int bank = get_rob_bank(wb->rob_idx), line = get_rob_line(wb->rob_idx);
     const auto bit = rob_cplt_mask_from_issue_port(i);
     Uop &u = q_.entry[bank][line].uop;
     if (wb.rob_defer) continue;  // speculative load write-back: the completion bit is set by its second write-back
     Assert((u.cplt_mask & bit) == 0 && "ROB: duplicate completion bit set");
     u.cplt_mask |= bit;
-    Assert((u.cplt_mask & ~u.expect_mask) == 0 && "ROB: completion bit outside expected mask");
-    Assert(rob_cplt_popcount(u.cplt_mask) <= rob_cplt_popcount(u.expect_mask) && "ROB: completion overflow");
+    Assert((u.cplt_mask & ~u->expect_mask) == 0 && "ROB: completion bit outside expected mask");
+    Assert(rob_cplt_popcount(u.cplt_mask) <= rob_cplt_popcount(u->expect_mask) && "ROB: completion overflow");
 
     const bool fault = rob_is_page_fault(wb);
     const bool load_port = i >= IQ_LD_PORT_BASE && i < IQ_LD_PORT_BASE + LSU_LDU_COUNT;
@@ -269,7 +269,7 @@ void Rob::fire(int &c_count) {
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (!in.dis2rob->dis_fire[i]) continue;
     const int idx = (out.rob2dis.enq_idx + m) % ROB_NUM;
-    Assert(static_cast<int>(in.dis2rob->uop[i].rob_idx) == idx && "ROB: dispatch numbering mismatch");
+    Assert(static_cast<int>(in.dis2rob->uop[i]->rob_idx) == idx && "ROB: dispatch numbering mismatch");
     auto &e = q_.cent(idx);
     e.valid = true;
     e.uop = in.dis2rob->uop[i];

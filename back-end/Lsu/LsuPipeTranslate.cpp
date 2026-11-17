@@ -10,12 +10,12 @@ void RealLsu::exe2lsu() {
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
     const MicroOp &inst = x.sdu_req[i].uop;
-    if (inst.stq_idx >= STQ_SIZE) continue;
-    PStq &e = pnxt.stq[inst.stq_idx];
-    if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
+    if (inst->stq_idx >= STQ_SIZE) continue;
+    PStq &e = pnxt.stq[inst->stq_idx];
+    if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
     e.data = inst.result;
     e.data_v = 1;
-    pw.ev_data |= (stq_mask_t)1 << inst.stq_idx;
+    pw.ev_data |= (stq_mask_t)1 << inst->stq_idx;
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
   int ns = 0;
@@ -24,28 +24,29 @@ void RealLsu::exe2lsu() {
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
     if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA)) continue;
     const MicroOp &inst = x.agu_req[i].uop;
-    if (inst.stq_idx >= STQ_SIZE) continue;
-    PStq &e = pnxt.stq[inst.stq_idx];
-    if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
+    if (inst->stq_idx >= STQ_SIZE) continue;
+    PStq &e = pnxt.stq[inst->stq_idx];
+    if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
     e.va_v = 1;
     e.vaddr = inst.result;
     {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
-      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
       e.m_atnt = f && f->is_store && f->vaddr != static_cast<xlen_t>(inst.result);
     }
     e.pa_v = 0;
     e.paddr = 0;
     e.func3 = inst->func3;
-    e.dest_preg = inst.dest_preg;
+    e.dest_preg = inst->dest_preg;
+    e.id = inst.id;
     e.lrsc = inst->is_atomic && ((inst->func7 >> 2) == AmoOp::SC);
     e.trp = 0;
     LP_PORT_CHECK(ns + 1, LSU_STA_COUNT, "sta_agu");
     pw.s1[ns].v = true;
-    pw.s1[ns].stq = inst.stq_idx;
+    pw.s1[ns].stq = inst->stq_idx;
     ns++;
-    pw.ev_sta |= (stq_mask_t)1 << inst.stq_idx;  // the partial address is known from now on
+    pw.ev_sta |= (stq_mask_t)1 << inst->stq_idx;  // the partial address is known from now on
     {  // memory-order check: younger loads that passed this store while its address was unknown
-      const uint32_t j = inst.stq_idx;
+      const uint32_t j = inst->stq_idx;
       const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
       const uint32_t sw = ld_width(inst->func3);
       for (int i = 0; i < LDQ_SIZE; i++) {
@@ -75,27 +76,28 @@ void RealLsu::exe2lsu() {
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
     if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_LOAD)) continue;
     const MicroOp &inst = x.agu_req[i].uop;
-    if (inst.ldq_idx >= LDQ_SIZE) continue;
-    PLdq &e = pnxt.ldq[inst.ldq_idx];
-    if (e.rob_flag != inst.rob_flag || e.rob_idx != inst.rob_idx) continue;
+    if (inst->ldq_idx >= LDQ_SIZE) continue;
+    PLdq &e = pnxt.ldq[inst->ldq_idx];
+    if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
     e.vaddr = inst.result;
     {  // a load whose base register was stale reads the stale address
-      const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+      const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
       e.atnt = f && f->is_load && f->vaddr != static_cast<xlen_t>(inst.result);
     }
-    e.dest_preg = inst.dest_preg;
+    e.dest_preg = inst->dest_preg;
+    e.id = inst.id;
     e.pa_v = 0;
     e.paddr = 0;
     e.func3 = inst->func3;
     e.illegal = inst.illegal_inst;
     e.st = L_PIPE;
-    e.snap_idx = inst.stq_idx;
-    e.snap_flag = inst.stq_flag;
+    e.snap_idx = inst->stq_idx;
+    e.snap_flag = inst->stq_flag;
     e.lrsc = is_amo_lr_uop(inst);
     LP_PORT_CHECK(nl + 1, LD, "load_agu");
     pw.l1[nl].v = true;
     pw.l1[nl].need_tlb = true;
-    pw.l1[nl].ldq = inst.ldq_idx;
+    pw.l1[nl].ldq = inst->ldq_idx;
     nl++;
   }
 }

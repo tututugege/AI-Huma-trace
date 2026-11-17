@@ -109,7 +109,7 @@ inline bool is_move_shape(const InstInfo &u) {
 }
 // After rename: an eliminated move shares its source's physical register.
 inline bool is_eliminated_move(const InstInfo &u) {
-  return is_move_shape(u) && u.dest_preg == u->src1_preg;
+  return is_move_shape(u) && u->dest_preg == u->src1_preg;
 }
 
 static inline bool is_amo_lr_uop(const MicroOp &uop) {
@@ -132,10 +132,10 @@ inline bool is_branch_uop(wire<UOP_TYPE_WIDTH> op) {
 }
 
 inline bool cmp_inst_age(InstInfo inst1, InstInfo inst2) {
-  if (inst1.rob_flag == inst2.rob_flag) {
-    return inst1.rob_idx > inst2.rob_idx;
+  if (inst1->rob_flag == inst2->rob_flag) {
+    return inst1->rob_idx > inst2->rob_idx;
   } else {
-    return inst1.rob_idx < inst2.rob_idx;
+    return inst1->rob_idx < inst2->rob_idx;
   }
 }
 

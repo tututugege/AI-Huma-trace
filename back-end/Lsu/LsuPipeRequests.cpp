@@ -270,13 +270,13 @@ void RealLsu::check() {
   if (sim_env().lsu_pipe_evt) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
     for (int p = 0; p < LD; p++)
-      if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)out.lsu2exe.wb_req[p].uop.rob_idx, (int)out.lsu2exe.wb_req[p].uop.dest_preg,
+      if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)out.lsu2exe.wb_req[p].uop->rob_idx, (int)out.lsu2exe.wb_req[p].uop->dest_preg,
                                                        (int)out.lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)out.lsu2exe.wb_req[p].uop.br_mask),
         std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)out.lsu2exe.wb_req[p].uop.result, (unsigned)out.lsu2exe.wb_req[p].uop.diag_val,
                      (int)out.lsu2exe.wb_req[p].uop.page_fault_load, (int)out.lsu2exe.wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " sta:");
     for (int p = 0; p < STA; p++)
-      if (out.lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)out.lsu2exe.sta_wb_req[p].uop.rob_idx, (unsigned long long)out.lsu2exe.sta_wb_req[p].uop.br_mask),
+      if (out.lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)out.lsu2exe.sta_wb_req[p].uop->rob_idx, (unsigned long long)out.lsu2exe.sta_wb_req[p].uop.br_mask),
         std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)out.lsu2exe.sta_wb_req[p].uop.result, (unsigned)out.lsu2exe.sta_wb_req[p].uop.diag_val,
                      (int)out.lsu2exe.sta_wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " dl:");
@@ -325,13 +325,13 @@ void RealLsu::check() {
       if (out.lsu2dis.ldq_alloc_valid[p]) std::fprintf(stderr, " %d", (int)out.lsu2dis.ldq_alloc_idx[p]);
     std::fprintf(stderr, " x:");
     for (int p = 0; p < LSU_SDU_COUNT; p++)
-      if (in.exe2lsu->sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)in.exe2lsu->sdu_req[p].uop.stq_idx);
+      if (in.exe2lsu->sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)in.exe2lsu->sdu_req[p].uop->stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
       if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_STA)
-        std::fprintf(stderr, " A%d=%d", p - LD, (int)in.exe2lsu->agu_req[p].uop.stq_idx);
+        std::fprintf(stderr, " A%d=%d", p - LD, (int)in.exe2lsu->agu_req[p].uop->stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
       if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_LOAD)
-        std::fprintf(stderr, " G%d=%d", p, (int)in.exe2lsu->agu_req[p].uop.ldq_idx);
+        std::fprintf(stderr, " G%d=%d", p, (int)in.exe2lsu->agu_req[p].uop->ldq_idx);
     if (const char *si = sim_env().lsu_pipe_stq) {
       const PStq &q = pcur.stq[std::atoi(si)];  // registers at the start of the cycle (RTL prints the registers)
       std::fprintf(stderr, " Q[%s]: va=%d pa=%d dv=%d pf=%d wbp=%d wbd=%d cmt=%d iss=%d done=%d", si, (int)q.va_v, (int)q.pa_v, (int)q.data_v, (int)q.pf,

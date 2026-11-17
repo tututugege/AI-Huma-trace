@@ -88,7 +88,7 @@ void BackTop::pmu_sample() {
     committed++;
     const Uop &u = ce.uop;
     const InstType t = decode_inst_type(u->type);
-    const bool is_ret = u.tma.is_ret;
+    const bool is_ret = u->tma.is_ret;
     if (t == LOAD || t == AMO) e.add(PMU_COMMIT_LOAD);
     if (t == STORE || t == AMO) e.add(PMU_COMMIT_STORE);
     if (t == BR) e.add(PMU_COMMIT_BRANCH);

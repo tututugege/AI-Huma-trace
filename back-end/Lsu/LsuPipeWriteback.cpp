@@ -9,7 +9,7 @@ void RealLsu::stq_commit() {
     if (!in.rob_commit->commit_entry[i].valid) continue;
     const auto &u = in.rob_commit->commit_entry[i].uop;
     if (!is_store(u)) continue;
-    const int idx = u.stq_idx;
+    const int idx = u->stq_idx;
     if (idx != pnxt.stq_commit || !pnxt.stq[idx].wbd) continue;
     PStq &s = pnxt.stq[idx];
     s.cmt = 1;
@@ -199,13 +199,11 @@ void RealLsu::dcache2lsu_stq() {
 void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   PLdq &l = pnxt.ldq[idx];
   MicroOp wb;
+  wb.id = l.id;
   wb.op = UOP_LOAD;
-  wb.rob_idx = l.rob_idx;
-  wb.rob_flag = l.rob_flag;
   wb.br_mask = l.br_mask;
   wb.diag_val = l.vaddr;
   wb.result = l.pf ? l.vaddr : l.result;
-  wb.dest_preg = l.pf ? 0 : l.dest_preg;   // a faulting load does not write its destination (RTL: lp_wb)
   wb.page_fault_load = l.pf;
   wb.illegal_inst = l.illegal;
   wb.dest_en = !l.pf && l.dest_preg != 0;  // loads to x0 still complete without a destination
@@ -287,8 +285,7 @@ void RealLsu::lsu2exe() {
     PStq &s = pnxt.stq[j];
     if (!s.wbp) continue;
     MicroOp wb;
-    wb.rob_idx = s.rob_idx;
-    wb.rob_flag = s.rob_flag;
+    wb.id = s.id;
     wb.br_mask = s.br_mask;
     wb.diag_val = s.vaddr;
     wb.page_fault_store = s.pf;
@@ -309,7 +306,6 @@ void RealLsu::lsu2exe() {
         s.suppress = !pass;
         nxt.lrsc_unit.reserve_valid = false;
         wb.result = pass ? 0 : 1;
-        wb.dest_preg = s.dest_preg;
         wb.dest_en = s.dest_preg != 0;
         pw.ev_sc |= (stq_mask_t)1 << j;
       }

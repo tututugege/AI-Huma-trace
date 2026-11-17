@@ -102,11 +102,11 @@ void Exu::to_csr() {
 
     const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;  // CSRRW / CSRRWI always write
     out.exe2csr.we = rw_family || u->imm != 0;
-    out.exe2csr.re = !rw_family || u.dest_preg != 0;
+    out.exe2csr.re = !rw_family || u->dest_preg != 0;
     out.exe2csr.idx = u->csr_idx;
     out.exe2csr.wcmd = u->func3 & 0b11;
     out.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
-    if (const tb::Fact *f2 = tbhook::fact_by_rob(u.rob_idx)) out.exe2csr.wdata = f2->csr_wdata;
+    if (const tb::Fact *f2 = tbhook::fact_by_rob(u->rob_idx)) out.exe2csr.wdata = f2->csr_wdata;
     return;
   }
 }
@@ -121,7 +121,7 @@ void Exu::seq() {
     l.valid = !in.rob_bcast->flush && e.valid && !is_br_killed(e.uop, (*in.dec_bcast)) && e.uop.dest_en &&
               decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
     if (!l.valid) continue;
-    l.preg = e.uop.dest_preg;
+    l.preg = e.uop->dest_preg;
     l.br_mask = e.uop.br_mask & ~in.dec_bcast->clear_mask;
   }
   if (in.rob_bcast->flush) {
@@ -347,13 +347,13 @@ void Exu::exec() {
     const auto &u = out.exu2rob.entry[p].uop;
     const int op = (int)decode_uop_type(u.op);
     if (op != UOP_LOAD && op != UOP_CSR) continue;
-    tbhook::on_exec({(uint32_t)u.rob_idx, op, (xlen_t)u.result, (bool)(u.page_fault_inst || u.page_fault_load || u.page_fault_store)});
+    tbhook::on_exec({(uint32_t)u->rob_idx, op, (xlen_t)u.result, (bool)(u.page_fault_inst || u.page_fault_load || u.page_fault_store)});
   }
 
   out.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
   out.exu2id.mispred = mispred;
   out.exu2id.redirect_pc = mispred ? oldest->diag_val : 0;
-  out.exu2id.redirect_rob_idx = mispred ? oldest->rob_idx : 0;
+  out.exu2id.redirect_rob_idx = mispred ? (*oldest)->rob_idx : 0;
   out.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
   out.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
   out.exu2id.ftq_off = mispred ? (*oldest)->ftq_offset : 0;

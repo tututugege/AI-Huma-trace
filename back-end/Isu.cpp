@@ -152,7 +152,7 @@ void Isu::calc_latency_next(const Regs &q) {
     if (lat <= 1) continue;
     auto put = [&](auto &e, int countdown) {
       e.valid = true;
-      e.dest_preg = inst.uop.dest_preg;
+      e.dest_preg = inst.uop->dest_preg;
       e.br_mask = inst.uop.br_mask;
       if constexpr (requires { e.countdown; }) e.countdown = countdown;
     };
@@ -216,7 +216,7 @@ void Isu::awake() {
     if (!(e.valid && e.uop.dest_en)) continue;
     const UopType op = decode_uop_type(e.uop.op);
     if (get_latency(op, e.uop->func7, e.uop->is_word) <= 1 && op != UOP_LOAD && op != UOP_STA && fast_ch[i] != -1)
-      drive(fast_ch[i], e.uop.dest_preg, "Fast writeback collision");
+      drive(fast_ch[i], e.uop->dest_preg, "Fast writeback collision");
   }
 
   {  // LSU channels after the fast ones ([p] unused since the speculative L2 wake-up was removed, [LD + p] L3 register)

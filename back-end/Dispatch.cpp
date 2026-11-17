@@ -56,20 +56,22 @@ void Dispatch::comb_alloc() {
     u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
     {
       const int pos = static_cast<int>(in.rob2dis->enq_idx) + rob_k;
-      u.rob_idx = pos % ROB_NUM;
-      u.rob_flag = static_cast<bool>(in.rob2dis->rob_flag) ^ (pos >= ROB_NUM);
-      if (q.inst_valid[i]) rob_k++;
+      if (q.inst_valid[i]) {   // (an invalid slot's handle names an instruction that has left: its pool entry is not written)
+        u->rob_idx = pos % ROB_NUM;
+        u->rob_flag = static_cast<bool>(in.rob2dis->rob_flag) ^ (pos >= ROB_NUM);
+        u->expect_mask = 0;
+        rob_k++;
+      }
     }
-    u.expect_mask = 0;
     u.cplt_mask = 0;
     out.dis2rob.valid[i] = q.inst_valid[i];
 
     if (q.inst_valid[i] && is_load(q.inst_r[i])) {
       const int pos = in.lsu2dis->stq_tail + stores;  // stores older than this load, allocated this cycle
-      u.stq_idx = pos % STQ_SIZE;
-      u.stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+      u->stq_idx = pos % STQ_SIZE;
+      u->stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
       if (loads < in.lsu2dis->ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && in.lsu2dis->ldq_alloc_valid[loads]) {
-        u.ldq_idx = in.lsu2dis->ldq_alloc_idx[loads];
+        u->ldq_idx = in.lsu2dis->ldq_alloc_idx[loads];
         ldq_port_owner[loads++] = i;
       } else {
         if (loads < in.lsu2dis->ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
@@ -79,8 +81,8 @@ void Dispatch::comb_alloc() {
     if (q.inst_valid[i] && is_store(q.inst_r[i])) {
       if (stores < in.lsu2dis->stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
         const int pos = in.lsu2dis->stq_tail + stores;
-        u.stq_idx = pos % STQ_SIZE;
-        u.stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+        u->stq_idx = pos % STQ_SIZE;
+        u->stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
         stq_port_owner[stores++] = i;
       } else {
         out.dis2rob.valid[i] = false;
@@ -104,9 +106,9 @@ void Dispatch::wake() {
     for (int j = 0; j < i; j++) {
       if (!out.dis2rob.valid[j] || !inst_alloc[j].dest_en || (inst_alloc[j]->dest_areg == 0 && !inst_alloc[j]->dest_fp)) continue;
       if (is_eliminated_move(inst_alloc[j])) continue;  // its register is its source's: no writer to wait for
-      if (u->src1_en && u->src1_preg == inst_alloc[j].dest_preg) u.src1_busy = true;
-      if (u->src2_en && u->src2_preg == inst_alloc[j].dest_preg) u.src2_busy = true;
-      if (u->src3_en && u->src3_preg == inst_alloc[j].dest_preg) u.src3_busy = true;
+      if (u->src1_en && u->src1_preg == inst_alloc[j]->dest_preg) u.src1_busy = true;
+      if (u->src2_en && u->src2_preg == inst_alloc[j]->dest_preg) u.src2_busy = true;
+      if (u->src3_en && u->src3_preg == inst_alloc[j]->dest_preg) u.src3_busy = true;
     }
   }
 }
@@ -138,7 +140,7 @@ void Dispatch::dispatch() {
     // SC returns its 0/1 result through the load-like write-back and still completes an STD
     if (decode_inst_type(inst_alloc[i]->type) == AMO && (inst_alloc[i]->func7 >> 2) == AmoOp::SC)
       expect = ROB_CPLT_G0 | ROB_CPLT_G2;
-    inst_alloc[i].expect_mask = expect;
+    inst_alloc[i]->expect_mask = expect;
     inst_alloc[i].cplt_mask = 0;
 
     bool fit = true;
@@ -153,7 +155,7 @@ void Dispatch::dispatch() {
     if (!fit) break;
 
     dispatch_success_flags[i] = true;
-    out.dis2rob.uop[i].expect_mask = expect;
+    out.dis2rob.uop[i]->expect_mask = expect;
     out.dis2rob.uop[i].cplt_mask = 0;
     for (int k = 0; k < cnt; k++) {
       const int q = uops[k].iq_id;
@@ -208,9 +210,9 @@ void Dispatch::fire() {
     const Uop &u = out.dis2rob.uop[i];
     out.dis2lsu.alloc_req[k] = true;
     out.dis2lsu.br_mask[k] = u.br_mask & ~clear_mask;
-    out.dis2lsu.rob_idx[k] = u.rob_idx;
-    out.dis2lsu.rob_flag[k] = u.rob_flag;
-    out.dis2lsu.stq_flag[k] = u.stq_flag;
+    out.dis2lsu.rob_idx[k] = u->rob_idx;
+    out.dis2lsu.rob_flag[k] = u->rob_flag;
+    out.dis2lsu.stq_flag[k] = u->stq_flag;
     out.dis2lsu.func3[k] = u->func3;
     out.dis2lsu.st_pc[k] = u->dbg.pc;
   }
@@ -219,10 +221,10 @@ void Dispatch::fire() {
     if (i < 0 || !out.dis2rob.dis_fire[i]) continue;
     const Uop &u = out.dis2rob.uop[i];
     out.dis2lsu.ldq_alloc_req[k] = true;
-    out.dis2lsu.ldq_idx[k] = u.ldq_idx;
+    out.dis2lsu.ldq_idx[k] = u->ldq_idx;
     out.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
-    out.dis2lsu.ldq_rob_idx[k] = u.rob_idx;
-    out.dis2lsu.ldq_rob_flag[k] = u.rob_flag;
+    out.dis2lsu.ldq_rob_idx[k] = u->rob_idx;
+    out.dis2lsu.ldq_rob_flag[k] = u->rob_flag;
     out.dis2lsu.ldq_pc[k] = u->dbg.pc;
   }
 }
@@ -238,7 +240,7 @@ void Dispatch::seq() {
     if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
   for (int i = 0; i < DECODE_WIDTH; i++)
     if (out.dis2rob.dis_fire[i] && d.inst_r[i].dest_en && !is_eliminated_move(d.inst_r[i]))
-      d.busy_table[d.inst_r[i].dest_preg] = true;
+      d.busy_table[d.inst_r[i]->dest_preg] = true;
   const Regs &q = q_;
   const auto clear_mask = in.dec_bcast->clear_mask;
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
@@ -267,7 +269,7 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   Uop uop;
   uop.id = static_cast<uint16_t>(inst.id + 1 + k);
   uop_pool[uop.id] = uop_pool[inst.id];
-  uop.dest_preg = inst.dest_preg;
+  uop->dest_preg = inst->dest_preg;
   uop->src1_preg = inst->src1_preg;
   uop->src2_preg = inst->src2_preg;
   uop->src3_preg = inst->src3_preg;
@@ -288,11 +290,11 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   uop->br_id = inst->br_id;
   uop.br_mask = inst.br_mask;
   uop->csr_idx = inst->csr_idx;
-  uop.rob_idx = inst.rob_idx;
-  uop.stq_idx = inst.stq_idx;
-  uop.stq_flag = inst.stq_flag;
-  uop.ldq_idx = inst.ldq_idx;
-  uop.rob_flag = inst.rob_flag;
+  uop->rob_idx = inst->rob_idx;
+  uop->stq_idx = inst->stq_idx;
+  uop->stq_flag = inst->stq_flag;
+  uop->ldq_idx = inst->ldq_idx;
+  uop->rob_flag = inst->rob_flag;
   uop->dbg = inst->dbg;
   return uop;
 }
@@ -382,7 +384,7 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   }
   if (type == AMO && amo != AmoOp::LR && amo != AmoOp::SC) {
     // the store data of an AMO comes from the loaded value (the load's destination), except for SWAP
-    out[2].uop->src1_preg = inst.dest_preg;
+    out[2].uop->src1_preg = inst->dest_preg;
     out[2].uop.src1_busy = amo != AmoOp::SWAP;
   }
   return n;

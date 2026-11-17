@@ -284,17 +284,17 @@ inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
 // Effects are written into `inst` (BRU: mispred / br_taken / diag_val; SDU: result = store data; AGU / load: result = the stale address).
 template <class Inst>
 inline void exec(Inst &inst) {
-  const bool d_en = inst.dest_en && inst.dest_preg != 0;
+  const bool d_en = inst.dest_en && inst->dest_preg != 0;
   const auto &u = *inst.operator->();
   const bool s1 = u.src1_en && u.src1_preg != 0 && live(u.src1_preg);
   const bool s2 = u.src2_en && u.src2_preg != 0 && live(u.src2_preg);
   if (!s1 && !s2) {
-    if (d_en && inst.op != UOP_LOAD) taint[inst.dest_preg] = TV{};   // a clean producer: its register holds the true value
+    if (d_en && inst.op != UOP_LOAD) taint[inst->dest_preg] = TV{};   // a clean producer: its register holds the true value
     return;
   }
-  const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+  const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
   if (!f) {  // killed instruction: no fact
-    if (d_en && inst.op != UOP_LOAD) taint[inst.dest_preg] = TV{};
+    if (d_en && inst.op != UOP_LOAD) taint[inst->dest_preg] = TV{};
     return;
   }
   const X a = s1 ? taint[u.src1_preg].v : f->rs1_value;
@@ -306,10 +306,10 @@ inline void exec(Inst &inst) {
   case UOP_MUL:
   case UOP_DIV: {
     X r;
-    if (!eval_alu(w, f->pc, a, b, r)) { if (d_en) taint[inst.dest_preg] = TV{}; return; }
+    if (!eval_alu(w, f->pc, a, b, r)) { if (d_en) taint[inst->dest_preg] = TV{}; return; }
     if (d_en) {
-      if (f->rd_valid && r != f->rd_value) set_taint(inst.dest_preg, true, r, depth);
-      else taint[inst.dest_preg] = TV{};
+      if (f->rd_valid && r != f->rd_value) set_taint(inst->dest_preg, true, r, depth);
+      else taint[inst->dest_preg] = TV{};
     }
     return;
   }
@@ -348,7 +348,7 @@ inline void exec(Inst &inst) {
     return;
   }
   default:
-    if (d_en) taint[inst.dest_preg] = TV{};
+    if (d_en) taint[inst->dest_preg] = TV{};
     return;
   }
 }

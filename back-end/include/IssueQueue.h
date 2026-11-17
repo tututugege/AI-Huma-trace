@@ -358,13 +358,13 @@ private:
       auto older_than = [&](int lhs, int rhs) {
         const auto &a = q_.entry[lhs].uop;
         const auto &b = q_.entry[rhs].uop;
-        if (a.rob_flag == b.rob_flag) {
-          if (a.rob_idx != b.rob_idx) {
-            return a.rob_idx < b.rob_idx;
+        if (a->rob_flag == b->rob_flag) {
+          if (a->rob_idx != b->rob_idx) {
+            return a->rob_idx < b->rob_idx;
           }
         } else {
-          if (a.rob_idx != b.rob_idx) {
-            return a.rob_idx > b.rob_idx;
+          if (a->rob_idx != b->rob_idx) {
+            return a->rob_idx > b->rob_idx;
           }
         }
         return lhs < rhs; // Stable tie-breaker.

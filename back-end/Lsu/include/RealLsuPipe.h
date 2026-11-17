@@ -45,6 +45,7 @@ enum PRc : uint8_t {
 };
 
 struct PLdq {
+  uint16_t id = 0;            // the load uop (its write-back carries it)
   wire<4> st = L_EMPTY;
   wire<ROB_IDX_WIDTH> rob_idx = 0;
   wire<1> rob_flag = 0;
@@ -79,6 +80,7 @@ struct PLdq {
 };
 
 struct PStq {
+  uint16_t id = 0;            // the STA uop (its write-back carries it)
   wire<32> pc = 0;            // store PC (predictor mode 1)
   wire<1> va_v = 0;           // STA arrived (vaddr[11:0] + size known: partial CAM can compare)
   wire<XLEN> vaddr = 0;

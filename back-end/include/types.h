@@ -107,6 +107,16 @@ struct UopS {
   wire<PRF_IDX_WIDTH> src3_preg;
   wire<3> fp_cls;       // FpCls: which FP unit class the instruction needs (FP_NONE unless it is an OP-FP / fused instruction)
   wire<PRF_IDX_WIDTH> old_dest_preg;
+  // written once, before the uop leaves its stage (rename: dest_preg; dispatch: the ROB / LSU slots and the ROB's
+  // expected completion bits; decode: the top-down flags), read by every later copy through the id
+  wire<PRF_IDX_WIDTH> dest_preg;
+  wire<ROB_IDX_WIDTH> rob_idx;
+  wire<1> rob_flag;    // age comparison (ring wrap bit)
+  wire<STQ_IDX_WIDTH> stq_idx;
+  wire<1> stq_flag;
+  wire<LDQ_IDX_WIDTH> ldq_idx;
+  wire<ROB_CPLT_MASK_WIDTH> expect_mask;
+  TmaMeta tma;
   wire<XLEN> pc;
   wire<XLEN> ftq_next_pc;
   wire<1> ftq_pred_taken;
@@ -124,22 +134,14 @@ struct Uop {
 
   wire<XLEN> diag_val{};  // Hardware: Shared field for instruction or pc_next
   wire<XLEN> result{};  // register-width value: load/ALU result, AGU address, store data
-  wire<PRF_IDX_WIDTH> dest_preg{};
-  wire<1> dest_en{};
+  wire<1> dest_en{};      // this copy writes its destination (a faulting load's write-back does not)
 
   wire<1> mispred{};
   wire<1> br_taken{};
   wire<1> src1_busy{}, src2_busy{}, src3_busy{};
   wire<BR_MASK_WIDTH> br_mask{};
 
-  wire<ROB_IDX_WIDTH> rob_idx{};
-  wire<STQ_IDX_WIDTH> stq_idx{};
-  wire<1> stq_flag{};
-  wire<LDQ_IDX_WIDTH> ldq_idx{};
-
-  wire<ROB_CPLT_MASK_WIDTH> expect_mask{};
   wire<ROB_CPLT_MASK_WIDTH> cplt_mask{};
-  wire<1> rob_flag{};  // age comparison (ring wrap bit)
 
   wire<1> page_fault_inst{};
   wire<1> page_fault_load{};
@@ -151,8 +153,7 @@ struct Uop {
   wire<1> is_mmio{};  // set when the LSU executes an MMIO access
   wire<1> early_woken{};  // the consumers of this load were already woken by the LSU (no PRF-register wake-up)
 
-  UopType op{};
-  TmaMeta tma{};
+  UopType op{};           // this copy's operation (an SC reports through a load write-back)
 
 
 

@@ -57,11 +57,11 @@ inline void compute(FuKind kind, ExuInst &inst) {
   switch (kind) {
   case FuKind::AGU:
     inst.result = 0;
-    if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) inst.result = f->vaddr;
+    if (const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx)) inst.result = f->vaddr;
     break;
   case FuKind::SDU:
     inst.result = 0;
-    if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) inst.result = f->rs2_value;
+    if (const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx)) inst.result = f->rs2_value;
     break;
   case FuKind::BRU:
     resolve_branch(inst);
@@ -81,7 +81,7 @@ inline void fp_trap(ExuInst &inst) {
   const bool fpmem = (op == UOP_LOAD || op == UOP_STA || op == UOP_STD) && (inst->dest_fp || inst->src2_fp);
   const bool fpcsr = op == UOP_CSR && inst->csr_idx >= 1 && inst->csr_idx <= 3;   // fflags / frm / fcsr: illegal while FS = Off
   if (!fpq && !fpmem && !fpcsr) return;
-  const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx);
+  const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
   if (f && f->trapped && f->blocked == tb::Blocked::None && f->trap_cause == 2) inst.illegal_inst = true;
 }
 
@@ -89,7 +89,7 @@ inline void resolve_branch(ExuInst &inst) {
   const xlen_t inst_pc = inst->pc;
   xlen_t pc_br = inst_pc + static_cast<xlen_t>(static_cast<sxlen_t>(static_cast<int32_t>(inst->imm)));   // (imm is a 32-bit sign-extended immediate)
   bool br_taken = false;
-  if (const tb::Fact *f = tbhook::fact_by_rob(inst.rob_idx)) {
+  if (const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx)) {
     if (inst.op == UOP_BR) {
       br_taken = f->br_taken;
     } else if (inst.op == UOP_JUMP) {
