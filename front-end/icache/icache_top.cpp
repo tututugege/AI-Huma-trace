@@ -157,7 +157,7 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
       if (edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
       itlb_invoked = true;
       uint32_t pa = 0;
-      itlb_ret = itlb.translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, ci->csr_status);
+      itlb_ret = itlb.translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, &csr_state().status);
       if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = pa >> 12; }
       else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
     }
@@ -224,11 +224,10 @@ void ICacheTop::comb_calc(ICacheIn *ci, ICacheOut *co) {
 // fetch-step result (the module's comb reads io.regs, so R1 is presented there for the evaluation and the registers are
 // restored after it; they change only at the edge). Its outputs replace this cycle's; its memory-side requests are the
 // cycle's last (RTL: the memory-side outputs are those of the last step).
-void ICacheTop::invalidate_step(CsrStatusIO *csr_status, ICacheOut *co) {
+void ICacheTop::invalidate_step(ICacheOut *co) {
   if (edge_.reset || edge_.n != 1) { fatal("[icache_top] ERROR: invalidate step without a fetch step\n"); }
   ICacheIn inv{};
   inv.invalidate_req = true;
-  inv.csr_status = csr_status;
   const icache_module_n::ICacheRegs q = mod_.io.regs;
   mod_.io.regs = mod_.io.reg_write;   // R1
   edge_.kill_step = true;
@@ -284,8 +283,8 @@ bool ICacheTop::fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, i
 }
 
 // FE_IPF: ITLB lookup without side effects.
-bool ICacheTop::peek_translate(uint32_t v_addr, CsrStatusIO *status, uint32_t &p_addr) {
-  return itlb.peek_translate(p_addr, v_addr, 0, status);
+bool ICacheTop::peek_translate(uint32_t v_addr, uint32_t &p_addr) {
+  return itlb.peek_translate(p_addr, v_addr, 0, &csr_state().status);
 }
 
 // FE_IPF: install a prefetched line (tag + valid only). An invalid way is used first, else a rotating victim.

@@ -2,7 +2,6 @@
 #include <cstdio>
 #include "trace_hook.h"
 #include "BackTop.h"
-#include "Csr.h"
 #include "IO.h"
 #include "RealLsu.h"
 #include "config.h"
@@ -23,12 +22,10 @@ void BackTop::init() {
   dis = std::make_unique<Dispatch>(ctx);
   isu = std::make_unique<Isu>(ctx);
   exu = std::make_unique<Exu>(ctx);
-  csr = std::make_unique<Csr>();
   rob = std::make_unique<Rob>(ctx);
   lsu = std::make_unique<RealLsu>(ctx);
 
   exu->ftq = pre.get();
-  exu->csr = csr.get();
   rob->ftq = pre.get();
   // the modules' outputs that are the back end's interface (kept here)
   lsu->out.lsu2dcache = &out.lsu2dcache;
@@ -72,15 +69,10 @@ void BackTop::init() {
   rob->in.exu2rob = &exu->out.exu2rob;
   rob->in.top_in = &in;
   rob->in.lsu2rob = &lsu->out.lsu2rob;
-  csr->in.csr_interrupt_inject_io = &csr_interrupt_inject_io;
-  csr->in.rob2csr = &rob->out.rob2csr;
-  csr->in.rob_bcast = &rob->out.rob_bcast;
   rob->in.pre2front = &pre->out.pre2front;
   rob->in.ftq_commit_info = &pre->out.ftq_commit_info;
-  rob->csr = csr.get();
   rob->in.idu_br_latch = &idu->q().br_latch;
   rob->out.top_out = &out;
-  lsu->in.csr_status = &csr->status;
   lsu->in.dec_bcast = &idu->out.dec_bcast;
   lsu->in.dis2lsu = &dis->out.dis2lsu;
   lsu->in.exe2lsu = &exu->out.exe2lsu;
@@ -94,7 +86,6 @@ void BackTop::init() {
   dis->init();
   isu->init();
   exu->init();
-  csr->init();
   rob->init();
   lsu->init();
 }
@@ -114,17 +105,13 @@ void BackTop::seq() {
   isu->seq();
   exu->seq();
   rob->seq();
-  csr->seq();
   lsu->seq();
 }
 
-// Architectural state taken from the reference model / a checkpoint that the timing model itself uses: PC, privilege,
-// CSRs (address translation, interrupts, traps) and the LR/SC reservation.
-void BackTop::install_arch_state(const CPU_state &state, uint8_t privilege) {
+// Architectural state taken from the reference model / a checkpoint that the back end itself uses: the PC and the LR/SC
+// reservation (the CSR file: SimCpu::install_arch_state).
+void BackTop::install_arch_state(const CPU_state &state) {
   restored_pc = state.pc;
-  csr->q_mut().privilege = privilege;
-  for (int i = 0; i < CSR_NUM; i++) csr->q_mut().CSR_RegFile[i] = state.csr[i];
-  csr->refresh();
   lsu->cur_mut().lrsc_unit.reserve_valid = lsu->nxt.lrsc_unit.reserve_valid = state.reserve_valid;
   lsu->cur_mut().lrsc_unit.reserve_addr = lsu->nxt.lrsc_unit.reserve_addr = state.reserve_addr;
   // the pipeline starts with a refetch from the restored pc
@@ -136,5 +123,4 @@ void BackTop::restart_at(pc_t pc) {
   out.flush = true;
   out.mispred = true;
   out.redirect_pc = pc;
-  csr->refresh();
 }

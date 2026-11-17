@@ -309,7 +309,7 @@ int main(int argc, char *argv[]) {
       std::cout << "[CKPT] front-door restore, restore program: " << config.restore_stub_file << std::endl;
       ckpt_interval = restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
     } else {
-      ckpt_interval = restore_checkpoint(cpu.back, config.target_file);
+      ckpt_interval = restore_checkpoint(cpu, config.target_file);
       cpu.sync_mmio_devices_from_backing();
     }
 
@@ -400,7 +400,7 @@ int main(int argc, char *argv[]) {
     if (ref_prewarm_target > 0) refcore_end_warmup();
     if (!front_door || fast_warm_active) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
-      restore_from_ref(cpu.back);
+      restore_from_ref(cpu);
       cpu.sync_mmio_devices_from_backing();
       cpu.restore_pc(cpu.back.restored_pc); // restart the fetch at the restored pc
       if (fast_warm_active) fast_warm_install(cpu);

@@ -27,12 +27,18 @@ after it has started writing, it takes a local snapshot (`const Regs q = q_;` or
 Kept with q / d (their d is a real same-cycle wire, or the module is a stage-register file read by several phases):
 RealDcache, WriteBuffer, MSHR, MemPtwBlock, the LSU (`pcur_` / `pnxt`), FrontControl (`front_state.d`).
 
-## 2. The CSR file is shared state, not a module
+## 2. The CSR file is CPU-wide state, not a module
 
-The CSR has no comb phase and no ports out. `Csr::status` (`CsrStatusIO`) and `interrupt_req()` are derived from its
-registers by `refresh()` at seq; readers bind to `&back.csr->status`. The commit's trap / xRET target is
-`trap_out() const` (`TrapOut {privilege, cause, trap_pc, epc}`), a function of the registers and the ROB's broadcast, read
-by `Rob::comb_redirect` and the interrupt report. `BackPorts::csr_status`, `CsrRobIO` and `CsrFrontIO` are gone.
+`SimCpu::csr` (include/Csr.h, Csr.cpp) holds the CSR registers and the privilege. Every module reads it through
+`csr_state()` (const): the status view `status` (mstatus, sstatus, satp, privilege) for the TLBs, `interrupt_req()` for the
+ROB, `read(idx)` for the EXU, `trap_out()` (the trap / xRET target, mode and cause of this cycle's commit) for the ROB's
+redirect and the interrupt report. Only SimCpu writes it: `csr.seq()` at the edge (after the back end, before the devices'
+tick) and the checkpoint restore (`SimCpu::install_arch_state`). Its edge inputs: `RobCsrIO` (the interrupt response, the
+committing CSR instruction's write from its uop and the value of its fact, FS-dirty) and the interrupt lines
+(`SimCpu::csr_interrupt_inject_io`, driven by the peripheral model). Gone: BackTop's / the ROB's / the EXU's CSR pointers,
+the `csr_status` ports of the LSU, the front end, the I-cache and Back2Front, `ExeCsrIO` / `TopCsrIO` and the
+execute-time write latch (a shadow compare of the latch against the commit-time write: 0 differences on both gates, the
+Linux checkpoint and the 13 Linux windows).
 
 ## 3. Uops carry an id
 

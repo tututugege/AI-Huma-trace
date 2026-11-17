@@ -74,7 +74,6 @@ public:
   } in;
 
   const class PreIduQueue *ftq = nullptr;
-  const class Csr *csr = nullptr;          // CSR read port (Csr::read): the CSR uop's result  // FTQ PC read port (PreIduQueue::ftq_pc): the ALU pc operand and the BRU
 
 private:
   // phases of one cycle, run in the order of the methods above

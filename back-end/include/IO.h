@@ -505,7 +505,6 @@ struct MMULsuIO{
 struct LsuMMUIO{
   MMUReq ldq_req[LSU_LDU_COUNT];
   MMUReq stq_req[LSU_STA_COUNT];
-  CsrStatusIO csr_status;
 };
 
 struct LsuDcacheIO {

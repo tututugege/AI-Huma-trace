@@ -17,15 +17,12 @@ FrontTop::FrontTop()
 FrontTop::~FrontTop() = default;
 
 void FrontTop::init() {
-  CsrStatusIO *bound_csr = in.csr_status;
   core->bind(&in, read_data_.get(), &out, ctx);
   core->icache.set_context(ctx);
   core->icache.bind_walk();
   in = {};
   out = {};
-  in.csr_status = bound_csr;
   Assert(ctx != nullptr && "FrontTop::init requires bound SimContext");
-  Assert(in.csr_status != nullptr && "FrontTop::init requires bound csr_status");
   in.ctrl.fifo_read_enable = true;
   in.ctrl.reset = true;
   step_bpu();

@@ -11,11 +11,23 @@
 // An interrupt taken at commit is reported to the trace bridge (Ren calls it through SimContext while it commits).
 void SimContext::run_interrupt_hook() {
   Assert(cpu != nullptr && "SimContext::run_interrupt_hook: cpu is null");
-  const Csr::TrapOut t = cpu->back.csr->trap_out();   // the trap of this cycle
-  tbhook::on_interrupt(t.cause, t.privilege, cpu->back.csr->q().CSR_RegFile[csr_mip]);
+  const Csr::TrapOut t = cpu->csr.trap_out();   // the trap of this cycle
+  tbhook::on_interrupt(t.cause, t.privilege, cpu->csr.q().CSR_RegFile[csr_mip]);
 }
 
 // reset
+namespace { const Csr *g_csr = nullptr; }
+const Csr &csr_state() { return *g_csr; }
+
+SimCpu::SimCpu() : back(&this->ctx), mem_subsystem(&this->ctx) { g_csr = &csr; }
+
+void SimCpu::install_arch_state(const CPU_state &state, uint8_t privilege) {
+  csr.q_mut().privilege = privilege;
+  for (int i = 0; i < CSR_NUM; i++) csr.q_mut().CSR_RegFile[i] = state.csr[i];
+  csr.refresh();
+  back.install_arch_state(state);
+}
+
 void SimCpu::init() {
   // 1. the top-level context
   ctx.cpu = this;
@@ -24,13 +36,16 @@ void SimCpu::init() {
   back.init();
 
   // 3. the wires between the modules
-  mem_subsystem.csr_interrupt_inject = &back.csr_interrupt_inject_io;
+  csr.in.csr_interrupt_inject_io = &csr_interrupt_inject_io;
+  csr.in.rob2csr = &back.rob->out.rob2csr;
+  csr.in.rob_bcast = &back.rob->out.rob_bcast;
+  csr.init();
+  mem_subsystem.csr_interrupt_inject = &csr_interrupt_inject_io;
   mem_subsystem.peripheral_req = &back.out.peripheral_req;
   mem_subsystem.commit_store = &back.out.commit_store;
   mem_subsystem.peripheral_resp = &back.lsu->mmio_resp_d;   // the MMIO response enters the back end through a register
   mem_subsystem.set_ptw_coherent_source(back.lsu.get());
 
-  front.in.csr_status = &back.csr->status;
   front.ctx = &ctx;
 
 
@@ -51,7 +66,6 @@ void SimCpu::init() {
   // the I-cache's read port of the shared interconnect and its D-cache probe (it reads the responses through registers)
   front.core->icache.out.axi = &axi.interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
   front.core->icache.in.axi_q = &icache_axi_q;
-  front.core->icache.in.csr_status = &back.csr->status;
   front.core->icache.out.probe_req = &icache_req;
   front.core->icache.in.probe_resp = &icache_resp_q;
   // the masters' ports, as the AXI subsystem sees them
@@ -73,7 +87,7 @@ void SimCpu::init() {
   b2f.in.back_out = &back.out;
   b2f.out.front_in = &front.in;
   b2f.out.can_read = &front.can_read;
-  b2f.init(&back.csr->status);
+  b2f.init();
 }
 
 void SimCpu::sync_mmio_devices_from_backing() {
@@ -88,6 +102,7 @@ void SimCpu::restore_pc(pc_t pc) {
   b2f.restart_at(pc);
   f2b.restart();
   back.restart_at(pc);
+  csr.refresh();
 }
 
 // The clock edge of the I-cache port registers (at the start of the cycle: nothing between the end of the previous
@@ -160,6 +175,7 @@ void SimCpu::cycle() {
   f2b.seq();
 
   back.seq();
+  csr.seq();   // the commit's trap / xRET, CSR write and FS state, the interrupt lines (before the devices' tick)
   mem_subsystem.seq();
   axi.seq();
   ctx.perf.perf_maybe_capture_simtime_snapshot();

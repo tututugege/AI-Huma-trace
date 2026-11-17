@@ -120,7 +120,6 @@ void RealLsu::tlb() {
 void RealLsu::tlb_out() {
   const lp::LsuPipeState &pcur = pcur_;
   tlb_req_ = {};
-  tlb_req_.csr_status = (*in.csr_status);
 
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;

@@ -28,8 +28,7 @@ MUTATE = r'(?:\[[^\]]*\]|\.\w+)*\.(?:fill|reset|clear|assign|push_back|emplace_b
 # The module instances: SimCpu path, class, the call prefix in SimCpu::cycle(), the parent's binding code.
 TOPS = {
     'back': dict(cls='BackTop', bind=[('BackTop', 'init')], prefix='back.', call='back.{m}->', own='{m}->',
-                 alias={'in': 'back.in', 'out': 'back.out', 'csr_status': 'back.csr_status',
-                        'csr_interrupt_inject_io': 'back.csr_interrupt_inject_io'}),
+                 alias={'in': 'back.in', 'out': 'back.out'}),
     'front': dict(cls='FrontCore', bind=[('FrontCore', 'FrontCore'), ('FrontCore', 'bind')], prefix='front.core.',
                   call='front.core->{m}.', own='{m}.', alias={'in': 'front.in', 'rd': 'front.read_data', 'out': 'front.out'}),
     'cpu': dict(cls='SimCpu', bind=[('SimCpu', 'init')], prefix='', call='{m}.', own='{m}.', alias={}),

@@ -51,7 +51,6 @@ public:
     const ExuIdIO *idu_br_latch = nullptr;   // the IDU's branch latch (its register): the mispredict target
   } in;
   const class PreIduQueue *ftq = nullptr;
-  const class Csr *csr = nullptr;          // the CSR file: the pending interrupt, the trap / xRET target  // FTQ PC read port (PreIduQueue::ftq_pc): the pc of the head
 
   // Registers (q): read by the comb phases, updated only by seq (the RTL's rob_entry always_ff: enqueue, write-back,
   // branch clear, commit clear, flush).

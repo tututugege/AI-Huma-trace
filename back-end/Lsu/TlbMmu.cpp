@@ -1,4 +1,5 @@
 #include "TlbMmu.h"
+#include "Csr.h"
 #include "ref.h"
 
 namespace {
@@ -107,7 +108,7 @@ void TlbMmu::clear_tlb_entries() {
 }
 
 TlbMmu::TranslateContext TlbMmu::build_translate_context(uint32_t type,
-                                                         CsrStatusIO *status) {
+                                                         const CsrStatusIO *status) {
   if (status == nullptr) {
     return {};
   }
@@ -551,7 +552,7 @@ void TlbMmu::translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp) {
     walk_comb_valid_ = true;
   }
 
-  TopInput in = build_top_common_input(&req.csr_status);
+  TopInput in = build_top_common_input(&csr_state().status);
   const uint16_t asid = sv_asid(in.satp);
 
   for (int i = 0; i < LSU_LDU_COUNT; ++i) {
@@ -629,7 +630,7 @@ void TlbMmu::schedule_refill(vaddr_t v_addr, uint16_t asid, uint8_t level,
   refill_comb_ = refill;
 }
 
-bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) const {
+bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, const CsrStatusIO *status) const {
   const TranslateContext ctx_view = build_translate_context(type, status);
   const vaddr_t satp = ctx_view.satp;
   if (ctx_view.eff_priv == 3 || !sv_enabled(satp)) { p_addr = identity_pa(v_addr); return true; }
@@ -643,7 +644,7 @@ bool TlbMmu::peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, Csr
 
 // Every TLB has a shared page-table walker port (MemPtwBlock): lookup, permission check and walk request / response all go
 // through comb_top, the same function the LSU's ports use.
-TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) {
+TlbMmu::Result TlbMmu::translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, const CsrStatusIO *status) {
   Assert(walk_port != nullptr && "TlbMmu: no page-table walker port bound");
   TopInput in = build_top_common_input(status);
   const int port_idx = (kind_ == Kind::DTLB && type == 2) ? LSU_LDU_COUNT : 0;

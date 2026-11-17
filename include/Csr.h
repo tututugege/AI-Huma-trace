@@ -121,7 +121,8 @@ inline int cvt_number_to_csr(int csr_idx) {
   }
 }
 
-// The CSR file: architectural state the whole CPU reads directly (no comb phase of its own). The status view (status:
+// The CSR file: CPU-wide architectural state (SimCpu::csr). Every module reads it through csr_state(); only SimCpu writes
+// it (seq at the clock edge, a checkpoint restore). It has no comb phase and no ports out. The status view (status:
 // mstatus, sstatus, satp, privilege), the pending interrupt and the CSR read port are functions of its registers; the
 // trap / xRET of this cycle's commit (trap_out: its target, mode, cause) is a function of the registers and the ROB's
 // commit broadcast. seq applies the commit's trap / xRET, the committed CSR write and the interrupt lines.
@@ -166,3 +167,6 @@ private:
   void interrupt_inject();
   Regs q_;
 };
+
+// The CPU's CSR file (SimCpu::csr), read-only.
+const Csr &csr_state();

@@ -87,6 +87,7 @@ CXXSRC := $(shell find ./back-end -name "*.cpp") \
           $(shell find ./driver -name "*.cpp") \
           $(AXI_KIT_SRC) \
           ./SimCpu.cpp \
+          ./Csr.cpp \
           ./AxiSubsystem.cpp \
           ./Front2Back.cpp \
           ./Back2Front.cpp

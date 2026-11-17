@@ -247,7 +247,7 @@ void Exu::exec() {
 
     if (u.op == UOP_CSR) {   // the read port (CSRRW / CSRRWI to x0 do not read)
       const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;
-      if (!rw_family || u->dest_preg != 0) u.result = csr->read(u->csr_idx);
+      if (!rw_family || u->dest_preg != 0) u.result = csr_state().read(u->csr_idx);
     }
     if (!dead) {
       if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back

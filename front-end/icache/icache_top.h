@@ -19,17 +19,16 @@ struct ICacheMemPortReq;
 struct ICacheMemPortResp;
 
 // The front end's fetch step is a phase of the I-cache (ports named after the front end's wires):
-//   CONTRACT comb_fetch  in: in.axi_q in.csr_status in.fetch_addr_head in.global_refetch in.global_reset in.in.ctrl in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_in out.ic_k out.ic_out out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
-//   CONTRACT comb_invalidate  in: in.axi_q in.csr_status in.predecode_flush in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_k out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
+//   CONTRACT comb_fetch  in: in.axi_q in.fetch_addr_head in.global_refetch in.global_reset in.in.ctrl in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_in out.ic_k out.ic_out out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
+//   CONTRACT comb_invalidate  in: in.axi_q in.predecode_flush in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_k out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
 class ICacheTop {
 public:
   struct In {
     const bool *global_reset = nullptr;
     const bool *global_refetch = nullptr;
-    const FrontTopIn *in = nullptr;                 // the front end's inputs (redirect / fence / csr_status)
+    const FrontTopIn *in = nullptr;                 // the front end's inputs (redirect / fence)
     const FetchAddrFifoOut *fetch_addr_head = nullptr;
     const bool *predecode_flush = nullptr;          // the checker's refetch (the invalidate step)
-    CsrStatusIO *csr_status = nullptr;                             // the CSR's status (translation mode, privilege)
     const axi_interconnect::ReadMasterPort_t *axi_q = nullptr;   // the AXI read port's outputs of the last cycle (a register)
     const ICacheMemPortResp *probe_resp = nullptr;                 // the D-cache probe's response (a register)
   } in;
@@ -50,11 +49,11 @@ public:
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
   void comb_calc(ICacheIn *ci, ICacheOut *co);              // the fetch step R1 = N(R0)
-  void invalidate_step(CsrStatusIO *csr_status, ICacheOut *co);   // a predecode flush: R2 = K(R1)
+  void invalidate_step(ICacheOut *co);   // a predecode flush: R2 = K(R1)
   void seq();                                                  // the clock edge
   bool peek_hit(uint32_t index, uint32_t ptag);
   bool fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
-  bool peek_translate(uint32_t v_addr, CsrStatusIO *status, uint32_t &p_addr);
+  bool peek_translate(uint32_t v_addr, uint32_t &p_addr);
   bool prefetch_install(uint32_t index, uint32_t ptag);
   void warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
   void warm_install_itlb(const void *entries, int count, int repl_ptr);

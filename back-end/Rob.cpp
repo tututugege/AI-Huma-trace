@@ -115,7 +115,7 @@ void Rob::commit() {
 
   const bool front_stall = static_cast<bool>(in.top_in->front_stall);
   const bool mispred = in.dec_bcast->mispred;
-  const bool intr = csr->interrupt_req();
+  const bool intr = csr_state().interrupt_req();
   int n = 0;
   bool single = false;
   if (q.c_count > 0 && !mispred) {
@@ -372,7 +372,7 @@ void Rob::comb_redirect() {
     }
   } else {
     out.top_out->mispred = true;
-    const Csr::TrapOut trap = csr->trap_out();   // (the CSR file: its registers and this cycle's commit)
+    const Csr::TrapOut trap = csr_state().trap_out();   // (the CSR file: its registers and this cycle's commit)
     if (out.rob_bcast.mret || out.rob_bcast.sret) {
       out.top_out->redirect_pc = trap.epc;
     } else if (out.rob_bcast.exception) {

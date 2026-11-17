@@ -3,11 +3,7 @@
 #include "config.h"
 #include "util.h"
 
-void Back2Front::init(CsrStatusIO *csr) {
-  csr_status = csr;
-  q_ = {};
-  q_.in.csr_status = csr;
-}
+void Back2Front::init() { q_ = {}; }
 
 void Back2Front::comb_front() {
   const bool registered_refetch = static_cast<bool>(q_.in.redirect.valid);
@@ -15,7 +11,6 @@ void Back2Front::comb_front() {
   *out.can_read = can_read;
   FrontTopIn &fi = *out.front_in;
   fi = q_.in;   // (reset is 0 here: only FrontTop::init() runs the front end with reset)
-  fi.csr_status = csr_status;
   fi.ctrl.fifo_read_enable = can_read;
   if (!can_read) fi.redirect.valid = false;
 }
@@ -26,7 +21,6 @@ void Back2Front::seq() {
   const auto &bo = *in.back_out;
   d.stall = bo.stall;
   d.in.ctrl.fifo_read_enable = false;
-  d.in.csr_status = csr_status;
   d.in.redirect.valid = bo.mispred || bo.flush;
   d.in.redirect.rf_valid = bo.rf_valid && !bo.flush;
   d.in.redirect.rf_blk = bo.rf_blk;

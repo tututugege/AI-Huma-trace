@@ -1,5 +1,4 @@
 #pragma once
-#include "Csr.h"
 #include "Dispatch.h"
 #include "Exu.h"
 #include "FTQ.h"
@@ -26,7 +25,6 @@ class Isu;
 struct CPU_state;
 class Exu;
 class Rob;
-class Csr;
 class AbstractMMU;
 class MemSubsystem;
 
@@ -51,7 +49,6 @@ public:
   std::unique_ptr<Dispatch> dis;
   std::unique_ptr<Isu> isu;
   std::unique_ptr<Exu> exu;
-  std::unique_ptr<Csr> csr;
   std::unique_ptr<Rob> rob;
   std::unique_ptr<RealLsu> lsu;
 
@@ -68,7 +65,7 @@ public:
 
   // Architectural state the timing model itself keeps (privilege, CSRs, the LR/SC reservation), from a checkpoint or
   // the reference core; the pipeline starts with a refetch from state.pc.
-  void install_arch_state(const CPU_state &state, uint8_t privilege);
+  void install_arch_state(const CPU_state &state);
   // between cycles (a switch from fast mode): the redirect outputs as if the back end redirected to pc, the CSR
   // status refreshed (satp, privilege: the MMU mode)
   void restart_at(pc_t pc);

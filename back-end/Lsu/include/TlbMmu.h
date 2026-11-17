@@ -176,10 +176,10 @@ public:
   explicit TlbMmu(int tlb_entries = DTLB_ENTRIES, Kind kind = Kind::DTLB);
 
   Result translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type,
-                   CsrStatusIO *status);
+                   const CsrStatusIO *status);
   void translate_lsu_ports(const LsuMMUIO &req, MMULsuIO &resp);
   // FE_IPF: translation without any side effect (no walk, no TLB update); false when the TLB cannot translate it right now
-  bool peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, CsrStatusIO *status) const;
+  bool peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type, const CsrStatusIO *status) const;
   void flush();
   void seq();
   void cancel_pending_walk();
@@ -217,7 +217,7 @@ private:
   const WalkRegs &visible_walk_regs() const;
   void clear_tlb_entries();
   static TranslateContext build_translate_context(uint32_t type,
-                                                  CsrStatusIO *status);
+                                                  const CsrStatusIO *status);
   static TranslateContext build_translate_context(uint32_t type, vaddr_t satp,
                                                   uint32_t privilege,
                                                   bool mstatus_mxr,

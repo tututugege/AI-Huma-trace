@@ -1,7 +1,7 @@
 // Loading a program image or a checkpoint into the model (the function model's RAM, its devices, the timing model's
 // architectural registers). The checkpoint file itself is read by the function model (refcpu_restore_checkpoint).
 #include "Load.h"
-#include "BackTop.h"
+#include "SimCpu.h"
 #include "IoBacking.h"
 #include "RefCore.h"
 #include "config.h"
@@ -79,12 +79,12 @@ void load_image(const std::string &filename) {
   refcore_seed_devices();
 }
 
-uint64_t restore_checkpoint(BackTop &back, const std::string &filename) {
+uint64_t restore_checkpoint(SimCpu &cpu, const std::string &filename) {
   refcore_clear_memory();
   CPU_state state{};
   uint8_t privilege = 0;
   const uint64_t interval = refcore_restore_ckpt(filename, state, privilege);
-  back.install_arch_state(state, privilege);
+  cpu.install_arch_state(state, privilege);
   return interval;
 }
 
@@ -113,9 +113,9 @@ uint64_t restore_checkpoint_front_door(const std::string &filename, const std::s
   return interval;
 }
 
-void restore_from_ref(BackTop &back) {
+void restore_from_ref(SimCpu &cpu) {
   CPU_state state;
   uint8_t privilege;
   refcore_get_state(state, privilege);
-  back.install_arch_state(state, privilege);
+  cpu.install_arch_state(state, privilege);
 }
