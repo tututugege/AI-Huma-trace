@@ -2,6 +2,7 @@
 // EXP-TLBPORTS: shape of the load / store address pipes. AGU_CFG="nL,nS,nM": nL AGUs only for loads, nS only for stores, nM shared
 // (loads win). Per cycle: loads <= nL+nM, stores <= nS+nM, loads+stores <= nL+nS+nM. AGU_TOT=N is "0,0,N". Unset: every port
 // has its own AGU (no limit). The same shape limits the issue (Isu::grant_gate) and the requests reaching the DTLB (new + replay).
+#include "config.h"
 #include <cstdio>
 #include <cstdlib>
 struct AguCfg {
@@ -26,8 +27,15 @@ struct AguCfg {
   static const AguCfg &get() {
     static const AguCfg c = [] {
       AguCfg r;
+      if (LSU_AGU_SHARED > 0) {   // compile-time shape (CFG_AGU_SHARED): port-accurate shared AGUs
+        r.nm = LSU_AGU_SHARED;
+        r.nl = LSU_LDU_COUNT - r.nm;
+        r.ns = LSU_STA_COUNT - r.nm;
+        r.phys = true;
+      }
       if (const char *s = getenv("AGU_PORTS")) {
         if (std::sscanf(s, "%d,%d,%d", &r.nl, &r.ns, &r.nm) == 3) r.phys = true;
+      } else if (LSU_AGU_SHARED > 0) {
       } else if (const char *s = getenv("AGU_CFG")) {
         if (std::sscanf(s, "%d,%d,%d", &r.nl, &r.ns, &r.nm) == 3) r.on = true;
       } else if (const char *t = getenv("AGU_TOT")) {

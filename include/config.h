@@ -589,6 +589,15 @@ constexpr int div_latency(bool word) { return (word) ? DIV_MAX_LATENCY / 2 : DIV
 constexpr int LSU_STA_COUNT = count_ports_with_mask(OP_MASK_STA);
 constexpr int LSU_LDU_COUNT = count_ports_with_mask(OP_MASK_LD);
 constexpr int LSU_AGU_COUNT = LSU_STA_COUNT + LSU_LDU_COUNT;
+// EXP-TLBPORTS: AGUs shared by the load and the store-address pipes (loads win). The load pipes and the STA pipes keep their lanes
+// (LSU_LDU_COUNT, LSU_STA_COUNT); the issue ports / DTLB ports are LSU_AGU_PHYS physical ports: LD - SHARED ports only for loads,
+// SHARED ports for both, STA - SHARED ports only for stores (docs/TLB_PORTS.md). 0 = every pipe has its own AGU.
+#ifndef CFG_AGU_SHARED
+#define CFG_AGU_SHARED 0
+#endif
+constexpr int LSU_AGU_SHARED = CFG_AGU_SHARED;
+constexpr int LSU_AGU_PHYS = LSU_STA_COUNT + LSU_LDU_COUNT - LSU_AGU_SHARED;
+static_assert(LSU_AGU_SHARED >= 0 && LSU_AGU_SHARED <= LSU_LDU_COUNT && LSU_AGU_SHARED <= LSU_STA_COUNT, "CFG_AGU_SHARED");
 constexpr int LSU_LDU_WIDTH = clog2(LSU_LDU_COUNT);
 constexpr int LSU_SDU_COUNT = count_ports_with_mask(OP_MASK_STD);
 constexpr int LSU_LOAD_WB_WIDTH = LSU_LDU_COUNT;
