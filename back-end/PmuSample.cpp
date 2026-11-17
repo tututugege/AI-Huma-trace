@@ -41,7 +41,7 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
       else if (serial) cause = PMU_SLOT_BE_SERIAL;
       else if (!out.dis2rob.valid[i] && is_load(q.inst_r[i]) && !iq_blk_width[i]) cause = PMU_SLOT_BE_LDQ_FULL;
       else if (!out.dis2rob.valid[i] && is_store(q.inst_r[i])) cause = PMU_SLOT_BE_STQ_FULL;
-      else if (!dispatch_success_flags[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
+      else if (!fit_[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
       else cause = PMU_SLOT_BE_SERIAL;  // behind an exclusive instruction (AMO/WFI) that fired this cycle
       if (cause == PMU_SLOT_BE_IQ_FULL && iq_blk[i] >= 0)
         iq_sub = (iq_blk_width[i] ? PMU_SLOT_BE_IQ_WIDTH_INT : PMU_SLOT_BE_IQ_SPACE_INT) + iq_blk[i];

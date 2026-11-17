@@ -576,51 +576,15 @@ struct LsuExeIO {
   LsuExeRespEntry sta_wb_req[LSU_STA_COUNT] = {};
 };
 
+// Dispatch -> LSU: the LSQ allocations of the fired loads and stores; the LSU reads the instruction's fields (ROB entry,
+// STQ / LDQ entry, funct3, pc) from its pool entry `id`.
 struct DisLsuIO {
-
-  wire<1> alloc_req[MAX_STQ_DISPATCH_WIDTH];
-  wire<BR_MASK_WIDTH> br_mask[MAX_STQ_DISPATCH_WIDTH];
-  wire<3> func3[MAX_STQ_DISPATCH_WIDTH];
-  wire<ROB_IDX_WIDTH> rob_idx[MAX_STQ_DISPATCH_WIDTH];
-  wire<1> rob_flag[MAX_STQ_DISPATCH_WIDTH];
-  wire<1> stq_flag[MAX_STQ_DISPATCH_WIDTH];
-
-  wire<1> ldq_alloc_req[MAX_LDQ_DISPATCH_WIDTH];
-  wire<LDQ_IDX_WIDTH> ldq_idx[MAX_LDQ_DISPATCH_WIDTH];
-  wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH];
-  wire<ROB_IDX_WIDTH> ldq_rob_idx[MAX_LDQ_DISPATCH_WIDTH];
-  wire<1> ldq_rob_flag[MAX_LDQ_DISPATCH_WIDTH];
-  wire<32> st_pc[MAX_STQ_DISPATCH_WIDTH];   // store PC (store-set predictor)
-  wire<32> ldq_pc[MAX_LDQ_DISPATCH_WIDTH];  // load PC (memory-dependence predictor index / training)
-
-  DisLsuIO() {
-    for (auto &v : alloc_req)
-      v = 0;
-    for (auto &v : br_mask)
-      v = 0;
-    for (auto &v : func3)
-      v = 0;
-    for (auto &v : rob_idx)
-      v = 0;
-    for (auto &v : rob_flag)
-      v = 0;
-    for (auto &v : stq_flag)
-      v = 0;
-    for (auto &v : ldq_alloc_req)
-      v = 0;
-    for (auto &v : ldq_idx)
-      v = 0;
-    for (auto &v : ldq_br_mask)
-      v = 0;
-    for (auto &v : ldq_rob_idx)
-      v = 0;
-    for (auto &v : ldq_rob_flag)
-      v = 0;
-    for (auto &v : ldq_pc)
-      v = 0;
-    for (auto &v : st_pc)
-      v = 0;
-  }
+  wire<1> alloc_req[MAX_STQ_DISPATCH_WIDTH] = {};
+  uint16_t id[MAX_STQ_DISPATCH_WIDTH] = {};
+  wire<BR_MASK_WIDTH> br_mask[MAX_STQ_DISPATCH_WIDTH] = {};
+  wire<1> ldq_alloc_req[MAX_LDQ_DISPATCH_WIDTH] = {};
+  uint16_t ldq_id[MAX_LDQ_DISPATCH_WIDTH] = {};
+  wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH] = {};
 };
 
 struct ExeLsuIO {

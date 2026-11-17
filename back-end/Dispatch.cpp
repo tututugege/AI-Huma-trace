@@ -4,226 +4,161 @@
 #include "config.h"
 #include "util.h"
 
-bool Dispatch::is_preg_woken(wire<PRF_IDX_WIDTH> preg) const {
-  for (int w = 0; w < LSU_LOAD_WB_WIDTH; w++)
-    if (in.prf_awake->wake[w].valid && in.prf_awake->wake[w].preg == preg) return true;
-  return in.iss_awake->woken(preg);
-}
-
+// A source woken by this cycle's wake-up bus (it carries the load write-backs too) is no longer busy.
 void Dispatch::apply_wakeup_to_uop(Uop &uop) const {
-  if (uop->src1_en && is_preg_woken(uop->src1_preg)) uop.src1_busy = false;
-  if (uop->src2_en && is_preg_woken(uop->src2_preg)) uop.src2_busy = false;
-  if (uop->src3_en && is_preg_woken(uop->src3_preg)) uop.src3_busy = false;
+  const IssAwakeIO &w = *in.iss_awake;
+  if (uop->src1_en && w.woken(uop->src1_preg)) uop.src1_busy = false;
+  if (uop->src2_en && w.woken(uop->src2_preg)) uop.src2_busy = false;
+  if (uop->src3_en && w.woken(uop->src3_preg)) uop.src3_busy = false;
 }
 
 void Dispatch::init() {
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    q_.inst_r[i] = inst_alloc[i] = {};
+    q_.inst_r[i] = {};
     q_.inst_valid[i] = false;
-    dispatch_success_flags[i] = false;
-    dispatch_cache[i] = {};
+    fit_[i] = true;
   }
   for (int &o : stq_port_owner) o = -1;
   for (int &o : ldq_port_owner) o = -1;
   std::memset(q_.busy_table, 0, sizeof(q_.busy_table));
 }
 
-// Allocate ROB ids and LDQ/STQ entries for the instructions waiting in the stage. A load records the STQ tail it must
-// see (the stores before it); a load or store that finds no queue entry or port is marked invalid for the ROB.
+// The instructions of the stage go to the ROB's input (out.dis2rob.uop, also this cycle's working copy of each slot) with
+// their ROB entry, and loads / stores take their LDQ / STQ entry and request port. A load records the STQ tail it must
+// see (the stores before it); a load or store that finds no entry or port is not valid for the ROB.
 void Dispatch::comb_alloc() {
   const Regs &q = q_;
   const auto clear_mask = in.dec_bcast->clear_mask;
-  int stores = 0, loads = 0;
-
-  for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
-    out.dis2lsu.alloc_req[k] = false;
-    out.dis2lsu.br_mask[k] = 0;
-    stq_port_owner[k] = -1;
-  }
-  for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
-    out.dis2lsu.ldq_alloc_req[k] = false;
-    out.dis2lsu.ldq_br_mask[k] = 0;
-    ldq_port_owner[k] = -1;
-  }
-
-  for (int i = 0; i < DECODE_WIDTH; i++) { iq_blk[i] = -1; iq_blk_width[i] = false; }
-  int rob_k = 0;  // position of this slot among the valid slots of the group (its ROB entry is the tail + rob_k)
+  const LsuDisIO &lsu = *in.lsu2dis;
+  int stores = 0, loads = 0, rob_k = 0;   // rob_k: position among the valid slots (the ROB entry is the tail + rob_k)
+  for (int &o : stq_port_owner) o = -1;
+  for (int &o : ldq_port_owner) o = -1;
+  auto stq_slot = [&](Uop &u) {   // the STQ entry after the stores allocated before it in this group
+    const int pos = lsu.stq_tail + stores;
+    u->stq_idx = pos % STQ_SIZE;
+    u->stq_flag = lsu.stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+  };
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    Uop &u = inst_alloc[i];
+    iq_blk[i] = -1;
+    iq_blk_width[i] = false;
+    Uop &u = out.dis2rob.uop[i];
     u = q.inst_r[i];
     u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
-    {
-      const int pos = static_cast<int>(in.rob2dis->enq_idx) + rob_k;
-      if (q.inst_valid[i]) {   // (an invalid slot's handle names an instruction that has left: its pool entry is not written)
-        u->rob_idx = pos % ROB_NUM;
-        u->rob_flag = static_cast<bool>(in.rob2dis->rob_flag) ^ (pos >= ROB_NUM);
-        u->expect_mask = 0;
-        rob_k++;
-      }
-    }
     u.cplt_mask = 0;
     out.dis2rob.valid[i] = q.inst_valid[i];
-
-    if (q.inst_valid[i] && is_load(q.inst_r[i])) {
-      const int pos = in.lsu2dis->stq_tail + stores;  // stores older than this load, allocated this cycle
-      u->stq_idx = pos % STQ_SIZE;
-      u->stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
-      if (loads < in.lsu2dis->ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && in.lsu2dis->ldq_alloc_valid[loads]) {
-        u->ldq_idx = in.lsu2dis->ldq_alloc_idx[loads];
+    if (!q.inst_valid[i]) continue;   // (an invalid slot's handle names an instruction that has left: its pool entry is not written)
+    const int pos = static_cast<int>(in.rob2dis->enq_idx) + rob_k++;
+    u->rob_idx = pos % ROB_NUM;
+    u->rob_flag = static_cast<bool>(in.rob2dis->rob_flag) ^ (pos >= ROB_NUM);
+    u->expect_mask = 0;
+    if (is_load(u)) {
+      stq_slot(u);
+      if (loads < lsu.ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && lsu.ldq_alloc_valid[loads]) {
+        u->ldq_idx = lsu.ldq_alloc_idx[loads];
         ldq_port_owner[loads++] = i;
       } else {
-        if (loads < in.lsu2dis->ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
+        if (loads < lsu.ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
         out.dis2rob.valid[i] = false;
       }
     }
-    if (q.inst_valid[i] && is_store(q.inst_r[i])) {
-      if (stores < in.lsu2dis->stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
-        const int pos = in.lsu2dis->stq_tail + stores;
-        u->stq_idx = pos % STQ_SIZE;
-        u->stq_flag = in.lsu2dis->stq_tail_flag ^ ((pos / STQ_SIZE) & 1);
+    if (is_store(u)) {
+      if (stores < lsu.stq_free && stores < MAX_STQ_DISPATCH_WIDTH) {
+        stq_slot(u);
         stq_port_owner[stores++] = i;
       } else {
         out.dis2rob.valid[i] = false;
       }
     }
-    out.dis2rob.uop[i] = u;
   }
 }
 
-// Source-operand busy bits: busy table, this cycle's wakeups, and a register written by an older slot of the same group
-// stays busy (the older instruction has not issued yet).
-void Dispatch::wake() {
+// Source-operand busy bits of slot i: busy table, this cycle's wakeups, and a register written by an older slot of the
+// same group stays busy (the older instruction has not issued yet).
+void Dispatch::wake(int i) {
   const Regs &q = q_;
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!out.dis2rob.valid[i]) continue;
-    Uop &u = inst_alloc[i];
-    u.src1_busy = u->src1_en ? q.busy_table[u->src1_preg] : false;
-    u.src2_busy = u->src2_en ? q.busy_table[u->src2_preg] : false;
-    u.src3_busy = u->src3_en ? q.busy_table[u->src3_preg] : false;
-    apply_wakeup_to_uop(u);
-    for (int j = 0; j < i; j++) {
-      if (!out.dis2rob.valid[j] || !inst_alloc[j].dest_en || (inst_alloc[j]->dest_areg == 0 && !inst_alloc[j]->dest_fp)) continue;
-      if (is_eliminated_move(inst_alloc[j])) continue;  // its register is its source's: no writer to wait for
-      if (u->src1_en && u->src1_preg == inst_alloc[j]->dest_preg) u.src1_busy = true;
-      if (u->src2_en && u->src2_preg == inst_alloc[j]->dest_preg) u.src2_busy = true;
-      if (u->src3_en && u->src3_preg == inst_alloc[j]->dest_preg) u.src3_busy = true;
-    }
+  Uop &u = out.dis2rob.uop[i];
+  u.src1_busy = u->src1_en ? q.busy_table[u->src1_preg] : false;
+  u.src2_busy = u->src2_en ? q.busy_table[u->src2_preg] : false;
+  u.src3_busy = u->src3_en ? q.busy_table[u->src3_preg] : false;
+  apply_wakeup_to_uop(u);
+  for (int j = 0; j < i; j++) {
+    const Uop &o = out.dis2rob.uop[j];
+    if (!out.dis2rob.valid[j] || !o.dest_en || (o->dest_areg == 0 && !o->dest_fp)) continue;
+    if (is_eliminated_move(o)) continue;  // its register is its source's: no writer to wait for
+    if (u->src1_en && u->src1_preg == o->dest_preg) u.src1_busy = true;
+    if (u->src2_en && u->src2_preg == o->dest_preg) u.src2_busy = true;
+    if (u->src3_en && u->src3_preg == o->dest_preg) u.src3_busy = true;
   }
 }
 
-// Split each instruction into uops and place them in the issue-queue request ports, in slot order; the first
-// instruction that does not fit stops the group. What was placed is remembered so comb_fire can take it back.
-void Dispatch::dispatch() {
+// One pass in slot order: each slot's busy bits; then, up to the first slot that does not fire, its uops, whether they
+// fit the issue queues, and whether it fires. A slot fires when it has its LSQ entry, its uops fit, the ROB has room and
+// takes instructions, nothing flushes, and nothing older stalled; CSR and atomic instructions also need an empty ROB and
+// nothing older firing; an atomic or WFI that fires is alone. Only fired slots place their uops (so nothing is taken back).
+void Dispatch::comb_dispatch() {
   const Regs &q = q_;
   for (int i = 0; i < IQ_NUM; i++)
     for (int k = 0; k < MAX_IQ_DISPATCH_WIDTH; k++) out.dis2iss.req[i][k].valid = false;
-
+  const bool global_flush = in.rob_bcast->flush || in.dec_bcast->mispred || in.rob2dis->stall;
   int usage[IQ_NUM] = {0};
+  int rob_used = 0;  // ROB entries taken by the older slots of this group
+  bool stalled = false, fired = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    dispatch_success_flags[i] = false;
-    dispatch_cache[i].count = 0;
-    if (!q.inst_valid[i]) {
-      dispatch_success_flags[i] = true;
-      continue;
-    }
+    out.dis2rob.dis_fire[i] = false;
+    fit_[i] = true;
+    if (out.dis2rob.valid[i]) wake(i);   // (a slot that waits keeps them in the stage register)
+    if (!q.inst_valid[i] || stalled) continue;
+    Uop &u = out.dis2rob.uop[i];
+    const InstType type = decode_inst_type(u->type);
 
     UopPacket uops[MAX_UOPS_PER_INST];
-    const int cnt = decompose_inst(inst_alloc[i], uops);
-    dispatch_cache[i].count = cnt;
+    const int cnt = decompose_inst(u, uops);
     wire<ROB_CPLT_MASK_WIDTH> expect = 0;
-    for (int k = 0; k < cnt; k++) {
-      expect |= rob_cplt_mask_from_iq(uops[k].iq_id);
-      dispatch_cache[i].iq_ids[k] = uops[k].iq_id;
-    }
+    for (int k = 0; k < cnt; k++) expect |= rob_cplt_mask_from_iq(uops[k].iq_id);
     // SC returns its 0/1 result through the load-like write-back and still completes an STD
-    if (decode_inst_type(inst_alloc[i]->type) == AMO && (inst_alloc[i]->func7 >> 2) == AmoOp::SC)
-      expect = ROB_CPLT_G0 | ROB_CPLT_G2;
-    inst_alloc[i]->expect_mask = expect;
-    inst_alloc[i].cplt_mask = 0;
-
-    bool fit = true;
-    for (int k = 0; k < cnt && fit; k++) {
-      const int q = uops[k].iq_id;
-      fit = usage[q] < GLOBAL_IQ_CONFIG[q].dispatch_width && usage[q] < in.iss2dis->ready_num[q];
-      if (!fit) {
-        iq_blk[i] = q;
-        iq_blk_width[i] = usage[q] < in.iss2dis->ready_num[q];  // room left: the enqueue width is what stopped it
+    if (type == AMO && (u->func7 >> 2) == AmoOp::SC) expect = ROB_CPLT_G0 | ROB_CPLT_G2;
+    for (int k = 0; k < cnt && fit_[i]; k++) {
+      const int iq = uops[k].iq_id;
+      fit_[i] = usage[iq] < GLOBAL_IQ_CONFIG[iq].dispatch_width && usage[iq] < in.iss2dis->ready_num[iq];
+      if (!fit_[i]) {
+        iq_blk[i] = iq;
+        iq_blk_width[i] = usage[iq] < in.iss2dis->ready_num[iq];  // room left: the enqueue width is what stopped it
       }
     }
-    if (!fit) break;
 
-    dispatch_success_flags[i] = true;
-    out.dis2rob.uop[i]->expect_mask = expect;
-    out.dis2rob.uop[i].cplt_mask = 0;
+    bool fire = out.dis2rob.valid[i] && fit_[i] && in.rob2dis->ready && !global_flush && rob_used < in.rob2dis->free_cnt;
+    rob_used++;
+    if ((is_CSR(type) || type == AMO) && (!in.rob2dis->empty || fired)) fire = false;   // serializing (CSR, xRET, ECALL, EBREAK, AMO)
+    if (!fire) { stalled = true; continue; }
+
+    out.dis2rob.dis_fire[i] = true;
+    fired = true;
+    u->expect_mask = expect;
     for (int k = 0; k < cnt; k++) {
-      const int q = uops[k].iq_id;
-      out.dis2iss.req[q][usage[q]].valid = true;
-      out.dis2iss.req[q][usage[q]].uop = uops[k].uop;
-      usage[q]++;
+      const int iq = uops[k].iq_id;
+      out.dis2iss.req[iq][usage[iq]].valid = true;
+      out.dis2iss.req[iq][usage[iq]].uop = uops[k].uop;
+      usage[iq]++;
     }
+    if (type == AMO || type == WFI) stalled = true;  // exclusive issue slot
   }
-}
+  out.dis2ren.ready = !stalled;
 
-// Final fire decision per slot, busy-table update, and confirm/take back the issue-queue and LSU requests.
-// Flushes and stalls block everything; CSR and atomic instructions only go when the ROB is empty and nothing
-// older fires in the same cycle; an atomic or WFI that fires blocks the slots behind it; a slot that does not
-// fire blocks the slots behind it.
-void Dispatch::fire() {
-  const Regs &q = q_;
+  // the LSQ allocation requests of the fired loads and stores (the LSU reads the rest from the pool by id)
   const auto clear_mask = in.dec_bcast->clear_mask;
-  const bool global_flush = in.rob_bcast->flush || in.dec_bcast->mispred || in.rob2dis->stall;
-
-
-  bool pre_stall = false, pre_fire = false;
-  int rob_used = 0;  // ROB entries taken by the older slots of this group
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    const InstType type = q.inst_valid[i] ? decode_inst_type(q.inst_r[i]->type) : NOP;
-    const bool atomic = type == AMO, wfi = type == WFI;
-    bool fire = out.dis2rob.valid[i] && dispatch_success_flags[i] && in.rob2dis->ready && !pre_stall && !global_flush;
-    if (q.inst_valid[i]) { if (rob_used >= in.rob2dis->free_cnt) fire = false; rob_used++; }
-    // serializing instructions need an empty ROB and nothing older firing this cycle
-    if ((is_CSR(q.inst_r[i]->type) || atomic) && (!in.rob2dis->empty || pre_fire)) fire = false;
-    out.dis2rob.dis_fire[i] = fire;
-    if (q.inst_valid[i] && !fire) pre_stall = true;
-    if (fire && (atomic || wfi)) pre_stall = true;  // exclusive issue slot
-    if (fire) pre_fire = true;
-  }
-  out.dis2ren.ready = !pre_stall;
-
-  // take back the issue requests of instructions that did not fire (ports were assigned in slot order)
-  int next_slot[IQ_NUM] = {0};
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!q.inst_valid[i]) continue;
-    if (!dispatch_success_flags[i]) break;
-    for (int k = 0; k < dispatch_cache[i].count; k++) {
-      const int q = dispatch_cache[i].iq_ids[k];
-      if (!out.dis2rob.dis_fire[i]) out.dis2iss.req[q][next_slot[q]].valid = false;
-      next_slot[q]++;
-    }
-  }
-
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
     const int i = stq_port_owner[k];
-    if (i < 0 || !out.dis2rob.dis_fire[i]) continue;
-    const Uop &u = out.dis2rob.uop[i];
-    out.dis2lsu.alloc_req[k] = true;
-    out.dis2lsu.br_mask[k] = u.br_mask & ~clear_mask;
-    out.dis2lsu.rob_idx[k] = u->rob_idx;
-    out.dis2lsu.rob_flag[k] = u->rob_flag;
-    out.dis2lsu.stq_flag[k] = u->stq_flag;
-    out.dis2lsu.func3[k] = u->func3;
-    out.dis2lsu.st_pc[k] = u->dbg.pc;
+    out.dis2lsu.alloc_req[k] = i >= 0 && out.dis2rob.dis_fire[i];
+    if (!out.dis2lsu.alloc_req[k]) continue;
+    out.dis2lsu.id[k] = out.dis2rob.uop[i].id;
+    out.dis2lsu.br_mask[k] = out.dis2rob.uop[i].br_mask & ~clear_mask;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
     const int i = ldq_port_owner[k];
-    if (i < 0 || !out.dis2rob.dis_fire[i]) continue;
-    const Uop &u = out.dis2rob.uop[i];
-    out.dis2lsu.ldq_alloc_req[k] = true;
-    out.dis2lsu.ldq_idx[k] = u->ldq_idx;
-    out.dis2lsu.ldq_br_mask[k] = u.br_mask & ~clear_mask;
-    out.dis2lsu.ldq_rob_idx[k] = u->rob_idx;
-    out.dis2lsu.ldq_rob_flag[k] = u->rob_flag;
-    out.dis2lsu.ldq_pc[k] = u->dbg.pc;
+    out.dis2lsu.ldq_alloc_req[k] = i >= 0 && out.dis2rob.dis_fire[i];
+    if (!out.dis2lsu.ldq_alloc_req[k]) continue;
+    out.dis2lsu.ldq_id[k] = out.dis2rob.uop[i].id;
+    out.dis2lsu.ldq_br_mask[k] = out.dis2rob.uop[i].br_mask & ~clear_mask;
   }
 }
 
@@ -232,8 +167,6 @@ void Dispatch::fire() {
 // bits refreshed by this cycle's wakeups).
 void Dispatch::seq() {
   Regs &d = q_;   // updated in place (each slot reads only its own old value first)
-  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
-    if (in.prf_awake->wake[k].valid) d.busy_table[in.prf_awake->wake[k].preg] = false;
   for (int k = 0; k < WAKE_CH_ALL; k++)
     if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
   for (int i = 0; i < DECODE_WIDTH; i++)
@@ -252,9 +185,9 @@ void Dispatch::seq() {
     }
     d.inst_valid[i] = q.inst_valid[i] && !out.dis2rob.dis_fire[i];
     if (d.inst_valid[i]) {
-      d.inst_r[i].src1_busy = inst_alloc[i].src1_busy;
-      d.inst_r[i].src2_busy = inst_alloc[i].src2_busy;
-      d.inst_r[i].src3_busy = inst_alloc[i].src3_busy;
+      d.inst_r[i].src1_busy = out.dis2rob.uop[i].src1_busy;
+      d.inst_r[i].src2_busy = out.dis2rob.uop[i].src2_busy;
+      d.inst_r[i].src3_busy = out.dis2rob.uop[i].src3_busy;
       apply_wakeup_to_uop(d.inst_r[i]);
       d.inst_r[i].br_mask &= ~clear_mask;
     }
@@ -262,7 +195,7 @@ void Dispatch::seq() {
 }
 
 
-// A uop of `inst`: its own pool slot, a copy of the instruction's (the pieces override a few static fields below), and the
+// A uop of `inst`: its own pool slot (the instruction's block, UOP_BLOCK in types.h), a copy of the instruction's (the pieces override a few static fields below), and the
 // instruction's per-copy bits.
 Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   Uop uop;
@@ -367,9 +300,3 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   return n;
 }
 
-// wakeups, dispatch to the issue queues / LSU / ROB, the handshake
-void Dispatch::comb_dispatch() {
-  wake();
-  dispatch();
-  fire();
-}

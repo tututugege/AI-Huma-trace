@@ -12,24 +12,18 @@ struct UopPacket {
 
 // Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_alloc  in: in.dec_bcast in.lsu2dis in.rob2dis  out: out.dis2lsu out.dis2rob
-//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.prf_awake in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
+//   CONTRACT comb_alloc  in: in.dec_bcast in.lsu2dis in.rob2dis  out: out.dis2rob
+//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
 class Dispatch {
 private:
-  // phases of one cycle, run in the order of the methods above
-  void wake();
-  void dispatch();
-  void fire();
+  void wake(int i);   // the busy bits of slot i (comb_dispatch)
 
   Uop make_dis_iss_uop(const Uop &inst, int k) const;
-  bool is_preg_woken(wire<PRF_IDX_WIDTH> preg) const;
   void apply_wakeup_to_uop(Uop &uop) const;
   int decompose_inst(const Uop &original_inst, UopPacket *out_uops);
 
-  Uop inst_alloc[DECODE_WIDTH];
-
-  // per instruction: dispatched (comb_dispatch -> comb_fire)
-  bool dispatch_success_flags[DECODE_WIDTH];
+  // per slot (PMU): its uops fit the issue queues (evaluated up to the first slot that does not fire)
+  bool fit_[DECODE_WIDTH];
   // PMU only (EXP-014): the issue queue that stopped this slot in comb_dispatch (-1: none) and whether it was its enqueue
   // width (true) or a lack of free entries (false)
   int iq_blk[DECODE_WIDTH];
@@ -39,13 +33,6 @@ private:
   int stq_port_owner[MAX_STQ_DISPATCH_WIDTH];
   int ldq_port_owner[MAX_LDQ_DISPATCH_WIDTH];
 
-  struct DispatchCache {
-    int count;                     // number of uops
-    int iq_ids[MAX_UOPS_PER_INST]; // target IQ ids
-  };
-
-  // passed from comb_dispatch to comb_fire
-  DispatchCache dispatch_cache[DECODE_WIDTH];
 
 public:
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
@@ -56,7 +43,7 @@ public:
   };
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
-  void comb_dispatch();  // wakeups, dispatch to the issue queues / LSU / ROB, the handshake, the next pipeline register
+  void comb_dispatch();  // busy bits, the fire decision per slot, the issue-queue / LSQ requests of the fired slots, the handshake
   friend struct DisDigestAccess;  // lockstep test hook
   Dispatch(SimContext *ctx) { this->ctx = ctx; }
   SimContext *ctx;
@@ -73,7 +60,6 @@ public:
     const IssDisIO *iss2dis = nullptr;
     const IssAwakeIO *iss_awake = nullptr;
     const LsuDisIO *lsu2dis = nullptr;
-    const PrfAwakeIO *prf_awake = nullptr;
     const RenDisIO *ren2dis = nullptr;
     const RobDisIO *rob2dis = nullptr;
     const RobBroadcastIO *rob_bcast = nullptr;
@@ -82,7 +68,7 @@ public:
   void init();
   void comb_alloc();
   void seq();
-  // PMU (EXP-013): classify this cycle's DECODE_WIDTH dispatch slots into the event vector (read-only, after comb_fire)
+  // PMU (EXP-013): classify this cycle's DECODE_WIDTH dispatch slots into the event vector (read-only, after comb_dispatch)
   void pmu_slots(struct PmuVec &ev, bool recovering, bool recovering_by_flush, int &be_slots) const;
 
 private:

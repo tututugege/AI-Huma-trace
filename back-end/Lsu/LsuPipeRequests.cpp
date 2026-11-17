@@ -21,14 +21,15 @@ void RealLsu::dis2lsu() {
   const DisLsuIO &d = (*in.dis2lsu);
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
-    PLdq &e = pnxt.ldq[d.ldq_idx[i]];
+    const UopS &u = uop_pool[d.ldq_id[i]];
+    PLdq &e = pnxt.ldq[u.ldq_idx];
     const uint8_t ep = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
     e = {};
     e.epoch = ep;
-    e.rob_idx = d.ldq_rob_idx[i];
-    e.rob_flag = d.ldq_rob_flag[i];
+    e.rob_idx = u.rob_idx;
+    e.rob_flag = u.rob_flag;
     e.br_mask = d.ldq_br_mask[i];
-    e.pc = d.ldq_pc[i];
+    e.pc = u.dbg.pc;
     {
       if (MemDepPred::kClr && (long long)sim_time >= mdp_.next_clear) {
         std::fill(mdp_.table.begin(), mdp_.table.end(), false);
@@ -40,15 +41,16 @@ void RealLsu::dis2lsu() {
   }
   for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) {
     if (!d.alloc_req[i]) continue;
+    const UopS &u = uop_pool[d.id[i]];
     if (pnxt.stq_count >= STQ_SIZE) continue;
-    if (d.stq_flag[i] != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
+    if (u.stq_flag != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
     PStq &e = pnxt.stq[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE];
     e = {};
-    e.rob_idx = d.rob_idx[i];
-    e.rob_flag = d.rob_flag[i];
+    e.rob_idx = u.rob_idx;
+    e.rob_flag = u.rob_flag;
     e.br_mask = d.br_mask[i];
-    e.pc = d.st_pc[i];
-    e.func3 = d.func3[i];
+    e.pc = u.dbg.pc;
+    e.func3 = u.func3;
     pnxt.stq_count++;
   }
 }

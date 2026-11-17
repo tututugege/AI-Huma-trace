@@ -50,7 +50,6 @@ void BackTop::init() {
   dis->in.iss2dis = &isu->out.iss2dis;
   dis->in.iss_awake = &isu->out.iss_awake;
   dis->in.lsu2dis = &lsu->out.lsu2dis;
-  dis->in.prf_awake = &exu->out.prf_awake;
   dis->in.ren2dis = &rename->out.ren2dis;
   dis->in.rob2dis = &rob->out.rob2dis;
   dis->in.rob_bcast = &rob->out.rob_bcast;
