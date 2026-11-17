@@ -44,6 +44,7 @@ void RealLsu::exe2lsu() {
     LP_PORT_CHECK(ns + 1, LSU_STA_COUNT, "sta_agu");
     pw.s1[ns].v = true;
     pw.s1[ns].stq = inst->stq_idx;
+    pw.s1[ns].phys = AguCfg::get().phys ? AguCfg::get().st_phys(i - LSU_LDU_COUNT) : -1;
     ns++;
     pw.ev_sta |= (stq_mask_t)1 << inst->stq_idx;  // the partial address is known from now on
     {  // memory-order check: younger loads that passed this store while its address was unknown
@@ -97,6 +98,7 @@ void RealLsu::exe2lsu() {
     pw.l1[nl].v = true;
     pw.l1[nl].need_tlb = true;
     pw.l1[nl].ldq = inst->ldq_idx;
+    pw.l1[nl].phys = AguCfg::get().phys ? AguCfg::get().ld_phys(i) : -1;
     nl++;
   }
 }
@@ -172,19 +174,38 @@ void RealLsu::tlb_out() {
   const lp::LsuPipeState &pcur = pcur_;
   for (auto &r : tlb_req_) r = {};
 
+  // AGU_PORTS (port-accurate shared AGUs): the physical DTLB ports the new requests of this cycle hold; a replay that needs the
+  // DTLB takes a free one it may use, otherwise its replay register keeps it for the next cycle
+  const AguCfg &ac = AguCfg::get();
+  uint32_t used = 0;
+  if (ac.phys) {
+    for (int k = 0; k < LD; k++) if (pw.l1[k].v && pw.l1[k].phys >= 0) used |= 1u << pw.l1[k].phys;
+    for (int k = 0; k < STA; k++) if (pw.s1[k].v && pw.s1[k].phys >= 0) used |= 1u << pw.s1[k].phys;
+  }
+  auto free_phys = [&](bool ld) {
+    for (int q = 0; q < ac.nl + ac.nm + ac.ns; q++)
+      if (!(used >> q & 1) && (ld ? ac.ld_can(q) : ac.st_can(q))) return q;
+    return -1;
+  };
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;
   for (int r = 0; r < lp_rp_ports; r++) {
     if (n >= LD) continue;
-    int src = -1;
+    int src = -1, ph = -1;
     if (pcur.rp[r].v) {
       src = pcur.rp[r].ldq;
+      if (ac.phys && pnxt.ldq[src].st == L_PIPE && !pnxt.ldq[src].pa_v) {
+        ph = free_phys(true);
+        if (ph < 0) continue;   // no free DTLB port this cycle
+        used |= 1u << ph;
+      }
       pnxt.rp[r].v = 0;
     }
     if (src < 0) continue;
     PLdq &e = pnxt.ldq[src];
     if (e.st != L_PIPE) continue;
     pw.l1[n].v = true;
+    pw.l1[n].phys = ph;
     pw.l1[n].replay = true;
     pw.l1[n].need_tlb = !e.pa_v;
     pw.l1[n].ldq = src;
@@ -197,11 +218,18 @@ void RealLsu::tlb_out() {
 
   int ns = 0;
   while (ns < STA && pw.s1[ns].v) ns++;
-  if (ns < STA && pcur.srp.v) {  // STA replay register takes a free STA port
+  int sph = -1;
+  bool take_srp = ns < STA && pcur.srp.v;
+  if (take_srp && ac.phys) {
+    sph = free_phys(false);
+    if (sph < 0) take_srp = false;   // no free DTLB port: the replay register keeps the store
+  }
+  if (take_srp) {  // STA replay register takes a free STA port
     const uint32_t j = pcur.srp.ldq;
     pnxt.srp.v = 0;
     if (stq_rank(j, pnxt.stq_head) < pnxt.stq_count && pnxt.stq[j].va_v && !pnxt.stq[j].pa_v && !pnxt.stq[j].pf) {
       pw.s1[ns].v = true;
+      pw.s1[ns].phys = sph;
       pw.s1[ns].replay = true;
       pw.s1[ns].stq = j;
       ns++;

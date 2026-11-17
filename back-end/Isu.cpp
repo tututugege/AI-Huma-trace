@@ -97,6 +97,21 @@ bool Isu::grant_gate(const Uop &u, int port) {
   const bool is_ld = port >= IQ_LD_PORT_BASE && port < IQ_LD_PORT_BASE + LSU_LDU_COUNT;
   const bool is_st = port >= IQ_STA_PORT_BASE && port < IQ_STA_PORT_BASE + LSU_STA_COUNT;
   if ((is_ld && !ac.ok_ld(agu_ld_, agu_st_)) || (is_st && !ac.ok_st(agu_ld_, agu_st_))) return false;
+  static const bool chk = [&] {
+    if (ac.phys && (LSU_LDU_COUNT != ac.nl + ac.nm || LSU_STA_COUNT != ac.ns + ac.nm)) {
+      std::fprintf(stderr, "AGU_PORTS=%d,%d,%d needs CFG_LD_PORTS=%d and CFG_STA_PORTS=%d (this build: %d / %d)\n", ac.nl, ac.ns, ac.nm,
+                   ac.nl + ac.nm, ac.ns + ac.nm, LSU_LDU_COUNT, LSU_STA_COUNT);
+      std::exit(2);
+    }
+    return true;
+  }();
+  (void)chk;
+  int phys_bit = -1;   // AGU_PORTS (port-accurate): the physical AGU port this grant would take
+  if (ac.phys) {
+    if (is_ld) phys_bit = ac.ld_phys(port - IQ_LD_PORT_BASE);
+    if (is_st) phys_bit = ac.st_phys(port - IQ_STA_PORT_BASE);
+    if (phys_bit >= 0 && (agu_phys_used_ >> phys_bit & 1)) return false;
+  }
   const UopType t = decode_uop_type(u.op);
   const int lat = get_latency(t, u->func7, u->is_word);
   const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
@@ -104,6 +119,7 @@ bool Isu::grant_gate(const Uop &u, int port) {
   if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
       !fp_wb_busy_.try_reserve(lat)) return false;
   wb_busy_.reserve(port, off);
+  if (phys_bit >= 0) agu_phys_used_ |= 1u << phys_bit;
   if (is_ld) agu_ld_++;
   if (is_st) agu_st_++;
   return true;
@@ -115,6 +131,7 @@ void Isu::issue() {
   wb_busy_.new_cycle(in.rob_bcast->flush);
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   agu_ld_ = agu_st_ = 0;
+  agu_phys_used_ = 0;
   for (auto &q : iqs) {
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];

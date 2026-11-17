@@ -203,11 +203,13 @@ struct PL1 {
   bool cand_v = false;
   uint8_t cand = 0;
   bool launch = false;
+  int8_t phys = -1;   // AGU_PORTS: the physical AGU / DTLB port of this request (-1: none)
 };
 struct PSta {
   bool v = false;
   bool replay = false;
   uint8_t stq = 0;
+  int8_t phys = -1;   // AGU_PORTS: the physical AGU / DTLB port of this request (-1: none)
 };
 struct PCycle {
   PL1 l1[LD];

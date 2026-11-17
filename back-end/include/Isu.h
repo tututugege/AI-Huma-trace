@@ -97,7 +97,8 @@ public:
 private:
   void add_iq(const IssueQueueConfig &cfg);
   int get_latency(UopType uop_type, wire<7> func7, bool word = false);
-  int agu_ld_ = 0, agu_st_ = 0;   // EXP-TLBPORTS: load / STA grants of this cycle
+  int agu_ld_ = 0, agu_st_ = 0;
+  uint32_t agu_phys_used_ = 0;   // AGU_PORTS: physical AGU ports taken this cycle   // EXP-TLBPORTS: load / STA grants of this cycle
   bool grant_gate(const Uop &u, int port);   // extra grant conditions (port completion cycle, FP write port)
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
