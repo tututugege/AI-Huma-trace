@@ -559,6 +559,7 @@ struct ExeLsuIO {
 
   struct ExeLsuReqEntry {
     wire<1> valid = {};
+    wire<1> raw = {};   // the AGU holds a uop this cycle, whether a flush / mispredict kills it or not (the replay port allocation looks at this)
     Uop uop = {};
   };
 

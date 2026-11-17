@@ -63,7 +63,7 @@ void Exu::begin_cycle() {
     out.exu2rob.entry[i].valid = false;
     out.exe2iss.fu_ready_mask[i] = 0;
   }
-  for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = false;
+  for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = out.exe2lsu.agu_req[i].raw = false;
   for (int i = 0; i < LSU_SDU_COUNT; i++) out.exe2lsu.sdu_req[i].valid = false;
   out.exu2id.clear_mask = 0;
   out.exu2id.mispred = false;
@@ -183,6 +183,10 @@ void Exu::exec() {
 
     // the input slot goes to the unit unless flushed or killed (that frees it)
     bool en = false;
+    if (f.slot_valid && f.lsu_agu_port >= 0 && (f.slot.op == UOP_LOAD || f.slot.op == UOP_STA)) {   // the AGU is occupied, killed or not
+      out.exe2lsu.agu_req[f.lsu_agu_port].raw = true;
+      out.exe2lsu.agu_req[f.lsu_agu_port].uop.op = f.slot.op;
+    }
     if (f.slot_valid) {
       if (flush_all || is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
       else en = true;

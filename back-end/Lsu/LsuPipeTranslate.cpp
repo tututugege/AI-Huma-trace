@@ -33,7 +33,7 @@ void RealLsu::exe2lsu() {
   }
   agu_raw_ = raw_ld_ = raw_st_ = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    if (!x.agu_req[i].valid) continue;
+    if (!(CFG_LSU_SLOT_FIXED || CFG_LSU_FREEPORT_RAW ? x.agu_req[i].raw : x.agu_req[i].valid)) continue;   // (raw: occupied, dead or not)
     if (x.agu_req[i].uop.op == UOP_LOAD) { agu_raw_ |= 1u << agu::ld_port(i); raw_ld_ |= 1u << i; }
     else if (x.agu_req[i].uop.op == UOP_STA) { agu_raw_ |= 1u << agu::st_port(i - LSU_LDU_COUNT); raw_st_ |= 1u << (i - LSU_LDU_COUNT); }
   }
