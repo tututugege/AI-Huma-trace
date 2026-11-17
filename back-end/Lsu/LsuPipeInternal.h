@@ -141,11 +141,13 @@ inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip,
   }
   xlen_t word = 0;
   bool have = false;
+  uint32_t base_rank = 0;
   for (uint32_t rank = 0; rank < S.stq_count && !have; rank++) {
     const PStq &t = S.stq[(head + rank) % STQ_SIZE];
     if (!t.m_v || t.m_w != W || t.done || t.suppress) continue;
     word = (xlen_t)t.m_old;
     have = true;
+    base_rank = rank;
   }
   if (!have) {
     word = tbhook::mem_read(W);
@@ -154,7 +156,8 @@ inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip,
   for (uint32_t rank = 0; rank < older; rank++) {
     const uint32_t j = (head + rank) % STQ_SIZE;
     const PStq &t = S.stq[j];
-    if (!t.m_v || t.m_w != W || t.done || t.suppress || t.m_atnt) continue;
+    if (!t.m_v || t.m_w != W || t.suppress || t.m_atnt) continue;
+    if (t.done && !(have && rank > base_rank)) continue;   // a done store younger than the base store is in the cache but not in its m_old snapshot
     if (apply_skip && (l.skip >> j & 1)) continue;
     if (t.m_amo) {
       word = (xlen_t)t.m_new;
