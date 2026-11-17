@@ -5,7 +5,8 @@ from the header and checked by tools; cycles stay identical to the RTL-aligned m
 
 ## The contract
 
-1. **Registers in one struct, q and d.** `struct Regs { ... } q_, d;` Comb reads the registers through
+1. **Registers in one struct, q and d.** (Superseded for most modules by NEXT_STATE.md: one register set, the next
+   state written at seq; the D-cache, MSHR, write buffer, PTW block, LSU and FrontControl keep q / d.) `struct Regs { ... } q_, d;` Comb reads the registers through
    `const Regs &q = q_;` and writes only `d` (a register write in comb does not compile). `d == q` at the start of every
    cycle; `seq()` copies `d` to `q` (large, rarely changing parts only when dirty).
 2. **Declared phase interface.** In the module header, per comb phase, the Wires it reads and writes, and the outputs the

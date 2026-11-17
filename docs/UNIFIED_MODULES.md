@@ -28,11 +28,11 @@ public:
   writes. A read of its own owned output field is internal and is not listed.
 * A module's phases run in the order its header lists them.
 
-## The modules (26: back end 9, front end 8, memory 6, SimCpu 3)
+## The modules (25: back end 8, front end 8, memory 6, SimCpu 3)
 
 | top | modules |
 | --- | --- |
-| back end (BackTop::init) | pre, rename, idu, lsu, csr, rob, dis, exu, isu |
+| back end (BackTop::init) | pre, rename, idu, lsu, rob, dis, exu, isu (the CSR file is shared state, not a module: NEXT_STATE.md) |
 | front end (FrontCore) | ctrl, bpu_pipe, fa_port, ptab_port, inst_port, f2b_port, icache, checker |
 | memory (MemSubsystem::init) | wb_, mshr_, dcache_, mem_route_block, ptw_block, peripheral_axi_ |
 | SimCpu::init | b2f (Back2Front: the register and the front end's inputs), f2b (Front2Back), axi (AxiSubsystem) |
