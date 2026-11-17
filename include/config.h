@@ -637,12 +637,6 @@ enum class IssueSchedulePolicy : int {
 
 // 1: a slot freed by an issue can be taken by an enqueue of the same cycle (the slot allocation sees this cycle's issue);
 // 0: the allocation sees only the registered valid bits (the enqueue does not wait for the issue)
-// 1: the INT queue selects in parallel instead of port by port: the rare classes (CSR, MUL, DIV, I2F) each pick their lowest /
-// second-lowest ready slot and go to fixed ports (P0: CSR, else the 1st MUL; P1: the 1st DIV; P2: the 1st I2F, else the 2nd
-// MUL; P3: the 2nd DIV, else the 2nd I2F); the k-th lowest ready ALU slot goes to the k-th port left over, in port order.
-#ifndef CFG_INT_PAR_SELECT
-#define CFG_INT_PAR_SELECT 0
-#endif
 #ifndef CFG_IQ_SAME_CYCLE_REUSE
 #define CFG_IQ_SAME_CYCLE_REUSE 1
 #endif
