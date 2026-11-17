@@ -133,6 +133,17 @@ void RealLsu::tlb() {
     g_tlb_hist.h[nl][ns]++;
     g_tlb_hist.cyc++;
   }
+  // EXP-TLBPORTS: DTLB port sharing. TLB_LD_PORTS / TLB_ST_PORTS cap how many load / STA requests are served per cycle
+  // (the first ones in port order win); a request that is not served comes back with no response, which the LSU already
+  // handles as a retry (load: l.tlb = 1 through the replay register, STA: trp).
+  static const int cap_ld = getenv("TLB_LD_PORTS") ? atoi(getenv("TLB_LD_PORTS")) : LD;
+  static const int cap_st = getenv("TLB_ST_PORTS") ? atoi(getenv("TLB_ST_PORTS")) : STA;
+  if (cap_ld < LD || cap_st < STA) {
+    for (int k = 0, n = 0; k < LD; k++)
+      if (tlb_req_[k].valid && n++ >= cap_ld) tlb_req_[k] = {};
+    for (int k = 0, n = 0; k < STA; k++)
+      if (tlb_req_[LD + k].valid && n++ >= cap_st) tlb_req_[LD + k] = {};
+  }
   const bool fence = in.rob_bcast->fence, cancel = !fence && (in.rob_bcast->flush || in.dec_bcast->mispred);
   dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : LD + STA);
   if (fence || cancel) for (auto &r : tlb_resp_) r = {};
