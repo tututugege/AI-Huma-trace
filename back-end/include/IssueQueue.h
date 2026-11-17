@@ -372,6 +372,35 @@ private:
 
     // 3. Port-centric scheduling: for each port, find the best instruction
     inst_issued.assign(size, 0);
+
+    if (CFG_INT_PAR_SELECT && id_ == IQ_INT) {   // parallel select of the INT queue (see config.h CFG_INT_PAR_SELECT)
+      Assert(num_ports == 6 && "CFG_INT_PAR_SELECT: the INT queue has six ports (CSR+MUL, DIV, MUL+I2F, DIV+I2F, ALU, ALU)");
+      std::vector<int> cl_c, cl_m, cl_d, cl_f, cl_a;   // ready slots by class, lowest slot first
+      for (int idx : ready_indices) {
+        const uint32_t op = q_.entry[idx].uop.op;
+        if (op == UOP_CSR) cl_c.push_back(idx);
+        else if (op == UOP_MUL) cl_m.push_back(idx);
+        else if (op == UOP_DIV) cl_d.push_back(idx);
+        else if (op == UOP_I2F) cl_f.push_back(idx);
+        else cl_a.push_back(idx);
+      }
+      auto at = [](const std::vector<int> &v, size_t k) { return k < v.size() ? v[k] : -1; };
+      int spec[6] = {-1, -1, -1, -1, -1, -1};
+      spec[0] = !cl_c.empty() ? cl_c[0] : at(cl_m, 0);
+      spec[1] = at(cl_d, 0);
+      spec[2] = !cl_f.empty() ? cl_f[0] : at(cl_m, 1);
+      spec[3] = !cl_d.empty() && cl_d.size() > 1 ? cl_d[1] : at(cl_f, 1);
+      size_t next_alu = 0;
+      for (int p = 0; p < 6; p++) {
+        int idx = spec[p];
+        if (idx < 0 && next_alu < cl_a.size()) idx = cl_a[next_alu++];
+        if (idx >= 0) {
+          result.push_back({idx, ports[p].port_idx});
+          inst_issued[idx] = 1;
+        }
+      }
+      return result;
+    }
     
     // OLDEST_ON_FIRST_PORT: the first port of each capability (no earlier port shares a capability bit with it) takes the oldest ready
     // uop it can serve; the other ports take the lowest slot.
