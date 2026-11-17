@@ -394,6 +394,11 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #ifndef CFG_LSU_AGU_REG
 #define CFG_LSU_AGU_REG 0
 #endif
+//  CFG_LSU_FREEPORT_RAW=1 a DTLB port counts as taken by a replay's competitor when its AGU request is valid, accepted or not (the replay port
+//                      allocation does not wait for the LDQ / STQ acceptance check of the new request)
+#ifndef CFG_LSU_FREEPORT_RAW
+#define CFG_LSU_FREEPORT_RAW 0
+#endif
 #ifndef CFG_LSU_STAEV_REG
 #define CFG_LSU_STAEV_REG 0
 #endif

@@ -171,6 +171,7 @@ private:
     }
   };
   ExeLsuIO::ExeLsuReqEntry agu_q_[LSU_AGU_COUNT] = {}, agu_d_[LSU_AGU_COUNT] = {};   // CFG_LSU_AGU_REG: the AGU stage register
+  uint32_t agu_raw_ = 0;   // CFG_LSU_FREEPORT_RAW: DTLB ports whose AGU request is valid this cycle
   struct EvReg { lp::stq_mask_t sta = 0, data = 0; } ev_q_, ev_d_;                    // CFG_LSU_STAEV_REG: registered wake events
   MemDepPred mdp_;
   LsuState cur_;

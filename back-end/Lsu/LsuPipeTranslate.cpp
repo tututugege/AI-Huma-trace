@@ -31,6 +31,12 @@ void RealLsu::exe2lsu() {
     pw.ev_data |= (stq_mask_t)1 << inst->stq_idx;
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
+  agu_raw_ = 0;
+  for (int i = 0; i < LSU_AGU_COUNT; i++) {
+    if (!x.agu_req[i].valid) continue;
+    if (x.agu_req[i].uop.op == UOP_LOAD) agu_raw_ |= 1u << agu::ld_port(i);
+    else if (x.agu_req[i].uop.op == UOP_STA) agu_raw_ |= 1u << agu::st_port(i - LSU_LDU_COUNT);
+  }
   int ns = 0;
   int vio_new = 0;  // loads marked as violating in this cycle
   uint64_t vio_set = 0;
@@ -137,7 +143,7 @@ void RealLsu::tlb_out() {
 
   // The DTLB ports the new requests of this cycle hold; a replay that needs the DTLB takes a free port it may use, otherwise its
   // replay register keeps it for the next cycle
-  uint32_t used = 0;
+  uint32_t used = CFG_LSU_FREEPORT_RAW ? agu_raw_ : 0;
   for (int k = 0; k < LD; k++) if (pw.l1[k].v) used |= 1u << pw.l1[k].phys;
   for (int k = 0; k < STA; k++) if (pw.s1[k].v) used |= 1u << pw.s1[k].phys;
   auto free_port = [&](bool ld) {
