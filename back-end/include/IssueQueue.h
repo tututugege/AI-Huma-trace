@@ -370,8 +370,29 @@ private:
     // 3. Port-centric scheduling: for each port, find the best instruction
     inst_issued.assign(size, 0);
     
+    // OLDEST_ON_FIRST_PORT: the first port of each capability (no earlier port shares a capability bit with it) takes the oldest ready
+    // uop it can serve; the other ports take the lowest slot.
+    std::vector<int> by_age;
+    if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT) {
+      by_age = ready_indices;
+      std::sort(by_age.begin(), by_age.end(), [&](int lhs, int rhs) {
+        const auto &a = q_.entry[lhs].uop;
+        const auto &b = q_.entry[rhs].uop;
+        if (a->rob_flag == b->rob_flag) {
+          if (a->rob_idx != b->rob_idx) return a->rob_idx < b->rob_idx;
+        } else {
+          if (a->rob_idx != b->rob_idx) return a->rob_idx > b->rob_idx;
+        }
+        return lhs < rhs;
+      });
+    }
     for (int p = 0; p < num_ports; p++) {
-      for (int idx : ready_indices) {
+      bool first_of_cap = true;
+      if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT)
+        for (int q = 0; q < p; q++)
+          if (ports[q].capability_mask & ports[p].capability_mask) first_of_cap = false;
+      const std::vector<int> &order = (first_of_cap && ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT) ? by_age : ready_indices;
+      for (int idx : order) {
         if (inst_issued[idx]) {
           continue;
         }
