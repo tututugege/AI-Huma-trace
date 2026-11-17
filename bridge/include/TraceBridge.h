@@ -90,6 +90,13 @@ private:
   static constexpr uint64_t kSlotMask = 4095;
   Entry *slot_[kSlotMask + 1] = {};
   void push(Entry *e);
+  // BRIDGE_CHECK=1: the function model's registers before every dispatch must equal the committed registers plus the writes of the entries in the
+  // chain (self check of the undo log); a violation prints the register, the two values and the last writer.
+  bool check_on_ = false, check_init_ = false;
+  int check_reports_ = 0;
+  xlen_t cgpr_[32] = {};
+  void check_dispatch(uint64_t uid, xlen_t pc);
+  void retire_entry(Entry *e);
   const Fact *find_slow(uint64_t uid) const;
   void free_entry(Entry *e);
   bool in_ram(uint32_t addr, uint32_t size) const;

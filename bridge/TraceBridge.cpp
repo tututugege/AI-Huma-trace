@@ -1,6 +1,7 @@
 #include "TraceBridge.h"
 #include "InstDecode.h"
 #include "refcpu_api.h"
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -154,6 +155,8 @@ const Fact *Bridge::find(uint64_t uid) const {
 }
 
 const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t len) {
+  { static const bool on = std::getenv("BRIDGE_CHECK") != nullptr; check_on_ = on; }
+  if (check_on_) check_dispatch(uid, pc);
   Entry *e = alloc_entry();
   e->f.uid = uid;
   e->f.pc = pc;
@@ -249,9 +252,42 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     bool tk; xlen_t nx;
     xlen_t npc = pc + len;
     if (eval_control(pc, inst, gpr, tk, nx, len)) { e->f.br_taken = tk; e->f.control_valid = true; npc = nx; }
+    // A misaligned integer load (wrong path only: the function model would exit): the RTL does not trap it, it extracts from the aligned dword
+    // (lsu_pkg::extract_data: dword >> 8 * offset, zero / sign extended by funct3, no merge with the next dword).  The destination gets that value so the
+    // dependent branches resolve like the RTL's (a wrong-path load that left its register unchanged made a later branch go the other way).
+    if (blk == Blocked::MemMisalign && opcode == 0x03 && rd != 0 && data_xlate_ok && in_ram(data_pa & ~7u, 8)) {
+      const uint64_t dw = (uint64_t)refcpu_load_word(ctx_, data_pa & ~7u) | ((uint64_t)refcpu_load_word(ctx_, (data_pa & ~7u) + 4) << 32);
+      const uint64_t sh = dw >> (8 * (data_pa & 7));
+      xlen_t val;
+      switch (funct3) {
+      case 0: val = xs(sext((uint32_t)sh & 0xff, 8)); break;
+      case 1: val = xs(sext((uint32_t)sh & 0xffff, 16)); break;
+      case 2: val = xs((int32_t)(uint32_t)sh); break;
+      case 4: val = (xlen_t)(sh & 0xff); break;
+      case 5: val = (xlen_t)(sh & 0xffff); break;
+      case 6: val = (xlen_t)(sh & 0xffffffffu); break;
+      default: val = (xlen_t)sh; break;
+      }
+      RefCpuState st;
+      refcpu_get_state(ctx_, &st);
+      e->rd = (uint8_t)rd;
+      e->rd_old = st.gpr[rd];
+      st.gpr[rd] = val;
+      st.pc = npc;
+      refcpu_set_state(ctx_, &st);
+      e->f.rd_valid = true;
+      e->f.rd = (uint8_t)rd;
+      e->f.rd_value = val;
+      e->f.next_pc = npc;
+      push(e);
+      return e->f;
+    }
     refcpu_set_pc(ctx_, npc);
     e->f.next_pc = npc;
     push(e);
+    { static const bool tr = std::getenv("BRIDGE_TRACE") != nullptr;
+      if (tr) std::fprintf(stderr, "[DISP-BLOCKED] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d reason=%d vaddr=%llx rs1=%llx data_xlate_ok=%d pc_pa=%x data_pa=%x\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
+                   (int)e->f.forced_jump, (int)blk, (unsigned long long)e->f.vaddr, (unsigned long long)e->f.rs1_value, (int)data_xlate_ok, pc_pa, data_pa); }
     return e->f;
   }
 
@@ -331,6 +367,9 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     }
   }
   push(e);
+  { static const bool tr = std::getenv("BRIDGE_TRACE") != nullptr;
+    if (tr) std::fprintf(stderr, "[DISP] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d rd=%d v=%llx br_taken=%d rs1=%llx rs2=%llx next=%llx\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
+                 (int)e->f.forced_jump, e->f.rd_valid ? (int)e->f.rd : -1, (unsigned long long)e->f.rd_value, (int)e->f.br_taken, (unsigned long long)e->f.rs1_value, (unsigned long long)e->f.rs2_value, (unsigned long long)e->f.next_pc); }
   return e->f;
 }
 
@@ -365,8 +404,34 @@ void Bridge::rewind_after(int64_t uid) {
   refcpu_set_state(ctx_, &st);
 }
 
+void Bridge::retire_entry(Entry *e) {   // the committed register shadow follows the retiring entry
+  if (check_on_ && e->f.rd_valid && !e->f.rd_is_fp && e->f.rd != 0) cgpr_[e->f.rd] = e->f.rd_value;
+}
+
+void Bridge::check_dispatch(uint64_t uid, xlen_t pc) {
+  const xlen_t *gpr = refcpu_gpr(ctx_);
+  { static unsigned long long calls = 0; if ((++calls & 0xfffff) == 1) std::fprintf(stderr, "[BRIDGE-CHECK] running: %llu dispatches checked, chain=%zu\n", calls, chain_.size()); }
+  if (!check_init_) { for (int i = 0; i < 32; i++) cgpr_[i] = gpr[i]; check_init_ = true; }
+  xlen_t exp[32]; const Entry *last[32];
+  for (int i = 0; i < 32; i++) { exp[i] = cgpr_[i]; last[i] = nullptr; }
+  for (const Entry *e : chain_)
+    if (e->f.rd_valid && !e->f.rd_is_fp && e->f.rd != 0) { exp[e->f.rd] = e->f.rd_value; last[e->f.rd] = e; }
+  for (int i = 1; i < 32 && check_reports_ < 40; i++) {
+    if (gpr[i] == exp[i]) continue;
+    check_reports_++;
+    std::fprintf(stderr, "[BRIDGE-CHECK] cyc=%lld dispatching uid=%llu pc=%llx: x%d fm=%llx expected=%llx chain=%zu last_writer=", (long long)sim_time, (unsigned long long)uid,
+                 (unsigned long long)pc, i, (unsigned long long)gpr[i], (unsigned long long)exp[i], chain_.size());
+    if (last[i]) std::fprintf(stderr, "uid=%llu pc=%llx", (unsigned long long)last[i]->f.uid, (unsigned long long)last[i]->f.pc);
+    else std::fprintf(stderr, "committed");
+    std::fprintf(stderr, "\n");
+    cgpr_[i] = gpr[i];   // report each divergence once (resync the shadow)
+    if (last[i]) {}      // (the chain entry keeps its own value: the next dispatch will compare again)
+  }
+}
+
 void Bridge::commit(uint64_t uid) {
   if (chain_.empty() || chain_.front()->f.uid != uid) return;
+  retire_entry(chain_.front());
   free_entry(chain_.front());
   chain_.pop_front();
 }
@@ -402,7 +467,7 @@ void Bridge::commit_flush(uint64_t uid) {
   Entry *x = chain_.back();
   if (x->trap_after) refcpu_set_state(ctx_, x->trap_after.get());
   // X retires: every older entry has already retired, so it is the only one left.
-  while (!chain_.empty()) { free_entry(chain_.front()); chain_.pop_front(); }
+  while (!chain_.empty()) { retire_entry(chain_.front()); free_entry(chain_.front()); chain_.pop_front(); }
 }
 
 bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
