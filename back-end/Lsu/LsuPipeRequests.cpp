@@ -423,7 +423,7 @@ void RealLsu::wake_loads() {
       break;
     case RC_ADDR:
       if ((ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)
-        const PStq &s = pnxt.stq[e.blk_idx];
+        const PStq &s = CFG_LSU_STAEV_REG ? pcur.stq[e.blk_idx] : pnxt.stq[e.blk_idx];   // STAEV_REG: the registered store (no same-cycle bypass)
         const Conf c = stlf_confirm(e, s, stq_rank(e.blk_idx, pcur.stq_head) < pcur.stq_count && !(pw.ev_ret & b));  // B
         if (c == CF_REPLAY) e.st = L_RDY;
         else if (c == CF_HOLD) e.rcause = RC_HOLD;

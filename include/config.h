@@ -390,7 +390,7 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #endif
 // EXP-LSUTIM: one more pipeline stage in the load / store path (timing study, default 0 = unchanged):
 //  CFG_LSU_AGU_REG=1   the AGU results (loads and STA) reach the LSU one cycle later (a register between the AGU and L1: DTLB + CAM)
-//  CFG_LSU_STAEV_REG=1 the STQ address / data events that wake parked loads (ADDR, DATA) are registered: the wake-up is one cycle later
+//  CFG_LSU_STAEV_REG=1 the STQ address / data events that wake parked loads (ADDR, DATA) are registered and the confirm reads the registered store (no same-cycle bypass of the DTLB result): the wake-up is one cycle later
 #ifndef CFG_LSU_AGU_REG
 #define CFG_LSU_AGU_REG 0
 #endif
