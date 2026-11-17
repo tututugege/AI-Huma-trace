@@ -7,6 +7,8 @@
 #include "config.h"
 #include "mmio_address_map.h"
 #include "util.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include <cstdint>
 #include <fstream>
@@ -52,12 +54,18 @@ void seed_uart_io_words() {
                  ((kUartMsrCts | kUartMsrDsr | kUartMsrDcd) << 16));
   io_write(UART_ADDR_BASE + 0x08u, 0);
 }
+// An input error must stop the simulation in every build: Assert() is compiled out under NDEBUG (the normal build), so a missing
+// image used to be loaded as an empty one and the simulation ran until its time limit.
+[[noreturn]] void fatal(const std::string &what, const std::string &name) {
+  std::fprintf(stderr, "Error: %s: %s\n", what.c_str(), name.c_str());
+  std::exit(1);
+}
 } // namespace
 
 void load_image(const std::string &filename) {
   std::ifstream inst_data(filename, std::ios::binary);
   if (!inst_data.is_open()) {
-    Assert(0 && "Error: Image does not exist");
+    fatal("image does not exist", filename);
   }
 
   inst_data.seekg(0, std::ios::end);
@@ -65,10 +73,10 @@ void load_image(const std::string &filename) {
   inst_data.seekg(0, std::ios::beg);
 
   if (size < 0 || static_cast<uint64_t>(size) > RAM_SIZE) {
-    Assert(0 && "Image too large for configured RAM window.");
+    fatal("image too large for the configured RAM window", filename);
   }
   if (!inst_data.read(reinterpret_cast<char *>(refcore_ram_ptr()), size)) {
-    Assert(0 && "failed to read the checkpoint file");
+    fatal("failed to read the image", filename);
   }
 
   inst_data.close();
@@ -94,11 +102,11 @@ uint64_t restore_checkpoint_front_door(const std::string &filename, const std::s
   // The restore program goes into the boot window (words at 0x0; the core fetches the reset code from there).
   std::ifstream stub(stub_file, std::ios::binary);
   if (!stub.is_open()) {
-    Assert(0 && "Error: restore program (stub) does not exist");
+    fatal("restore program (stub) does not exist", stub_file);
   }
   std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(stub)), std::istreambuf_iterator<char>());
   if (bytes.empty() || bytes.size() > BOOT_IO_SIZE || (bytes.size() & 3u) != 0) {
-    Assert(0 && "Error: restore program must be a non-empty word array that fits the boot window");
+    fatal("restore program must be a non-empty word array that fits the boot window", stub_file);
   }
   for (size_t off = 0; off < bytes.size(); off += 4) {
     const uint32_t word = static_cast<uint32_t>(bytes[off]) | (static_cast<uint32_t>(bytes[off + 1]) << 8) |
