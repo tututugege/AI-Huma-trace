@@ -117,9 +117,11 @@ void Dispatch::comb_dispatch() {
     for (int k = 0; k < cnt; k++) expect |= rob_cplt_mask_from_iq(uops[k].iq_id);
     // SC returns its 0/1 result through the load-like write-back and still completes an STD
     if (type == AMO && (u->func7 >> 2) == AmoOp::SC) expect = ROB_CPLT_G0 | ROB_CPLT_G2;
+    int lane_use[IQ_NUM] = {0};   // uops of this instruction already counted for each queue (a memory queue can take two: LD + STA of an AMO)
     for (int k = 0; k < cnt && fit_[i]; k++) {
       const int iq = route_iq(uops[k].iq_id);
-      fit_[i] = usage[iq] < GLOBAL_IQ_CONFIG[iq].dispatch_width && usage[iq] < in.iss2dis->ready_num[iq];
+      const int u_iq = usage[iq] + lane_use[iq]++;
+      fit_[i] = u_iq < GLOBAL_IQ_CONFIG[iq].dispatch_width && u_iq < in.iss2dis->ready_num[iq];
       if (!fit_[i]) {
         iq_blk[i] = iq;
         iq_blk_width[i] = usage[iq] < in.iss2dis->ready_num[iq];  // room left: the enqueue width is what stopped it
