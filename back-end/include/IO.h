@@ -279,15 +279,6 @@ struct ExuIdIO {
   }
 };
 
-struct ExeCsrIO {
-
-  wire<1> we = {};
-  wire<1> re = {};
-  wire<12> idx = {};
-  wire<XLEN> wdata = {};
-  wire<32> wcmd = {};
-};
-
 
 struct CsrInterruptInjectIO {
   wire<1> external_irq_pending_valid = {};
@@ -306,14 +297,16 @@ struct CsrStatusIO {
   wire<2> privilege = {};
 };
 
+// What the commit does to the CSR file at the clock edge (Csr::seq): the interrupt is taken, a CSR instruction writes
+// (from its uop and the value of its fact), an instruction set mstatus.FS to Dirty (a fact of the trace).
 struct RobCsrIO {
 
   wire<1> interrupt_resp = {};
-  wire<1> commit = {};
-};
-
-// BackTop -> CSR: an instruction committed this cycle turned mstatus.FS to Dirty (a fact of the trace)
-struct TopCsrIO {
+  wire<1> commit = {};       // a CSR instruction commits; it writes when `we`
+  wire<1> we = {};
+  wire<12> idx = {};
+  wire<32> wcmd = {};
+  wire<XLEN> wdata = {};
   wire<1> fs_dirty = {};
 };
 

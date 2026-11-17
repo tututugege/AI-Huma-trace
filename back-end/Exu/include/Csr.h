@@ -131,10 +131,6 @@ public:
   struct Regs {
     reg<XLEN> CSR_RegFile[CSR_NUM];
     reg<2> privilege  = 0b11;
-    reg<12> csr_idx;
-    reg<XLEN> csr_wdata;
-    reg<2> csr_wcmd;
-    reg<1> csr_we;
   };
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only (then refresh())
@@ -149,10 +145,8 @@ public:
   // What seq reads (the commit's broadcast, the executed CSR write, the interrupt lines), bound by BackTop::init.
   struct In {
     const CsrInterruptInjectIO *csr_interrupt_inject_io = nullptr;
-    const ExeCsrIO *exe2csr = nullptr;
     const RobCsrIO *rob2csr = nullptr;
     const RobBroadcastIO *rob_bcast = nullptr;
-    const TopCsrIO *top2csr = nullptr;
   } in;
 
   void init();
@@ -161,8 +155,6 @@ public:
   void seq();
   reg<XLEN> read(int idx) const { return q_.CSR_RegFile[cvt_number_to_csr(idx)]; }   // the read port (a combinational read of the register file)
 
-  // The CSR write (idx, cmd, data) is held at execute and applied at commit:
-  // otherwise an uncommitted CSR instruction would already take effect
 
 
 

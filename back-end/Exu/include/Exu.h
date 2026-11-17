@@ -45,7 +45,7 @@ struct FuUnit {
 
 // Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2csr out.exe2iss out.exe2lsu out.exe2prf out.exu2id out.exu2rob out.prf_awake
+//   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2iss out.exe2lsu out.exe2prf out.exu2id out.exu2rob out.prf_awake
 class Exu {
 public:
   void comb_exec();  // late load wakeup, the FUs, the port readiness for issue
@@ -58,7 +58,6 @@ public:
 
   // Outputs: the signals this module drives (it alone).
   struct Out {
-    ExeCsrIO exe2csr;
     ExeIssIO exe2iss;
     ExeLsuIO exe2lsu;
     ExePrfIO exe2prf;
@@ -83,7 +82,6 @@ private:
   void exec();
   void ready();
   void begin_cycle();   // called by load_wake(), the first phase of the cycle
-  void to_csr();
   // The write-back register (one cycle after exe2prf.entry), kept only for what it is used for: a load completing on a
   // port that the LSU did not wake early wakes its consumers one cycle later (comb_load_wake -> prf_awake).
   struct LoadWake {

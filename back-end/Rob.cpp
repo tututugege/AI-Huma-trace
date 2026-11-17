@@ -200,7 +200,15 @@ void Rob::single_actions(const Uop &u) {
     else if (t == EBREAK && is_semihost_marker(pc)) { bc.breakpoint = true; bc.trap_val = pc; }  // breakpoint exception, cause 3, tval = pc
     else if (t == EBREAK) ctx->exit_reason = ExitReason::EBREAK;
     else if (wfi) { /* retires without leaving the simulator */ }
-    else if (t == CSR) out.rob2csr.commit = true;
+    else if (t == CSR) {
+      out.rob2csr.commit = true;
+      const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;
+      out.rob2csr.we = rw_family || u->imm != 0;
+      out.rob2csr.idx = u->csr_idx;
+      out.rob2csr.wcmd = u->func3 & 0b11;
+      out.rob2csr.wdata = 0;
+      if (const tb::Fact *f2 = tbhook::fact_by_rob(u->rob_idx)) out.rob2csr.wdata = f2->csr_wdata;
+    }
     else if (t == SFENCE_VMA) bc.fence = true;
     else if (t == FENCE_I) bc.fence_i = true;
     else if (u.flush_pipe) {  // memory-order violator (EXP-018): no CSR/MMU action, refetch from pc+4
@@ -374,7 +382,7 @@ void Rob::comb_redirect() {
     }
   }
 
-  out.top2csr->fs_dirty = false;
+  out.rob2csr.fs_dirty = false;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     out.top_out->commit_entry[i] =
         out.rob_commit.commit_entry[i].uop.to_inst_entry(
@@ -383,7 +391,7 @@ void Rob::comb_redirect() {
     out.top_out->commit_ftq[i] = in.ftq_commit_info->resp[i];
     if (out.rob_commit.commit_entry[i].valid &&
         !out.rob_bcast.interrupt) {
-      if (tbhook::fs_dirty_at_commit((uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) out.top2csr->fs_dirty = true;
+      if (tbhook::fs_dirty_at_commit((uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) out.rob2csr.fs_dirty = true;
       tbhook::on_commit(
           (uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx);
     }

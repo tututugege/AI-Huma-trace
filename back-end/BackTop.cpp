@@ -73,16 +73,13 @@ void BackTop::init() {
   rob->in.top_in = &in;
   rob->in.lsu2rob = &lsu->out.lsu2rob;
   csr->in.csr_interrupt_inject_io = &csr_interrupt_inject_io;
-  csr->in.exe2csr = &exu->out.exe2csr;
   csr->in.rob2csr = &rob->out.rob2csr;
   csr->in.rob_bcast = &rob->out.rob_bcast;
-  csr->in.top2csr = &top2csr;
   rob->in.pre2front = &pre->out.pre2front;
   rob->in.ftq_commit_info = &pre->out.ftq_commit_info;
   rob->csr = csr.get();
   rob->in.idu_br_latch = &idu->q().br_latch;
   rob->out.top_out = &out;
-  rob->out.top2csr = &top2csr;
   lsu->in.csr_status = &csr->status;
   lsu->in.dec_bcast = &idu->out.dec_bcast;
   lsu->in.dis2lsu = &dis->out.dis2lsu;
