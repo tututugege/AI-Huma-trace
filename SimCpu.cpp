@@ -2,7 +2,6 @@
 #include "SimCpu.h"
 #include "front_core.h"   // the front end's modules (SimCpu::cycle() calls their phases)
 #include "Csr.h"
-#include "PhysMemory.h"
 #include "RealLsu.h"
 #include "config.h"
 #include "trace_hook.h"

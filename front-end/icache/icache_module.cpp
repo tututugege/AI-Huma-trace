@@ -2,7 +2,6 @@
 #include "fatal.h"
 #include "trace_hook.h"
 #include "include/icache_module.h"
-#include "PhysMemory.h"
 #include "config.h"
 
 using namespace icache_module_n;

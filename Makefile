@@ -80,7 +80,8 @@ CXXSRC := $(shell find ./back-end -name "*.cpp") \
           ./MemSubSystem/MSHR.cpp \
           ./MemSubSystem/WriteBuffer.cpp \
           ./MemSubSystem/DcacheConfig.cpp \
-          ./MemSubSystem/MemRouteBlock.cpp\
+          ./MemSubSystem/MemRouteBlock.cpp \
+          ./MemSubSystem/IoBacking.cpp \
           $(shell find $(FRONT_DIR) -name "*.cpp") \
           $(shell find ./bridge -name "*.cpp") \
           $(shell find ./driver -name "*.cpp") \

@@ -12,7 +12,7 @@
 #include "config.h"
 #include "trace_hook.h"
 #include "MsData.h"
-#include "PhysMemory.h"
+#include "mmio_address_map.h"
 #include "util.h"
 #include <algorithm>
 #include <cstdint>
@@ -129,7 +129,7 @@ inline Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 // visible older STQ stores applied in age order (the youngest wins, as STLF does).  Returns false when it cannot say (MMIO, no trace info).
 inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t &val) {
   constexpr uint32_t XB = XLEN / 8;   // the unit of the model: one word (rv32) / one aligned dword (rv64)
-  if (!l.pa_v || !pmem_is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
+  if (!l.pa_v || !is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
   const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.func3);
   if (off + lw > XB) return false;   // crosses the unit: not modelled
   const uint32_t head = S.stq_head;

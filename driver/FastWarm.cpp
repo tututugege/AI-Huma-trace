@@ -10,7 +10,7 @@
 #include "DcacheConfig.h"
 #include "AXI_LLC.h"
 #include "MemSubsystem.h"
-#include "PhysMemory.h"
+#include "mmio_address_map.h"
 #include "SimCpu.h"
 #include "TlbMmu.h"
 #include "config.h"
@@ -136,7 +136,7 @@ struct Warm {
 };
 std::unique_ptr<Warm> g_warm;   // the replay's state, from fast_warm_replay to fast_warm_install
 
-inline bool is_ram(uint32_t pa) { return pmem_is_ram_addr(pa, 4); }
+inline bool is_ram(uint32_t pa) { return is_ram_addr(pa, 4); }
 
 }  // namespace
 

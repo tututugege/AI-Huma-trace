@@ -1,7 +1,7 @@
 // The AXI side of the SoC (include/AxiSubsystem.h).
 #include "AxiSubsystem.h"
 #include "MemSubsystem.h"
-#include "PhysMemory.h"
+#include "IoBacking.h"
 #include "config.h"
 
 namespace {
@@ -32,7 +32,7 @@ void AxiSubsystem::sync_uart_from_backing() {
     const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
     const uint32_t shift = (reg_off & 0x3u) * 8u;
     const uint8_t value =
-        static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
+        static_cast<uint8_t>((io_read(word_addr) >> shift) & 0xffu);
     uart.write(UART_ADDR_BASE + reg_off, &value, 1u, 1u);
   }
 }

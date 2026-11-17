@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <string>
 
+bool refcore_init();          // creates the core (its RAM is the model's functional memory)
+void refcore_release();
+uint32_t *refcore_ram_ptr();   // the DDR window (an image is loaded straight into it)
+void refcore_clear_memory();   // RAM, SDRAM and the device registers to zero
 void refcore_seed_devices();
 void refcore_init_ckpt(CPU_state ckpt_state, uint8_t privilege);
 // A checkpoint into the core (refcpu_restore_checkpoint): memory, devices, CPU state; the device registers also into

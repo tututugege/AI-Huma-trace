@@ -3,7 +3,6 @@
 #include "SimDDR.h"
 #include "trace_hook.h"
 #include "SimCpu.h"
-#include "PhysMemory.h"
 #include "RISCV.h"
 #include "config.h"
 #include "RefCore.h"
@@ -285,7 +284,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  if (!pmem_init()) {
+  if (!refcore_init()) {
     std::cerr << "Error: Failed to allocate memory!" << std::endl;
     exit(1);
   }
@@ -444,7 +443,7 @@ int main(int argc, char *argv[]) {
     for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
       if (sim_time >= cycle_limit) {
         std::cout << "[sim] SIM_MAX_CYCLES=" << cycle_limit << " reached without termination" << std::endl;
-        pmem_release();
+        refcore_release();
         return 3;
       }
       if (sim_time % 10000000 == 0) {
@@ -454,7 +453,7 @@ int main(int argc, char *argv[]) {
       cpu.cycle();
 
     if (handle_pending_sigint()) {
-        pmem_release();
+        refcore_release();
         return 130;
       }
 
@@ -475,7 +474,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  pmem_release();
+  refcore_release();
 
   if (sim_time != MAX_SIM_TIME) {
     cout << "\033[38;5;34m-----------------------------\033[0m" << endl;

@@ -1,6 +1,5 @@
 #include "PeripheralAxi.h"
 #include "PeripheralModel.h"
-#include "PhysMemory.h"
 #include "config.h"
 #include "mmio_address_map.h"
 

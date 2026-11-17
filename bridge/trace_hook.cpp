@@ -4,7 +4,7 @@
 extern long long sim_time;   // timing-model cycle counter (main.cpp)
 #include "config.h"
 #include "RefCore.h"
-#include "PhysMemory.h"
+#include "IoBacking.h"
 #include "refcpu_api.h"
 #include <cstdio>
 #include <cstdlib>
@@ -21,10 +21,10 @@ uint64_t g_rob_uid[4096];
 
 void ensure() {
   if (g_bridge) return;
-  g_ctx = pmem_core_ctx();  // the RAM image was loaded straight into the core
+  g_ctx = refcore_ctx();  // the RAM image was loaded straight into the core
   // Boot ROM (word-backed MMIO at 0x0): the core fetches the reset stub from there.
   for (uint32_t a = 0; a < 0x100000u; a += 4) {
-    const uint32_t w = pmem_read(a);
+    const uint32_t w = io_read(a);
     if (w) refcpu_set_io_word(g_ctx, a, w);
   }
   g_bridge.reset(new tb::Bridge(g_ctx, 0x80000000u, static_cast<uint32_t>(RAM_SIZE)));
@@ -52,7 +52,7 @@ uint32_t mem_read(uint32_t paddr) {
   ensure();
   uint32_t w;
   if (g_bridge->read_word(paddr, w)) return w;
-  return pmem_read(paddr);
+  return io_read(paddr);
 }
 
 const tb::Fact *fact_by_rob(uint32_t rob_idx) {

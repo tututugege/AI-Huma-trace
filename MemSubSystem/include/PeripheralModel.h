@@ -1,7 +1,7 @@
 #pragma once
 
 #include "IO.h"
-#include "PhysMemory.h"
+#include "IoBacking.h"
 #include "config.h"
 #include <cstddef>
 #include <cstdint>
@@ -49,19 +49,19 @@ public:
 
   void sync_from_backing() {
     const uint64_t timer_value =
-        static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_LOW_ADDR)) |
-        (static_cast<uint64_t>(pmem_read(OPENSBI_TIMER_HIGH_ADDR)) << 32);
+        static_cast<uint64_t>(io_read(OPENSBI_TIMER_LOW_ADDR)) |
+        (static_cast<uint64_t>(io_read(OPENSBI_TIMER_HIGH_ADDR)) << 32);
     const uint64_t now = sim_time >= 0 ? static_cast<uint64_t>(sim_time) : 0ull;
     // Preserve the serialized 64-bit timer value modulo 2^64. Saturating here
     // would change when the next compare interrupt becomes pending.
     timer_offset_ = timer_value - now;
     timer_cmp_ =
-        static_cast<uint64_t>(pmem_read(OPENSBI_TIMERCMP_LOW_ADDR)) |
-        (static_cast<uint64_t>(pmem_read(OPENSBI_TIMERCMP_HIGH_ADDR)) << 32);
+        static_cast<uint64_t>(io_read(OPENSBI_TIMERCMP_LOW_ADDR)) |
+        (static_cast<uint64_t>(io_read(OPENSBI_TIMERCMP_HIGH_ADDR)) << 32);
 
-    xps_intc_isr_ = pmem_read(XPS_INTC_ADDR_BASE + 0x00);
-    xps_intc_ier_ = pmem_read(XPS_INTC_ADDR_BASE + 0x08);
-    xps_intc_mer_ = pmem_read(XPS_INTC_ADDR_BASE + 0x1c);
+    xps_intc_isr_ = io_read(XPS_INTC_ADDR_BASE + 0x00);
+    xps_intc_ier_ = io_read(XPS_INTC_ADDR_BASE + 0x08);
+    xps_intc_mer_ = io_read(XPS_INTC_ADDR_BASE + 0x1c);
 
     update_external_irq();
     update_timer_irq();
@@ -111,7 +111,7 @@ public:
       data = xps_intc_read_reg(paddr - XPS_INTC_ADDR_BASE);
     } else {
       const uint32_t shift = (paddr & 0x3u) * 8u;
-      data = pmem_read(paddr) >> shift;
+      data = io_read(paddr) >> shift;
     }
 
     const uint32_t size = func3 & 0x3u;
@@ -194,13 +194,13 @@ public:
     const uint32_t store_data = mask_store_data(data, func3);
     const uint32_t mask = mask_store_mask(func3) << shift;
     const uint32_t wdata = store_data << shift;
-    const uint32_t old_data = pmem_read(paddr);
-    pmem_write(paddr, (old_data & ~mask) | (wdata & mask));
+    const uint32_t old_data = io_read(paddr);
+    io_write(paddr, (old_data & ~mask) | (wdata & mask));
 
     const bool is_uart =
         paddr >= UART_ADDR_BASE && paddr < (UART_ADDR_BASE + UART_MMIO_SIZE);
     const uint8_t uart_lcr =
-        is_uart ? static_cast<uint8_t>((pmem_read(UART_ADDR_BASE) >> 24) & 0xffu)
+        is_uart ? static_cast<uint8_t>((io_read(UART_ADDR_BASE) >> 24) & 0xffu)
                 : 0u;
     const bool uart_dlab = (uart_lcr & kUartLcrDlab) != 0;
 
@@ -208,11 +208,11 @@ public:
       if (uart_dlab) {
         return;
       }
-      pmem_write(UART_ADDR_BASE, pmem_read(UART_ADDR_BASE) & 0xffffff00u);
+      io_write(UART_ADDR_BASE, io_read(UART_ADDR_BASE) & 0xffffff00u);
       const uint32_t lsr_value =
           static_cast<uint32_t>(kUartLsrThre | kUartLsrTemt) << 8;
-      pmem_write(UART_ADDR_BASE + 4u,
-                 (pmem_read(UART_ADDR_BASE + 4u) & 0xffff00ffu) | lsr_value);
+      io_write(UART_ADDR_BASE + 4u,
+                 (io_read(UART_ADDR_BASE + 4u) & 0xffff00ffu) | lsr_value);
       char temp = static_cast<char>(data & 0xffu);
       std::cout << temp << std::flush;
       uart_refresh_interrupt();
@@ -230,8 +230,8 @@ public:
     if (paddr == (UART_ADDR_BASE + kUartRegIirFcr)) {
       const uint32_t iir_value =
           static_cast<uint32_t>(kUartIirNoInt | kUartIirFifoEnabled) << 16;
-      pmem_write(UART_ADDR_BASE,
-                 (pmem_read(UART_ADDR_BASE) & 0xff00ffffu) | iir_value);
+      io_write(UART_ADDR_BASE,
+                 (io_read(UART_ADDR_BASE) & 0xff00ffffu) | iir_value);
       uart_refresh_interrupt();
       return;
     }
@@ -254,14 +254,14 @@ private:
   static uint8_t uart_read_reg8(uint32_t reg_off) {
     const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
     const uint32_t shift = (reg_off & 0x3u) * 8u;
-    return static_cast<uint8_t>((pmem_read(word_addr) >> shift) & 0xffu);
+    return static_cast<uint8_t>((io_read(word_addr) >> shift) & 0xffu);
   }
 
   static void uart_write_reg8(uint32_t reg_off, uint8_t value) {
     const uint32_t word_addr = UART_ADDR_BASE + (reg_off & ~0x3u);
     const uint32_t shift = (reg_off & 0x3u) * 8u;
     const uint32_t mask = 0xffu << shift;
-    pmem_write(word_addr, (pmem_read(word_addr) & ~mask) |
+    io_write(word_addr, (io_read(word_addr) & ~mask) |
                               (static_cast<uint32_t>(value) << shift));
   }
 

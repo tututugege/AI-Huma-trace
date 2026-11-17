@@ -1,5 +1,4 @@
 #include "MSHR.h"
-#include "PhysMemory.h"
 #include "types.h"
 #include "DataPrefetcher.h"
 
