@@ -262,38 +262,17 @@ void Dispatch::seq() {
 }
 
 
-// A uop of `inst`: it gets its own pool slot (static fields are copied; STA/STD, JAL/JALR pieces differ).
+// A uop of `inst`: its own pool slot, a copy of the instruction's (the pieces override a few static fields below), and the
+// instruction's per-copy bits.
 Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   Uop uop;
   uop.id = static_cast<uint16_t>(inst.id + 1 + k);
   uop_pool[uop.id] = uop_pool[inst.id];
-  uop->dest_preg = inst->dest_preg;
-  uop->src1_preg = inst->src1_preg;
-  uop->src2_preg = inst->src2_preg;
-  uop->src3_preg = inst->src3_preg;
-  uop->ftq_idx = inst->ftq_idx;
-  uop->ftq_offset = inst->ftq_offset;
-  uop->is_atomic = inst->is_atomic;
   uop.dest_en = inst.dest_en;
-  uop->src1_en = inst->src1_en;
-  uop->src2_en = inst->src2_en;
   uop.src1_busy = inst.src1_busy;
   uop.src2_busy = inst.src2_busy;
   uop.src3_busy = inst.src3_busy;
-  uop->src1_is_pc = inst->src1_is_pc;
-  uop->src2_is_imm = inst->src2_is_imm;
-  uop->func3 = inst->func3;
-  uop->func7 = inst->func7;
-  uop->imm = inst->imm;
-  uop->br_id = inst->br_id;
   uop.br_mask = inst.br_mask;
-  uop->csr_idx = inst->csr_idx;
-  uop->rob_idx = inst->rob_idx;
-  uop->stq_idx = inst->stq_idx;
-  uop->stq_flag = inst->stq_flag;
-  uop->ldq_idx = inst->ldq_idx;
-  uop->rob_flag = inst->rob_flag;
-  uop->dbg = inst->dbg;
   return uop;
 }
 
