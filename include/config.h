@@ -635,6 +635,11 @@ enum class IssueSchedulePolicy : int {
   OLDEST_ON_FIRST_PORT = 2, // lowest slot first, except the first issue port of each capability picks the oldest ready uop it can serve
 };
 
+// 1: a slot freed by an issue can be taken by an enqueue of the same cycle (the slot allocation sees this cycle's issue);
+// 0: the allocation sees only the registered valid bits (the enqueue does not wait for the issue)
+#ifndef CFG_IQ_SAME_CYCLE_REUSE
+#define CFG_IQ_SAME_CYCLE_REUSE 1
+#endif
 #ifndef CFG_ISSUE_OLDEST_FIRST
 #define CFG_ISSUE_OLDEST_FIRST 0   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
 #endif

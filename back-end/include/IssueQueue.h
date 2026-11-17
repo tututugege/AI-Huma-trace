@@ -90,6 +90,7 @@ private:
   bool entry_all_dirty = false;
   std::vector<uint64_t> slot_dirty;
   std::vector<uint64_t> d_vmask;     // bit i = entry[i].valid, so scans visit only the live slots
+  std::vector<uint64_t> alloc_mask_; // CFG_IQ_SAME_CYCLE_REUSE = 0: the valid bits at the start of the edge (the slots an enqueue may take)
   std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]), refreshed in seq()
   void refresh_ready(int i) {
     const Regs &q = q_;
@@ -231,7 +232,7 @@ private:
     if (q_.count >= size)
       return 0;
     for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
-      const uint64_t freebits = ~d_vmask[w];
+      const uint64_t freebits = CFG_IQ_SAME_CYCLE_REUSE ? ~d_vmask[w] : ~(alloc_mask_[w] | d_vmask[w]);
       if (!freebits) continue;
       const int i = int(w * 64) + __builtin_ctzll(freebits);
       if (i >= size) break;
@@ -306,6 +307,7 @@ public:
   // The clock edge: the picks of this cycle leave, the wake-ups clear busy bits, the enqueue requests enter (their
   // wake-ups already applied by the Isu), then the flush / resolved-branch clear; the ready bits of the changed slots.
   void seq() {
+    if (!CFG_IQ_SAME_CYCLE_REUSE) alloc_mask_ = d_vmask;
     commit_issue(committed_indices);
     committed_indices.clear();
     if (!wake_pregs_.empty()) wakeup(wake_pregs_.data(), int(wake_pregs_.size()));
