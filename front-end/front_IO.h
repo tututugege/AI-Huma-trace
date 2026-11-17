@@ -49,7 +49,6 @@ struct FrontTopIn {
   FrontCtrl ctrl;
   FrontRedirect redirect;
   BpuTrain train[COMMIT_WIDTH];
-  CsrStatusIO *csr_status;    // the CSR status of the cycle (BackPorts::csr_status)
 };
 
 struct FrontTopOut {
@@ -80,7 +79,6 @@ struct ICacheIn {
   // from BPU
   wire<1> icache_read_valid;
   fetch_addr_t fetch_address;
-  CsrStatusIO *csr_status;
 };
 
 struct ICacheOut {

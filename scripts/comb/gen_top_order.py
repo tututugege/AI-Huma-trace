@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 TOP_PRIORITY = ['back', 'axi', 'front', 'f2b', 'b2f', 'mem_subsystem']
 ORDER = ['b2f', 'front', 'axi', 'f2b', 'back', 'mem_subsystem']   # the modules' order (rank) by top
 TB_ORDER = ['front.core.icache.comb_fetch', 'front.core.inst_port.comb_write', 'front.core.ctrl.finish',
-            'mem_subsystem.mem_route_block.comb_response', 'back.lsu.comb_outputs', 'back.lsu.comb_writeback',
+            'mem_subsystem.mem_route_block.comb_response', 'back.lsu.comb_outputs', 'back.rob.comb_commit', 'back.lsu.comb_writeback',
             'back.exu.comb_exec', 'back.lsu.comb_translate', 'back.rob.comb_redirect']   # (then the seq-time users: the ROB's enqueue / mispredict)
 FRONT_RANK = ['ctrl.control', 'bpu_pipe.comb_front', 'ctrl.enables', 'fa_port.comb_read', 'ptab_port.comb_read',
               'inst_port.comb_read', 'f2b_port.comb_read', 'fa_port.comb_write', 'icache.comb_fetch', 'inst_port.comb_write',

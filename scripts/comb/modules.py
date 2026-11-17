@@ -28,8 +28,7 @@ MUTATE = r'(?:\[[^\]]*\]|\.\w+)*\.(?:fill|reset|clear|assign|push_back|emplace_b
 # The module instances: SimCpu path, class, the call prefix in SimCpu::cycle(), the parent's binding code.
 TOPS = {
     'back': dict(cls='BackTop', bind=[('BackTop', 'init')], prefix='back.', call='back.{m}->', own='{m}->',
-                 alias={'in': 'back.in', 'out': 'back.out', 'csr_status': 'back.csr_status', 'top2csr': 'back.top2csr',
-                        'csr_interrupt_inject_io': 'back.csr_interrupt_inject_io'}),
+                 alias={'in': 'back.in', 'out': 'back.out'}),
     'front': dict(cls='FrontCore', bind=[('FrontCore', 'FrontCore'), ('FrontCore', 'bind')], prefix='front.core.',
                   call='front.core->{m}.', own='{m}.', alias={'in': 'front.in', 'rd': 'front.read_data', 'out': 'front.out'}),
     'cpu': dict(cls='SimCpu', bind=[('SimCpu', 'init')], prefix='', call='{m}.', own='{m}.', alias={}),
@@ -47,22 +46,19 @@ MODULES = [   # (path, class), in each top's tie-break order
     ('mem_subsystem.peripheral_axi_', 'PeripheralAxi'),
     ('b2f', 'Back2Front'), ('f2b', 'Front2Back'), ('axi', 'AxiSubsystem'),
 ]
-ALIASES = {'mem_subsystem.dtlb_walk_port': 'mem_subsystem.dtlb_walk_port_inst',   # (set in MemSubsystem's constructor)
-           'mem_subsystem.itlb_walk_port': 'mem_subsystem.itlb_walk_port_inst'}
+ALIASES = {}
 # A module's submodule (not scheduled itself: its parent calls it) uses some of its parent's ports: the scan follows the
 # parent's calls into it (<call pattern>, its class, {its member: the parent's port}).
 SUBMODULES = {
-    'RealLsu': [(r'\bdtlb\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.dtlb_walk'})],
-    'ICacheTop': [(r'\bm\s*->\s*(\w+)\s*\(', 'TlbMmu', {'walk_port': 'out.itlb_walk'})],
+    'RealLsu': [(r'\bdtlb\s*\.\s*(\w+)\s*\(', 'TlbMmu', {'walk_req': 'out.dtlb_walk', 'walk_resp': 'in.dtlb_walk'})],
+    'ICacheTop': [(r'\bitlb\s*\.\s*(\w+)\s*\(', 'TlbMmu', {'walk_req': 'out.itlb_walk', 'walk_resp': 'in.itlb_walk'})],
     'PeripheralAxi': [(r'\bperipheral_model\s*->\s*(\w+)\s*\(', 'PeripheralModel', {'csr_interrupt_inject': 'out.csr_interrupt_inject'})],
     'AxiSubsystem': [(r'\binterconnect\s*\.\s*(\w+)\s*\(', 'AXI_Interconnect',
                       {'read_ports': 'out.read_ports', 'write_ports': 'out.write_ports'})],
 }
 # a call through a port to an object's method: the part of the object it reads or writes (else: a const method reads it,
 # another writes it)
-PORT_METHODS = {'comb_output': ('r', 'comb_out'), 'resp_valid': ('r', 'comb_out'), 'resp': ('r', 'comb_out'),
-                'send_walk_req': ('w', 'comb_input'), 'consume_resp': ('w', 'comb_input'),
-                'flush_client': ('w', 'seq_input')}   # PtwWalkPort: the TLB's requests in, the walker's response a register
+PORT_METHODS = {}
 TOP_STRUCTS = {'back.in', 'back.out', 'front.in', 'front.out', 'front.read_data'}   # a port at one of them: per field
 FIELD_PORTS = {'mem_subsystem.dcache_mshr_io_', 'mem_subsystem.dcache_wb_io_'}   # written by two phases: per field (also
 #   an AXI master port of the interconnect: per channel field, req.<f> / resp.<f>)

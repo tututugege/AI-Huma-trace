@@ -21,34 +21,36 @@ void RealLsu::dis2lsu() {
   const DisLsuIO &d = (*in.dis2lsu);
   for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) {
     if (!d.ldq_alloc_req[i]) continue;
-    PLdq &e = pnxt.ldq[d.ldq_idx[i]];
+    const UopS &u = uop_pool[d.ldq_id[i]];
+    PLdq &e = pnxt.ldq[u.ldq_idx];
     const uint8_t ep = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
     e = {};
+    ms_ldq_[u.ldq_idx] = {};
     e.epoch = ep;
-    e.rob_idx = d.ldq_rob_idx[i];
-    e.rob_flag = d.ldq_rob_flag[i];
+    e.id = d.ldq_id[i];
     e.br_mask = d.ldq_br_mask[i];
-    e.pc = d.ldq_pc[i];
     {
       if (MemDepPred::kClr && (long long)sim_time >= mdp_.next_clear) {
         std::fill(mdp_.table.begin(), mdp_.table.end(), false);
         mdp_.next_clear = (long long)sim_time + MemDepPred::kClr;
       }
-      e.wait = mdp_.wait(e.pc);
+      e.wait = mdp_.wait(e.pc());
     }
     e.st = L_ALLOC;
   }
   for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) {
     if (!d.alloc_req[i]) continue;
+    const UopS &u = uop_pool[d.id[i]];
     if (pnxt.stq_count >= STQ_SIZE) continue;
-    if (d.stq_flag[i] != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
+    if (u.stq_flag != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
     PStq &e = pnxt.stq[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE];
     e = {};
-    e.rob_idx = d.rob_idx[i];
-    e.rob_flag = d.rob_flag[i];
+    ms_stq_[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE] = {};
+    e.rob_idx = u.rob_idx;
+    e.rob_flag = u.rob_flag;
     e.br_mask = d.br_mask[i];
-    e.pc = d.st_pc[i];
-    e.func3 = d.func3[i];
+    e.pc = u.dbg.pc;
+    e.func3 = u.func3;
     pnxt.stq_count++;
   }
 }
@@ -158,12 +160,18 @@ void RealLsu::lsu2dcache_ldq() {
 //      (first lp_drain ports); then the stores committed at the cycle start are inserted (wb_insert).
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::lsu2dcache_stq() {
-  const lp::LsuPipeState &pcur = pcur_;
   auto &ports = out.lsu2dcache->req_ports.store_ports;
   for (int i = 0; i < LSU_STA_COUNT; i++) ports[i].valid = ports[i].replay = false;
-
-  const uint32_t n = std::min<uint32_t>(pcur.stq_ccount, pnxt.stq_count);  // H: stores committed at the cycle start
+  const uint32_t n = std::min<uint32_t>(pcur_.stq_ccount, pnxt.stq_count);  // H: stores committed at the cycle start
   bool rdy[STQ_SIZE] = {};  // by rank
+  drain_countdown(n, rdy);
+  mmio_store_issue(n, rdy);
+  wb_drain(n, rdy);
+}
+
+// 1. every eligible committed store counts its replay countdown down; rdy[rank]: it may be sent this cycle
+void RealLsu::drain_countdown(uint32_t n, bool *rdy) {
+  const lp::LsuPipeState &pcur = pcur_;
   for (uint32_t rank = 0; rank < n; rank++) {
     const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
     PStq &s = pnxt.stq[j];
@@ -174,6 +182,10 @@ void RealLsu::lsu2dcache_stq() {
     if (s.rwait > 0) s.rwait--;
     rdy[rank] = rw_seen <= 1;
   }
+}
+
+// 2. the head store, when MMIO, takes the uncached unit
+void RealLsu::mmio_store_issue(uint32_t n, const bool *rdy) {
   if (n > 0 && rdy[0] && pnxt.stq[pnxt.stq_head].mmio && !nxt.uncached_unit.valid) {  // MMIO store: only the head
     PStq &s = pnxt.stq[pnxt.stq_head];
     UncachedUnit &u = nxt.uncached_unit;
@@ -185,6 +197,13 @@ void RealLsu::lsu2dcache_stq() {
     u.idx = pnxt.stq_head;
     s.mmw = 1;
   }
+}
+
+// 3. EXP-024 write buffer: the oldest registered entries whose stores are all ready and that do not overlap an older entry are
+// sent, one DCache request each, on the store ports without a pending hidden retry; then this cycle's committed stores are inserted
+void RealLsu::wb_drain(uint32_t n, const bool *rdy) {
+  const lp::LsuPipeState &pcur = pcur_;
+  auto &ports = out.lsu2dcache->req_ports.store_ports;
   // free ports among the first lp_drain (no hidden retry pending)
   int free_port[DRAIN_MAX], nfree = 0;
   for (int t = 0; t < lp_drain; t++)
@@ -242,7 +261,20 @@ void RealLsu::lsu2dcache_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // STQ retire, wake-up pass (events of this cycle -> LDQ entries), replay-register fill
 // ---------------------------------------------------------------------------------------------------------------
+// the RTL's code of a DTLB result in the LSU_PIPE_EVT print: miss 0, hit 1, page fault 2
+static int tlb_code(TlbMmu::Result r) { return r == TlbMmu::Result::OK ? 1 : r == TlbMmu::Result::FAULT ? 2 : 0; }
+
+// the end of the request phase: retire, watchdog, events, wake-ups, replay picks (in this order)
 void RealLsu::check() {
+  stq_retire();
+  watchdog();
+  print_events();
+  wake_loads();
+  fill_replay_registers();
+}
+
+// STQ retire: up to RETIRE_PORTS done stores leave the head (R: registered state only)
+void RealLsu::stq_retire() {
   const lp::LsuPipeState &pcur = pcur_;
   int ret = 0;
   while (ret < RETIRE_PORTS && pnxt.stq_ccount > 0 && pnxt.stq_count > 0 && pnxt.stq[pnxt.stq_head].done &&
@@ -255,7 +287,10 @@ void RealLsu::check() {
     ret++;
   }
   LP_PORT_CHECK(ret, RETIRE_PORTS, "stq_retire");
+}
 
+// DCache response watchdog (see below)
+void RealLsu::watchdog() {
   // DCache response watchdog: a request whose response never arrives (lost bank-retry latch in the DCache) is replayed.
   // The RTL has none: LSU_PIPE_NOWD=1 turns it off (needed to match the RTL's cycles, e.g. crc32).
   // An entry waits from the cycle it was sent (wd_t, set by wd_arm); it is replayed 62 cycles later. Only the cycle of the earliest
@@ -277,6 +312,11 @@ void RealLsu::check() {
     }
     wd_next_ = nx;
   }
+}
+
+// LSU_PIPE_EVT=1: the per-cycle LSU boundary events (the RTL test bench prints the same)
+void RealLsu::print_events() {
+  const lp::LsuPipeState &pcur = pcur_;
   if (sim_env().lsu_pipe_evt) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
     for (int p = 0; p < LD; p++)
@@ -301,9 +341,9 @@ void RealLsu::check() {
     }
     std::fprintf(stderr, " mmu:");
     for (int p = 0; p < LD; p++)
-      if (tlb_req_.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)tlb_req_.ldq_req[p].entry_idx);
+      if (tlb_req_[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)pw.l1[p].ldq);
     for (int p = 0; p < STA; p++)
-      if (tlb_req_.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)tlb_req_.stq_req[p].entry_idx);
+      if (tlb_req_[LD + p].valid) std::fprintf(stderr, " S%d=%d", p, (int)pw.s1[p].stq);
     std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)out.lsu2dis.stq_free, (int)out.lsu2dis.ldq_free, (int)out.lsu2dis.stq_tail,
                  (int)out.lsu2dis.stq_tail_flag, (int)out.lsu2rob.committed_store_pending);
     {
@@ -316,9 +356,9 @@ void RealLsu::check() {
     }
     std::fprintf(stderr, " in:");
     for (int p = 0; p < LD; p++)
-      if (tlb_resp_.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)tlb_resp_.ldq_resp[p].result, (unsigned)tlb_resp_.ldq_resp[p].paddr);
+      if (tlb_resp_[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, tlb_code(tlb_resp_[p].result), (unsigned)tlb_resp_[p].paddr);
     for (int p = 0; p < STA; p++)
-      if (tlb_resp_.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)tlb_resp_.stq_resp[p].result, (unsigned)tlb_resp_.stq_resp[p].paddr);
+      if (tlb_resp_[LD + p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, tlb_code(tlb_resp_[LD + p].result), (unsigned)tlb_resp_[LD + p].paddr);
     for (int p = 0; p < LD; p++) {
       const auto &r = in.top_in->dcache2lsu.resp_ports.load_resps[p];
       if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);
@@ -349,6 +389,11 @@ void RealLsu::check() {
     }
     std::fprintf(stderr, "\n");
   }
+}
+
+// wake-up pass: this cycle's STQ events and the MSHR fill wake the parked loads
+void RealLsu::wake_loads() {
+  const lp::LsuPipeState &pcur = pcur_;
   // wake-up pass
   uint32_t full_wakes = 0;
   for (int i = 0; i < LDQ_SIZE; i++) {
@@ -394,7 +439,11 @@ void RealLsu::check() {
     default: break;
     }
   }
+}
 
+// replay registers and the STA replay register: the next entries to re-enter L1
+void RealLsu::fill_replay_registers() {
+  const lp::LsuPipeState &pcur = pcur_;
   // replay registers: find-first over the RDY mask including this cycle's wake-ups (selected entry re-enters at L1 next cycle)
   for (int r = 0; r < lp_rp_ports; r++) {
     if (pnxt.rp[r].v) continue;
@@ -424,3 +473,4 @@ void RealLsu::check() {
     }
   }
 }
+

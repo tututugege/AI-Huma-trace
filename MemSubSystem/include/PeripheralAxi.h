@@ -36,7 +36,7 @@ struct PeripheralAxiState {
 
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
 //   CONTRACT comb_commit_store  in: in.commit_store  out: out.csr_interrupt_inject
-//   CONTRACT comb  in: out.resp  out: out.read.req.addr out.read.req.bypass out.read.req.id out.read.req.total_size out.read.req.valid out.read.resp.ready out.resp out.write.req.addr out.write.req.bypass out.write.req.id out.write.req.total_size out.write.req.valid out.write.req.wdata out.write.req.wstrb out.write.resp.ready
+//   CONTRACT comb  in: -  out: out.read.req.addr out.read.req.bypass out.read.req.id out.read.req.total_size out.read.req.valid out.read.resp.ready out.resp out.write.req.addr out.write.req.bypass out.write.req.id out.write.req.total_size out.write.req.valid out.write.req.wdata out.write.req.wstrb out.write.resp.ready
 class PeripheralAxi {
 public:
   PeripheralModel *peripheral_model = nullptr;   // the devices (a submodule: its interrupt lines are out.csr_interrupt_inject)

@@ -11,6 +11,7 @@ void RealLsu::init() {
   pcur_ = {};
   pnxt = {};
   pw = {};
+  dtlb.reset();
 }
 
 // Commit-time view of a store for the peripheral model (state of the registered STQ).
@@ -22,7 +23,7 @@ void RealLsu::comb_commit_store() {
     CommitStore &cs = out.commit_store->slot[i];
     cs = {};
     if (!in.rob_commit->commit_entry[i].valid || interrupt) continue;
-    const InstEntry ce = in.rob_commit->commit_entry[i].uop.to_inst_entry(true);
+    const auto &ce = in.rob_commit->commit_entry[i];
     const InstInfo &inst = ce.uop;
     if (!inst->tma.mem_commit_is_store || inst.page_fault_store) continue;
     const StqEntry e = get_stq_entry(inst->stq_idx, inst->stq_flag);

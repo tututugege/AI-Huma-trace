@@ -1,10 +1,10 @@
-// The reference core is the trace bridge's own core (pmem_core_ctx(): the librefcpu instance whose RAM is the model's
+// The reference core is the trace bridge's own core (refcore_ctx(): the librefcpu instance whose RAM is the model's
 // functional memory). This file prepares it for an image or a checkpoint, steps it through the checkpoint prewarm and
 // hands its architectural state to the timing model. There is no second core and no comparison: the timing model
 // computes no values, the bridge (TraceBridge.cpp) supplies them and TB_CHECK compares what the model still decides.
 #include "RefCore.h"
 #include "Csr.h"
-#include "PhysMemory.h"
+#include "IoBacking.h"
 #include "RISCV.h"
 #include "config.h"
 #include "mmio_address_map.h"
@@ -15,10 +15,23 @@
 
 namespace {
 
+RefCpuContext *g_core = nullptr;   // the core whose RAM is the model's functional memory
+
 RefCpuContext *core() {
-  RefCpuContext *c = pmem_core_ctx();
-  Assert(c != nullptr && "reference core: pmem_init() has not run");
-  return c;
+  Assert(g_core != nullptr && "reference core: refcore_init() has not run");
+  return g_core;
+}
+
+// Zero a buffer page by page, touching only pages that are not zero already: a freshly calloc'ed 2 GiB stays unmapped
+// (the result is the same as memset, the resident size is not).
+void clear_sparse(void *base, size_t bytes) {
+  constexpr size_t kPage = 4096;
+  auto *p = static_cast<uint8_t *>(base);
+  static const uint8_t zeros[kPage] = {};
+  for (size_t off = 0; off < bytes; off += kPage) {
+    const size_t n = bytes - off < kPage ? bytes - off : kPage;
+    if (std::memcmp(p + off, zeros, n) != 0) std::memset(p + off, 0, n);
+  }
 }
 
 RefCpuState to_ref_state(const CPU_state &state, uint8_t privilege) {
@@ -68,6 +81,28 @@ CPU_state from_ref_state(const RefCpuState &ref_state) {
 
 } // namespace
 
+bool refcore_init() {
+  g_core = refcpu_init(0, static_cast<uint32_t>(RAM_SIZE));
+  if (g_core == nullptr) return false;
+  refcpu_set_uart_print(g_core, false);
+  return refcpu_get_ram_ptr(g_core) != nullptr && refcpu_get_sdram_ptr(g_core) != nullptr;
+}
+
+void refcore_release() {
+  if (g_core != nullptr) refcpu_destroy(g_core);
+  g_core = nullptr;
+  io_clear();
+}
+
+uint32_t *refcore_ram_ptr() { return refcpu_get_ram_ptr(core()); }
+
+// RAM, SDRAM and the device registers back to zero (before a checkpoint is restored into them).
+void refcore_clear_memory() {
+  clear_sparse(refcpu_get_ram_ptr(core()), RAM_SIZE);
+  clear_sparse(refcpu_get_sdram_ptr(core()), PMEM_SDRAM_SIZE);
+  io_clear();
+}
+
 // Device registers of the checkpoint / boot image (timer, interrupt controller, UART, SD controller, boot window), as
 // the loaders left them in the model's IO backing, into the core.
 void refcore_seed_devices() {
@@ -75,7 +110,7 @@ void refcore_seed_devices() {
   refcpu_clear_io_words(c);
   for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
-      refcpu_set_io_word(c, range.base + off, pmem_read(range.base + off));
+      refcpu_set_io_word(c, range.base + off, io_read(range.base + off));
     }
   }
   refcpu_sync_mmio_devices_from_backing(c);
@@ -103,7 +138,7 @@ uint64_t refcore_restore_ckpt(const std::string &path, CPU_state &state, uint8_t
   for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
       const uint32_t addr = range.base + off;
-      pmem_write(addr, refcpu_get_io_backing_word(c, addr));
+      io_write(addr, refcpu_get_io_backing_word(c, addr));
     }
   }
   refcore_init_ckpt(state, privilege);
@@ -125,7 +160,7 @@ void refcore_get_state(CPU_state &dut_state, uint8_t &privilege) {
   for (const auto &range : kCheckpointMmioRanges) {
     for (uint32_t off = 0; off + 4u <= range.size; off += 4u) {
       const uint32_t addr = range.base + off;
-      pmem_write(addr, refcpu_get_io_word(c, addr));
+      io_write(addr, refcpu_get_io_word(c, addr));
     }
   }
 }

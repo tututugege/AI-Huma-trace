@@ -12,7 +12,7 @@ struct Back2FrontRegs {
 };
 
 // Comb phases in its own ports (SimCpu::init binds them):
-//   CONTRACT comb_front  in: -  out: out.can_read out.front_in out.front_in.csr_status out.front_in.ctrl out.front_in.redirect
+//   CONTRACT comb_front  in: -  out: out.can_read out.front_in out.front_in.ctrl out.front_in.redirect
 class Back2Front {
 public:
   struct In {   // bound by SimCpu::init
@@ -22,9 +22,8 @@ public:
     FrontTopIn *front_in = nullptr;   // the front end's inputs of this cycle (FrontTop::in)
     bool *can_read = nullptr;         // the back end takes a group this cycle (FrontTop::can_read)
   } out;
-  CsrStatusIO *csr_status = nullptr;      // carried in the front end's inputs (back.csr_status)
 
-  void init(CsrStatusIO *csr);
+  void init();
   // the register's output: the front end's inputs of this cycle; when the back end did not stall (or a refetch is
   // pending) the fetch-group FIFO is read (can_read: Front2Back then takes the group from the front end's output)
   void comb_front();

@@ -57,10 +57,6 @@ void Exu::init() {
 
 // Default (idle) outputs.
 void Exu::begin_cycle() {
-  out.exe2csr.we = out.exe2csr.re = false;
-  out.exe2csr.idx = 0;
-  out.exe2csr.wcmd = 0;
-  out.exe2csr.wdata = 0;
   for (int i = 0; i < TOTAL_FU_COUNT; i++) out.exe2prf.bypass[i].valid = false;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     out.exe2prf.entry[i].valid = false;
@@ -92,25 +88,6 @@ void Exu::ready() {
 }
 
 // The CSR uop sitting in port 0's FU slot drives the CSR file's read/write request.
-void Exu::to_csr() {
-  if (in.rob_bcast->flush) return;
-  for (int fu : port_fus[0]) {
-    const FuUnit &f = units[fu];
-    if (!f.slot_valid) continue;
-    const ExuInst &u = f.slot;
-    if (u.op != UOP_CSR || is_br_killed(u, (*in.dec_bcast))) continue;
-
-    const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;  // CSRRW / CSRRWI always write
-    out.exe2csr.we = rw_family || u->imm != 0;
-    out.exe2csr.re = !rw_family || u->dest_preg != 0;
-    out.exe2csr.idx = u->csr_idx;
-    out.exe2csr.wcmd = u->func3 & 0b11;
-    out.exe2csr.wdata = 0;  // the written value is a fact of the trace (rs1 or zimm)
-    if (const tb::Fact *f2 = tbhook::fact_by_rob(u->rob_idx)) out.exe2csr.wdata = f2->csr_wdata;
-    return;
-  }
-}
-
 // The clock edge: the load write-back register; issued uops enter the FU input slots (killed ones are dropped, resolved
 // branch bits are cleared); a flush empties them.
 void Exu::seq() {
@@ -165,7 +142,6 @@ void Exu::seq() {
 // sends its LSU request, writes back (ALU ports) or takes part in the branch arbitration (the oldest mispredicted branch
 // redirects). LSU write-backs come in on their own ports.
 void Exu::exec() {
-  to_csr();   // the CSR uop in port 0's input slot: its read / write request (exe2csr, written at commit by Csr::comb_csr_write)
   const bool flush_all = in.rob_bcast->flush, flush_br = !flush_all && in.dec_bcast->mispred;
   const bool flush_any = flush_all || flush_br, flush = flush_all;  // (results are dead only on a global flush or when killed by the branch mask)
   const wire<BR_MASK_WIDTH> all = ~wire<BR_MASK_WIDTH>(0);
@@ -269,7 +245,10 @@ void Exu::exec() {
     ExuInst u = *cinst[fu];
     const bool dead = flush || is_br_killed(u, (*in.dec_bcast));
 
-    if (u.op == UOP_CSR && out.exe2csr.re) u.result = csr->read(out.exe2csr.idx);
+    if (u.op == UOP_CSR) {   // the read port (CSRRW / CSRRWI to x0 do not read)
+      const bool rw_family = u->func3 == 0b001 || u->func3 == 0b101;
+      if (!rw_family || u->dest_preg != 0) u.result = csr_state().read(u->csr_idx);
+    }
     if (!dead) {
       if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back
         out.exu2rob.entry[p].valid = true;

@@ -19,11 +19,11 @@
 extern long long sim_time;
 
 #if defined(__GNUC__)
-extern uint32_t pmem_read(uint32_t paddr) __attribute__((weak));
-extern void pmem_write(uint32_t paddr, uint32_t data) __attribute__((weak));
+extern uint32_t io_read(uint32_t paddr) __attribute__((weak));
+extern void io_write(uint32_t paddr, uint32_t data) __attribute__((weak));
 #else
-extern uint32_t pmem_read(uint32_t paddr);
-extern void pmem_write(uint32_t paddr, uint32_t data);
+extern uint32_t io_read(uint32_t paddr);
+extern void io_write(uint32_t paddr, uint32_t data);
 #endif
 
 namespace axi_interconnect {
@@ -64,20 +64,20 @@ int port_index(DownstreamPort port) {
 
 uint32_t read_backing_word_or_zero(uint32_t paddr) {
 #if defined(__GNUC__)
-  if (::pmem_read == nullptr) {
+  if (::io_read == nullptr) {
     return 0;
   }
 #endif
-  return ::pmem_read(paddr);
+  return ::io_read(paddr);
 }
 
 void write_backing_word_if_available(uint32_t paddr, uint32_t data) {
 #if defined(__GNUC__)
-  if (::pmem_write == nullptr) {
+  if (::io_write == nullptr) {
     return;
   }
 #endif
-  ::pmem_write(paddr, data);
+  ::io_write(paddr, data);
 }
 
 WideReadData_t load_legacy_mmio_backing_line(uint32_t addr) {

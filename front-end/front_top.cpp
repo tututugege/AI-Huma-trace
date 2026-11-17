@@ -308,7 +308,7 @@ void FrontControl::finish() {
 // A predecode flush: the I-cache's invalidate step K, whose outputs replace the fetch step's (ic_k).
 void ICacheTop::comb_invalidate() {
   out.ic_k = {};
-  if (*in.predecode_flush) invalidate_step(in.csr_status, &out.ic_k);
+  if (*in.predecode_flush) invalidate_step(&out.ic_k);
 }
 
 // ---- the FIFO ports (front-end/front_fifo_ports.h) ----
@@ -587,7 +587,6 @@ void ICacheTop::comb_fetch() {
   out.ic_in.itlb_flush = in.in->ctrl.itlb_flush;
   out.ic_in.fence_i = in.in->ctrl.fence_i;
   out.ic_in.invalidate_req = false;
-  out.ic_in.csr_status = in.csr_status;
   out.ic_in.icache_read_valid = fetch_addr_head.read_valid;
   out.ic_in.fetch_address = fetch_addr_head.read_valid ? fetch_addr_head.fetch_address : 0;
   comb_calc(&out.ic_in, &out.ic_out);
@@ -790,6 +789,6 @@ void FrontCore::seq(const FrontTopIn &inp) {
   inst_fifo.seq(inst_port.out.fifo_req);
   ptab.seq(ptab_port.out.ptab_req);
   f2b_fifo.seq(f2b_port.out.front2back_fifo_req);
-  ipf.tick(icache, ctx ? ctx->perf.cycle : 0, fa_port.out.ipf.cand, ctrl.out.front_state.valid ? fa_port.out.ipf.ncand : 0, inp.csr_status);
+  ipf.tick(icache, ctx ? ctx->perf.cycle : 0, fa_port.out.ipf.cand, ctrl.out.front_state.valid ? fa_port.out.ipf.ncand : 0);
   if (ctrl.out.front_state.valid) q_ = ctrl.out.front_state.d;
 }

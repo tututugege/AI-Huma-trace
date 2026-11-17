@@ -72,9 +72,8 @@ void Csr::interrupt_inject() {
     d.CSR_RegFile[csr_mip] = l.pending ? (d.CSR_RegFile[csr_mip] | l.bit) : (d.CSR_RegFile[csr_mip] & ~l.bit);
     d.CSR_RegFile[csr_sip] = d.CSR_RegFile[csr_mip] & (d.CSR_RegFile[csr_mideleg] & kDelegBits);
   }
-  // FS = Dirty, SD (an FP instruction committed: top2csr.fs_dirty from the ROB): on top of whatever else changed mstatus
-  // this cycle
-  if (in.top2csr->fs_dirty) {
+  // FS = Dirty, SD (an FP instruction committed: rob2csr.fs_dirty): on top of whatever else changed mstatus this cycle
+  if (in.rob2csr->fs_dirty) {
     d.CSR_RegFile[csr_mstatus] |= (xlen_t(3) << 13) | (xlen_t(1) << (XLEN - 1));
     d.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_mstatus] & kSstatusMask;
   }
@@ -187,21 +186,17 @@ Csr::TrapOut Csr::exception(const Regs &q, Regs *d) const {
   return t;
 }
 
-// A CSR instruction latches its write at execute and performs it when it commits (so a squashed instruction has no
-// effect). The aliases (sie/sip/sstatus) update the machine register and the derived supervisor view.
+// The committing CSR instruction's write (the ROB gives its CSR, command and the value of its fact). The aliases
+// (sie/sip/sstatus) update the machine register and the derived supervisor view.
 void Csr::csr_write(const Regs &q, Regs &d) {
-  if (in.exe2csr->we) {
-    d.csr_we = in.exe2csr->we;
-    d.csr_idx = in.exe2csr->idx;
-    d.csr_wcmd = in.exe2csr->wcmd;
-    d.csr_wdata = in.exe2csr->wdata;
-  }
-  if (!(in.rob2csr->commit && q.csr_we)) return;
+  const RobCsrIO &w = *in.rob2csr;
+  if (!(w.commit && w.we)) return;
 
-  const xlen_t old_val = q.CSR_RegFile[cvt_number_to_csr(q.csr_idx)];
-  xlen_t wdata = q.csr_wdata;   // the value written (CSRRS / CSRRC: combined with the old value)
-  if (q.csr_wcmd == CSR_S) wdata = (wdata | old_val);
-  else if (q.csr_wcmd == CSR_C) wdata = (~wdata & old_val);
+  const int csr_idx = w.idx;
+  const xlen_t old_val = q.CSR_RegFile[cvt_number_to_csr(csr_idx)];
+  xlen_t wdata = w.wdata;   // the value written (CSRRS / CSRRC: combined with the old value)
+  if (w.wcmd == CSR_S) wdata = (wdata | old_val);
+  else if (w.wcmd == CSR_C) wdata = (~wdata & old_val);
 
   // machine register `m`, written through its supervisor alias with `s_mask` or directly with `m_mask`
   auto write_pair = [&](int m, int s, bool via_s, xlen_t m_mask, xlen_t s_mask, xlen_t s_view) {
@@ -209,30 +204,29 @@ void Csr::csr_write(const Regs &q, Regs &d) {
     d.CSR_RegFile[s] = d.CSR_RegFile[m] & s_view;   // the supervisor view: sstatus shows UXL (read-only) that a write cannot change
   };
   const xlen_t deleg = q.CSR_RegFile[csr_mideleg] & kDelegBits;
-  if (q.csr_idx == number_mie || q.csr_idx == number_sie) {
-    write_pair(csr_mie, csr_sie, q.csr_idx == number_sie, kMieMask, deleg, deleg);
-  } else if (q.csr_idx == number_mip || q.csr_idx == number_sip) {
-    write_pair(csr_mip, csr_sip, q.csr_idx == number_sip, kMipMask, q.csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg,
-               q.csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg);
+  if (csr_idx == number_mie || csr_idx == number_sie) {
+    write_pair(csr_mie, csr_sie, csr_idx == number_sie, kMieMask, deleg, deleg);
+  } else if (csr_idx == number_mip || csr_idx == number_sip) {
+    write_pair(csr_mip, csr_sip, csr_idx == number_sip, kMipMask, csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg,
+               csr_idx == number_sip ? (MIP_SSIP & deleg) : deleg);
     d.CSR_RegFile[csr_sip] = d.CSR_RegFile[csr_mip] & deleg;
-  } else if (q.csr_idx == number_mideleg) {
+  } else if (csr_idx == number_mideleg) {
     d.CSR_RegFile[csr_mideleg] = wdata & kDelegBits;
     d.CSR_RegFile[csr_sie] = q.CSR_RegFile[csr_mie] & d.CSR_RegFile[csr_mideleg];
     d.CSR_RegFile[csr_sip] = q.CSR_RegFile[csr_mip] & d.CSR_RegFile[csr_mideleg];
-  } else if (q.csr_idx == number_mstatus || q.csr_idx == number_sstatus) {
-    write_pair(csr_mstatus, csr_sstatus, q.csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask, kSstatusMask);
+  } else if (csr_idx == number_mstatus || csr_idx == number_sstatus) {
+    write_pair(csr_mstatus, csr_sstatus, csr_idx == number_sstatus, kMstatusWriteMask, kSstatusWriteMask, kSstatusMask);
     {  // SD follows FS
       const xlen_t sd = xlen_t(1) << (XLEN - 1);
       if (((d.CSR_RegFile[csr_mstatus] >> 13) & 3) == 3) d.CSR_RegFile[csr_mstatus] |= sd; else d.CSR_RegFile[csr_mstatus] &= ~sd;
       d.CSR_RegFile[csr_sstatus] = d.CSR_RegFile[csr_mstatus] & kSstatusMask;
     }
-  } else if (q.csr_idx == number_satp) {
+  } else if (csr_idx == number_satp) {
     // rv64: only Bare (0) and Sv39 (8) are implemented; any other mode leaves satp unchanged (as in the function model)
     if (!((wdata >> 60) != 0 && (wdata >> 60) != 8)) d.CSR_RegFile[csr_satp] = wdata;
   } else {
-    d.CSR_RegFile[cvt_number_to_csr(q.csr_idx)] = wdata;
+    d.CSR_RegFile[cvt_number_to_csr(csr_idx)] = wdata;
   }
-  d.csr_we = false;
 }
 
 // The clock edge: the trap / xRET state, the committed CSR write (and the latch of an executed one), the interrupt lines;

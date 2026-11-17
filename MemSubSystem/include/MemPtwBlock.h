@@ -13,12 +13,11 @@ class SimContext;
 // Shared PTW submodule. Port-side requests are latched in comb_begin(), memory
 // feedback is applied in comb_finish(), and seq() is the only state commit.
 //   CONTRACT comb_request  in: in.dtlb_walk in.itlb_walk  out: out.ptw_walk_req
-//   CONTRACT comb_feedback  in: in.dtlb_flush in.itlb_flush in.ptw_events in.ptw_grant in.wakeup  out: out.dtlb_walk out.itlb_walk
+//   CONTRACT comb_feedback  in: in.dtlb_walk in.itlb_walk in.ptw_events in.ptw_grant in.wakeup  out: out.dtlb_walk out.itlb_walk
 class MemPtwBlock {
 public:
   struct In {
-    const PtwWalkPortCombIn *dtlb_walk = nullptr, *itlb_walk = nullptr;   // the TLBs' walk requests of the cycle
-    const PtwWalkPortSeqIn *dtlb_flush = nullptr, *itlb_flush = nullptr;  // their flushes
+    const PtwWalkPortCombIn *dtlb_walk = nullptr, *itlb_walk = nullptr;   // the TLBs' walk requests / flushes of the cycle
     const PtwGrant *ptw_grant = nullptr;     // the route block's grant / response / wake-up
     const PtwEvent *ptw_events = nullptr;
     const ReplayWakeup *wakeup = nullptr;
@@ -42,18 +41,8 @@ public:
     IGNORED,
   };
 
-  struct WalkClientIn {
-    bool req_valid = false;
-    PtwWalkReq req = {};
-    bool resp_consumed = false;
-    bool flush = false;
-  };
-
-  struct WalkClientOut {
-    bool req_ready = false;
-    bool resp_valid = false;
-    PtwWalkResp resp = {};
-  };
+  using WalkClientIn = PtwWalkPortCombIn;    // a TLB's requests (PtwWalkPort.h)
+  using WalkClientOut = PtwWalkPortCombOut;  // the walker's outputs to a TLB
 
   struct PortIn {
     std::array<WalkClientIn, static_cast<size_t>(Client::NUM_CLIENTS)>
@@ -96,6 +85,7 @@ public:
     reset_state(d);
     reset_outputs(comb_);
     refresh_outputs();
+    latch_client_outputs();
   }
 
   void comb_begin(const PortIn &in) {
@@ -119,6 +109,13 @@ public:
   void seq() {
     q_ = d;
     refresh_outputs();
+    latch_client_outputs();
+  }
+  // the outputs to the TLBs as of the last clock edge (each TLB's walk port reads its own)
+  PtwWalkPortCombOut dtlb_q{}, itlb_q{};
+  void latch_client_outputs() {
+    dtlb_q = comb_.walk_clients[static_cast<size_t>(Client::DTLB)];
+    itlb_q = comb_.walk_clients[static_cast<size_t>(Client::ITLB)];
   }
 
   const CombOut &comb_outputs() const { return comb_; }

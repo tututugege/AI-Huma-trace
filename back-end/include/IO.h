@@ -279,15 +279,6 @@ struct ExuIdIO {
   }
 };
 
-struct ExeCsrIO {
-
-  wire<1> we = {};
-  wire<1> re = {};
-  wire<12> idx = {};
-  wire<XLEN> wdata = {};
-  wire<32> wcmd = {};
-};
-
 
 struct CsrInterruptInjectIO {
   wire<1> external_irq_pending_valid = {};
@@ -306,14 +297,16 @@ struct CsrStatusIO {
   wire<2> privilege = {};
 };
 
+// What the commit does to the CSR file at the clock edge (Csr::seq): the interrupt is taken, a CSR instruction writes
+// (from its uop and the value of its fact), an instruction set mstatus.FS to Dirty (a fact of the trace).
 struct RobCsrIO {
 
   wire<1> interrupt_resp = {};
-  wire<1> commit = {};
-};
-
-// BackTop -> CSR: an instruction committed this cycle turned mstatus.FS to Dirty (a fact of the trace)
-struct TopCsrIO {
+  wire<1> commit = {};       // a CSR instruction commits; it writes when `we`
+  wire<1> we = {};
+  wire<12> idx = {};
+  wire<32> wcmd = {};
+  wire<XLEN> wdata = {};
   wire<1> fs_dirty = {};
 };
 
@@ -482,39 +475,6 @@ struct DCacheRespPorts {
     }
   }
 };
-enum class MMUResultType : wire<2> {
-  MISS = 0,
-  HIT = 1,
-  PAGE_FAULT = 2,
-};
-
-static constexpr int LSU_MMU_IDX_WIDTH =
-    (LDQ_IDX_WIDTH > STQ_IDX_WIDTH) ? LDQ_IDX_WIDTH : STQ_IDX_WIDTH;
-
-struct MMUReq{
-  wire<1> valid;
-  wire<XLEN> vaddr;
-  wire<LSU_MMU_IDX_WIDTH> entry_idx;
-  wire<LSU_MMU_IDX_WIDTH> wait_idx;
-};
-struct MMUResp{
-  wire<1> valid;
-  wire<32> paddr;
-  MMUResultType result;
-  wire<LSU_MMU_IDX_WIDTH> entry_idx;
-  wire<LSU_MMU_IDX_WIDTH> wait_idx;
-};
-struct MMULsuIO{
-  MMUResp ldq_resp[LSU_LDU_COUNT];
-  MMUResp stq_resp[LSU_STA_COUNT];
-};
-
-struct LsuMMUIO{
-  MMUReq ldq_req[LSU_LDU_COUNT];
-  MMUReq stq_req[LSU_STA_COUNT];
-  CsrStatusIO csr_status;
-};
-
 struct LsuDcacheIO {
   DCacheReqPorts req_ports;
   wire<LSU_LDU_WIDTH+1> icache_req;
@@ -584,51 +544,15 @@ struct LsuExeIO {
   LsuExeRespEntry sta_wb_req[LSU_STA_COUNT] = {};
 };
 
+// Dispatch -> LSU: the LSQ allocations of the fired loads and stores; the LSU reads the instruction's fields (ROB entry,
+// STQ / LDQ entry, funct3, pc) from its pool entry `id`.
 struct DisLsuIO {
-
-  wire<1> alloc_req[MAX_STQ_DISPATCH_WIDTH];
-  wire<BR_MASK_WIDTH> br_mask[MAX_STQ_DISPATCH_WIDTH];
-  wire<3> func3[MAX_STQ_DISPATCH_WIDTH];
-  wire<ROB_IDX_WIDTH> rob_idx[MAX_STQ_DISPATCH_WIDTH];
-  wire<1> rob_flag[MAX_STQ_DISPATCH_WIDTH];
-  wire<1> stq_flag[MAX_STQ_DISPATCH_WIDTH];
-
-  wire<1> ldq_alloc_req[MAX_LDQ_DISPATCH_WIDTH];
-  wire<LDQ_IDX_WIDTH> ldq_idx[MAX_LDQ_DISPATCH_WIDTH];
-  wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH];
-  wire<ROB_IDX_WIDTH> ldq_rob_idx[MAX_LDQ_DISPATCH_WIDTH];
-  wire<1> ldq_rob_flag[MAX_LDQ_DISPATCH_WIDTH];
-  wire<32> st_pc[MAX_STQ_DISPATCH_WIDTH];   // store PC (store-set predictor)
-  wire<32> ldq_pc[MAX_LDQ_DISPATCH_WIDTH];  // load PC (memory-dependence predictor index / training)
-
-  DisLsuIO() {
-    for (auto &v : alloc_req)
-      v = 0;
-    for (auto &v : br_mask)
-      v = 0;
-    for (auto &v : func3)
-      v = 0;
-    for (auto &v : rob_idx)
-      v = 0;
-    for (auto &v : rob_flag)
-      v = 0;
-    for (auto &v : stq_flag)
-      v = 0;
-    for (auto &v : ldq_alloc_req)
-      v = 0;
-    for (auto &v : ldq_idx)
-      v = 0;
-    for (auto &v : ldq_br_mask)
-      v = 0;
-    for (auto &v : ldq_rob_idx)
-      v = 0;
-    for (auto &v : ldq_rob_flag)
-      v = 0;
-    for (auto &v : ldq_pc)
-      v = 0;
-    for (auto &v : st_pc)
-      v = 0;
-  }
+  wire<1> alloc_req[MAX_STQ_DISPATCH_WIDTH] = {};
+  uint16_t id[MAX_STQ_DISPATCH_WIDTH] = {};
+  wire<BR_MASK_WIDTH> br_mask[MAX_STQ_DISPATCH_WIDTH] = {};
+  wire<1> ldq_alloc_req[MAX_LDQ_DISPATCH_WIDTH] = {};
+  uint16_t ldq_id[MAX_LDQ_DISPATCH_WIDTH] = {};
+  wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH] = {};
 };
 
 struct ExeLsuIO {

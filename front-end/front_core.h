@@ -23,7 +23,7 @@ class SimContext;
 // only; LLC / bus traffic of the prefetch is not modelled). Runs at the clock edge.
 class FrontIpf {
 public:
-  void tick(ICacheTop &icache, uint64_t now, const uint32_t *cand, int n, CsrStatusIO *csr) {
+  void tick(ICacheTop &icache, uint64_t now, const uint32_t *cand, int n) {
     if (!on_) return;
     if (!hooked_) { hooked_ = true; icache.fill_hook = [this](uint32_t index, uint32_t tag) { seen_.insert(key(index, tag)); }; }
     for (size_t i = 0; i < fl_.size();) {
@@ -32,7 +32,7 @@ public:
     }
     for (int c = 0; c < n; c++) {
       uint32_t pa;
-      if (!icache.peek_translate(cand[c], csr, pa)) continue;
+      if (!icache.peek_translate(cand[c], pa)) continue;
       const uint32_t index = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u), tag = pa >> 12;
       if (icache.peek_hit(index, tag) || !seen_.count(key(index, tag))) continue;
       bool dup = false;

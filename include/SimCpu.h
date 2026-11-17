@@ -1,6 +1,7 @@
 #pragma once
 #include "AxiSubsystem.h"
 #include "BackTop.h"
+#include "Csr.h"
 #include "Back2Front.h"
 #include "Front2Back.h"
 #include "FrontTop.h"
@@ -20,8 +21,10 @@ public:
   ICacheMemPortResp icache_resp_q{};
   void icache_port_regs_seq();
   ICacheMemPortResp icache_resp{}; // the probe response (the memory subsystem drives it; the I-cache reads it through icache_resp_q)
-  SimCpu() : back(&this->ctx), mem_subsystem(&this->ctx) {};
+  SimCpu();
   SimContext ctx;
+  Csr csr;          // the CSR file: CPU-wide state, read through csr_state() (include/Csr.h)
+  CsrInterruptInjectIO csr_interrupt_inject_io{};   // the interrupt lines: the memory subsystem's devices -> the CSR file (at the edge)
   BackTop back;
   FrontTop front;
   MemSubsystem mem_subsystem;
@@ -32,5 +35,7 @@ public:
   void init();
   void sync_mmio_devices_from_backing();
   void restore_pc(pc_t pc);
+  // architectural state from the reference model / a checkpoint: the CSR file and the back end's (PC, LR/SC reservation)
+  void install_arch_state(const CPU_state &state, uint8_t privilege);
   void cycle();
 };

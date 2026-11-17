@@ -40,7 +40,7 @@ struct BackIn;
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs  in: -  out: out.lsu2dis out.lsu2rob out.lsu_awake
 //   CONTRACT comb_writeback  in: in.dec_bcast in.rob_bcast in.rob_commit in.top_in.dcache2lsu  out: out.lsu2exe out.lsu_awake
-//   CONTRACT comb_translate  in: in.csr_status in.dec_bcast in.exe2lsu in.rob_bcast out.dtlb_walk.comb_out  out: out.dtlb_walk.comb_input out.dtlb_walk.seq_input
+//   CONTRACT comb_translate  in: in.dec_bcast in.exe2lsu in.rob_bcast in.dtlb_walk  out: out.dtlb_walk
 //   CONTRACT comb_requests  in: in.dec_bcast in.dis2lsu in.exe2lsu in.rob_bcast in.rob_commit in.top_in.dcache2lsu out.lsu2dcache  out: out.lsu2dcache out.peripheral_req
 //   CONTRACT comb_commit_store  in: in.rob_bcast in.rob_commit  out: out.commit_store
 class RealLsu {
@@ -50,7 +50,6 @@ public:
   void comb_translate();  // AGU / STD results in, address translation, store-to-load forwarding
   void comb_requests();  // allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
   void comb_commit_store();  // the committed stores to a modeled device (from the ROB's commit and the registered STQ)
-  RealLsu() : nxt{}, ctx(nullptr), cur_{} {}
   explicit RealLsu(SimContext *ctx) : nxt{}, ctx(ctx), cur_{} {}
 
   // Registers: cur_ / pcur_ (q: read in comb through const references, written only by seq) and nxt / pnxt (d: written
@@ -67,12 +66,12 @@ public:
     LsuDcacheIO *lsu2dcache = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     CommitStoreIO *commit_store = nullptr;       // in BackTop (the back end's interface), bound by BackTop::init
-    PtwWalkPort *dtlb_walk = nullptr;   // the DTLB's page-table walk port (its TLB, dtlb, uses it)
+    PtwWalkPortCombIn *dtlb_walk = nullptr;   // the DTLB's requests to the page-table walker (its TLB, dtlb, writes them)
   } out;
   PeripheralRespIO mmio_resp_d{};   // the MMIO response (the memory subsystem drives it after the LSU's phases); q: mmio_resp_q_
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
   struct In {
-    const CsrStatusIO *csr_status = nullptr;
+    const PtwWalkPortCombOut *dtlb_walk = nullptr;   // the page-table walker's outputs to the DTLB (registered)
     const DecBroadcastIO *dec_bcast = nullptr;
     const DisLsuIO *dis2lsu = nullptr;
     const ExeLsuIO *exe2lsu = nullptr;
@@ -81,10 +80,11 @@ public:
     const RobCommitIO *rob_commit = nullptr;
   } in;
   SimContext *ctx = nullptr;
-  TlbMmu *dtlb = nullptr;         // the DTLB (looked up in comb_tlb)
+  TlbMmu dtlb{DTLB_ENTRIES, TlbMmu::Kind::DTLB};   // the DTLB (looked up in comb_translate, its edge in seq)
 
   void init();
   void seq() {
+    dtlb.seq();
     cur_ = nxt;
     seq_pipe();
     mmio_resp_q_ = mmio_resp_d;
@@ -94,6 +94,8 @@ public:
   lp::LsuPipeState pnxt;
 
   lp::PCycle pw;
+  lp::MsLdq ms_ldq_[LDQ_SIZE];   // LSU_MS_DATA beside the queues (RealLsuPipe.h)
+  lp::MsStq ms_stq_[STQ_SIZE];
 
   StqEntry get_stq_entry(int idx, bool flag);
   void seq_pipe();  // pcur = pnxt, copying only the live LDQ / STQ entries (see RealLsuPipe.cpp)
@@ -116,6 +118,8 @@ private:
   void lsu2dcache();
   void mmio_out();
   void check();
+  void ms_capture_stores();   // LSU_MS_DATA: the trace's store data, the cycle after allocation
+  void ms_load_written_back(int ldq_idx, bool defer);   // LSU_MS_DATA: the destination's (stale?) value at a load write-back
   long long wd_next_ = 0x7fffffffffffffffLL;  // earliest watchdog deadline (stale entries only cause an extra scan)
   void wd_arm(long long &t) { t = sim_time; if (sim_time + 62 < wd_next_) wd_next_ = sim_time + 62; }
   void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
@@ -126,8 +130,21 @@ private:
   void lsu2dcache_stq();
   void dcache2lsu_ldq();
   void dcache2lsu_stq();
-  LsuMMUIO tlb_req_{};    // this cycle's DTLB requests and responses (also printed by LSU_PIPE_EVT)
-  MMULsuIO tlb_resp_{};
+  // steps of the phases above (named by what they do)
+  void l2_decide();
+  void dcache_load_responses();
+  void l3_register();
+  void drain_countdown(uint32_t n, bool *rdy);
+  void mmio_store_issue(uint32_t n, const bool *rdy);
+  void wb_drain(uint32_t n, const bool *rdy);
+  void stq_retire();
+  void watchdog();
+  void print_events();
+  void wake_loads();
+  void fill_replay_registers();
+  // this cycle's DTLB requests and responses, the load ports then the STA ports (also printed by LSU_PIPE_EVT)
+  TlbMmu::Req tlb_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+  TlbMmu::Resp tlb_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   // Wait table of the memory-dependence predictor (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries
   // indexed by a PC hash, set when a load of that PC violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is
   // set does not pass unknown-address stores. Training as in the RTL: the violators of a cycle are only flagged (trn, one

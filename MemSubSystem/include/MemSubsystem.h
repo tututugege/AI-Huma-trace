@@ -54,9 +54,8 @@ public:
   axi_interconnect::ReadMasterPort_t *extra_axi_r = nullptr;
   axi_interconnect::WriteMasterPort_t *extra_axi_w = nullptr;
 
-  // the PTW walk ports of the TLBs (bound by SimCpu)
-  PtwWalkPort *dtlb_walk_port = nullptr;
-  PtwWalkPort *itlb_walk_port = nullptr;
+  // the TLBs' requests to the page-table walker (their walk ports: written by the TLBs, read and cleared by the walker)
+  PtwWalkPortCombIn dtlb_walk_req{}, itlb_walk_req{};
   PeripheralReqIO *peripheral_req = nullptr;
   PeripheralRespIO *peripheral_resp = nullptr;
   CsrInterruptInjectIO *csr_interrupt_inject = nullptr;
@@ -107,13 +106,9 @@ private:
 
   std::unique_ptr<AxiKitRuntime> axi_kit_runtime;
 
-  void sync_ptw_port_outputs();
   void dcache_domain_seq(bool sample_mshr_perf);
 
-  friend class MemSubsystemPtwWalkPortAdapter;
 
-  std::unique_ptr<MemSubsystemPtwWalkPortAdapter> dtlb_walk_port_inst;
-  std::unique_ptr<MemSubsystemPtwWalkPortAdapter> itlb_walk_port_inst;
 
   RealLsu *ptw_coherent_source_ = nullptr;
 };

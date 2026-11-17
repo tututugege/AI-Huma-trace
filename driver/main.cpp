@@ -3,7 +3,6 @@
 #include "SimDDR.h"
 #include "trace_hook.h"
 #include "SimCpu.h"
-#include "PhysMemory.h"
 #include "RISCV.h"
 #include "config.h"
 #include "RefCore.h"
@@ -285,7 +284,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  if (!pmem_init()) {
+  if (!refcore_init()) {
     std::cerr << "Error: Failed to allocate memory!" << std::endl;
     exit(1);
   }
@@ -310,7 +309,7 @@ int main(int argc, char *argv[]) {
       std::cout << "[CKPT] front-door restore, restore program: " << config.restore_stub_file << std::endl;
       ckpt_interval = restore_checkpoint_front_door(config.target_file, config.restore_stub_file);
     } else {
-      ckpt_interval = restore_checkpoint(cpu.back, config.target_file);
+      ckpt_interval = restore_checkpoint(cpu, config.target_file);
       cpu.sync_mmio_devices_from_backing();
     }
 
@@ -401,7 +400,7 @@ int main(int argc, char *argv[]) {
     if (ref_prewarm_target > 0) refcore_end_warmup();
     if (!front_door || fast_warm_active) {
       std::cout << "[Run] Restoring DUT from ref snapshot..." << std::endl;
-      restore_from_ref(cpu.back);
+      restore_from_ref(cpu);
       cpu.sync_mmio_devices_from_backing();
       cpu.restore_pc(cpu.back.restored_pc); // restart the fetch at the restored pc
       if (fast_warm_active) fast_warm_install(cpu);
@@ -444,7 +443,7 @@ int main(int argc, char *argv[]) {
     for (; sim_time < (long long)MAX_SIM_TIME; sim_time++) {
       if (sim_time >= cycle_limit) {
         std::cout << "[sim] SIM_MAX_CYCLES=" << cycle_limit << " reached without termination" << std::endl;
-        pmem_release();
+        refcore_release();
         return 3;
       }
       if (sim_time % 10000000 == 0) {
@@ -454,7 +453,7 @@ int main(int argc, char *argv[]) {
       cpu.cycle();
 
     if (handle_pending_sigint()) {
-        pmem_release();
+        refcore_release();
         return 130;
       }
 
@@ -475,7 +474,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  pmem_release();
+  refcore_release();
 
   if (sim_time != MAX_SIM_TIME) {
     cout << "\033[38;5;34m-----------------------------\033[0m" << endl;
