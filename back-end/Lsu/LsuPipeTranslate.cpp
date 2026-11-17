@@ -105,8 +105,34 @@ void RealLsu::exe2lsu() {
 // ---------------------------------------------------------------------------------------------------------------
 // L1 address translation, one phase: the requests of the load / STA pipes, the DTLB lookup (a fence flushes it, a flush
 // or mispredict cancels its pending walk and returns nothing), the responses.
+// EXP-TLBPORTS: per-cycle DTLB request count histogram [loads][stores], written at exit to $TLB_HIST_OUT (experiment only).
+namespace {
+struct TlbHist {
+  uint64_t h[16][16] = {};
+  uint64_t cyc = 0;
+  ~TlbHist() {
+    const char *o = getenv("TLB_HIST_OUT");
+    if (!o) return;
+    FILE *f = fopen(o, "w");
+    if (!f) return;
+    fprintf(f, "cycles %llu\n", (unsigned long long)cyc);
+    for (int l = 0; l < 16; l++)
+      for (int s = 0; s < 16; s++)
+        if (h[l][s]) fprintf(f, "%d %d %llu\n", l, s, (unsigned long long)h[l][s]);
+    fclose(f);
+  }
+} g_tlb_hist;
+}  // namespace
+
 void RealLsu::tlb() {
   tlb_out();
+  {
+    int nl = 0, ns = 0;
+    for (int k = 0; k < LD; k++) nl += tlb_req_[k].valid;
+    for (int k = 0; k < STA; k++) ns += tlb_req_[LD + k].valid;
+    g_tlb_hist.h[nl][ns]++;
+    g_tlb_hist.cyc++;
+  }
   const bool fence = in.rob_bcast->fence, cancel = !fence && (in.rob_bcast->flush || in.dec_bcast->mispred);
   dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : LD + STA);
   if (fence || cancel) for (auto &r : tlb_resp_) r = {};
