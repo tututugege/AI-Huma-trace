@@ -15,8 +15,8 @@
 // ones: the frontend could not have been used), and the cause is the first resource that stopped it.
 void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, int &be_slots) const {
   const Regs &q = q_;
-  for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch)
-    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q), GLOBAL_IQ_CONFIG[q].size - in.iss2dis->ready_num[q]);
+  for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch); IQ_INT1 counts with IQ_INT
+    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + (q == IQ_INT1 ? IQ_INT : q)), GLOBAL_IQ_CONFIG[q].size - in.iss2dis->ready_num[q]);
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
   const bool recov = recovering || kill;
   const bool by_flush = kill ? static_cast<bool>(in.rob_bcast->flush) : recovering_by_flush;
@@ -44,7 +44,7 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
       else if (!fit_[i] || iq_blk_width[i]) cause = PMU_SLOT_BE_IQ_FULL;
       else cause = PMU_SLOT_BE_SERIAL;  // behind an exclusive instruction (AMO/WFI) that fired this cycle
       if (cause == PMU_SLOT_BE_IQ_FULL && iq_blk[i] >= 0)
-        iq_sub = (iq_blk_width[i] ? PMU_SLOT_BE_IQ_WIDTH_INT : PMU_SLOT_BE_IQ_SPACE_INT) + iq_blk[i];
+        iq_sub = (iq_blk_width[i] ? PMU_SLOT_BE_IQ_WIDTH_INT : PMU_SLOT_BE_IQ_SPACE_INT) + (iq_blk[i] == IQ_INT1 ? IQ_INT : iq_blk[i]);
     }
     if (blocked) {
       e.add(cause);

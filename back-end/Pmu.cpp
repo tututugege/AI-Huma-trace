@@ -62,7 +62,7 @@ void Pmu::accumulate() {
                          cur.v[PMU_SLOT_BE_LDQ_FULL] + cur.v[PMU_SLOT_BE_STQ_FULL] + cur.v[PMU_SLOT_BE_IQ_FULL];
   if (slots != DECODE_WIDTH) identity_violations++;
   uint64_t iq_sub = 0;  // the IQ stall split must add up to SLOT_BE_IQ_FULL
-  for (int q = 0; q < IQ_NUM; q++) iq_sub += cur.v[PMU_SLOT_BE_IQ_SPACE_INT + q] + cur.v[PMU_SLOT_BE_IQ_WIDTH_INT + q];
+  for (int q = 0; q < IQ_PMU_NUM; q++) iq_sub += cur.v[PMU_SLOT_BE_IQ_SPACE_INT + q] + cur.v[PMU_SLOT_BE_IQ_WIDTH_INT + q];
   if (iq_sub != cur.v[PMU_SLOT_BE_IQ_FULL]) identity_violations++;
   if (interval && ncycles >= series_next) {
     if (!series) {
@@ -139,13 +139,13 @@ void Pmu::report(uint64_t instructions) {
               pct(T(PMU_SLOT_BE_FLUSH_WAIT)), pct(T(PMU_SLOT_BE_SERIAL)));
 
   {
-    static const char *const nm[IQ_NUM] = {"INT", "LD", "STA", "STD", "BR"};
+    static const char *const nm[IQ_PMU_NUM] = {"INT", "LD", "STA", "STD", "BR", "FP"};
     std::printf("  IQ stall (%% of slots, no-room/width): ");
-    for (int q = 0; q < IQ_NUM; q++)
+    for (int q = 0; q < IQ_PMU_NUM; q++)
       std::printf(" %s %.2f/%.2f", nm[q], pct(T(static_cast<PmuEvent>(PMU_SLOT_BE_IQ_SPACE_INT + q))),
                   pct(T(static_cast<PmuEvent>(PMU_SLOT_BE_IQ_WIDTH_INT + q))));
     std::printf("\n  IQ avg occupancy:");
-    for (int q = 0; q < IQ_NUM; q++)
+    for (int q = 0; q < IQ_PMU_NUM; q++)
       std::printf(" %s %.1f/%d", nm[q], T(static_cast<PmuEvent>(PMU_OCC_IQ_INT + q)) / cyc, GLOBAL_IQ_CONFIG[q].size);
     std::printf("\n");
   }

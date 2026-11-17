@@ -400,6 +400,11 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #ifndef CFG_STD_IQ_SIZE
 #define CFG_STD_IQ_SIZE 16
 #endif
+// 2: two INT issue queues (IQ_INT: ports 0, 1, 4; IQ_INT1: ports 2, 3, 5), CFG_INT_IQ_SIZE slots and CFG_INT_IQ_ENQ_WIDTH enqueue lanes each.
+// Dispatch steers a uop by position: CSR to IQ_INT, I2F to IQ_INT1, the others by the parity of the ROB index.
+#ifndef CFG_INT_CLUSTERS
+#define CFG_INT_CLUSTERS 1
+#endif
 #ifndef CFG_INT_IQ_SIZE
 #define CFG_INT_IQ_SIZE 64
 #endif
@@ -687,9 +692,14 @@ constexpr int TOTAL_FU_COUNT = calculate_total_fu_count();
 // ============================================================
 
 constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
+#if CFG_INT_CLUSTERS == 2
+    {IQ_INT, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
+     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE, 3, 0x13},   // ports 0, 1, 4
+#else
     {IQ_INT, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
      OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE,
      count_ports_with_mask(OP_MASK_ALU)},
+#endif
 #if CFG_MEM_MERGE
     {IQ_LD, CFG_MEM_IQ_SIZE, CFG_MEM_IQ_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
      CFG_LD_PORTS + CFG_STA_PORTS},
@@ -705,7 +715,13 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
      count_ports_with_mask(OP_MASK_BR)}
     ,
-    {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)}
+    {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)},
+#if CFG_INT_CLUSTERS == 2
+    {IQ_INT1, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
+     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_I2F, IQ_ALU_PORT_BASE, 3, 0x2c}   // ports 2, 3, 5
+#else
+    {IQ_INT1, 1, 1, 0, 0, 0}   // empty: the integer uops are all in the INT queue
+#endif
 };
 
 // per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)

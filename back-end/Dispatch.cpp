@@ -119,7 +119,7 @@ void Dispatch::comb_dispatch() {
     if (type == AMO && (u->func7 >> 2) == AmoOp::SC) expect = ROB_CPLT_G0 | ROB_CPLT_G2;
     int lane_use[IQ_NUM] = {0};   // uops of this instruction already counted for each queue (a memory queue can take two: LD + STA of an AMO)
     for (int k = 0; k < cnt && fit_[i]; k++) {
-      const int iq = route_iq(uops[k].iq_id);
+      const int iq = route_iq(uops[k].iq_id, uops[k].uop.op, u->rob_idx);
       const int u_iq = usage[iq] + lane_use[iq]++;
       fit_[i] = u_iq < GLOBAL_IQ_CONFIG[iq].dispatch_width && u_iq < in.iss2dis->ready_num[iq];
       if (!fit_[i]) {
@@ -137,7 +137,7 @@ void Dispatch::comb_dispatch() {
     fired = true;
     u->expect_mask = expect;
     for (int k = 0; k < cnt; k++) {
-      const int iq = route_iq(uops[k].iq_id);
+      const int iq = route_iq(uops[k].iq_id, uops[k].uop.op, u->rob_idx);
       out.dis2iss.req[iq][usage[iq]].valid = true;
       out.dis2iss.req[iq][usage[iq]].uop = uops[k].uop;
       usage[iq]++;

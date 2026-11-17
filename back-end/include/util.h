@@ -34,7 +34,12 @@ inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
 
 // The queue a uop of logical queue `iq` is enqueued in: with one memory queue (CFG_MEM_MERGE) the store addresses go to the load queue.
 // (The ROB completion group stays the logical queue's.)
-inline int route_iq(int iq) { return (CFG_MEM_MERGE && iq == IQ_STA) ? IQ_LD : iq; }
+// With two INT queues (CFG_INT_CLUSTERS=2) an integer uop goes to the queue of its position: CSR to IQ_INT, I2F to IQ_INT1, the others by
+// the parity of the ROB index (even / odd lane of the dispatch group).
+inline int route_iq(int iq, int op = 0, uint32_t rob_idx = 0) {
+  if (CFG_INT_CLUSTERS == 2 && iq == IQ_INT) return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
+  return (CFG_MEM_MERGE && iq == IQ_STA) ? IQ_LD : iq;
+}
 
 inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_iq(int iq_id) {
   switch (iq_id) {

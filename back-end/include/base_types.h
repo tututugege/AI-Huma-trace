@@ -311,9 +311,11 @@ enum IQType {
   IQ_STD,
   IQ_BR,
   IQ_FP,   // F/D only (FP=1)
+  IQ_INT1, // the second integer queue (CFG_INT_CLUSTERS=2); an empty one-slot queue otherwise
 };
 // (an unscoped enum value IQ_NUM before F/D: the count is FP dependent now)
-constexpr int IQ_NUM = 6;
+constexpr int IQ_NUM = 7;
+constexpr int IQ_PMU_NUM = 6;   // the queues with PMU events of their own (IQ_INT1 counts with IQ_INT)
 
 constexpr int ROB_CPLT_MASK_WIDTH = 3;
 constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G0 = 0x1;
@@ -332,4 +334,5 @@ struct IQStaticConfig {
   uint64_t supported_ops; // operations the IQ accepts (dispatch routing)
   int port_start_idx;
   int port_num;
+  uint32_t port_mask = 0;  // nonzero: the physical issue ports of the queue (bit p = port p), instead of port_start_idx .. + port_num
 };

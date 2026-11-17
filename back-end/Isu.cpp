@@ -38,10 +38,15 @@ void Isu::init() {
     cfg.size = iq.size;
     cfg.dispatch_width = iq.dispatch_width;
     cfg.supported_ops = iq.supported_ops;  // coarse mask Dispatch routes with
-    for (int p = 0; p < iq.port_num; p++) {
-      // GLOBAL_ISSUE_PORT_CONFIG's index is the canonical physical issue-port id (the same one Exu uses)
-      const int port = iq.port_start_idx + p;
-      cfg.ports.push_back({port, GLOBAL_ISSUE_PORT_CONFIG[port].support_mask});
+    // GLOBAL_ISSUE_PORT_CONFIG's index is the canonical physical issue-port id (the same one Exu uses)
+    if (iq.port_mask) {
+      for (int port = 0; port < ISSUE_WIDTH; port++)
+        if (iq.port_mask >> port & 1) cfg.ports.push_back({port, GLOBAL_ISSUE_PORT_CONFIG[port].support_mask});
+    } else {
+      for (int p = 0; p < iq.port_num; p++) {
+        const int port = iq.port_start_idx + p;
+        cfg.ports.push_back({port, GLOBAL_ISSUE_PORT_CONFIG[port].support_mask});
+      }
     }
     add_iq(cfg);
   }
@@ -115,7 +120,10 @@ void Isu::issue() {
   wb_busy_.new_cycle(in.rob_bcast->flush);
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   agu_ports_used_ = 0;
-  for (auto &q : iqs) {
+  // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
+  static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_LD, IQ_STA, IQ_STD, IQ_BR, IQ_FP};
+  for (int qi : ORDER) {
+    auto &q = iqs[qi];
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];
     q.comb_issue();
