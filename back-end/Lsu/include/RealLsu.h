@@ -40,7 +40,7 @@ struct BackIn;
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs  in: -  out: out.lsu2dis out.lsu2rob out.lsu_awake
 //   CONTRACT comb_writeback  in: in.dec_bcast in.rob_bcast in.rob_commit in.top_in.dcache2lsu  out: out.lsu2exe out.lsu_awake
-//   CONTRACT comb_translate  in: in.dec_bcast in.exe2lsu in.rob_bcast out.dtlb_walk.comb_out  out: out.dtlb_walk.comb_input out.dtlb_walk.seq_input
+//   CONTRACT comb_translate  in: in.dec_bcast in.exe2lsu in.rob_bcast in.dtlb_walk  out: out.dtlb_walk
 //   CONTRACT comb_requests  in: in.dec_bcast in.dis2lsu in.exe2lsu in.rob_bcast in.rob_commit in.top_in.dcache2lsu out.lsu2dcache  out: out.lsu2dcache out.peripheral_req
 //   CONTRACT comb_commit_store  in: in.rob_bcast in.rob_commit  out: out.commit_store
 class RealLsu {
@@ -67,11 +67,12 @@ public:
     LsuDcacheIO *lsu2dcache = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     PeripheralReqIO *peripheral_req = nullptr;   // in BackTop (the back end's interface), bound by BackTop::init
     CommitStoreIO *commit_store = nullptr;       // in BackTop (the back end's interface), bound by BackTop::init
-    PtwWalkPort *dtlb_walk = nullptr;   // the DTLB's page-table walk port (its TLB, dtlb, uses it)
+    PtwWalkPortCombIn *dtlb_walk = nullptr;   // the DTLB's requests to the page-table walker (its TLB, dtlb, writes them)
   } out;
   PeripheralRespIO mmio_resp_d{};   // the MMIO response (the memory subsystem drives it after the LSU's phases); q: mmio_resp_q_
   // Inputs: the signals this module reads (const: it cannot write them), bound by BackTop::init.
   struct In {
+    const PtwWalkPortCombOut *dtlb_walk = nullptr;   // the page-table walker's outputs to the DTLB (registered)
     const DecBroadcastIO *dec_bcast = nullptr;
     const DisLsuIO *dis2lsu = nullptr;
     const ExeLsuIO *exe2lsu = nullptr;
@@ -126,8 +127,9 @@ private:
   void lsu2dcache_stq();
   void dcache2lsu_ldq();
   void dcache2lsu_stq();
-  LsuMMUIO tlb_req_{};    // this cycle's DTLB requests and responses (also printed by LSU_PIPE_EVT)
-  MMULsuIO tlb_resp_{};
+  // this cycle's DTLB requests and responses, the load ports then the STA ports (also printed by LSU_PIPE_EVT)
+  TlbMmu::Req tlb_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+  TlbMmu::Resp tlb_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   // Wait table of the memory-dependence predictor (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries
   // indexed by a PC hash, set when a load of that PC violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is
   // set does not pass unknown-address stores. Training as in the RTL: the violators of a cycle are only flagged (trn, one

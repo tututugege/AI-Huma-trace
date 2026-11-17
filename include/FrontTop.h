@@ -3,7 +3,6 @@
 #include "front_IO.h"
 #include <memory>
 
-class PtwWalkPort;
 class BackTop;
 struct FrontPreIO;
 struct Back2FrontRegs;

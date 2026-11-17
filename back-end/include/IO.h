@@ -475,38 +475,6 @@ struct DCacheRespPorts {
     }
   }
 };
-enum class MMUResultType : wire<2> {
-  MISS = 0,
-  HIT = 1,
-  PAGE_FAULT = 2,
-};
-
-static constexpr int LSU_MMU_IDX_WIDTH =
-    (LDQ_IDX_WIDTH > STQ_IDX_WIDTH) ? LDQ_IDX_WIDTH : STQ_IDX_WIDTH;
-
-struct MMUReq{
-  wire<1> valid;
-  wire<XLEN> vaddr;
-  wire<LSU_MMU_IDX_WIDTH> entry_idx;
-  wire<LSU_MMU_IDX_WIDTH> wait_idx;
-};
-struct MMUResp{
-  wire<1> valid;
-  wire<32> paddr;
-  MMUResultType result;
-  wire<LSU_MMU_IDX_WIDTH> entry_idx;
-  wire<LSU_MMU_IDX_WIDTH> wait_idx;
-};
-struct MMULsuIO{
-  MMUResp ldq_resp[LSU_LDU_COUNT];
-  MMUResp stq_resp[LSU_STA_COUNT];
-};
-
-struct LsuMMUIO{
-  MMUReq ldq_req[LSU_LDU_COUNT];
-  MMUReq stq_req[LSU_STA_COUNT];
-};
-
 struct LsuDcacheIO {
   DCacheReqPorts req_ports;
   wire<LSU_LDU_WIDTH+1> icache_req;

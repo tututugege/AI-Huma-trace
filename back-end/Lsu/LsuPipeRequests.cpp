@@ -244,6 +244,9 @@ void RealLsu::lsu2dcache_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // STQ retire, wake-up pass (events of this cycle -> LDQ entries), replay-register fill
 // ---------------------------------------------------------------------------------------------------------------
+// the RTL's code of a DTLB result in the LSU_PIPE_EVT print: miss 0, hit 1, page fault 2
+static int tlb_code(TlbMmu::Result r) { return r == TlbMmu::Result::OK ? 1 : r == TlbMmu::Result::FAULT ? 2 : 0; }
+
 void RealLsu::check() {
   const lp::LsuPipeState &pcur = pcur_;
   int ret = 0;
@@ -303,9 +306,9 @@ void RealLsu::check() {
     }
     std::fprintf(stderr, " mmu:");
     for (int p = 0; p < LD; p++)
-      if (tlb_req_.ldq_req[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)tlb_req_.ldq_req[p].entry_idx);
+      if (tlb_req_[p].valid) std::fprintf(stderr, " L%d=%d", p, (int)pw.l1[p].ldq);
     for (int p = 0; p < STA; p++)
-      if (tlb_req_.stq_req[p].valid) std::fprintf(stderr, " S%d=%d", p, (int)tlb_req_.stq_req[p].entry_idx);
+      if (tlb_req_[LD + p].valid) std::fprintf(stderr, " S%d=%d", p, (int)pw.s1[p].stq);
     std::fprintf(stderr, " d: sf=%d lf=%d tl=%d/%d cp=%d", (int)out.lsu2dis.stq_free, (int)out.lsu2dis.ldq_free, (int)out.lsu2dis.stq_tail,
                  (int)out.lsu2dis.stq_tail_flag, (int)out.lsu2rob.committed_store_pending);
     {
@@ -318,9 +321,9 @@ void RealLsu::check() {
     }
     std::fprintf(stderr, " in:");
     for (int p = 0; p < LD; p++)
-      if (tlb_resp_.ldq_resp[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, (int)tlb_resp_.ldq_resp[p].result, (unsigned)tlb_resp_.ldq_resp[p].paddr);
+      if (tlb_resp_[p].valid) std::fprintf(stderr, " ml%d=%d/%x", p, tlb_code(tlb_resp_[p].result), (unsigned)tlb_resp_[p].paddr);
     for (int p = 0; p < STA; p++)
-      if (tlb_resp_.stq_resp[p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, (int)tlb_resp_.stq_resp[p].result, (unsigned)tlb_resp_.stq_resp[p].paddr);
+      if (tlb_resp_[LD + p].valid) std::fprintf(stderr, " ms%d=%d/%x", p, tlb_code(tlb_resp_[LD + p].result), (unsigned)tlb_resp_[LD + p].paddr);
     for (int p = 0; p < LD; p++) {
       const auto &r = in.top_in->dcache2lsu.resp_ports.load_resps[p];
       if (r.valid) std::fprintf(stderr, " dr%d=%x/%d", p, (unsigned)(r.req_id & 0x7fffffffu), (int)r.replay);

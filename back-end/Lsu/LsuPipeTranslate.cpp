@@ -109,17 +109,16 @@ void RealLsu::exe2lsu() {
 // or mispredict cancels its pending walk and returns nothing), the responses.
 void RealLsu::tlb() {
   tlb_out();
-  tlb_resp_ = {};
-  if (in.rob_bcast->fence) dtlb.flush();
-  else if (in.rob_bcast->flush || in.dec_bcast->mispred) dtlb.cancel_pending_walk();
-  else dtlb.translate_lsu_ports(tlb_req_, tlb_resp_);
+  const bool fence = in.rob_bcast->fence, cancel = !fence && (in.rob_bcast->flush || in.dec_bcast->mispred);
+  dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : LD + STA);
+  if (fence || cancel) for (auto &r : tlb_resp_) r = {};
   tlb_in_ldq();
   tlb_in_stq();
 }
 
 void RealLsu::tlb_out() {
   const lp::LsuPipeState &pcur = pcur_;
-  tlb_req_ = {};
+  for (auto &r : tlb_req_) r = {};
 
   int n = 0;
   while (n < LD && pw.l1[n].v) n++;
@@ -141,11 +140,7 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
-    auto &rq = tlb_req_.ldq_req[k];
-    rq.valid = true;
-    rq.vaddr = pnxt.ldq[pw.l1[k].ldq].vaddr;
-    rq.entry_idx = pw.l1[k].ldq;
-    rq.wait_idx = pw.l1[k].ldq;
+    tlb_req_[k] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};
   }
 
   int ns = 0;
@@ -162,11 +157,7 @@ void RealLsu::tlb_out() {
   }
   for (int k = 0; k < STA; k++) {
     if (!pw.s1[k].v) continue;
-    auto &rq = tlb_req_.stq_req[k];
-    rq.valid = true;
-    rq.vaddr = pnxt.stq[pw.s1[k].stq].vaddr;
-    rq.entry_idx = pw.s1[k].stq;
-    rq.wait_idx = pw.s1[k].stq;
+    tlb_req_[LD + k] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
   }
 }
 
@@ -181,17 +172,17 @@ void RealLsu::tlb_in_ldq() {
       l.paddr = e.paddr;
       continue;
     }
-    const auto &resp = tlb_resp_.ldq_resp[k];
-    if (!resp.valid || resp.entry_idx != l.ldq) {
+    const TlbMmu::Resp &resp = tlb_resp_[k];
+    if (!resp.valid) {
       l.tlb = 1;
-    } else if (resp.result == MMUResultType::HIT) {
+    } else if (resp.result == TlbMmu::Result::OK) {
       e.pa_v = 1;
       e.paddr = resp.paddr;
       e.mmio = lsu_is_mmio_addr(resp.paddr);
       l.hit = true;
       l.mmio = e.mmio;
       l.paddr = resp.paddr;
-    } else if (resp.result == MMUResultType::PAGE_FAULT) {
+    } else if (resp.result == TlbMmu::Result::FAULT) {
       e.pf = 1;
       e.result = e.vaddr;
       nxt.lrsc_unit.reserve_valid = false;
@@ -207,12 +198,12 @@ void RealLsu::tlb_in_stq() {
     PSta &s1 = pw.s1[k];
     if (!s1.v) continue;
     PStq &s = pnxt.stq[s1.stq];
-    const auto &resp = tlb_resp_.stq_resp[k];
-    if (!resp.valid || resp.entry_idx != s1.stq || resp.result == MMUResultType::MISS) {
+    const TlbMmu::Resp &resp = tlb_resp_[LD + k];
+    if (!resp.valid || resp.result == TlbMmu::Result::RETRY) {
       s.trp = 1;  // retry through the STA replay register
       continue;
     }
-    if (resp.result == MMUResultType::HIT) {
+    if (resp.result == TlbMmu::Result::OK) {
       s.pa_v = 1;
       s.paddr = resp.paddr;
       s.mmio = lsu_is_mmio_addr(resp.paddr);

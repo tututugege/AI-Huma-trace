@@ -60,9 +60,12 @@ void SimCpu::init() {
   mem_subsystem.icache_resp = &icache_resp;
 
   // the TLBs' page-table walk ports (the memory subsystem's walker)
-  back.lsu->out.dtlb_walk = mem_subsystem.dtlb_walk_port;
-  back.lsu->dtlb.set_ptw_walk_port(back.lsu->out.dtlb_walk);
-  front.core->icache.out.itlb_walk = mem_subsystem.itlb_walk_port;
+  back.lsu->in.dtlb_walk = &mem_subsystem.ptw_block.dtlb_q;
+  back.lsu->out.dtlb_walk = &mem_subsystem.dtlb_walk_req;
+  back.lsu->dtlb.walk_resp = back.lsu->in.dtlb_walk;
+  back.lsu->dtlb.walk_req = back.lsu->out.dtlb_walk;
+  front.core->icache.in.itlb_walk = &mem_subsystem.ptw_block.itlb_q;
+  front.core->icache.out.itlb_walk = &mem_subsystem.itlb_walk_req;
   // the I-cache's read port of the shared interconnect and its D-cache probe (it reads the responses through registers)
   front.core->icache.out.axi = &axi.interconnect.read_ports[axi_interconnect::MASTER_ICACHE];
   front.core->icache.in.axi_q = &icache_axi_q;

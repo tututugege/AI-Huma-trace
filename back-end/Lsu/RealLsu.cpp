@@ -11,8 +11,7 @@ void RealLsu::init() {
   pcur_ = {};
   pnxt = {};
   pw = {};
-  dtlb.flush();
-  dtlb.seq();
+  dtlb.reset();
 }
 
 // Commit-time view of a store for the peripheral model (state of the registered STQ).

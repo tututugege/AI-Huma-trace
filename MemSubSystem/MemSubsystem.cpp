@@ -198,77 +198,6 @@ struct AxiKitRuntime {
   AxiLlcTableRuntime llc_tables;
 };
 
-class MemSubsystemPtwWalkPortAdapter : public PtwWalkPort {
-public:
-  bool send_walk_req(const PtwWalkReq &req) override {
-    if (!comb_out_.req_ready || comb_in_.req_valid) {
-      return false;
-    }
-    comb_in_.req_valid = true;
-    comb_in_.req = req;
-    comb_out_.req_ready = false;
-    comb_out_.resp_valid = false;
-    comb_out_.resp = {};
-    return true;
-  }
-
-  bool resp_valid() const override { return comb_out_.resp_valid; }
-
-  PtwWalkResp resp() const override { return comb_out_.resp; }
-
-  PtwWalkPortCombOut comb_output() const override { return comb_out_; }
-
-  void consume_resp() override {
-    comb_in_.resp_consumed = true;
-    comb_out_.resp_valid = false;
-    comb_out_.resp = {};
-  }
-
-  void flush_client() override {
-    seq_in_.flush = true;
-    comb_out_.req_ready = true;
-    comb_out_.resp_valid = false;
-    comb_out_.resp = {};
-  }
-
-  const PtwWalkPortCombIn &comb_input() const { return comb_in_; }
-
-  const PtwWalkPortSeqIn &seq_input() const { return seq_in_; }
-
-  void set_comb_output(const PtwWalkPortCombOut &out) { comb_out_ = out; }
-
-  void reset_cycle_input() { comb_in_ = {}; }
-  PtwWalkPortCombIn &comb_input() { return comb_in_; }   // (the walker consumes the requests: MemPtwBlock's out)
-
-  void reset_seq_input() { seq_in_ = {}; }
-
-private:
-  PtwWalkPortCombIn comb_in_{};
-  PtwWalkPortSeqIn seq_in_{};
-  PtwWalkPortCombOut comb_out_{};
-};
-
-void MemSubsystem::sync_ptw_port_outputs() {
-  const auto &ptw_out = ptw_block.comb_outputs();
-  {
-    PtwWalkPortCombOut out{};
-    const auto &src =
-        ptw_out.walk_clients[static_cast<size_t>(PtwClient::DTLB)];
-    out.req_ready = src.req_ready;
-    out.resp_valid = src.resp_valid;
-    out.resp = src.resp;
-    dtlb_walk_port_inst->set_comb_output(out);
-  }
-  {
-    PtwWalkPortCombOut out{};
-    const auto &src =
-        ptw_out.walk_clients[static_cast<size_t>(PtwClient::ITLB)];
-    out.req_ready = src.req_ready;
-    out.resp_valid = src.resp_valid;
-    out.resp = src.resp;
-    itlb_walk_port_inst->set_comb_output(out);
-  }
-}
 
 
 
@@ -323,10 +252,6 @@ void MemSubsystem::llc_seq(const axi_interconnect::AXI_LLC_TableOut_t &table_out
 
 MemSubsystem::MemSubsystem(SimContext *) {
   axi_kit_runtime = std::make_unique<AxiKitRuntime>();
-  dtlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
-  itlb_walk_port_inst = std::make_unique<MemSubsystemPtwWalkPortAdapter>();
-  dtlb_walk_port = dtlb_walk_port_inst.get();
-  itlb_walk_port = itlb_walk_port_inst.get();
 }
 
 MemSubsystem::~MemSubsystem() = default;
@@ -380,16 +305,14 @@ void MemSubsystem::init() {
   mem_route_block.out.wakeup = &wakeup;         // MemRouteBlock output → LSU wakeup signals
 
   // the shared page-table walker: the TLBs' walk ports, the route block's request / grant / response
-  ptw_block.in.dtlb_walk = &dtlb_walk_port_inst->comb_input();
-  ptw_block.in.itlb_walk = &itlb_walk_port_inst->comb_input();
-  ptw_block.in.dtlb_flush = &dtlb_walk_port_inst->seq_input();
-  ptw_block.in.itlb_flush = &itlb_walk_port_inst->seq_input();
+  ptw_block.in.dtlb_walk = &dtlb_walk_req;
+  ptw_block.in.itlb_walk = &itlb_walk_req;
   ptw_block.in.ptw_grant = &ptw_grant;
   ptw_block.in.ptw_events = &ptw_events;
   ptw_block.in.wakeup = &wakeup;
   ptw_block.out.ptw_walk_req = &ptw_walk_req;
-  ptw_block.out.dtlb_walk = &dtlb_walk_port_inst->comb_input();
-  ptw_block.out.itlb_walk = &itlb_walk_port_inst->comb_input();
+  ptw_block.out.dtlb_walk = &dtlb_walk_req;
+  ptw_block.out.itlb_walk = &itlb_walk_req;
 
 
   // ── Initialise sub-modules ─────────────────────────────────────────────────
@@ -411,11 +334,8 @@ void MemSubsystem::init() {
 
   ptw_block.init();
   mem_route_block.init();
-  sync_ptw_port_outputs();
-  dtlb_walk_port_inst->reset_cycle_input();
-  itlb_walk_port_inst->reset_cycle_input();
-  dtlb_walk_port_inst->reset_seq_input();
-  itlb_walk_port_inst->reset_seq_input();
+  dtlb_walk_req = {};
+  itlb_walk_req = {};
 
   dcache_req_mux_ = {};
   dcache_resp_route_ = {};
@@ -473,9 +393,6 @@ void MemSubsystem::seq() {
   peripheral_axi_.seq();   // (its MMIO load reads the devices before their tick)
   peripheral_model_.tick();
   mem_route_block.seq();
-  dtlb_walk_port_inst->reset_seq_input();
-  itlb_walk_port_inst->reset_seq_input();
-  sync_ptw_port_outputs();
 }
 
 // ---- the shared page-table walker's comb phases (MemPtwBlock.h) ----
@@ -534,8 +451,8 @@ void MemPtwBlock::comb_feedback() {
     }
   }
 
-  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::DTLB)] = in.dtlb_flush->flush;
-  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::ITLB)] = in.itlb_flush->flush;
+  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::DTLB)] = in.dtlb_walk->flush;
+  ptw_feedback.walk_client_flush[static_cast<size_t>(Client::ITLB)] = in.itlb_walk->flush;
   comb_finish(ptw_feedback);
   *out.dtlb_walk = {};
   *out.itlb_walk = {};

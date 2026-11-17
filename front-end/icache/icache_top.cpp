@@ -119,7 +119,7 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   if (ci->reset) {   // (the module itself is reset at the edge: icache_seq)
     out.axi->req.valid = false; out.axi->req.addr = 0; out.axi->req.total_size = 0; out.axi->req.id = 0; out.axi->req.bypass = false; out.axi->resp.ready = false;
     out.probe_req->req_valid = false; out.probe_req->req_addr = 0;
-    itlb.flush();
+    itlb.comb(true, false, nullptr, nullptr, 0);
     co->icache_read_ready = true;
     return;
   }
@@ -150,16 +150,19 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   // ITLB
   bool itlb_invoked = false;
   TlbMmu::Result itlb_ret = TlbMmu::Result::OK;
-  {
-    if (ci->itlb_flush) itlb.flush();
-    if (ci->refetch) itlb.cancel_pending_walk();
-    if (!ci->refetch && mod_.io.out.mmu_req_valid) {
-      if (edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
-      itlb_invoked = true;
-      uint32_t pa = 0;
-      itlb_ret = itlb.translate(pa, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0, &csr_state().status);
-      if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = pa >> 12; }
-      else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
+  {   // a fence.i / sfence flushes the ITLB, a refetch drops its walk, else the fetch's request (if any) is translated
+    const bool translate = !ci->refetch && mod_.io.out.mmu_req_valid;
+    if (translate && edge_.kill_step) { fatal("[icache_top] ERROR: the invalidate step (K) uses the ITLB\n"); }
+    if (ci->itlb_flush || ci->refetch || translate) {
+      const TlbMmu::Req req{true, static_cast<pc_t>(mod_.io.out.mmu_req_vtag) << 12, 0};
+      TlbMmu::Resp resp;
+      itlb.comb(ci->itlb_flush, ci->refetch, &req, &resp, translate ? 1 : 0);
+      if (translate) {
+        itlb_invoked = true;
+        itlb_ret = resp.result;
+        if (itlb_ret == TlbMmu::Result::OK) { hin.ppn_valid = true; hin.ppn = resp.paddr >> 12; }
+        else if (itlb_ret == TlbMmu::Result::FAULT) { hin.ppn_valid = true; hin.page_fault = true; }
+      }
     }
   }
 
@@ -284,7 +287,7 @@ bool ICacheTop::fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, i
 
 // FE_IPF: ITLB lookup without side effects.
 bool ICacheTop::peek_translate(uint32_t v_addr, uint32_t &p_addr) {
-  return itlb.peek_translate(p_addr, v_addr, 0, &csr_state().status);
+  return itlb.peek_translate(p_addr, v_addr, 0);
 }
 
 // FE_IPF: install a prefetched line (tag + valid only). An invalid way is used first, else a rotating victim.

@@ -13,14 +13,13 @@
 #include <functional>
 #include <memory>
 
-class PtwWalkPort;
 class SimContext;
 struct ICacheMemPortReq;
 struct ICacheMemPortResp;
 
 // The front end's fetch step is a phase of the I-cache (ports named after the front end's wires):
-//   CONTRACT comb_fetch  in: in.axi_q in.fetch_addr_head in.global_refetch in.global_reset in.in.ctrl in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_in out.ic_k out.ic_out out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
-//   CONTRACT comb_invalidate  in: in.axi_q in.predecode_flush in.probe_resp out.itlb_walk.comb_out  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_k out.itlb_walk.comb_input out.itlb_walk.seq_input out.probe_req
+//   CONTRACT comb_fetch  in: in.axi_q in.fetch_addr_head in.global_refetch in.global_reset in.in.ctrl in.probe_resp in.itlb_walk  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_in out.ic_k out.ic_out out.itlb_walk out.probe_req
+//   CONTRACT comb_invalidate  in: in.axi_q in.predecode_flush in.probe_resp in.itlb_walk  out: out.axi.req.addr out.axi.req.bypass out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready out.ic_k out.itlb_walk out.probe_req
 class ICacheTop {
 public:
   struct In {
@@ -31,6 +30,7 @@ public:
     const bool *predecode_flush = nullptr;          // the checker's refetch (the invalidate step)
     const axi_interconnect::ReadMasterPort_t *axi_q = nullptr;   // the AXI read port's outputs of the last cycle (a register)
     const ICacheMemPortResp *probe_resp = nullptr;                 // the D-cache probe's response (a register)
+    const PtwWalkPortCombOut *itlb_walk = nullptr;                 // the page-table walker's outputs to the ITLB (registered)
   } in;
   struct Out {
     ICacheIn ic_in{};
@@ -38,13 +38,13 @@ public:
     ICacheOut ic_k{};      // the outputs of the invalidate step K (a predecode flush), which replace ic_out
     axi_interconnect::ReadMasterPort_t *axi = nullptr;   // the AXI read master: requests driven this cycle
     ICacheMemPortReq *probe_req = nullptr;               // the D-cache probe (I-cache miss -> D-cache lookup)
-    PtwWalkPort *itlb_walk = nullptr;                    // the ITLB's page-table walk port (its TLB, below, uses it)
+    PtwWalkPortCombIn *itlb_walk = nullptr;              // the ITLB's requests to the page-table walker (its TLB, itlb, writes them)
   } out;
   void comb_fetch();
   void comb_invalidate();   // a predecode flush: the invalidate step K   // the address popped from the fetch-address FIFO into the I-cache
   void set_context(SimContext *ctx) { bind_.ctx_set = ctx; }
   // the ITLB's walk port is the I-cache's out.itlb_walk (FrontTop::init, after SimCpu bound it)
-  void bind_walk() { itlb.set_ptw_walk_port(out.itlb_walk); }
+  void bind_walk() { itlb.walk_resp = in.itlb_walk; itlb.walk_req = out.itlb_walk; }
   std::function<void(uint32_t index, uint32_t tag)> fill_hook;   // FE_IPF: demand fills are reported to the prefetcher
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
