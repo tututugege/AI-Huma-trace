@@ -3,57 +3,24 @@
 #include "Pmu.h"
 #include "MsData.h"
 #include "config.h"
-#include <algorithm>
-#include <cstdlib>
 #include <cstring>
 
 #include "util.h"
 
-// Shared by several phases of a cycle.
-static wire<1> fire[DECODE_WIDTH];
-static wire<PRF_IDX_WIDTH> alloc_reg[DECODE_WIDTH];
-static bool elim[DECODE_WIDTH];  // move elimination: renamed away, takes no free register
-
-static inline int ring_distance(int from, int to) { return to >= from ? to - from : to - from + PRF_NUM; }
-
-static inline int fp_ring_distance(int from, int to) { return to >= from ? to - from : to - from + FPRF_NUM; }
-// FP free list invariant: free slots + registers held by in-flight instructions == the managed pool (no move elimination here)
-static inline void fp_freelist_sanity(int spec_head, int commit_head, int tail) {
-  constexpr int kManagedPool = FPRF_NUM - FP_ARF_NUM;
-  Assert(spec_head >= 0 && spec_head < FPRF_NUM && commit_head >= 0 && commit_head < FPRF_NUM && tail >= 0 && tail < FPRF_NUM &&
-         "Ren: FP free list pointer out of range");
-  Assert(fp_ring_distance(spec_head, tail) + fp_ring_distance(commit_head, spec_head) == kManagedPool &&
+// FP free list invariant: free slots + tags held by in-flight instructions == the managed pool (no move elimination here)
+static void fp_freelist_sanity(const Ren::FpDomain &f) {
+  Assert(f.dist(f.head, f.tail) + f.dist(f.head_commit, f.head) == FPRF_NUM - FP_ARF_NUM &&
          "Ren: FP free slots + pending spec must equal the managed pool (FP register leak)");
 }
 
-// Free list invariant: free slots + registers held by in-flight instructions == the managed pool.
 void Ren::init() {
   Regs &r = q_;
   r = Regs{};
-  int free_count = 0;
-  for (int i = 0; i < PRF_NUM; i++) {
-    if (i < ARF_NUM + 1) {
-      r.spec_RAT[i] = r.arch_RAT[i] = i;
-      r.arch_cnt[i] = 1;
-    } else {
-      r.arch_cnt[i] = 0;
-      r.free_list[free_count++] = i;
-    }
-  }
-  r.free_head = r.free_head_commit = 0;
-  r.free_tail = free_count;
-  for (int i = 0; i < MAX_BR_NUM; i++) r.alloc_checkpoint_head[i] = r.free_head;
-  int fp_free_count = 0;
-  for (int i = 0; i < FPRF_NUM; i++) {
-    if (i < FP_ARF_NUM) r.fp_spec_RAT[i] = r.fp_arch_RAT[i] = FP_TAG_BASE + i;
-    else r.fp_free_list[fp_free_count++] = FP_TAG_BASE + i;
-  }
-  r.fp_free_head = r.fp_free_head_commit = 0;
-  r.fp_free_tail = fp_free_count;
-  for (int i = 0; i < MAX_BR_NUM; i++) r.fp_alloc_checkpoint_head[i] = r.fp_free_head;
-  fp_freelist_sanity(r.fp_free_head, r.fp_free_head_commit, r.fp_free_tail);
+  r.x.reset(0);
+  r.f.reset(FP_TAG_BASE);
+  for (int i = 0; i < PRF_NUM; i++) r.arch_cnt[i] = i < ARF_NUM + 1 ? 1 : 0;
+  fp_freelist_sanity(r.f);
 }
-
 
 // Move elimination bound. The architectural state after a move commits equals the speculative RAT right after its
 // rename, so the architectural reference count of the source register never exceeds the speculative one. A move is
@@ -71,250 +38,165 @@ bool Ren::elim_refs_ok(int i) const {
   }
   int refs = 0;
   for (int e = 0; e < ARF_NUM + 1; e++)
-    if (q.spec_RAT[e] == q.spec_RAT[s1]) refs++;
-  const bool ok = refs + older + 1 <= MOVE_ELIM_MAX_REFS;
-  return ok;
+    if (q.x.spec[e] == q.x.spec[s1]) refs++;
+  return refs + older + 1 <= MOVE_ELIM_MAX_REFS;
 }
 
-// Pick destination physical registers from the free list, in order. The first instruction that finds it empty stalls
-// itself and everything behind it (ren2dis.valid = 0).
-void Ren::alloc() {
+// Destination tags from the free lists, in order (each domain from its own; the first instruction that finds its list
+// empty stalls itself and everything behind it: ren2dis.valid = 0), then the source / old-destination lookup in the
+// speculative RAT, where an older instruction of the same group that writes the same architectural register (x0
+// excluded) takes precedence, the youngest such writer winning.
+void Ren::comb_rename() {
   const Regs &q = q_;
-  int head = q.free_head;
-  int left = ring_distance(q.free_head, q.free_tail);
-  int fhead = q.fp_free_head;
-  int fleft = fp_ring_distance(q.fp_free_head, q.fp_free_tail);
-  fp_freelist_sanity(q.fp_free_head, q.fp_free_head_commit, q.fp_free_tail);
+  fp_freelist_sanity(q.f);
+  int left[2] = {q.x.free_count(), q.f.free_count()};
+  int next[2] = {q.x.head, q.f.head};
   bool stall = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    alloc_reg[i] = 0;
-    elim[i] = false;
+    alloc_reg_[i] = 0;
+    elim_[i] = false;
     out.ren2dis.valid[i] = false;
     if (!q.inst_valid[i]) continue;
-    if (is_move_shape(q.inst_r[i]) && elim_refs_ok(i)) {
-      elim[i] = true;
+    const Uop &u = q.inst_r[i];
+    if (is_move_shape(u) && elim_refs_ok(i)) {
+      elim_[i] = true;
       out.ren2dis.valid[i] = !stall;
-    } else if (!q.inst_r[i].dest_en) {
+    } else if (!u.dest_en) {
       out.ren2dis.valid[i] = !stall;
-    } else if (q.inst_r[i]->dest_fp) {  // each domain stalls on its own free list; everything behind a stalled slot waits
-      if (!stall && fleft > 0) {
-        alloc_reg[i] = q.fp_free_list[fhead];
+    } else {
+      const int fp = u->dest_fp ? 1 : 0;
+      if (!stall && left[fp] > 0) {
+        alloc_reg_[i] = fp ? q.f.free_list[next[1]] : q.x.free_list[next[0]];
+        next[fp] = (next[fp] + 1) % (fp ? FPRF_NUM : PRF_NUM);
+        left[fp]--;
         out.ren2dis.valid[i] = true;
-        LOOP_INC(fhead, FPRF_NUM);
-        fleft--;
       } else {
         stall = true;
       }
-    } else if (!stall && left > 0) {
-      alloc_reg[i] = q.free_list[head];
-      out.ren2dis.valid[i] = true;
-      LOOP_INC(head, PRF_NUM);
-      left--;
-    } else {
-      stall = true;
     }
   }
   g_pmu_back.ren_no_preg = stall;
-}
 
-// Source/old-destination lookup in q.spec_RAT; an older instruction of the same group that writes the same architectural
-// register (x0 excluded) takes precedence, the youngest such writer wins.
-void Ren::rename() {
-  const Regs &q = q_;
-  wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination register of each slot (an eliminated move: its source)
+  wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination tag of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    out.ren2dis.uop[i] = q.inst_r[i];
-    dest_of[i] = alloc_reg[i];
-    // Static fields live in the uop pool: an invalid slot still holds the handle of an instruction that has long
-    // left the stage, so it must not be written.
+    dest_of[i] = alloc_reg_[i];
+    // static fields live in the uop pool: an invalid slot holds the handle of an instruction that has left the stage
     if (!q.inst_valid[i]) continue;
-    out.ren2dis.uop[i]->dest_preg = alloc_reg[i];
+    Uop &r = out.ren2dis.uop[i];
+    r = q.inst_r[i];
+    r->dest_preg = alloc_reg_[i];
     // EXP-020: a newly allocated physical register holds no stale value; the taint of a squashed wrong-path producer (a mispredict does not clear the table) must not leak to its next owner
-    if (q.inst_r[i].dest_en && !elim[i] && alloc_reg[i] != 0 && alloc_reg[i] < TAG_NUM) msd::taint[alloc_reg[i]] = msd::TV{};
+    if (r.dest_en && !elim_[i] && alloc_reg_[i] != 0 && alloc_reg_[i] < TAG_NUM) msd::taint[alloc_reg_[i]] = msd::TV{};
     auto lookup = [&](int areg, bool fp) {
-      wire<PRF_IDX_WIDTH> p = 0;
-      if (fp) p = q.fp_spec_RAT[areg]; else
-      p = q.spec_RAT[areg];
+      wire<PRF_IDX_WIDTH> p = fp ? q.f.spec[areg] : q.x.spec[areg];
       for (int j = 0; j < i; j++) {
-        if (!q.inst_valid[j] || !q.inst_r[j].dest_en || bool(q.inst_r[j]->dest_fp) != fp) continue;
-        if (fp ? q.inst_r[j]->dest_areg == areg : (q.inst_r[j]->dest_areg != 0 && q.inst_r[j]->dest_areg == areg)) p = dest_of[j];
+        const Uop &o = q.inst_r[j];
+        if (!q.inst_valid[j] || !o.dest_en || bool(o->dest_fp) != fp) continue;
+        if (o->dest_areg == areg && (fp || areg != 0)) p = dest_of[j];
       }
       return p;
     };
-    out.ren2dis.uop[i]->src1_preg = lookup(q.inst_r[i]->src1_areg, q.inst_r[i]->src1_fp);
-    out.ren2dis.uop[i]->src2_preg = lookup(q.inst_r[i]->src2_areg, q.inst_r[i]->src2_fp);
-    if (q.inst_r[i]->src3_en) out.ren2dis.uop[i]->src3_preg = lookup(q.inst_r[i]->src3_areg, q.inst_r[i]->src3_fp);
-    out.ren2dis.uop[i]->old_dest_preg = lookup(q.inst_r[i]->dest_areg, q.inst_r[i]->dest_fp);
-    if (elim[i]) {
-      dest_of[i] = out.ren2dis.uop[i]->src1_preg;
-      out.ren2dis.uop[i]->dest_preg = dest_of[i];
-    }
+    r->src1_preg = lookup(r->src1_areg, r->src1_fp);
+    r->src2_preg = lookup(r->src2_areg, r->src2_fp);
+    if (r->src3_en) r->src3_preg = lookup(r->src3_areg, r->src3_fp);
+    r->old_dest_preg = lookup(r->dest_areg, r->dest_fp);
+    if (elim_[i]) dest_of[i] = r->dest_preg = r->src1_preg;
   }
 }
 
-namespace {
-// Commit statistics and the checkpoint warm-up / measurement window.
-void count_commit(SimContext *ctx, const Uop &u) {
-  ctx->perf.commit_num++;
-  if (is_load(u)) ctx->perf.commit_load_num++;
-  if (is_store(u)) ctx->perf.commit_store_num++;
-  if (!ctx->is_ckpt) return;
-  if (ctx->front_door_pending) {
-    // The restore program ends with mret: the measurement counts from the checkpoint's first instruction. The commit
-    // counters restart; the cycle count is kept (the memory system uses it as a clock) and its baseline moves.
-    if (decode_inst_type(u->type) == MRET) {
-      ctx->front_door_pending = false;
-      std::cout << "[front-door] restore program committed: " << std::dec << ctx->perf.commit_num << " instructions, "
-                << ctx->perf.cycle << " cycles; measuring from here" << std::endl;
-      ctx->perf.commit_num = ctx->perf.commit_load_num = ctx->perf.commit_store_num = 0;
-      ctx->perf.pmu.reset();
-      ctx->perf.cycle_base = ctx->perf.cycle;
-      if (ctx->ckpt_warmup_commit_target == 0) ctx->perf.perf_start = true;
-    }
-    return;
-  }
-  if (!ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
-    std::cout << "[CKPT] O3 warmup done at commit " << std::dec << ctx->perf.commit_num << "/"
-              << ctx->ckpt_warmup_commit_target << ". Resetting perf counters and starting measure phase." << std::endl;
-    ctx->perf.perf_reset();
-    ctx->perf.perf_start = true;
-  }
-  if (ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_measure_commit_target)
-    ctx->exit_reason = ExitReason::SIMPOINT;
-}
-}  // namespace
-
-// The dispatch handshake (comb): the fired slots and ren2dec.ready; the commit's instruction count and its interrupt
-// report to the trace bridge.
-void Ren::handshake() {
+// The dispatch handshake: the fired slots and ren2dec.ready.
+void Ren::comb_fire() {
   const Regs &q = q_;
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
-  for (int i = 0; i < DECODE_WIDTH; i++) fire[i] = out.ren2dis.valid[i] && in.dis2ren->ready;
   out.ren2dec.ready = !flush && !mispred;
-  for (int i = 0; i < DECODE_WIDTH; i++) out.ren2dec.ready &= fire[i] || !q.inst_valid[i];
-
-  const bool interrupt = in.rob_bcast->interrupt;
-  for (int i = 0; i < COMMIT_WIDTH; i++)
-    if (in.rob_commit->commit_entry[i].valid && !interrupt) count_commit(ctx, in.rob_commit->commit_entry[i].uop);
-  if (interrupt) ctx->run_interrupt_hook();
+  for (int i = 0; i < DECODE_WIDTH; i++) {
+    fire_[i] = out.ren2dis.valid[i] && in.dis2ren->ready;
+    out.ren2dec.ready &= fire_[i] || !q.inst_valid[i];
+  }
 }
 
-// The clock edge. Fired instructions take their register and checkpoint the speculative RAT at branches, commits free
-// old registers and update the architectural RAT, then flush (restore from the architectural RAT) or mispredict
-// (restore a checkpoint) override the speculative state. The pipeline register: emptied by flush/mispredict, reloaded
-// from decode when ready, else keeps the unfired instructions; bits of branches resolved this cycle are cleared from
-// every mask that stays.
+// The clock edge. Fired instructions take their tag and checkpoint the speculative RAT at branches, commits free old
+// tags and update the architectural RAT, then flush (restore from the architectural RAT) or mispredict (restore a
+// checkpoint) override the speculative state. The pipeline register: emptied by flush / mispredict, reloaded from decode
+// when ready, else keeps the unfired instructions; bits of branches resolved this cycle are cleared from every mask that
+// stays.
 void Ren::seq() {
   Regs &d = q_;   // updated in place
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
-  const int free_tail0 = d.free_tail, fp_free_tail0 = d.fp_free_tail;   // (registered values for the mispredict restore)
+  // a mispredict restores the branch's checkpoint as registered and the registered tails (this cycle's reclaims are dropped)
   const int br = mispred ? int(in.dec_bcast->br_id) : 0;
-  int ckpt_head = 0, fp_ckpt_head = 0;
-  decltype(d.spec_RAT) mis_rat_;          // the registered checkpoint of the mispredicted branch
-  decltype(d.fp_spec_RAT) mis_fp_rat_;
+  Assert((!mispred || (br < MAX_BR_NUM && br != 0)) && "Ren: mispred br_id out of range");
+  decltype(d.x.spec) mis_x;
+  decltype(d.f.spec) mis_f;
+  const int x_head = d.x.ckpt_head[br], f_head = d.f.ckpt_head[br], x_tail = d.x.tail, f_tail = d.f.tail;
   if (mispred) {
-    Assert(br < MAX_BR_NUM && br != 0 && "Ren: mispred br_id out of range");
-    memcpy(mis_rat_, d.RAT_checkpoint[br], sizeof(mis_rat_));
-    memcpy(mis_fp_rat_, d.fp_RAT_checkpoint[br], sizeof(mis_fp_rat_));
-    ckpt_head = d.alloc_checkpoint_head[br];
-    fp_ckpt_head = d.fp_alloc_checkpoint_head[br];
+    std::memcpy(mis_x, d.x.ckpt[br], sizeof(mis_x));
+    std::memcpy(mis_f, d.f.ckpt[br], sizeof(mis_f));
   }
 
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!fire[i]) continue;
-    if (out.ren2dis.uop[i].dest_en) {
-      if (d.inst_r[i]->dest_fp) {
-        d.fp_spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i]->dest_preg;
-        Assert(d.fp_free_head != d.fp_free_tail && "Ren: allocate when the FP free list is empty");
-        LOOP_INC(d.fp_free_head, FPRF_NUM);
-      } else
-      {
-        d.spec_RAT[d.inst_r[i]->dest_areg] = out.ren2dis.uop[i]->dest_preg;
-        if (!elim[i]) {
-          Assert(d.free_head != d.free_tail && "Ren: allocate when free list is empty");
-          LOOP_INC(d.free_head, PRF_NUM);
-        }
+    if (!fire_[i]) continue;
+    const Uop &r = out.ren2dis.uop[i];
+    if (r.dest_en) {
+      if (r->dest_fp) {
+        d.f.spec[r->dest_areg] = r->dest_preg;
+        d.f.take();
+      } else {
+        d.x.spec[r->dest_areg] = r->dest_preg;
+        if (!elim_[i]) d.x.take();
       }
     }
-    if (is_branch(d.inst_r[i]->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
-      const auto br_id = d.inst_r[i]->br_id;
-      Assert(br_id < MAX_BR_NUM && "Ren: branch id out of range");
-      memcpy(d.RAT_checkpoint[br_id], d.spec_RAT, sizeof(d.spec_RAT));
-      d.alloc_checkpoint_head[br_id] = d.free_head;
-      memcpy(d.fp_RAT_checkpoint[br_id], d.fp_spec_RAT, sizeof(d.fp_spec_RAT));
-      d.fp_alloc_checkpoint_head[br_id] = d.fp_free_head;
+    if (is_branch(r->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
+      Assert(r->br_id < MAX_BR_NUM && "Ren: branch id out of range");
+      d.x.checkpoint(r->br_id);
+      d.f.checkpoint(r->br_id);
     }
   }
 
+  // An instruction that raised an exception (or retires with an interrupt) does not free its old destination: it looks
+  // as if it never committed.
   const bool interrupt = in.rob_bcast->interrupt;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    if (!in.rob_commit->commit_entry[i].valid) continue;
-    InstEntry commit_entry = in.rob_commit->commit_entry[i].uop.to_inst_entry(true);
-    InstInfo *inst = &commit_entry.uop;
-    // An exception instruction does not free its old destination: it looks as if it never committed.
-    if (inst->dest_en && !is_exception(*inst) && !interrupt && (*inst)->dest_fp) {  // FP destination: no move elimination
-      Assert(d.fp_free_head_commit != d.fp_free_head && "Ren: FP commit reclaim when no pending spec allocation");
-      d.fp_free_list[d.fp_free_tail] = (*inst)->old_dest_preg;
-      LOOP_INC(d.fp_free_tail, FPRF_NUM);
-      LOOP_INC(d.fp_free_head_commit, FPRF_NUM);
-      d.fp_arch_RAT[(*inst)->dest_areg] = (*inst)->dest_preg;
-    } else
-    if (inst->dest_en && !is_exception(*inst) && !interrupt) {
-      // move elimination: the old register is freed when no architectural register names it any more; an eliminated
-      // move allocated nothing, so it does not advance the commit head
-      Assert(!mispred && "Ren(ME): commit together with mispredict");
-      if (!is_eliminated_move(*inst)) {
-        Assert(d.free_head_commit != d.free_head && "Ren: commit reclaim when no pending spec allocation");
-        LOOP_INC(d.free_head_commit, PRF_NUM);
-      }
-      d.arch_cnt[(*inst)->dest_preg]++;
-      const auto old = (*inst)->old_dest_preg;
-      if (--d.arch_cnt[old] == 0) {
-        d.free_list[d.free_tail] = old;
-        LOOP_INC(d.free_tail, PRF_NUM);
-      }
-      d.arch_RAT[(*inst)->dest_areg] = (*inst)->dest_preg;
+    const auto &c = in.rob_commit->commit_entry[i];
+    if (!c.valid || interrupt || !c.uop.dest_en || is_exception(c.uop)) continue;
+    const Uop &u = c.uop;
+    if (u->dest_fp) {   // FP: no move elimination
+      d.f.commit_alloc();
+      d.f.reclaim(u->old_dest_preg);
+      d.f.arch[u->dest_areg] = u->dest_preg;
+      continue;
     }
+    // move elimination: the old tag is freed when no architectural register names it any more; an eliminated move
+    // allocated nothing, so it does not advance the commit head
+    Assert(!mispred && "Ren(ME): commit together with mispredict");
+    if (!is_eliminated_move(u)) d.x.commit_alloc();
+    d.arch_cnt[u->dest_preg]++;
+    if (--d.arch_cnt[u->old_dest_preg] == 0) d.x.reclaim(u->old_dest_preg);
+    d.x.arch[u->dest_areg] = u->dest_preg;
   }
 
   if (flush) {
-    memcpy(d.spec_RAT, d.arch_RAT, sizeof(d.spec_RAT));
-    d.free_head = d.free_head_commit;
-    memcpy(d.fp_spec_RAT, d.fp_arch_RAT, sizeof(d.fp_spec_RAT));
-    d.fp_free_head = d.fp_free_head_commit;
+    d.x.restore_arch();
+    d.f.restore_arch();
   } else if (mispred) {  // never together with flush
-    memcpy(d.spec_RAT, mis_rat_, sizeof(d.spec_RAT));
-    d.free_head = ckpt_head;
-    d.free_tail = free_tail0;  // reclaims of this cycle are dropped, as in the original
-    memcpy(d.fp_spec_RAT, mis_fp_rat_, sizeof(d.fp_spec_RAT));
-    d.fp_free_head = fp_ckpt_head;
-    d.fp_free_tail = fp_free_tail0;
+    std::memcpy(d.x.spec, mis_x, sizeof(mis_x));
+    std::memcpy(d.f.spec, mis_f, sizeof(mis_f));
+    d.x.head = x_head; d.x.tail = x_tail;
+    d.f.head = f_head; d.f.tail = f_tail;
   }
-  fp_freelist_sanity(d.fp_free_head, d.fp_free_head_commit, d.fp_free_tail);
+  fp_freelist_sanity(d.f);
 
   const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
-  const bool drain = flush || mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (drain) {
+    if (flush || mispred) {
       d.inst_valid[i] = false;
     } else if (out.ren2dec.ready) {
       d.inst_valid[i] = in.dec2ren->valid[i];
       d.inst_r[i] = in.dec2ren->uop[i];
       d.inst_r[i].br_mask &= ~clear;
     } else {
-      d.inst_valid[i] = d.inst_valid[i] && !fire[i];
+      d.inst_valid[i] = d.inst_valid[i] && !fire_[i];
       if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
     }
   }
-}
-
-// allocate the destination registers and rename the decoded group
-void Ren::comb_rename() {
-  alloc();
-  rename();
-}
-
-// dispatch handshake
-void Ren::comb_fire() {
-  handshake();
 }

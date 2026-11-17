@@ -8,8 +8,10 @@
 #include "config.h"
 #include "trace_hook.h"
 #include "util.h"
+#include "Pmu.h"
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
 
 
 namespace {
@@ -41,6 +43,35 @@ inline void check_load_alignment(const Uop &u, const char *msg) {
   const uint32_t mask = (u->func3 & 3u) == 0 ? 0u : (u->func3 & 3u) == 1 ? 1u : 3u;
   Assert((u.diag_val & mask) == 0 && msg);
 }
+// Commit statistics and the checkpoint warm-up / measurement window.
+void count_commit(SimContext *ctx, const Uop &u) {
+  ctx->perf.commit_num++;
+  if (is_load(u)) ctx->perf.commit_load_num++;
+  if (is_store(u)) ctx->perf.commit_store_num++;
+  if (!ctx->is_ckpt) return;
+  if (ctx->front_door_pending) {
+    // The restore program ends with mret: the measurement counts from the checkpoint's first instruction. The commit
+    // counters restart; the cycle count is kept (the memory system uses it as a clock) and its baseline moves.
+    if (decode_inst_type(u->type) == MRET) {
+      ctx->front_door_pending = false;
+      std::cout << "[front-door] restore program committed: " << std::dec << ctx->perf.commit_num << " instructions, "
+                << ctx->perf.cycle << " cycles; measuring from here" << std::endl;
+      ctx->perf.commit_num = ctx->perf.commit_load_num = ctx->perf.commit_store_num = 0;
+      ctx->perf.pmu.reset();
+      ctx->perf.cycle_base = ctx->perf.cycle;
+      if (ctx->ckpt_warmup_commit_target == 0) ctx->perf.perf_start = true;
+    }
+    return;
+  }
+  if (!ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
+    std::cout << "[CKPT] O3 warmup done at commit " << std::dec << ctx->perf.commit_num << "/"
+              << ctx->ckpt_warmup_commit_target << ". Resetting perf counters and starting measure phase." << std::endl;
+    ctx->perf.perf_reset();
+    ctx->perf.perf_start = true;
+  }
+  if (ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_measure_commit_target)
+    ctx->exit_reason = ExitReason::SIMPOINT;
+}
 }  // namespace
 
 void Rob::init() {
@@ -55,23 +86,20 @@ void Rob::init() {
 // attribution of the oldest incomplete instruction (core bound vs memory bound vs cache miss).
 void Rob::ready() {
   const Regs &q = q_;
-  out.rob2dis.stall = false;
-  out.rob2csr.commit = false;
-  out.rob2csr.interrupt_resp = false;
-
-  bool found = false, mem = false, miss = false;
-  for (int k = 0; k < ROB_BANK_NUM && k < q.c_count; k++) {   // the COMMIT_WIDTH oldest entries
+  // one scan of the head line (the ROB_BANK_NUM oldest entries): a flush-type instruction in it, its oldest incomplete entry
+  bool flush_inst = false;
+  head_incomplete_ = -1;
+  for (int k = 0; k < ROB_BANK_NUM && k < q.c_count; k++) {
     const int idx = (q.c_head + k) % ROB_NUM;
-    const auto &e = q.cent(idx);
-    if (rob_is_flush_inst(e.uop)) out.rob2dis.stall = true;
-    if (!found && !rob_is_complete(e.uop)) {  // the oldest incomplete instruction is the bottleneck
-      found = true;
-      mem = rob_is_load(e.uop) || rob_is_store(e.uop);
-      miss = mem && in.lsu2rob->tma.miss_mask.test(idx);
-    }
+    const Uop &u = q.cent(idx).uop;
+    flush_inst = flush_inst || rob_is_flush_inst(u);
+    if (head_incomplete_ < 0 && !rob_is_complete(u)) head_incomplete_ = idx;
   }
-  out.rob2dis.tma.head_is_memory = found && mem;
-  out.rob2dis.tma.head_is_miss = found && miss;
+  out.rob2dis.stall = flush_inst;
+  // top-down attribution: the oldest incomplete instruction is the bottleneck (memory, and a cache miss?)
+  const bool mem = head_incomplete_ >= 0 && (rob_is_load(q.cent(head_incomplete_).uop) || rob_is_store(q.cent(head_incomplete_).uop));
+  out.rob2dis.tma.head_is_memory = mem;
+  out.rob2dis.tma.head_is_miss = mem && in.lsu2rob->tma.miss_mask.test(head_incomplete_);
   out.rob2dis.empty = is_empty();
   out.rob2dis.ready = !is_full();
 }
@@ -88,30 +116,19 @@ void Rob::commit() {
   bc.flush = bc.exception = bc.mret = bc.sret = bc.ecall = bc.breakpoint = bc.fence = bc.fence_i = false;
   bc.interrupt = false;
   bc.page_fault_inst = bc.page_fault_load = bc.page_fault_store = bc.illegal_inst = false;
+  out.rob2csr.commit = false;
   out.rob2csr.interrupt_resp = false;
   // BPU commit credits: the control-flow instructions of the prefix may not exceed the free BPU update-queue entries and the
   // fetch-block ends may not exceed the free uBTB train-queue entries (the BPU queues drop instead of back-pressuring). Both
   // come from registers only: the BPU occupancy at the start of the cycle minus what this ROB committed last cycle (those
   // commits reach the BPU queues this cycle); conservative, no cross-unit combinational path.
 
-  bc.head_valid = bc.head_incomplete_valid = false;
-  bc.head_rob_idx = bc.head_incomplete_rob_idx = 0;
-  if (q.c_count > 0) {
-    bc.head_valid = true;
-    bc.head_rob_idx = q.c_head;
-    for (int k = 0; k < ROB_BANK_NUM && k < q.c_count; k++) {
-      const int idx = (q.c_head + k) % ROB_NUM;
-      if (!rob_is_complete(q.cent(idx).uop)) { bc.head_incomplete_valid = true; bc.head_incomplete_rob_idx = idx; break; }
-    }
-  }
+  bc.head_valid = q.c_count > 0;
+  bc.head_rob_idx = q.c_count > 0 ? q.c_head : 0;
+  bc.head_incomplete_valid = head_incomplete_ >= 0;
+  bc.head_incomplete_rob_idx = head_incomplete_ >= 0 ? head_incomplete_ : 0;
 
-  for (int k = 0; k < COMMIT_WIDTH; k++) {
-    const int idx = (q.c_head + k) % ROB_NUM;
-    out.rob_commit.commit_entry[k].uop = q.cent(idx).uop;
-    out.rob_commit.commit_extra[k].src1_areg = q.cent(idx).uop->src1_areg;
-    out.rob_commit.commit_extra[k].imm = q.cent(idx).uop->imm;
-    out.rob_commit.commit_entry[k].valid = false;
-  }
+  for (int k = 0; k < COMMIT_WIDTH; k++) out.rob_commit.commit_entry[k].valid = false;   // (the uops are written for the committing slots only)
 
   const bool front_stall = static_cast<bool>(in.top_in->front_stall);
   const bool mispred = in.dec_bcast->mispred;
@@ -153,8 +170,12 @@ void Rob::commit() {
 
   for (int k = 0; k < n; k++) {
     const int idx = (q.c_head + k) % ROB_NUM;
-    check_load_alignment(q.cent(idx).uop, "DUT: Load address misaligned at commit!");
+    const Uop &u = q.cent(idx).uop;
+    check_load_alignment(u, "DUT: Load address misaligned at commit!");
     out.rob_commit.commit_entry[k].valid = true;
+    out.rob_commit.commit_entry[k].uop = u;
+    out.rob_commit.commit_extra[k].src1_areg = u->src1_areg;
+    out.rob_commit.commit_extra[k].imm = u->imm;
   }
   if (single) single_actions(q.cent(q.c_head).uop);
 
@@ -324,11 +345,9 @@ bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
   occupied_entries = 0;
   for (int l = 0; l < ROB_LINE_NUM; l++)
     for (int i = 0; i < ROB_BANK_NUM; i++) occupied_entries += q.entry[i][l].valid ? 1 : 0;
-  for (int k = 0; k < ROB_BANK_NUM && k < q.c_count; k++) {
-    const auto &e = q.entry[((q.c_head + k) % ROB_NUM) % ROB_BANK_NUM][((q.c_head + k) % ROB_NUM) / ROB_BANK_NUM];
-    if (!rob_is_complete(e.uop)) { out = e.uop; return true; }
-  }
-  return false;
+  if (head_incomplete_ < 0) return false;   // (comb_commit's scan of this cycle)
+  out = q.cent(head_incomplete_).uop;
+  return true;
 }
 
 // the head: commit and its broadcasts
@@ -337,67 +356,67 @@ void Rob::comb_commit() {
   commit();
 }
 
-// the back end's outputs of the cycle: the redirect (a branch mispredict from the IDU, a flush from the commit, its
-// target from the CSR), the fetch-group handshake, the commit with its BPU training data, the commit / flush reported to
-// the trace bridge, the FS-dirty request to the CSR
-void Rob::comb_redirect() {
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.top_out->fire[i] = in.pre2front->fire[i];
-  out.top_out->flush = out.rob_bcast.flush;
-  if (out.top_out->flush) {
+// Where the front end goes: a flush from the commit (a trap or xRET target from the CSR file, else the next instruction)
+// or a branch mispredict from the IDU (with what the BPU needs to repair its history); the flush is reported to the
+// trace bridge.
+void Rob::redirect() {
+  BackOut &o = *out.top_out;
+  const auto &bc = out.rob_bcast;
+  o.flush = bc.flush;
+  o.fence_i = bc.fence_i;
+  o.itlb_flush = bc.fence;
+  if (bc.flush) {
     int64_t committing = -1;
-    for (int i = 0; i < COMMIT_WIDTH; i++) {
-      if (out.rob_commit.commit_entry[i].valid) {
-        committing = (int64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
-        break;
-      }
-    }
-    tbhook::on_flush(committing, out.rob_bcast.interrupt);
-  }
-  out.top_out->fence_i = out.rob_bcast.fence_i;
-  out.top_out->itlb_flush = out.rob_bcast.fence;
-
-  // 1. Normal case (No Rob flush)
-  if (!out.rob_bcast.flush) {
-    out.top_out->mispred = in.dec_bcast->mispred;
-    out.top_out->stall = !in.pre2front->ready;
-    out.top_out->redirect_pc = in.idu_br_latch->redirect_pc;
-    out.top_out->rf_valid = in.dec_bcast->mispred;
-    if (out.top_out->rf_valid) {
-      const uint32_t fi = in.idu_br_latch->ftq_idx;
-      out.top_out->rf_slot = in.idu_br_latch->ftq_off;
-      out.top_out->rf_blk = ftq->ftq_blk_id(fi, out.top_out->rf_slot);
-      out.top_out->rf_type = in.idu_br_latch->br_type;
-      out.top_out->rf_pc = ftq->ftq_slot_pc(fi, out.top_out->rf_slot);
-      out.top_out->rf_is_rvc = ftq->ftq_slot_rvc(fi, out.top_out->rf_slot);
-    }
-  } else {
-    out.top_out->mispred = true;
+    for (int i = 0; i < COMMIT_WIDTH && committing < 0; i++)
+      if (out.rob_commit.commit_entry[i].valid) committing = (int64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
+    tbhook::on_flush(committing, bc.interrupt);
+    o.mispred = true;
     const Csr::TrapOut trap = csr_state().trap_out();   // (the CSR file: its registers and this cycle's commit)
-    if (out.rob_bcast.mret || out.rob_bcast.sret) {
-      out.top_out->redirect_pc = trap.epc;
-    } else if (out.rob_bcast.exception) {
-      out.top_out->redirect_pc = trap.trap_pc;
-    } else {
-      out.top_out->redirect_pc = out.rob_bcast.pc + ilen_of(out.rob_bcast.is_rvc);
-    }
+    o.redirect_pc = (bc.mret || bc.sret) ? trap.epc : bc.exception ? trap.trap_pc : bc.pc + ilen_of(bc.is_rvc);
+    return;
   }
+  o.mispred = in.dec_bcast->mispred;
+  o.stall = !in.pre2front->ready;
+  o.redirect_pc = in.idu_br_latch->redirect_pc;
+  o.rf_valid = in.dec_bcast->mispred;
+  if (o.rf_valid) {
+    const uint32_t fi = in.idu_br_latch->ftq_idx;
+    o.rf_slot = in.idu_br_latch->ftq_off;
+    o.rf_blk = ftq->ftq_blk_id(fi, o.rf_slot);
+    o.rf_type = in.idu_br_latch->br_type;
+    o.rf_pc = ftq->ftq_slot_pc(fi, o.rf_slot);
+    o.rf_is_rvc = ftq->ftq_slot_rvc(fi, o.rf_slot);
+  }
+}
 
+// The commit as the back end's output (the uops with their FTQ data: the BPU training; on a flush their next pc is the
+// redirect target), the commits reported to the trace bridge (and FS-dirty from their facts), the commit statistics and
+// an interrupt taken at commit.
+void Rob::report_commit() {
+  BackOut &o = *out.top_out;
+  const bool interrupt = out.rob_bcast.interrupt;
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) o.fire[i] = in.pre2front->fire[i];
   out.rob2csr.fs_dirty = false;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
-    out.top_out->commit_entry[i] =
-        out.rob_commit.commit_entry[i].uop.to_inst_entry(
-            out.rob_commit.commit_entry[i].valid);
-    out.top_out->commit_extra[i] = out.rob_commit.commit_extra[i];
-    out.top_out->commit_ftq[i] = in.ftq_commit_info->resp[i];
-    if (out.rob_commit.commit_entry[i].valid &&
-        !out.rob_bcast.interrupt) {
-      if (tbhook::fs_dirty_at_commit((uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx)) out.rob2csr.fs_dirty = true;
-      tbhook::on_commit(
-          (uint64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx);
-    }
-    if (out.top_out->commit_entry[i].valid && out.top_out->flush) {
-      // Flush: the next PC of every committing instruction is the redirect target (trap vector, epc, ...)
-      out.top_out->commit_entry[i].uop.diag_val = out.top_out->redirect_pc;
-    }
+    const auto &c = out.rob_commit.commit_entry[i];
+    o.commit_entry[i].valid = c.valid;
+    if (!c.valid) continue;
+    o.commit_entry[i].uop = c.uop;
+    o.commit_extra[i] = out.rob_commit.commit_extra[i];
+    o.commit_ftq[i] = in.ftq_commit_info->resp[i];
+    if (o.flush) o.commit_entry[i].uop.diag_val = o.redirect_pc;
+    if (interrupt) continue;
+    if (tbhook::fs_dirty_at_commit((uint64_t)c.uop->dbg.inst_idx)) out.rob2csr.fs_dirty = true;
+    tbhook::on_commit((uint64_t)c.uop->dbg.inst_idx);
   }
+  if (!interrupt)
+    for (int i = 0; i < COMMIT_WIDTH; i++)
+      if (out.rob_commit.commit_entry[i].valid) count_commit(ctx, out.rob_commit.commit_entry[i].uop);
+  if (interrupt) ctx->run_interrupt_hook();   // (the trap of this cycle, to the trace bridge)
+}
+
+// the back end's outputs of the cycle: the redirect and the commit
+void Rob::comb_redirect() {
+  redirect();
+  report_commit();
 }

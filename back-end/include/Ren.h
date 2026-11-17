@@ -1,13 +1,40 @@
 #pragma once
 #include "IO.h"
 #include "config.h"
+#include <cstring>
 
 class BackTop;
+
+// One register domain of the renamer: the speculative and architectural RAT, a RAT checkpoint per branch tag, and the free
+// list (a ring: the speculative head, the commit head, the tail; a head at each branch tag). Integer: x0..x31 and the AMO
+// scratch register 32, tags 0..PRF_NUM-1. FP: f0..f31, tags FP_TAG_BASE + 0..FPRF_NUM-1.
+template <int NA, int NP> struct RenDomain {
+  reg<PRF_IDX_WIDTH> arch[NA], spec[NA], ckpt[MAX_BR_NUM][NA];
+  reg<PRF_IDX_WIDTH> free_list[NP];
+  reg<PRF_IDX_WIDTH> head, head_commit, tail;
+  reg<PRF_IDX_WIDTH> ckpt_head[MAX_BR_NUM];
+
+  static int dist(int from, int to) { return to >= from ? to - from : to - from + NP; }
+  int free_count() const { return dist(head, tail); }
+  // identity map of the architectural registers onto tags base + 0..NA-1, the other tags free
+  void reset(int base) {
+    for (int i = 0; i < NA; i++) arch[i] = spec[i] = base + i;
+    for (int i = NA; i < NP; i++) free_list[i - NA] = base + i;
+    head = head_commit = 0;
+    tail = NP - NA;
+    for (auto &h : ckpt_head) h = head;
+  }
+  void take() { Assert(head != tail && "Ren: allocate when the free list is empty"); head = (head + 1) % NP; }
+  void checkpoint(int br) { std::memcpy(ckpt[br], spec, sizeof(spec)); ckpt_head[br] = head; }
+  void reclaim(int old) { free_list[tail] = old; tail = (tail + 1) % NP; }   // an old destination back to the free list
+  void commit_alloc() { Assert(head_commit != head && "Ren: commit reclaim when no pending spec allocation"); head_commit = (head_commit + 1) % NP; }
+  void restore_arch() { std::memcpy(spec, arch, sizeof(spec)); head = head_commit; }   // a flush
+};
 
 // Rename. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in) and writes
 // (out), and the outputs only this module drives.
 //   CONTRACT comb_rename  in: -  out: out.ren2dis
-//   CONTRACT comb_fire  in: in.dec_bcast in.dis2ren in.rob_bcast in.rob_commit  out: out.ren2dec
+//   CONTRACT comb_fire  in: in.dec_bcast in.dis2ren in.rob_bcast  out: out.ren2dec
 class Ren {
 public:
   void comb_rename();  // allocate the destination registers and rename the group of q.inst_r -> ren2dis
@@ -25,39 +52,28 @@ public:
     const DecBroadcastIO *dec_bcast = nullptr;
     const DisRenIO *dis2ren = nullptr;
     const RobBroadcastIO *rob_bcast = nullptr;
-    const RobCommitIO *rob_commit = nullptr;
+    const RobCommitIO *rob_commit = nullptr;   // (seq: the committed destinations)
   } in;
 
   void init();
   void seq();
 
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
+  using IntDomain = RenDomain<ARF_NUM + 1, PRF_NUM>;
+  using FpDomain = RenDomain<FP_ARF_NUM, FPRF_NUM>;
   struct Regs {
-    Uop inst_r[DECODE_WIDTH];                                 // the group waiting for dispatch
+    Uop inst_r[DECODE_WIDTH];   // the group waiting for dispatch
     reg<1> inst_valid[DECODE_WIDTH];
-    reg<PRF_IDX_WIDTH> arch_RAT[ARF_NUM + 1];
-    reg<PRF_IDX_WIDTH> spec_RAT[ARF_NUM + 1];
-    reg<PRF_IDX_WIDTH> RAT_checkpoint[MAX_BR_NUM][ARF_NUM + 1];
-    int arch_cnt[PRF_NUM];   // move elimination: number of arch_RAT entries that name each physical register (freed at 0)
-    reg<PRF_IDX_WIDTH> free_list[PRF_NUM];
-    reg<PRF_IDX_WIDTH> free_head;   // speculative head
-    reg<PRF_IDX_WIDTH> free_head_commit;
-    reg<PRF_IDX_WIDTH> free_tail;
-    reg<PRF_IDX_WIDTH> alloc_checkpoint_head[MAX_BR_NUM];
-    // F/D: the FP rename state (32 architectural registers, no x0; tags FP_TAG_BASE + 0..FPRF_NUM-1)
-    reg<PRF_IDX_WIDTH> fp_arch_RAT[FP_ARF_NUM];
-    reg<PRF_IDX_WIDTH> fp_spec_RAT[FP_ARF_NUM];
-    reg<PRF_IDX_WIDTH> fp_RAT_checkpoint[MAX_BR_NUM][FP_ARF_NUM];
-    reg<PRF_IDX_WIDTH> fp_free_list[FPRF_NUM];
-    reg<PRF_IDX_WIDTH> fp_free_head, fp_free_head_commit, fp_free_tail;
-    reg<PRF_IDX_WIDTH> fp_alloc_checkpoint_head[MAX_BR_NUM];
+    IntDomain x;
+    FpDomain f;
+    int arch_cnt[PRF_NUM];      // move elimination: number of x.arch entries that name each integer tag (freed at 0)
   };
-  bool elim_refs_ok(int i) const;
 
 private:
   Regs q_;
-  // phases of one cycle, run in the order of the methods above
-  void alloc();
-  void rename();
-  void handshake();
+  // wires of this cycle (comb_rename / comb_fire -> seq)
+  wire<PRF_IDX_WIDTH> alloc_reg_[DECODE_WIDTH];   // the destination tag taken from the free list (0: none)
+  bool elim_[DECODE_WIDTH];                       // move elimination: renamed away, takes no free tag
+  bool fire_[DECODE_WIDTH];                       // the slot went to dispatch
+  bool elim_refs_ok(int i) const;
 };
