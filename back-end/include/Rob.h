@@ -31,11 +31,14 @@ public:
   // PMU (EXP-013): the oldest incomplete instruction of the head line (the one that blocks commit), if any
   bool pmu_head_incomplete(Uop &out, int &occupied_entries) const;
 
+  RobBroadcastIO bc_prev_;   // the broadcast of the previous cycle (CFG_FLUSH_REG)
+  struct PendFlush { bool v = false, fence_i = false, itlb = false; uint64_t pc = 0; } pend_, pend_nxt_;   // the front-end redirect, delivered one cycle later
   // Outputs: the signals this module drives (it alone).
   struct Out {
     RobCsrIO rob2csr;
     RobDisIO rob2dis;
     RobBroadcastIO rob_bcast;
+    RobBroadcastIO rob_bcast_d;   // what the other back-end modules read: CFG_FLUSH_REG = 1 delays the flush / trap fields by a cycle (the head fields stay)
     RobCommitIO rob_commit;
     BackOut *top_out = nullptr;    // the back end's outputs (BackTop's interface), bound by BackTop::init
   } out;

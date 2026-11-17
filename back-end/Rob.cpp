@@ -281,7 +281,7 @@ void Rob::complete() {
 // Branch mispredict: the tail moves to the entry right after the branch; everything younger is invalidated (head /
 // count: the registered ones).
 void Rob::branch(int head, int count, int &c_count) {
-  if (!in.dec_bcast->mispred || out.rob_bcast.flush) return;
+  if (!in.dec_bcast->mispred || out.rob_bcast.flush || (CFG_FLUSH_REG && pend_.v)) return;   // (a flush waits for its delivery: the ROB is empty, a stale mispredict must not recover it)
   tbhook::on_mispredict((uint64_t)q_.entry[get_rob_bank(in.dec_bcast->redirect_rob_idx)][get_rob_line(in.dec_bcast->redirect_rob_idx)].uop->dbg.inst_idx);
   const int bidx = static_cast<int>(in.dec_bcast->redirect_rob_idx);
   const int keep = (bidx - head + ROB_NUM) % ROB_NUM + 1;  // entries up to and including the branch
@@ -337,6 +337,8 @@ void Rob::seq() {
   fire(c_count);
   flush(c_head, c_count, c_hflag);
   q_.c_head = c_head; q_.c_count = c_count; q_.c_hflag = c_hflag;
+  bc_prev_ = out.rob_bcast;
+  pend_ = pend_nxt_;
 }
 
 // PMU (EXP-013): same "oldest incomplete instruction" as ready(); also the number of valid entries.
@@ -354,6 +356,15 @@ bool Rob::pmu_head_incomplete(Uop &out, int &occupied_entries) const {
 void Rob::comb_commit() {
   ready();
   commit();
+  if (CFG_FLUSH_REG) {   // the flush / trap fields of the previous cycle, with the head information of this one
+    RobBroadcastIO d = bc_prev_;
+    const RobBroadcastIO &bc = out.rob_bcast;
+    d.head_rob_idx = bc.head_rob_idx; d.head_valid = bc.head_valid;
+    d.head_incomplete_rob_idx = bc.head_incomplete_rob_idx; d.head_incomplete_valid = bc.head_incomplete_valid;
+    out.rob_bcast_d = d;
+  } else {
+    out.rob_bcast_d = out.rob_bcast;
+  }
 }
 
 // Where the front end goes: a flush from the commit (a trap or xRET target from the CSR file, else the next instruction)
@@ -362,6 +373,26 @@ void Rob::comb_commit() {
 void Rob::redirect() {
   BackOut &o = *out.top_out;
   const auto &bc = out.rob_bcast;
+  if (CFG_FLUSH_REG) {   // the redirect of a global flush goes to the front end one cycle after the decision, with the back-end clear
+    pend_nxt_ = {};
+    if (pend_.v) {
+      o.flush = true; o.fence_i = pend_.fence_i; o.itlb_flush = pend_.itlb; o.mispred = true; o.redirect_pc = pend_.pc;
+      o.rf_valid = false;
+      return;
+    }
+    o.flush = false; o.fence_i = false; o.itlb_flush = false;
+    if (bc.flush) {
+      int64_t committing = -1;
+      for (int i = 0; i < COMMIT_WIDTH && committing < 0; i++)
+        if (out.rob_commit.commit_entry[i].valid) committing = (int64_t)out.rob_commit.commit_entry[i].uop->dbg.inst_idx;
+      tbhook::on_flush(committing, bc.interrupt);
+      const Csr::TrapOut trap = csr_state().trap_out();
+      pend_nxt_.v = true; pend_nxt_.fence_i = bc.fence_i; pend_nxt_.itlb = bc.fence;
+      pend_nxt_.pc = (bc.mret || bc.sret) ? trap.epc : bc.exception ? trap.trap_pc : bc.pc + ilen_of(bc.is_rvc);
+      o.mispred = false; o.rf_valid = false; o.stall = !in.pre2front->ready; o.redirect_pc = 0;
+      return;
+    }
+  }
   o.flush = bc.flush;
   o.fence_i = bc.fence_i;
   o.itlb_flush = bc.fence;
