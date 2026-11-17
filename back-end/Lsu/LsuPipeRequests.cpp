@@ -25,17 +25,16 @@ void RealLsu::dis2lsu() {
     PLdq &e = pnxt.ldq[u.ldq_idx];
     const uint8_t ep = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
     e = {};
+    ms_ldq_[u.ldq_idx] = {};
     e.epoch = ep;
-    e.rob_idx = u.rob_idx;
-    e.rob_flag = u.rob_flag;
+    e.id = d.ldq_id[i];
     e.br_mask = d.ldq_br_mask[i];
-    e.pc = u.dbg.pc;
     {
       if (MemDepPred::kClr && (long long)sim_time >= mdp_.next_clear) {
         std::fill(mdp_.table.begin(), mdp_.table.end(), false);
         mdp_.next_clear = (long long)sim_time + MemDepPred::kClr;
       }
-      e.wait = mdp_.wait(e.pc);
+      e.wait = mdp_.wait(e.pc());
     }
     e.st = L_ALLOC;
   }
@@ -46,6 +45,7 @@ void RealLsu::dis2lsu() {
     if (u.stq_flag != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
     PStq &e = pnxt.stq[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE];
     e = {};
+    ms_stq_[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE] = {};
     e.rob_idx = u.rob_idx;
     e.rob_flag = u.rob_flag;
     e.br_mask = d.br_mask[i];

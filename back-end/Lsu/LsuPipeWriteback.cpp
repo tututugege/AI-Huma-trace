@@ -207,17 +207,17 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.result = l.pf ? l.vaddr : l.result;
   wb.page_fault_load = l.pf;
   wb.illegal_inst = l.illegal;
-  wb.dest_en = !l.pf && l.dest_preg != 0;  // loads to x0 still complete without a destination
+  wb.dest_en = !l.pf && l.uop().dest_preg != 0;  // loads to x0 still complete without a destination
   wb.is_mmio = l.mmio;
   const bool second = l.second;
   const bool defer = !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
   bool early = second;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
-  if (!early && from_l3 && !l.pf && l.dest_preg != 0 && !in.rob_bcast->flush &&
+  if (!early && from_l3 && !l.pf && l.uop().dest_preg != 0 && !in.rob_bcast->flush &&
       !(in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask) != 0)) {  // a2: wake from the L3 register
     out.lsu_awake.wake[LD + port].valid = true;
-    out.lsu_awake.wake[LD + port].preg = l.dest_preg;
+    out.lsu_awake.wake[LD + port].preg = l.uop().dest_preg;
     early = true;
   }
   wb.early_woken = early;
@@ -229,32 +229,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
     r.reserve_addr = l.paddr;
     r.reserve_br_mask = l.br_mask;
   }
-  // every load write-back leaves its register without a stale value unless the paths below set one (MMIO / LR-SC loads and the faulting ones do not go there)
-  if ((l.pf || l.mmio || l.lrsc) && l.dest_preg != 0) msd::taint[l.dest_preg] = msd::TV{};
-  if (!l.pf && !l.mmio && !l.lrsc) {
-    const tb::Fact *f = tbhook::fact_by_rob(l.rob_idx);
-    const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
-    xlen_t v = 0;
-    if (l.atnt) {  // stale base register: the load reads the stale address, its value stays stale (the load is never re-executed with a good address)
-      msd::taint[l.dest_preg] = msd::TV{};
-      if (plain && ms_load_value(pnxt, l, defer, v) && v != f->rd_value) msd::set_taint(l.dest_preg, true, v, 1);
-    } else if (defer) {  // first write-back of a speculative load: the value of the load without the stores it passed
-      msd::taint[l.dest_preg] = msd::TV{};
-      if (plain && ms_load_value(pnxt, l, true, v)) {
-        l.stale = v != f->rd_value;
-        if (l.stale) msd::set_taint(l.dest_preg, true, v, 0);
-      }
-    } else {
-      if (second) l.stale = false;
-      msd::release(l.dest_preg);  // the register holds the true value from here on (for consumers issuing from the next cycle) ...
-      if (plain && ms_load_value(pnxt, l, false, v)) {
-        // ... unless it was forwarded from a store whose DATA is stale (mode 4: the STQ holds the stale data): the load returns that
-        if (v != f->rd_value) {
-          msd::set_taint(l.dest_preg, true, v, 1);
-        }
-      }
-    }
-  }
+  ms_load_written_back(idx, defer);
   if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
     if (l.vio) {
       l.second = 1;
@@ -356,5 +331,33 @@ void RealLsu::lsu2exe() {
     if (p < 0) break;
     busy[p] = true;
     lp_emit_load_wb(p, i);
+  }
+}
+
+// LSU_MS_DATA: the value a load's write-back puts into its destination as the RTL would compute it. Every load write-back
+// leaves its register without a stale value unless one of the cases below sets one (MMIO / LR-SC loads and the faulting ones
+// do not go there): a stale base register (the load read the stale address, its value stays stale: it is never re-executed
+// with a good address); the first write-back of a speculative load (the value without the stores it passed); a normal or
+// second write-back (the true value from the next cycle on, unless it was forwarded from a store whose data is stale).
+void RealLsu::ms_load_written_back(int idx, bool defer) {
+  const PLdq &l = pnxt.ldq[idx];
+  const MsLdq &ml = ms_ldq_[idx];
+  const auto dst = l.uop().dest_preg;
+  if (l.pf || l.mmio || l.lrsc) {
+    if (dst != 0) msd::taint[dst] = msd::TV{};
+    return;
+  }
+  const tb::Fact *f = tbhook::fact_by_rob(l.uop().rob_idx);
+  const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
+  xlen_t v = 0;
+  if (ml.atnt) {
+    msd::taint[dst] = msd::TV{};
+    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, defer, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
+  } else if (defer) {
+    msd::taint[dst] = msd::TV{};
+    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, true, v) && v != f->rd_value) msd::set_taint(dst, true, v, 0);
+  } else {
+    msd::release(dst);
+    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
   }
 }

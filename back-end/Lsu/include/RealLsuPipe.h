@@ -45,13 +45,13 @@ enum PRc : uint8_t {
 };
 
 struct PLdq {
-  uint16_t id = 0;            // the load uop (its write-back carries it)
+  uint16_t id = 0;            // the load's uop (the instruction's from dispatch, the load uop's from the AGU on; its write-back carries it)
+  // the load's static fields (ROB entry, destination, funct3, pc) are in its uop's pool entry: a load leaves the LDQ before it
+  // commits, so the entry is alive as long as the LDQ entry
+  const UopS &uop() const { return uop_pool[id]; }
+  uint32_t pc() const { return static_cast<uint32_t>(uop().dbg.pc); }   // (32 bits: the memory-dependence predictor's index)
   wire<4> st = L_EMPTY;
-  wire<ROB_IDX_WIDTH> rob_idx = 0;
-  wire<1> rob_flag = 0;
   wire<BR_MASK_WIDTH> br_mask = 0;
-  wire<PRF_IDX_WIDTH> dest_preg = 0;
-  wire<3> func3 = 0;
   wire<XLEN> vaddr = 0;
   wire<1> pa_v = 0;           // paddr valid (translated once; replays skip the DTLB)
   wire<32> paddr = 0;
@@ -71,12 +71,8 @@ struct PLdq {
   long long wd_t = 0;         // DCache response watchdog: cycle it entered DCW (replayed 62 cycles later)
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
-  wire<32> pc = 0;            // load PC (memory-dependence predictor)
   wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
-  bool atnt = false;          // LSU_MS_DATA: the address came from a stale register
-  bool stale = false;         // LSU_MS_DATA: the first write-back carried a value different from the true one
-  stq_mask_t skip = 0;        // LSU_MS_DATA: STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
 };
 
 struct PStq {
@@ -108,11 +104,20 @@ struct PStq {
   wire<2> rtype = 0;
   wire<RWAIT_W> rwait = 0;
   long long wd_t = 0;         // DCache response watchdog: cycle it was sent (re-sent 62 cycles later)
-  // LSU_MS_DATA: what the trace says this store writes (captured the cycle after dispatch, the fact leaves the bridge at commit)
-  bool m_init = false, m_v = false, m_amo = false, m_atnt = false;
-  uint32_t m_w = 0;                                    // physical unit address (XLEN/8 bytes aligned)
-  uint64_t m_old = 0, m_new = 0, m_rs2 = 0;            // the unit before / after, true rs2
-  uint8_t m_off = 0, m_sz = 0;                         // byte lane inside the unit
+};
+
+// LSU_MS_DATA (MsData.h, the stale-value path of memory speculation): what it keeps per LDQ / STQ entry, beside the queues
+// (RealLsu::ms_ldq_ / ms_stq_; cleared when the entry is allocated). Not timing state of the queues themselves.
+struct MsLdq {
+  bool atnt = false;          // the address came from a stale base register
+  stq_mask_t skip = 0;        // the STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
+};
+struct MsStq {                // what the trace says the store writes (captured the cycle after dispatch: the fact leaves the bridge at commit)
+  bool init = false, v = false, amo = false;
+  bool atnt = false;          // the address came from a stale base register
+  uint32_t w = 0;             // physical unit address (XLEN/8 bytes aligned)
+  uint64_t old_ = 0, new_ = 0, rs2 = 0;   // the unit before / after, the true rs2
+  uint8_t off = 0, sz = 0;    // byte lane inside the unit
 };
 
 // L1 -> L2 pipeline register (one per load port)

@@ -76,7 +76,7 @@ inline CamRes stq_cam(const LsuPipeState &s, const LsuPipeState &n, stq_mask_t o
     older = (b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE);
     older = std::min<uint32_t>(older, s.stq_count);
   }
-  const uint32_t lw = ld_width(l.func3);
+  const uint32_t lw = ld_width(l.uop().func3);
   int best = -1;
   for (uint32_t j = 0; j < STQ_SIZE; j++) {  // 64 parallel comparators in hardware
     const uint32_t rank = stq_rank(j, head);
@@ -113,10 +113,10 @@ inline Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
   if (!alive || s.suppress) return CF_REPLAY;
   if (!s.va_v) return CF_NOADDR;
   if (!s.pa_v) {  // address known but not translated yet: the page offset can still prove independence
-    if (range_rel(e.vaddr, ld_width(e.func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT) return CF_REPLAY;
+    if (range_rel(e.vaddr, ld_width(e.uop().func3), s.vaddr, ld_width(s.func3), 12) == DISJOINT) return CF_REPLAY;
     return CF_NOADDR;
   }
-  const Rel r = range_rel(e.paddr, ld_width(e.func3), s.paddr, ld_width(s.func3), 32);
+  const Rel r = range_rel(e.paddr, ld_width(e.uop().func3), s.paddr, ld_width(s.func3), 32);
   if (r == DISJOINT) return CF_REPLAY;
   if (r == PARTIAL) return CF_HOLD;
   if (!s.data_v) return CF_DATA;
@@ -127,10 +127,10 @@ inline Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 // LSU_MS_DATA: the value a load returns when the stores in `l.skip` are not visible (apply_skip) or when everything older is visible.
 // Memory image = the word before the oldest STQ store that writes it (the cache content), or the core RAM when no STQ store writes it, with the
 // visible older STQ stores applied in age order (the youngest wins, as STLF does).  Returns false when it cannot say (MMIO, no trace info).
-inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip, xlen_t &val) {
+inline bool ms_load_value(const LsuPipeState &S, const MsStq *ms, const PLdq &l, const MsLdq &ml, bool apply_skip, xlen_t &val) {
   constexpr uint32_t XB = XLEN / 8;   // the unit of the model: one word (rv32) / one aligned dword (rv64)
   if (!l.pa_v || !is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
-  const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.func3);
+  const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.uop().func3);
   if (off + lw > XB) return false;   // crosses the unit: not modelled
   const uint32_t head = S.stq_head;
   uint32_t older;
@@ -143,9 +143,11 @@ inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip,
   bool have = false;
   uint32_t base_rank = 0;
   for (uint32_t rank = 0; rank < S.stq_count && !have; rank++) {
-    const PStq &t = S.stq[(head + rank) % STQ_SIZE];
-    if (!t.m_v || t.m_w != W || t.done || t.suppress) continue;
-    word = (xlen_t)t.m_old;
+    const uint32_t j = (head + rank) % STQ_SIZE;
+    const PStq &t = S.stq[j];
+    const MsStq &m = ms[j];
+    if (!m.v || m.w != W || t.done || t.suppress) continue;
+    word = (xlen_t)m.old_;
     have = true;
     base_rank = rank;
   }
@@ -156,19 +158,20 @@ inline bool ms_load_value(const LsuPipeState &S, const PLdq &l, bool apply_skip,
   for (uint32_t rank = 0; rank < older; rank++) {
     const uint32_t j = (head + rank) % STQ_SIZE;
     const PStq &t = S.stq[j];
-    if (!t.m_v || t.m_w != W || t.suppress || t.m_atnt) continue;
+    const MsStq &m = ms[j];
+    if (!m.v || m.w != W || t.suppress || m.atnt) continue;
     if (t.done && !(have && rank > base_rank)) continue;   // a done store younger than the base store is in the cache but not in its m_old snapshot
-    if (apply_skip && (l.skip >> j & 1)) continue;
-    if (t.m_amo) {
-      word = (xlen_t)t.m_new;
+    if (apply_skip && (ml.skip >> j & 1)) continue;
+    if (m.amo) {
+      word = (xlen_t)m.new_;
     } else {
-      const xlen_t data = t.data_v ? (xlen_t)t.data : (xlen_t)t.m_rs2;
-      for (uint32_t k = t.m_off; k < t.m_off + t.m_sz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - t.m_off))) & 0xff) << (8 * k));
+      const xlen_t data = t.data_v ? (xlen_t)t.data : (xlen_t)m.rs2;
+      for (uint32_t k = m.off; k < m.off + m.sz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - m.off))) & 0xff) << (8 * k));
     }
   }
   const xlen_t mask = lw >= 8 ? ~(xlen_t)0 : (xlen_t)((1ull << (8 * lw)) - 1);
   const xlen_t raw = lw >= XB ? word : (word >> (8 * off)) & mask;
-  val = msd::load_extend(raw, l.func3);
+  val = msd::load_extend(raw, l.uop().func3);
   return true;
 }
 

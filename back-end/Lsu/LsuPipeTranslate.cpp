@@ -31,7 +31,7 @@ void RealLsu::exe2lsu() {
     e.vaddr = inst.result;
     {  // a store whose base register was stale: its data goes to the stale address (never to the true one)
       const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
-      e.m_atnt = f && f->is_store && f->vaddr != static_cast<xlen_t>(inst.result);
+      ms_stq_[inst->stq_idx].atnt = f && f->is_store && f->vaddr != static_cast<xlen_t>(inst.result);
     }
     e.pa_v = 0;
     e.paddr = 0;
@@ -58,7 +58,7 @@ void RealLsu::exe2lsu() {
         const uint32_t b = (l.snap_flag ? STQ_SIZE : 0) + l.snap_idx;
         const uint32_t older = std::min<uint32_t>((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE), pcur.stq_count);
         if (stq_rank(j, pcur.stq_head) >= older) continue;  // the store is younger than the load
-        if (range_rel(l.vaddr, ld_width(l.func3), inst.result, sw, 12) == DISJOINT) continue;
+        if (range_rel(l.vaddr, ld_width(l.uop().func3), inst.result, sw, 12) == DISJOINT) continue;
         vio_new++;
         vio_set |= 1ULL << i;
         l.vio = 1;
@@ -78,17 +78,15 @@ void RealLsu::exe2lsu() {
     const MicroOp &inst = x.agu_req[i].uop;
     if (inst->ldq_idx >= LDQ_SIZE) continue;
     PLdq &e = pnxt.ldq[inst->ldq_idx];
-    if (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) continue;
+    if (e.uop().rob_flag != inst->rob_flag || e.uop().rob_idx != inst->rob_idx) continue;
     e.vaddr = inst.result;
     {  // a load whose base register was stale reads the stale address
       const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
-      e.atnt = f && f->is_load && f->vaddr != static_cast<xlen_t>(inst.result);
+      ms_ldq_[inst->ldq_idx].atnt = f && f->is_load && f->vaddr != static_cast<xlen_t>(inst.result);
     }
-    e.dest_preg = inst->dest_preg;
     e.id = inst.id;
     e.pa_v = 0;
     e.paddr = 0;
-    e.func3 = inst->func3;
     e.illegal = inst.illegal_inst;
     e.st = L_PIPE;
     e.snap_idx = inst->stq_idx;
@@ -234,7 +232,7 @@ void RealLsu::stlf() {
       if (pw.s1[q].v && !pw.s1[q].replay) ov |= (stq_mask_t)1 << pw.s1[q].stq;
     const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/!e.second && !e.lrsc && !e.wait);
     pnxt.ldq[l.ldq].spec = c.unk;
-    pnxt.ldq[l.ldq].skip = c.skip;
+    ms_ldq_[l.ldq].skip = c.skip;
     l.cand_v = c.v;
     l.cand = c.idx;
   }
@@ -244,7 +242,7 @@ void RealLsu::stlf() {
     PLdq &e = pnxt.ldq[i];
     if (e.st != L_MMW || nxt.uncached_unit.valid) continue;
     if (pcur.ldq[i].st != L_MMW) continue;  // M: only entries that were already MMW at the start of the cycle
-    if (!lsu_mmio_is_oldest_unfinished(in.rob_bcast, e.rob_idx)) continue;
+    if (!lsu_mmio_is_oldest_unfinished(in.rob_bcast, e.uop().rob_idx)) continue;
     const uint32_t h = (pcur.stq_head_flag ? STQ_SIZE : 0) + pcur.stq_head;
     const uint32_t b = (e.snap_flag ? STQ_SIZE : 0) + e.snap_idx;
     if ((b + 2 * STQ_SIZE - h) % (2 * STQ_SIZE) != 0) continue;
@@ -253,7 +251,7 @@ void RealLsu::stlf() {
     u.valid = true;
     u.is_load = true;
     u.addr = e.paddr;
-    u.func3 = e.func3;
+    u.func3 = e.uop().func3;
     u.idx = i;
   }
 }

@@ -50,7 +50,6 @@ public:
   void comb_translate();  // AGU / STD results in, address translation, store-to-load forwarding
   void comb_requests();  // allocation from dispatch, flush, the DCache / MMIO requests, ordering checks
   void comb_commit_store();  // the committed stores to a modeled device (from the ROB's commit and the registered STQ)
-  RealLsu() : nxt{}, ctx(nullptr), cur_{} {}
   explicit RealLsu(SimContext *ctx) : nxt{}, ctx(ctx), cur_{} {}
 
   // Registers: cur_ / pcur_ (q: read in comb through const references, written only by seq) and nxt / pnxt (d: written
@@ -95,6 +94,8 @@ public:
   lp::LsuPipeState pnxt;
 
   lp::PCycle pw;
+  lp::MsLdq ms_ldq_[LDQ_SIZE];   // LSU_MS_DATA beside the queues (RealLsuPipe.h)
+  lp::MsStq ms_stq_[STQ_SIZE];
 
   StqEntry get_stq_entry(int idx, bool flag);
   void seq_pipe();  // pcur = pnxt, copying only the live LDQ / STQ entries (see RealLsuPipe.cpp)
@@ -117,6 +118,8 @@ private:
   void lsu2dcache();
   void mmio_out();
   void check();
+  void ms_capture_stores();   // LSU_MS_DATA: the trace's store data, the cycle after allocation
+  void ms_load_written_back(int ldq_idx, bool defer);   // LSU_MS_DATA: the destination's (stale?) value at a load write-back
   long long wd_next_ = 0x7fffffffffffffffLL;  // earliest watchdog deadline (stale entries only cause an extra scan)
   void wd_arm(long long &t) { t = sim_time; if (sim_time + 62 < wd_next_) wd_next_ = sim_time + 62; }
   void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
