@@ -638,6 +638,10 @@ enum class IssueSchedulePolicy : int {
 #ifndef CFG_ISSUE_OLDEST_FIRST
 #define CFG_ISSUE_OLDEST_FIRST 0   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
 #endif
+// queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
+#ifndef CFG_ISSUE_OLDEST_QUEUES
+#define CFG_ISSUE_OLDEST_QUEUES 0xff
+#endif
 constexpr IssueSchedulePolicy ISSUE_SCHEDULE_POLICY =
     CFG_ISSUE_OLDEST_FIRST == 2 ? IssueSchedulePolicy::OLDEST_ON_FIRST_PORT
     : CFG_ISSUE_OLDEST_FIRST ? IssueSchedulePolicy::ROB_OLDEST_FIRST : IssueSchedulePolicy::IQ_SLOT_PRIORITY;

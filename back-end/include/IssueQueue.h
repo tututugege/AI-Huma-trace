@@ -64,6 +64,7 @@ public:
   IssueQueueOut out;
 
 private:
+  int id_ = 0;   // IQ id (IQ_INT, IQ_LD, ...)
   int size;
   int dispatch_width;
   std::vector<PortBinding> ports;
@@ -104,7 +105,7 @@ private:
 
 public:
   IssueQueue(const IssueQueueConfig &cfg)
-      : size(cfg.size), dispatch_width(cfg.dispatch_width),
+      : id_(cfg.id), size(cfg.size), dispatch_width(cfg.dispatch_width),
         ports(cfg.ports) {
     if (!ports.empty()) {
       port_lo = port_hi = ports[0].port_idx;
@@ -373,7 +374,8 @@ private:
     // OLDEST_ON_FIRST_PORT: the first port of each capability (no earlier port shares a capability bit with it) takes the oldest ready
     // uop it can serve; the other ports take the lowest slot.
     std::vector<int> by_age;
-    if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT) {
+    const bool age_policy = ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT && ((CFG_ISSUE_OLDEST_QUEUES >> id_) & 1);
+    if (age_policy) {
       by_age = ready_indices;
       std::sort(by_age.begin(), by_age.end(), [&](int lhs, int rhs) {
         const auto &a = q_.entry[lhs].uop;
@@ -388,10 +390,10 @@ private:
     }
     for (int p = 0; p < num_ports; p++) {
       bool first_of_cap = true;
-      if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT)
+      if (age_policy)
         for (int q = 0; q < p; q++)
           if (ports[q].capability_mask & ports[p].capability_mask) first_of_cap = false;
-      const std::vector<int> &order = (first_of_cap && ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT) ? by_age : ready_indices;
+      const std::vector<int> &order = (first_of_cap && age_policy) ? by_age : ready_indices;
       for (int idx : order) {
         if (inst_issued[idx]) {
           continue;
