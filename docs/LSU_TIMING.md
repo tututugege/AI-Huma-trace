@@ -59,3 +59,21 @@ there without FREEPORT_RAW).
   paths (other LSU chains, ISU 109 levels, EXU) are unknown until a cut is in.
 * The IPC numbers are the model's, 16 points (the same points as docs/TLB_PORTS.md), the AGU_REG model also delays STA translation by one cycle.
 * `back_top` synthesis needs `scripts/synth_module.sh back_top 26000 5400` (the `synth_depth.sh` memory limit of 12 GB kills it).
+
+## 5. Result of the zero-cost cut (`CFG_LSU_SLOT_FIXED`, RTL `lp_l1`, rtl-agu 'lp_l1: L1 slot k is AGU port k')
+
+L1 slot k is AGU port k (no compress by acceptance); the replays take the free slots and DTLB ports of the AGUs without a valid request. Model: cycles equal on
+all 67 programs (reference `scripts/ref_cycles_memiq6_nr_int2.txt` unchanged); RTL `fm_gate` 67/67 with the same cycles, `lint_chip` 0.
+
+Synthesis (same flow as section 1): `lsu` 164 -> 157 levels, `back_top` **234 -> 223** levels. Only -11: the flush segment (35) and the acceptance chain are gone,
+but the path now starts at the EXU and is longer there than estimated:
+
+| levels | segment |
+| --- | --- |
+| 0 - 96 | EXU issue-slot register -> operand read / bypass -> AGU add -> `exe2lsu_ldu_req_uop_result` (**96**, not the 64 assumed in section 1) |
+| 96 - 127 | vaddr mux (5) + DTLB (~26 on this path) |
+| 127 - 154 | `mmu2lsu_resp` -> `tl_s` -> STQ `paddr8` -> `sta_info` |
+| 154 - 223 | LDQ wake-up confirm (`inf` -> `conf` -> `o` -> `ew`), 69 levels |
+
+Consequences for the remaining cuts: `CFG_LSU_STAEV_REG` (-0.7 %) takes the 69-level wake segment off this path (-> ~154); after that the AGU add itself (96) is the longest
+segment, so `CFG_LSU_AGU_REG` (-2.4 %) only splits [96] | [58 + the rest] and cannot go below ~96 unless the EXU stage (operand read / bypass / add) is cut as well.
