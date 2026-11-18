@@ -370,9 +370,13 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
     std::fprintf(stderr, "[MSL] cyc=%lld rob=%d p%u pc=%llx defer=%d atnt=%d stale_calc=%d v=%llx true=%llx\n", (long long)sim_time, (int)l.uop().rob_idx, (unsigned)dst,
                  (unsigned long long)f->pc, (int)defer, (int)ml.atnt, (int)got, (unsigned long long)sv, (unsigned long long)f->rd_value);
   }
+  // A load the function model did not execute (its true address faults or is blocked: wrong path) but whose stale base register gave it a valid
+  // address executes in the RTL and writes the memory value there into its destination: the register is stale (its true value is "unchanged").
+  const bool ghost = f && f->is_load && !f->rd_valid && (f->inst & 0x7f) == 0x03 && ((f->inst >> 7) & 31) != 0 && ml.atnt;
   if (ml.atnt) {
     msd::taint[dst] = msd::TV{};
-    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, defer, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
+    if (ghost) { if (ms_load_value(pnxt, ms_stq_, l, ml, defer, v)) msd::set_taint(dst, true, v, 1); }
+    else if (plain && ms_load_value(pnxt, ms_stq_, l, ml, defer, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
   } else if (defer) {
     msd::taint[dst] = msd::TV{};
     if (plain && ms_load_value(pnxt, ms_stq_, l, ml, true, v) && v != f->rd_value) msd::set_taint(dst, true, v, 0);

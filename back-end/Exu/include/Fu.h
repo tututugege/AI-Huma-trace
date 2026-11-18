@@ -58,6 +58,10 @@ inline void compute(FuKind kind, ExuInst &inst) {
   case FuKind::AGU:
     inst.result = 0;
     if (const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx)) inst.result = f->vaddr;
+    { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
+      if (tr) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
+        std::fprintf(stderr, "[AGU] cyc=%lld rob=%d op=%d pc=%llx inst=%08x vaddr=%llx rs1=%llx src1=p%d live1=%d\n", (long long)sim_time, (int)inst->rob_idx, (int)inst.op, f ? (unsigned long long)f->pc : 0ull, f ? f->inst : 0u,
+                     f ? (unsigned long long)f->vaddr : 0ull, f ? (unsigned long long)f->rs1_value : 0ull, (int)inst->src1_preg, (int)(inst->src1_en && msd::live(inst->src1_preg))); } }
     break;
   case FuKind::SDU:
     inst.result = 0;
