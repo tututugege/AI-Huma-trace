@@ -30,6 +30,7 @@ struct TV {
   // the previous stale value of a register that a write-back replaced by another stale value: consumers executing up to cycle `pwhen` (the write-back cycle + 1)
   // still read it (the RTL reads the register file in the grant cycle, a write-back of that very cycle is not visible; found in the Linux window w505)
   bool pt = false;
+  bool pclean = false;   // the previous content is the clean (true) value of the same producer: consumers up to `pwhen` read their true operand
   uint8_t pdepth = 0;
   xlen_t pv = 0;
   long long pwhen = 0;
@@ -45,7 +46,7 @@ inline void release(uint32_t preg) {
 // what a consumer executing now reads from the register: the previous stale value in the cycle after its replacement
 inline TV view(uint32_t preg) {
   const TV &c = taint[preg];
-  if (c.pt && (long long)sim_time <= c.pwhen) { TV o; o.t = true; o.v = c.pv; o.depth = c.pdepth; return o; }
+  if (c.pt && (long long)sim_time <= c.pwhen) { if (c.pclean) return TV{}; TV o; o.t = true; o.v = c.pv; o.depth = c.pdepth; return o; }
   return c;
 }
 inline bool live(uint32_t preg) { const TV c = view(preg); return c.t && (c.until == 0 || (long long)sim_time <= c.until); }
@@ -288,11 +289,12 @@ inline X load_extend(X raw, uint32_t f3) {
 // Consumers.  Called by the functional unit when it takes an instruction (Fu::compute), after the facts were applied.
 // ---------------------------------------------------------------------------------------------------------------
 inline bool trace_on() { static const bool on = std::getenv("MSD_TRACE") != nullptr; return on; }
-inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
+inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth, bool keep_clean = false) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   if (trace_on() && trace_win::ok() && t) std::fprintf(stderr, "[MSD] cyc=%lld taint p%u v=%llx depth=%u\n", (long long)sim_time, preg, (unsigned long long)v, depth);
   TV &c = taint[preg];
-  if (t && c.t && prev_on()) { c.pt = true; c.pv = c.v; c.pdepth = c.depth; c.pwhen = (long long)sim_time + 1; }   // a stale value replaced by another one: the old one stays visible one more cycle
+  if (t && c.t && prev_on()) { c.pt = true; c.pclean = false; c.pv = c.v; c.pdepth = c.depth; c.pwhen = (long long)sim_time + 1; }   // a stale value replaced by another one: the old one stays visible one more cycle
+  else if (t && keep_clean && prev_on()) { c.pt = true; c.pclean = true; c.pwhen = (long long)sim_time + 1; }   // the final write-back of a load replaces the clean value its early write-back put there: the clean value stays visible one more cycle
   else c.pt = false;
   c.t = t;
   c.v = v;

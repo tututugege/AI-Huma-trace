@@ -131,6 +131,7 @@ struct MsLdq {
   stq_mask_t skip = 0;        // the STQ entries the last L1 CAM passed (address unknown): their data is not part of the loaded value
   bool cam_ok = false;        // cam_val: the value the DCache read of the last L1 pass returned (the memory image of that cycle, the stores in `skip` not visible)
   uint64_t cam_val = 0;
+  bool early_clean = false;   // the early (deferred) write-back put a clean value into the destination register (the final write-back may replace it with a stale one)
 };
 struct MsStq {                // what the trace says the store writes (captured the cycle after dispatch: the fact leaves the bridge at commit)
   bool init = false, v = false, amo = false;

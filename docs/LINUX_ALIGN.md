@@ -83,3 +83,15 @@ uBTB 条目的目标在 RTL 里存 63 位（`UB_TGT_W`），读出却只用低 3
 A/B 开关：`MSD_NOPREV=1` 关闭修复。
 诊断：`ISSUE_TRACE=1`（受 trace_win 窗口限制）打印 `[GR]` 每次 grant、`[WK]` 每周期被唤醒的 preg。
 验证：67 个程序周期不变；eda 窗口 w46–w515 全部 0 差异；从复位到 9140 万周期 1830 个箱 0 差异（旧的 38.0M、68.4M 差异均消失）。整条 1.4 亿周期的最终对比待 RTL 跑完。
+
+
+## 2026-11-19：RTL 降深度那一轮之后的整体对齐（rtl `exp/agu-share` `3120531`，模型默认值 = RTL 配置）
+
+结果：**12 个窗口 s00–s11 全部 PASS**（PT / UP 指纹全程相等，逐条函数模型检查 0 不一致）。这一轮之后合入 main 的 RTL 与旧基线（`6d7ed85`，两个 INT 队列）相比多了合并访存队列、FLUSH_REG、降深度改写等，窗口对齐时发现并处理了四类差别：
+
+1. **模型默认值**：`include/config.h` 的 13 个配置宏（`CFG_AGU_SHARED`、`CFG_MEM_IQ_ENQ_WIDTH`、`CFG_ISSUE_OLDEST_FIRST`、`CFG_ISSUE_OLDEST_QUEUES`、`CFG_IQ_SAME_CYCLE_REUSE`、`CFG_INT_CLUSTERS`、`CFG_INT_IQ_SIZE`、`CFG_INT_IQ_ENQ_WIDTH`、`CFG_LSU_SLOT_FIXED`、`CFG_LSU_STAEV_REG`、`CFG_FLUSH_REG`、`CFG_LSU_WBMERGE_REG`、`CFG_FE_OVR_REG`）原来的默认值是旧设计，要对齐 RTL 得在命令行带 13 个 `-D`，带错一个就得到一个“差几个周期”的模型，对比出一堆假差别。现在默认值就是 RTL 配置，不带 `-D` 的构建 67 个程序周期等于 RTL（`scripts/ref_cycles_memiq6_nr_int2_ev5.txt`）。
+2. **指纹口径**：不跳转的条件分支的“目标”字段在 RTL 和模型里是各自的残留值（`dir=0` 时 BPU 不用它：BTB 只在 `upd_actual_dir` 为 1 时写），指纹不再计入（`fpr::up`，模型 `front-end/BPU/fpr.h` 与 RTL `tb/soc/fpr.h` 一致，原始打印 `FPRRAW` 保留）。
+3. **RTL**（`back_top_glue.sv`）：flush 决定那一拍，原来把所有提交槽的 `diag_val` 覆盖成重定向地址，前端用它训练 BTB；模型在 `CFG_FLUSH_REG=1` 时覆盖落在推迟拍，那一拍没有有效提交，等于不覆盖。窗口 s08 周期 2856352：同拍提交的 `jal ra` 用 mtvec（`0x80000408`）训练了 BTB，之后预测地址不同。RTL 改成不覆盖。
+4. **模型**（`MsData.h`、`RealLsuPipe.h`、`LsuPipeWriteback.cpp`）：s08 周期 3214679。访存相关性推测（LSU_MEMSPEC）下，一条推测 load 写回两次：第一次（`rob_defer=1`，ROB 不完成）把读到的值写进目的寄存器，第二次（`second=1`，违例时带 `flush_pipe`，是修正值）覆盖它（设计见 rtl `docs/modules/lsu.md`，EXP-019，`f6daf0a`）。本例里第一次写回的值恰好等于真值（干净），第二次是陈旧值 `0`，依赖这条 load 的分支与第二次写回**同拍**执行。RTL 在 grant 时读寄存器堆，同拍写回不可见，分支读到第一次的值，判成 taken、与预测不同，误预测、多取了一段错误路径；模型的 `6916f44`（上一节）只在“旧值也是陈旧值”时保留旧值一拍，这里旧值是干净的，没保留，分支直接读到新值 `0`，不误预测（`[MSD] BRANCH FLIP … mispred=0`）。修复：`MsLdq::early_clean`（早期写回把干净值写进寄存器）、`set_taint(..., keep_clean)`、`TV::pclean`：最终写回覆盖时，同拍的消费者仍读自己的真值（`f->rs1_value`）。这个差别只影响时序（消费者比违例的 load 年轻，会被违例冲刷冲掉）。
+
+验证：模型 67 个程序周期对 ev5 差 0；12 个窗口 PASS；Linux 从复位启动到 `rv64 login:`（无 oops / panic）。诊断方法：窗口取两边 `FPR_DUMP` 原始事件（PT / UP 分流比较），RTL 用 `SOC_TB_VCD=<from>:<to>:<file>` 波形（`--trace` 构建，`SOC_TB_TRACE`），模型 `MSD_TRACE=1`。

@@ -397,8 +397,10 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
     // (the value of the DCache read: the one the L1 CAM pass recorded; the memory image of the write-back cycle may already hold stores the read did not see)
     const bool have = ml.cam_ok ? (v = (xlen_t)ml.cam_val, true) : ms_load_value(pnxt, ms_stq_, l, ml, true, v);
     if (plain && have && v != f->rd_value) msd::set_taint(dst, true, v, 0);
+    ms_ldq_[idx].early_clean = !(plain && have && v != f->rd_value);
   } else {
+    const bool keep = ml.early_clean && !msd::taint[dst].t;   // (before release: the register holds the clean value of this load's early write-back)
     msd::release(dst);
-    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
+    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1, keep);
   }
 }
