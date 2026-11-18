@@ -412,6 +412,7 @@ private:
   void arm_victim_writeback(bool for_write, uint8_t write_master, uint8_t mshr_slot, uint32_t addr);
   void write_line_tables(uint32_t set, uint32_t way, const AXI_LLCMetaEntry_t &meta, uint32_t repl_next_way);
   void touch_repl_at_lookup(uint32_t set, uint32_t way, bool alloc, bool prefetch);
+  bool lookup_tbl_busy_ = false;   // the table write port was taken (commit) when this cycle's lookup completed
   void write_valid_table(uint32_t set, uint32_t way, bool valid);
 
   // --- prefetch ---

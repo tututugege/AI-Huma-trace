@@ -152,7 +152,7 @@ struct ICacheTableWrite {
   wire<8> touch_way = 0;
 };
 
-// ICACHE_REPL (read once): rr (default, = RTL) one global round-robin pointer, hits do not update it; plru: tree
+// ICACHE_REPL (read once): srrip is the default (EXP-045); rr (old main) one global round-robin pointer, hits do not update it; plru: tree
 // pseudo-LRU per set (ways-1 bits); srrip: a 2-bit RRPV per way (hit: 0; victim: the largest RRPV, lowest way on a tie;
 // refill: the set is aged until its largest RRPV is 3, then the new line gets 2). An invalid way is always used first.
 int icache_repl_mode();

@@ -52,11 +52,11 @@ uint32_t update_dirty_line_count(uint32_t current, bool old_dirty, bool new_dirt
 
 // ---------------------------------------------------------------------------------------------
 // Replacement state (LLC_REPL, read once): one repl-table row per set, read by every lookup.
-//   rr   (default, = RTL): the row is a next-victim way pointer; a hit or a line write sets it to way + 1.
+//   rr   (old main): the row is a next-victim way pointer; a hit or a line write sets it to way + 1.
 //   plru: tree pseudo-LRU, ways-1 bits; node i has children 2i+1 / 2i+2, a bit set means "evict from the right half".
 //   lru : true LRU, a log2(ways)-bit age per way (0 = most recent), stored XOR the way number so the all-zero reset row
 //         is a valid order; a reference upper bound.
-//   srrip / brrip / drrip: a 2-bit re-reference prediction value (RRPV) per way. A hit sets it to 0; the victim is the
+//   srrip (default, EXP-045) / brrip / drrip: a 2-bit re-reference prediction value (RRPV) per way. A hit sets it to 0; the victim is the
 //         way with the largest RRPV (lowest way on a tie); an allocation first ages the row so that the largest RRPV
 //         becomes 3, then inserts the new line at 2 (srrip), at 3 except every 32nd allocation at 2 (brrip), or as
 //         chosen by set dueling (drrip: sets with set % 32 == 0 always use srrip, == 1 always brrip; their misses move a
@@ -75,8 +75,9 @@ LlcRepl llc_repl() {
     if (v && std::strcmp(v, "srrip") == 0) return LlcRepl::kSRRIP;
     if (v && std::strcmp(v, "brrip") == 0) return LlcRepl::kBRRIP;
     if (v && std::strcmp(v, "drrip") == 0) return LlcRepl::kDRRIP;
-    if (v && std::strcmp(v, "rr") != 0) { std::fprintf(stderr, "LLC_REPL=%s: unknown\n", v); std::abort(); }
-    return LlcRepl::kRR;
+    if (v && std::strcmp(v, "rr") == 0) return LlcRepl::kRR;
+    if (v) { std::fprintf(stderr, "LLC_REPL=%s: unknown\n", v); std::abort(); }
+    return LlcRepl::kSRRIP;
   }();
   return m;
 }
@@ -404,6 +405,9 @@ bool AXI_LLC::way_reserved(const AXI_LLC_Regs_t &regs, uint32_t set, uint8_t way
 // rrip: the insertion RRPV; drrip set dueling and the brrip 1-in-32 counter live in registers.
 void AXI_LLC::touch_repl_at_lookup(uint32_t set, uint32_t way, bool alloc, bool prefetch) {
   if (llc_repl() == LlcRepl::kRR) return;
+  // An allocation does not wait for the table write port: when the write-after-victim commit took it in this cycle
+  // (RTL: one table write per tick, commit first), the replacement update of the allocation is dropped.
+  if (alloc && lookup_tbl_busy_) return;
   uint32_t ins = 2;
   if (alloc && (llc_repl() == LlcRepl::kBRRIP || llc_repl() == LlcRepl::kDRRIP)) {
     const auto &r = io.regs;
@@ -846,6 +850,7 @@ bool AXI_LLC::try_complete_lookup() {
     return false;
 
   const bool table_busy = llc_table_write_busy(io.table_out);
+  lookup_tbl_busy_ = table_busy;
 
   const uint32_t set = set_index(config_, r.lookup_addr_r), tag = tag_of(config_, r.lookup_addr_r),
                  line = line_addr(config_, r.lookup_addr_r);

@@ -13,9 +13,9 @@ namespace icache_module_n {
 int icache_repl_mode() {
   static const int m = [] {
     const char *v = std::getenv("ICACHE_REPL");
-    if (!v || std::strcmp(v, "rr") == 0) return 0;
+    if (!v || std::strcmp(v, "srrip") == 0) return 2;   // default (EXP-045)
+    if (std::strcmp(v, "rr") == 0) return 0;
     if (std::strcmp(v, "plru") == 0) return 1;
-    if (std::strcmp(v, "srrip") == 0) return 2;
     std::fprintf(stderr, "ICACHE_REPL=%s: unknown\\n", v);
     std::abort();
   }();
