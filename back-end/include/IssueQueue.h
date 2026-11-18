@@ -431,7 +431,7 @@ private:
         uint64_t op_bit = (1ULL << op_type);
         
         if ((ports[p].capability_mask & op_bit) &&
-            (!CFG_WB_PRESEL || ((in.port_fu_ready_mask[ports[p].port_idx] & op_bit) &&
+            (!CFG_WB_PRESEL || ((CFG_WB_PRESEL != 2 || (in.port_fu_ready_mask[ports[p].port_idx] & op_bit)) &&
                                 (!in.presel_ok || in.presel_ok(q_.entry[idx].uop, ports[p].port_idx))))) {
           result.push_back({idx, ports[p].port_idx});
           inst_issued[idx] = 1;
