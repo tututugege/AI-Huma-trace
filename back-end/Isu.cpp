@@ -2,6 +2,10 @@
 #include "AguPorts.h"
 #include "BackPorts.h"
 #include "config.h"
+#include "debug_config.h"
+#include "trace_win.h"
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -138,6 +142,9 @@ void Isu::issue() {
       const auto &grant = q.out.issue_grants[p];
       if (!grant.valid) continue;
       if (isutr_on() && grant.uop->rob_idx == 14) std::fprintf(stderr, "ISUTR %llu GRANT port=%d op=%d rob=%d\n", (unsigned long long)g_dbg_cycle, p, (int)grant.uop.op, (int)grant.uop->rob_idx);
+      { static const bool tr = std::getenv("ISSUE_TRACE") != nullptr;   // ISSUE_TRACE=1 (+ FPR_DUMP window): every grant (queue, port, rob, pc, op) and every woken physical register
+        if (tr && trace_win::ok()) std::fprintf(stderr, "[GR] cyc=%lld q=%d port=%d rob=%d pc=%llx op=%d dest=p%d src1=p%d/%d src2=p%d/%d\n", (long long)sim_time, qi, p, (int)grant.uop->rob_idx, (unsigned long long)grant.uop->pc, (int)grant.uop.op,
+                                             (int)grant.uop->dest_preg, (int)grant.uop->src1_preg, (int)grant.uop.src1_busy, (int)grant.uop->src2_preg, (int)grant.uop.src2_busy); }
       Assert(!out.iss2prf.iss_entry[p].valid);
       out.iss2prf.iss_entry[p].valid = true;
       out.iss2prf.iss_entry[p].uop = grant.uop;
@@ -259,6 +266,8 @@ void Isu::awake() {
       woken[n_woken++] = bus[i].preg;
       if (bus[i].preg < TAG_NUM) out.iss_awake.woke_at[bus[i].preg] = ep;
     }
+  { static const bool tr = std::getenv("ISSUE_TRACE") != nullptr;
+    if (tr && trace_win::ok() && n_woken) { std::fprintf(stderr, "[WK] cyc=%lld p:", (long long)sim_time); for (int i = 0; i < n_woken; i++) std::fprintf(stderr, " %u", woken[i]); std::fprintf(stderr, "\n"); } }
   for (auto &q : iqs) q.set_wakeup(woken, n_woken);   // (applied at the edge)
 }
 

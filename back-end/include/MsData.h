@@ -27,15 +27,28 @@ struct TV {
   uint8_t depth = 0;  // 0 = the stale load itself
   xlen_t v = 0;
   long long until = 0;  // the second write-back of the load put the true value on the bus: consumers that issued up to this cycle still read the stale one
+  // the previous stale value of a register that a write-back replaced by another stale value: consumers executing up to cycle `pwhen` (the write-back cycle + 1)
+  // still read it (the RTL reads the register file in the grant cycle, a write-back of that very cycle is not visible; found in the Linux window w505)
+  bool pt = false;
+  uint8_t pdepth = 0;
+  xlen_t pv = 0;
+  long long pwhen = 0;
 };
 inline TV taint[TAG_NUM];
+inline bool prev_on() { static const bool on = std::getenv("MSD_NOPREV") == nullptr; return on; }   // MSD_NOPREV=1: A/B switch, a replaced stale value is not kept for one more cycle
 // the true value reaches the register file one cycle after the write-back bus: a consumer executing in the next cycle still has the stale operand (RTL, found at the Linux cycle 1129708)
 inline void release(uint32_t preg) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   if (taint[preg].t) taint[preg].until = (long long)sim_time + 1;
   else taint[preg] = TV{};
 }
-inline bool live(uint32_t preg) { return taint[preg].t && (taint[preg].until == 0 || (long long)sim_time <= taint[preg].until); }
+// what a consumer executing now reads from the register: the previous stale value in the cycle after its replacement
+inline TV view(uint32_t preg) {
+  const TV &c = taint[preg];
+  if (c.pt && (long long)sim_time <= c.pwhen) { TV o; o.t = true; o.v = c.pv; o.depth = c.pdepth; return o; }
+  return c;
+}
+inline bool live(uint32_t preg) { const TV c = view(preg); return c.t && (c.until == 0 || (long long)sim_time <= c.until); }
 
 
 inline void clear_all() {
@@ -278,10 +291,13 @@ inline bool trace_on() { static const bool on = std::getenv("MSD_TRACE") != null
 inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   if (trace_on() && trace_win::ok() && t) std::fprintf(stderr, "[MSD] cyc=%lld taint p%u v=%llx depth=%u\n", (long long)sim_time, preg, (unsigned long long)v, depth);
-  taint[preg].t = t;
-  taint[preg].v = v;
-  taint[preg].depth = depth;
-  taint[preg].until = 0;
+  TV &c = taint[preg];
+  if (t && c.t && prev_on()) { c.pt = true; c.pv = c.v; c.pdepth = c.depth; c.pwhen = (long long)sim_time + 1; }   // a stale value replaced by another one: the old one stays visible one more cycle
+  else c.pt = false;
+  c.t = t;
+  c.v = v;
+  c.depth = depth;
+  c.until = 0;
 }
 
 // Effects are written into `inst` (BRU: mispred / br_taken / diag_val; SDU: result = store data; AGU / load: result = the stale address).
@@ -300,9 +316,10 @@ inline void exec(Inst &inst) {
     if (d_en && inst.op != UOP_LOAD) taint[inst->dest_preg] = TV{};
     return;
   }
-  const X a = s1 ? taint[u.src1_preg].v : f->rs1_value;
-  const X b = s2 ? taint[u.src2_preg].v : f->rs2_value;
-  const uint8_t depth = (uint8_t)(std::max(s1 ? (int)taint[u.src1_preg].depth : 0, s2 ? (int)taint[u.src2_preg].depth : 0) + 1);
+  const TV v1 = s1 ? view(u.src1_preg) : TV{}, v2 = s2 ? view(u.src2_preg) : TV{};
+  const X a = s1 ? v1.v : f->rs1_value;
+  const X b = s2 ? v2.v : f->rs2_value;
+  const uint8_t depth = (uint8_t)(std::max(s1 ? (int)v1.depth : 0, s2 ? (int)v2.depth : 0) + 1);
   const uint32_t w = f->inst, opc = w & 0x7f, f3 = mbits(w, 14, 12);
   switch (inst.op) {
   case UOP_ADD:

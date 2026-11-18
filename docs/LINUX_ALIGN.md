@@ -73,3 +73,13 @@ uBTB 条目的目标在 RTL 里存 63 位（`UB_TGT_W`），读出却只用低 3
 
 两边统一为全宽：模型 `UbEnt::target` 改成 `pc_t`、`UB_TGT_BITS = XLEN - SLOT_SHIFT`、`ub_expand` 直接移位；RTL 读出直接用存储的目标（rtl `bpu_ub_look.sv`）。
 主 BTB（`bta`）两边本来就是全宽。67 个程序周期不变（低地址程序）。索引 / tag 的哈希输入、`hist_sym`、更新队列窗口比较仍只用低 32 位（哈希宽度，两边一致，不影响值）。
+
+## 38.0M 周期 PT 差异：load 值读取时刻（模型，已修）
+
+现象：从复位 Linux，第一处 PT 差异在 3800 万周期（bin 380）。
+根因：模型的 stale-value（访存推测）机制 `MsData.h` 在执行周期读源寄存器的污点值，而 RTL 在 grant 周期读 PRF。
+同一周期内 load 写回刚改了污点（`set_taint`）时，依赖指令在 RTL 看到的是旧值，模型看到的是新值。
+修复：`TV` 记录上一个污点值 `pv`（有效到 `pwhen = sim_time+1`），`view()` 在该周期内返回旧值；`live()`、`exec()` 用 `view()`。
+A/B 开关：`MSD_NOPREV=1` 关闭修复。
+诊断：`ISSUE_TRACE=1`（受 trace_win 窗口限制）打印 `[GR]` 每次 grant、`[WK]` 每周期被唤醒的 preg。
+验证：67 个程序周期不变；eda 窗口 w46–w515 全部 0 差异；从复位到 9140 万周期 1830 个箱 0 差异（旧的 38.0M、68.4M 差异均消失）。整条 1.4 亿周期的最终对比待 RTL 跑完。
