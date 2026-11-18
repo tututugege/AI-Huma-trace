@@ -75,7 +75,7 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 2. `scripts/build_tests.sh . build/tests`,再加 `scripts/build_tests.sh . build/tests memory-stress-small smc-addi smc-div pf-stress`
    (Homebrew LLVM,riscv64;额外程序默认不构建)。
 3. `scripts/run_gate.sh build/simulator results/gate`:62 个测试(cpu-tests 与 `tests/extra` 的额外程序;`memory-stress`、`load-store` 和 `smc-*` 被脚本排除,见其 `grep -v`;`baseline.csv` 也列出它们),通过 = 周期数等于 `results/baseline/baseline.csv`
-   (2026-11-11 以 compact ROB(EXP-028)为默认重新生成,在那之前是 2026-11-09 带 write buffer(EXP-024)的版本;`baseline_nopf.csv` 是同一基线的关预取版本:`PF_ENABLE=0` 可复现,可能落后于 main)。
+   (2026-11-19 以新默认配置(= RTL 配置:两个 INT 队列、合并访存队列、`FLUSH_REG` 等 13 个 `CFG_*` 默认值,EXP-044)重新生成,62 个程序周期都变了,几何平均 +1.96%;更早:2026-11-11 以 compact ROB(EXP-028)为默认,2026-11-09 带 write buffer(EXP-024);`baseline_nopf.csv` 是同一基线的关预取版本:`PF_ENABLE=0` 可复现,2026-11-19 同时重新生成)。
    全部以 difftest Success 结束,TB_CHECK 不一致数为 0。gate 不需要 `LSU_PIPE_NOWD=1`(基线就是模型自己的周期数);与 RTL 做任何周期比较时才需要。
    **旧设计回归**(旧 LSU + 旧 BPU):两者都已删除(BPU_PIPE 0..2 在 exp/rvc-carry,旧 LSU / `LSU_PIPE=0` 与 `legacy_lsu_baseline*.csv` 于 2026-11-15 删除);要用请查历史。
 4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-12,开启 compact ROB EXP-028;`docs/MAIN_RECORDS.md`):**
