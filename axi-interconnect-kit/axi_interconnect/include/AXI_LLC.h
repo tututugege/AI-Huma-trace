@@ -283,6 +283,8 @@ struct AXI_LLC_Regs_t {
   uint8_t rr_write_master_r = 0;
   uint8_t invalidate_epoch_r = 0;
   uint32_t dirty_line_count_r = 0;
+  uint16_t repl_psel_r = 512;   // LLC_REPL=drrip: set-dueling counter (>= 512: brrip insertion for the follower sets)
+  uint8_t repl_bip_ctr_r = 0;   // LLC_REPL=brrip / drrip: 1-in-32 RRPV-2 insertion
 
   bool read_resp_valid_r[NUM_READ_MASTERS] = {false};
   bool read_resp_fresh_r[NUM_READ_MASTERS] = {false};
@@ -409,7 +411,7 @@ private:
   bool enqueue_read_victim_snapshot(uint8_t owner_slot, uint32_t victim_addr, const WideWriteStrb_t &victim_strobe);
   void arm_victim_writeback(bool for_write, uint8_t write_master, uint8_t mshr_slot, uint32_t addr);
   void write_line_tables(uint32_t set, uint32_t way, const AXI_LLCMetaEntry_t &meta, uint32_t repl_next_way);
-  void touch_repl_at_lookup(uint32_t set, uint32_t way);
+  void touch_repl_at_lookup(uint32_t set, uint32_t way, bool alloc, bool prefetch);
   void write_valid_table(uint32_t set, uint32_t way, bool valid);
 
   // --- prefetch ---

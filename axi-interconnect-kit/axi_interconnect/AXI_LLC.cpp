@@ -56,19 +56,43 @@ uint32_t update_dirty_line_count(uint32_t current, bool old_dirty, bool new_dirt
 //   plru: tree pseudo-LRU, ways-1 bits; node i has children 2i+1 / 2i+2, a bit set means "evict from the right half".
 //   lru : true LRU, a log2(ways)-bit age per way (0 = most recent), stored XOR the way number so the all-zero reset row
 //         is a valid order; a reference upper bound.
+//   srrip / brrip / drrip: a 2-bit re-reference prediction value (RRPV) per way. A hit sets it to 0; the victim is the
+//         way with the largest RRPV (lowest way on a tie); an allocation first ages the row so that the largest RRPV
+//         becomes 3, then inserts the new line at 2 (srrip), at 3 except every 32nd allocation at 2 (brrip), or as
+//         chosen by set dueling (drrip: sets with set % 32 == 0 always use srrip, == 1 always brrip; their misses move a
+//         10-bit counter, the other sets follow the winner).
+// LLC_PF_LOW=1: a prefetch allocation goes in at the low-priority end (plru / lru: not touched; rrip: RRPV 3).
 // plru / lru are updated read-modify-write when the lookup completes: a hit touches the hit way, an allocating miss
 // touches its victim (allocation time); line fills do not write the row. Only one lookup is in flight, so the next
 // lookup always reads the written row.
 // ---------------------------------------------------------------------------------------------
-enum class LlcRepl { kRR, kPLRU, kLRU };
+enum class LlcRepl { kRR, kPLRU, kLRU, kSRRIP, kBRRIP, kDRRIP };
 LlcRepl llc_repl() {
   static const LlcRepl m = [] {
     const char *v = std::getenv("LLC_REPL");
     if (v && std::strcmp(v, "plru") == 0) return LlcRepl::kPLRU;
     if (v && std::strcmp(v, "lru") == 0) return LlcRepl::kLRU;
+    if (v && std::strcmp(v, "srrip") == 0) return LlcRepl::kSRRIP;
+    if (v && std::strcmp(v, "brrip") == 0) return LlcRepl::kBRRIP;
+    if (v && std::strcmp(v, "drrip") == 0) return LlcRepl::kDRRIP;
+    if (v && std::strcmp(v, "rr") != 0) { std::fprintf(stderr, "LLC_REPL=%s: unknown\n", v); std::abort(); }
     return LlcRepl::kRR;
   }();
   return m;
+}
+
+bool llc_rrip() { return llc_repl() == LlcRepl::kSRRIP || llc_repl() == LlcRepl::kBRRIP || llc_repl() == LlcRepl::kDRRIP; }
+bool llc_pf_low() { static const bool on = std::getenv("LLC_PF_LOW") && std::getenv("LLC_PF_LOW")[0] == '1'; return on; }
+
+uint32_t rrpv_of(uint64_t t, uint32_t way) { return uint32_t(t >> (2 * way)) & 3u; }
+uint64_t rrpv_set(uint64_t t, uint32_t way, uint32_t v) { return (t & ~(3ull << (2 * way))) | (uint64_t(v & 3u) << (2 * way)); }
+// the row aged so that its largest RRPV is 3 (the classic "increment all until one reaches 3")
+uint64_t rrip_age(uint64_t t, uint32_t ways) {
+  uint32_t mx = 0;
+  for (uint32_t w = 0; w < ways; ++w) mx = std::max(mx, rrpv_of(t, w));
+  const uint32_t add = 3u - mx;
+  for (uint32_t w = 0; w < ways && add; ++w) t = rrpv_set(t, w, rrpv_of(t, w) + add);
+  return t;
 }
 
 uint32_t log2_ways(uint32_t ways) {
@@ -116,13 +140,18 @@ uint64_t lru_touch(uint64_t t, uint32_t ways, uint32_t way) {
   return out;
 }
 
-// The repl row after `way` was used (hit or allocated).
-uint64_t repl_after_use(uint64_t t, uint32_t ways, uint32_t way) {
-  const bool fits = llc_repl() == LlcRepl::kPLRU ? ways <= 64 : llc_repl() != LlcRepl::kLRU || ways * log2_ways(ways) <= 64;
+// The repl row after `way` was used: a hit (alloc = false) or an allocation (rrip: inserted with RRPV `ins`; low: a
+// low-priority insertion, plru / lru leave the row as it is).
+uint64_t repl_after_use(uint64_t t, uint32_t ways, uint32_t way, bool alloc = false, uint32_t ins = 2, bool low = false) {
+  const bool fits = llc_repl() == LlcRepl::kPLRU ? ways <= 64
+                    : llc_repl() == LlcRepl::kLRU ? ways * log2_ways(ways) <= 64
+                    : llc_rrip() ? ways <= 32 : true;
   if (!fits || (ways & (ways - 1)) != 0) {
     std::fprintf(stderr, "LLC_REPL: %u ways do not fit the 64-bit repl row (plru: power of two <= 64, lru: <= 16)\n", ways);
     std::abort();
   }
+  if (llc_rrip()) return alloc ? rrpv_set(rrip_age(t, ways), way, low ? 3u : ins) : rrpv_set(t, way, 0);
+  if (alloc && low && llc_repl() != LlcRepl::kRR) return t;
   switch (llc_repl()) {
     case LlcRepl::kPLRU: return plru_touch(t, ways, way);
     case LlcRepl::kLRU: return lru_touch(t, ways, way);
@@ -371,21 +400,45 @@ bool AXI_LLC::way_reserved(const AXI_LLC_Regs_t &regs, uint32_t set, uint8_t way
   return false;
 }
 
-// plru / lru: an allocating miss (or a write hit) writes the repl row back from the value its lookup read.
-void AXI_LLC::touch_repl_at_lookup(uint32_t set, uint32_t way) {
+// plru / lru / rrip: an allocating miss (alloc) or a write hit writes the repl row back from the value its lookup read.
+// rrip: the insertion RRPV; drrip set dueling and the brrip 1-in-32 counter live in registers.
+void AXI_LLC::touch_repl_at_lookup(uint32_t set, uint32_t way, bool alloc, bool prefetch) {
   if (llc_repl() == LlcRepl::kRR) return;
-  put_repl(io.table_out.repl, set, repl_after_use(decode_repl(io.lookup_in.repl), config_.ways, way));
+  uint32_t ins = 2;
+  if (alloc && (llc_repl() == LlcRepl::kBRRIP || llc_repl() == LlcRepl::kDRRIP)) {
+    const auto &r = io.regs;
+    auto &w = io.reg_write;
+    bool bimodal = llc_repl() == LlcRepl::kBRRIP;
+    if (llc_repl() == LlcRepl::kDRRIP) {
+      const uint32_t leader = set % 32u;
+      if (leader == 0) {   // an srrip leader missed: brrip is better
+        bimodal = false;
+        w.repl_psel_r = uint16_t(std::min<uint32_t>(r.repl_psel_r + 1u, 1023u));
+      } else if (leader == 1) {
+        bimodal = true;
+        w.repl_psel_r = uint16_t(r.repl_psel_r == 0 ? 0 : r.repl_psel_r - 1u);
+      } else {
+        bimodal = r.repl_psel_r >= 512u;
+      }
+    }
+    if (bimodal) {
+      ins = (r.repl_bip_ctr_r % 32u) == 0 ? 2u : 3u;
+      w.repl_bip_ctr_r = uint8_t(r.repl_bip_ctr_r + 1u);
+    }
+  }
+  put_repl(io.table_out.repl, set,
+           repl_after_use(decode_repl(io.lookup_in.repl), config_.ways, way, alloc, ins, alloc && prefetch && llc_pf_low()));
 }
 
 int AXI_LLC::pick_unreserved_way(const AXI_LLC_Regs_t &regs, uint32_t set, int first_invalid_way, uint64_t repl_state,
                                  uint32_t line) const {
   if (first_invalid_way >= 0 && !way_reserved(regs, set, uint8_t(first_invalid_way), line)) return first_invalid_way;
-  if (llc_repl() == LlcRepl::kLRU) {   // the oldest way that no in-flight miss reserved
+  if (llc_repl() == LlcRepl::kLRU || llc_rrip()) {   // the oldest way (largest age / RRPV) that no in-flight miss reserved
     int best = -1;
     uint32_t best_age = 0;
     for (uint32_t w = 0; w < config_.ways; ++w) {
       if (way_reserved(regs, set, uint8_t(w), line)) continue;
-      const uint32_t a = lru_age(repl_state, config_.ways, w);
+      const uint32_t a = llc_rrip() ? rrpv_of(repl_state, w) : lru_age(repl_state, config_.ways, w);
       if (best < 0 || a > best_age) best = int(w), best_age = a;
     }
     return best;
@@ -838,7 +891,7 @@ bool AXI_LLC::complete_hit_lookup(bool table_busy, uint32_t set, uint32_t tag, u
     // a bypass write only refreshes the line: it keeps the dirty state it had
     meta.flags = uint8_t(AXI_LLC_META_VALID | (r.lookup_is_bypass_r ? (hit_meta.flags & AXI_LLC_META_DIRTY) : AXI_LLC_META_DIRTY));
     write_line_tables(set, uint32_t(hit_way), meta, repl_next);
-    if (llc_repl() != LlcRepl::kRR && !r.lookup_is_bypass_r) touch_repl_at_lookup(set, uint32_t(hit_way));
+    if (llc_repl() != LlcRepl::kRR && !r.lookup_is_bypass_r) touch_repl_at_lookup(set, uint32_t(hit_way), false, false);
     end_lookup(AXI_LLCState::kIdle);
     io.reg_write.dirty_line_count_r =
         update_dirty_line_count(r.dirty_line_count_r, hit_dirty, (meta.flags & AXI_LLC_META_DIRTY) != 0);
@@ -927,7 +980,7 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
     ctx.way = way;
     ctx.repl_next_way = repl_next;
     ctx.tag = tag;
-    touch_repl_at_lookup(set, way);
+    touch_repl_at_lookup(set, way, true, false);
     end_lookup(AXI_LLCState::kMiss);
     return true;
   }
@@ -946,14 +999,14 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
     ctx.way = way;
     ctx.repl_next_way = repl_next;
     ctx.tag = tag;
-    touch_repl_at_lookup(set, way);
+    touch_repl_at_lookup(set, way, true, false);
   } else {
     if (table_busy) {
       retry_lookup(AXI_LLCState::kLookup);
       return true;
     }
     write_line_tables(set, way, AXI_LLCMetaEntry_t{tag, uint8_t(AXI_LLC_META_VALID | AXI_LLC_META_DIRTY)}, repl_next);
-    touch_repl_at_lookup(set, way);
+    touch_repl_at_lookup(set, way, true, false);
     io.reg_write.dirty_line_count_r = update_dirty_line_count(r.dirty_line_count_r, false, true);
     ctx.cache_done = true;
   }
@@ -1020,7 +1073,7 @@ bool AXI_LLC::complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int 
   e.victim_dirty = decode_valid_bit(io.lookup_in.valid, way, false) && (victim_meta.flags & AXI_LLC_META_DIRTY);
   e.victim_writeback_done = !e.victim_dirty;
   e.victim_addr = e.victim_dirty ? build_line_addr_from_tag_set(config_, victim_meta.tag, set) : 0;
-  if (!e.bypass) touch_repl_at_lookup(set, way);
+  if (!e.bypass) touch_repl_at_lookup(set, way, true, prefetch);
   end_lookup(AXI_LLCState::kMiss);
   if (prefetch) drop_prefetch_slot(r.lookup_id_r);
   return true;

@@ -73,6 +73,12 @@ private:
   std::vector<TlbEntry> entries_;
   int capacity_;
   int repl_ptr_ = 0;
+  // TLB_REPL=nru: one used bit per entry; plru: a binary tree over the entries (capacity-1 nodes). Updated at the edge
+  // from this cycle's table hits (touch_) and the refill.
+  std::vector<uint8_t> used_, plru_;
+  std::vector<int> touch_;
+  void repl_touch(int slot);
+  int repl_victim() const;
   WalkRegs walk_{};
   // this cycle's wires (comb -> seq): the next walk state, the refill, the flush; the walk port as this cycle's
   // requests / consumes / flushes leave it (a later step of the cycle sees it so)

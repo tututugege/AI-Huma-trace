@@ -99,6 +99,7 @@ void ICacheTop::fill_lookup_meta() {
   d.meta_resp_valid = lookup_.meta_valid;
   if (!lookup_.meta_valid) return;
   for (uint32_t w = 0; w < ICACHE_WAY_NUM; ++w) { d.lookup_set_tag[w] = lookup_.tag[w]; d.lookup_set_valid[w] = lookup_.valid[w]; }
+  d.lookup_set_repl = repl_[lookup_.index & (ICACHE_SET_NUM - 1u)];
 }
 void ICacheTop::fill_lookup_data() {
   auto &d = mod_.io.lookup_in;
@@ -242,7 +243,7 @@ void ICacheTop::invalidate_step(ICacheOut *co) {
 // The clock edge: module registers (R1 or R2, or the reset state), the ITLB, the table writes of the steps in order.
 void ICacheTop::seq() {
   if (edge_.n == 0) return;   // (no I-cache step this cycle)
-  if (edge_.reset) { tags_.reset(); valid_.reset(); mod_.reset(); }
+  if (edge_.reset) { tags_.reset(); valid_.reset(); mod_.reset(); for (auto &r : repl_) r = 0; }
   else mod_.seq();
   itlb.seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
   for (int s = 0; s < edge_.n; ++s) {
@@ -258,6 +259,10 @@ void ICacheTop::seq() {
       tag_write.chunk_enable[tw.way] = valid_write.chunk_enable[tw.way] = true;
     }
     if (tw.invalidate_all) valid_.reset();
+    if (tw.touch_we) {
+      uint16_t &st = repl_[static_cast<uint32_t>(tw.touch_index) & (ICACHE_SET_NUM - 1u)];
+      st = icache_module_n::icache_repl_update(st, static_cast<uint32_t>(tw.touch_way), tw.touch_fill);
+    }
     tags_.seq(TagTable::ReadReq{}, tag_write);
     valid_.seq(ValidTable::ReadReq{}, valid_write);
   }
