@@ -395,6 +395,10 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 // ROB decides it (a register in front of the broadcast: no commit -> trap -> flush logic in the combinational paths of the other modules). The ROB
 // clears itself in the cycle of the decision, the front end is redirected in that cycle; the IDU, rename, dispatch, ISU, EXU and LSU clear one cycle
 // later, so what they do in the cycle of the decision is dropped by that clear. Default 0 = unchanged.
+#ifndef CFG_LSU_WBMERGE_REG
+#define CFG_LSU_WBMERGE_REG 0   // write-buffer insert merges only into an entry started in the same cycle (not into the registered tail)
+#endif
+
 #ifndef CFG_FLUSH_REG
 #define CFG_FLUSH_REG 0
 #endif
