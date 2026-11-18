@@ -53,11 +53,11 @@ void Dispatch::comb_alloc() {
     u->expect_mask = 0;
     if (is_load(u)) {
       stq_slot(u);
-      if (loads < lsu.ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && lsu.ldq_alloc_valid[loads]) {
+      if (loads < lsu.ldq_free && loads < GLOBAL_IQ_CONFIG[IQ_MEM].dispatch_width && loads < MAX_LDQ_DISPATCH_WIDTH && lsu.ldq_alloc_valid[loads]) {
         u->ldq_idx = lsu.ldq_alloc_idx[loads];
         ldq_port_owner[loads++] = i;
       } else {
-        if (loads < lsu.ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_LD].dispatch_width) { iq_blk[i] = IQ_LD; iq_blk_width[i] = true; }
+        if (loads < lsu.ldq_free && loads >= GLOBAL_IQ_CONFIG[IQ_MEM].dispatch_width) { iq_blk[i] = IQ_MEM; iq_blk_width[i] = true; }
         out.dis2rob.valid[i] = false;
       }
     }
@@ -114,12 +114,12 @@ void Dispatch::comb_dispatch() {
     UopPacket uops[MAX_UOPS_PER_INST];
     const int cnt = decompose_inst(u, uops);
     wire<ROB_CPLT_MASK_WIDTH> expect = 0;
-    for (int k = 0; k < cnt; k++) expect |= rob_cplt_mask_from_iq(uops[k].iq_id);
+    for (int k = 0; k < cnt; k++) expect |= rob_cplt_mask_from_kind(uops[k].kind);
     // SC returns its 0/1 result through the load-like write-back and still completes an STD
     if (type == AMO && (u->func7 >> 2) == AmoOp::SC) expect = ROB_CPLT_G0 | ROB_CPLT_G2;
     int lane_use[IQ_NUM] = {0};   // uops of this instruction already counted for each queue (a memory queue can take two: LD + STA of an AMO)
     for (int k = 0; k < cnt && fit_[i]; k++) {
-      const int iq = route_iq(uops[k].iq_id, uops[k].uop.op, u->rob_idx);
+      const int iq = route_iq(uops[k].kind, uops[k].uop.op, u->rob_idx);
       const int u_iq = usage[iq] + lane_use[iq]++;
       fit_[i] = u_iq < GLOBAL_IQ_CONFIG[iq].dispatch_width && u_iq < in.iss2dis->ready_num[iq];
       if (!fit_[i]) {
@@ -137,7 +137,7 @@ void Dispatch::comb_dispatch() {
     fired = true;
     u->expect_mask = expect;
     for (int k = 0; k < cnt; k++) {
-      const int iq = route_iq(uops[k].iq_id, uops[k].uop.op, u->rob_idx);
+      const int iq = route_iq(uops[k].kind, uops[k].uop.op, u->rob_idx);
       out.dis2iss.req[iq][usage[iq]].valid = true;
       out.dis2iss.req[iq][usage[iq]].uop = uops[k].uop;
       usage[iq]++;
@@ -223,9 +223,9 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
 }
 
 namespace {
-// One uop of a decomposition: target queue, operation, and the fields it overrides (-1 = keep the instruction's value).
+// One uop of a decomposition: kind (UopKind), operation, and the fields it overrides (-1 = keep the instruction's value).
 struct Piece {
-  int iq, op;
+  int kind, op;
   int src1_en, src2_en, dest_en;
   bool imm4;    // immediate becomes the instruction length (the "PC + 4" link value; 2 for a compressed instruction)
   bool atomic;  // marks the STD of an atomic
@@ -238,64 +238,64 @@ int Dispatch::decompose_inst(const Uop &inst, UopPacket *out) {
   Piece pieces[MAX_UOPS_PER_INST];
   int n = 0;
   if (is_eliminated_move(inst)) return 0;  // renamed away by move elimination: completes in the ROB at dispatch
-  auto add = [&](int iq, int op, int s1 = -1, int s2 = -1, int dst = -1, bool imm4 = false, bool atomic = false) {
-    pieces[n++] = {iq, op, s1, s2, dst, imm4, atomic};
+  auto add = [&](int kind, int op, int s1 = -1, int s2 = -1, int dst = -1, bool imm4 = false, bool atomic = false) {
+    pieces[n++] = {kind, op, s1, s2, dst, imm4, atomic};
   };
   switch (type) {
-  case ADD:   add(IQ_INT, UOP_ADD); break;
-  case MUL:   add(IQ_INT, UOP_MUL); break;
-  case DIV:   add(IQ_INT, UOP_DIV); break;
+  case ADD:   add(UK_INT, UOP_ADD); break;
+  case MUL:   add(UK_INT, UOP_MUL); break;
+  case DIV:   add(UK_INT, UOP_DIV); break;
   case FPOP:
     switch (inst->fp_cls) {
-    case FP_C_FMA:  add(IQ_FP, UOP_FMA); break;
-    case FP_C_FDIV: add(IQ_FP, UOP_FDIV); break;
-    case FP_C_MISC: add(IQ_FP, UOP_FMISC); break;
-    case FP_C_I2F:  add(IQ_INT, UOP_I2F); break;
+    case FP_C_FMA:  add(UK_FP, UOP_FMA); break;
+    case FP_C_FDIV: add(UK_FP, UOP_FDIV); break;
+    case FP_C_MISC: add(UK_FP, UOP_FMISC); break;
+    case FP_C_I2F:  add(UK_INT, UOP_I2F); break;
     default: Assert(0 && "FP instruction without a unit class");
     }
     break;
-  case BR:    add(IQ_BR, UOP_BR); break;
-  case LOAD:  add(IQ_LD, UOP_LOAD); break;
+  case BR:    add(UK_BR, UOP_BR); break;
+  case LOAD:  add(UK_LD, UOP_LOAD); break;
   case STORE:  // STA uses the base register, STD the data register
-    add(IQ_STA, UOP_STA, -1, 0);
-    add(IQ_STD, UOP_STD, 0, 1);
+    add(UK_STA, UOP_STA, -1, 0);
+    add(UK_STD, UOP_STD, 0, 1);
     break;
   case JALR:  // link value through the integer queue, then the jump (needs the base register)
-    add(IQ_INT, UOP_ADD, 0, 0, -1, true);
-    add(IQ_BR, UOP_JUMP, 1, -1, 0);
+    add(UK_INT, UOP_ADD, 0, 0, -1, true);
+    add(UK_BR, UOP_JUMP, 1, -1, 0);
     break;
   case JAL:
-    add(IQ_INT, UOP_ADD, 0, 0, -1, true);
-    add(IQ_BR, UOP_JUMP, -1, -1, 0);
+    add(UK_INT, UOP_ADD, 0, 0, -1, true);
+    add(UK_BR, UOP_JUMP, -1, -1, 0);
     break;
   case AMO:
     if (amo == AmoOp::LR) {
-      add(IQ_LD, UOP_LOAD, -1, 0);
+      add(UK_LD, UOP_LOAD, -1, 0);
     } else if (amo == AmoOp::SC) {  // the 0/1 result comes back through the STA write-back port
-      add(IQ_STA, UOP_STA, -1, 0, 1);
-      add(IQ_STD, UOP_STD, 0, -1, 0, false, true);
+      add(UK_STA, UOP_STA, -1, 0, 1);
+      add(UK_STD, UOP_STD, 0, -1, 0, false, true);
     } else {  // read-modify-write: load, store address, store data (data source patched below)
-      add(IQ_LD, UOP_LOAD, -1, 0);
-      add(IQ_STA, UOP_STA, -1, 0, 0);
-      add(IQ_STD, UOP_STD, -1, -1, 0, false, true);
+      add(UK_LD, UOP_LOAD, -1, 0);
+      add(UK_STA, UOP_STA, -1, 0, 0);
+      add(UK_STD, UOP_STD, -1, -1, 0, false, true);
     }
     break;
-  case NOP:        add(IQ_INT, UOP_ADD); break;
-  case CSR:        add(IQ_INT, UOP_CSR); break;
-  case FENCE:      add(IQ_INT, UOP_FENCE); break;
-  case ECALL:      add(IQ_INT, UOP_ECALL); break;
-  case MRET:       add(IQ_INT, UOP_MRET); break;
-  case SRET:       add(IQ_INT, UOP_SRET); break;
-  case SFENCE_VMA: add(IQ_INT, UOP_SFENCE_VMA); break;
-  case FENCE_I:    add(IQ_INT, UOP_FENCE_I); break;
-  case EBREAK:     add(IQ_INT, UOP_EBREAK); break;
-  case WFI:        add(IQ_INT, UOP_WFI); break;
+  case NOP:        add(UK_INT, UOP_ADD); break;
+  case CSR:        add(UK_INT, UOP_CSR); break;
+  case FENCE:      add(UK_INT, UOP_FENCE); break;
+  case ECALL:      add(UK_INT, UOP_ECALL); break;
+  case MRET:       add(UK_INT, UOP_MRET); break;
+  case SRET:       add(UK_INT, UOP_SRET); break;
+  case SFENCE_VMA: add(UK_INT, UOP_SFENCE_VMA); break;
+  case FENCE_I:    add(UK_INT, UOP_FENCE_I); break;
+  case EBREAK:     add(UK_INT, UOP_EBREAK); break;
+  case WFI:        add(UK_INT, UOP_WFI); break;
   default: Assert(0 && "unknown instruction");
   }
 
   for (int k = 0; k < n; k++) {
     const Piece &p = pieces[k];
-    out[k].iq_id = p.iq;
+    out[k].kind = p.kind;
     Uop &u = out[k].uop;
     u = make_dis_iss_uop(inst, k);
     u.op = static_cast<UopType>(p.op);

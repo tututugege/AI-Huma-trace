@@ -304,18 +304,28 @@ constexpr int UOP_TYPE_WIDTH = bit_width_for_count(MAX_UOP_TYPE);
 // F/D: the unit class of an OP-FP / fused multiply-add instruction (UopS::fp_cls)
 enum FpCls : uint8_t { FP_NONE = 0, FP_C_FMA, FP_C_FDIV, FP_C_MISC, FP_C_I2F };
 
+// The issue queues. The memory queue holds the loads and the store addresses.
 enum IQType {
   IQ_INT,
-  IQ_LD,
-  IQ_STA,
+  IQ_MEM,
   IQ_STD,
   IQ_BR,
   IQ_FP,   // F/D only (FP=1)
   IQ_INT1, // the second integer queue (CFG_INT_CLUSTERS=2); an empty one-slot queue otherwise
 };
-// (an unscoped enum value IQ_NUM before F/D: the count is FP dependent now)
-constexpr int IQ_NUM = 7;
-constexpr int IQ_PMU_NUM = 6;   // the queues with PMU events of their own (IQ_INT1 counts with IQ_INT)
+constexpr int IQ_NUM = 6;
+constexpr int IQ_PMU_NUM = 5;   // the queues with PMU events of their own (IQ_INT1 counts with IQ_INT)
+
+// The kinds of uop an instruction is split into (Dispatch::decompose_inst): at most one uop of each kind per instruction. The kinds LD and
+// STA both go to the memory queue (an AMO sends both), INT goes to IQ_INT or IQ_INT1 (route_iq). The ROB completion group is the kind's.
+enum UopKind {
+  UK_INT,
+  UK_LD,
+  UK_STA,
+  UK_STD,
+  UK_BR,
+  UK_FP,
+};
 
 constexpr int ROB_CPLT_MASK_WIDTH = 3;
 constexpr wire<ROB_CPLT_MASK_WIDTH> ROB_CPLT_G0 = 0x1;

@@ -6,7 +6,7 @@ class BackTop;
 class Ren;
 
 struct UopPacket {
-  int iq_id;               // target IQ
+  int kind;                // UopKind of the uop
   Uop uop; // in the issue wire format
 };
 

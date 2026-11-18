@@ -128,7 +128,7 @@ void Isu::issue() {
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   agu_ports_used_ = 0;
   // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
-  static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_LD, IQ_STA, IQ_STD, IQ_BR, IQ_FP};
+  static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_MEM, IQ_STD, IQ_BR, IQ_FP};
   for (int qi : ORDER) {
     auto &q = iqs[qi];
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;

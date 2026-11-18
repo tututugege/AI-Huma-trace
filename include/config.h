@@ -375,13 +375,8 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #ifndef CFG_STD_PORTS
 #define CFG_STD_PORTS 3
 #endif
-// EXP-MEMIQ: one memory issue queue for the loads and the store addresses (instead of the LD and STA queues): one slot array of
-// CFG_MEM_IQ_SIZE entries shared by both, served by the same issue ports as before (the load ports pick the oldest ready load,
-// the STA ports the oldest ready store address, each port its own). The STA queue stays as an empty one-slot queue so that the
-// queue numbering does not change.
-#ifndef CFG_MEM_MERGE
-#define CFG_MEM_MERGE 0
-#endif
+// One memory issue queue for the loads and the store addresses: one slot array of CFG_MEM_IQ_SIZE entries shared by both, served by the
+// load and the STA issue ports (the load ports pick the oldest ready load, the STA ports the oldest ready store address, each port its own).
 #ifndef CFG_MEM_IQ_SIZE
 #define CFG_MEM_IQ_SIZE 64
 #endif
@@ -426,12 +421,6 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #ifndef CFG_AGU_SHARED
 #define CFG_AGU_SHARED 0
 #endif
-#ifndef CFG_LD_IQ_SIZE
-#define CFG_LD_IQ_SIZE 64
-#endif
-#ifndef CFG_STA_IQ_SIZE
-#define CFG_STA_IQ_SIZE 64
-#endif
 #ifndef CFG_STD_IQ_SIZE
 #define CFG_STD_IQ_SIZE 16
 #endif
@@ -449,12 +438,6 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 // Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014; 8 = unrestricted).
 #ifndef CFG_INT_IQ_ENQ_WIDTH
 #define CFG_INT_IQ_ENQ_WIDTH 7
-#endif
-#ifndef CFG_LD_IQ_ENQ_WIDTH
-#define CFG_LD_IQ_ENQ_WIDTH 6
-#endif
-#ifndef CFG_STA_IQ_ENQ_WIDTH
-#define CFG_STA_IQ_ENQ_WIDTH 4
 #endif
 #ifndef CFG_STD_IQ_ENQ_WIDTH
 #define CFG_STD_IQ_ENQ_WIDTH 4
@@ -735,16 +718,8 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
      OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE,
      count_ports_with_mask(OP_MASK_ALU)},
 #endif
-#if CFG_MEM_MERGE
-    {IQ_LD, CFG_MEM_IQ_SIZE, CFG_MEM_IQ_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
+    {IQ_MEM, CFG_MEM_IQ_SIZE, CFG_MEM_IQ_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
      CFG_LD_PORTS + CFG_STA_PORTS},
-    {IQ_STA, 1, 1, OP_MASK_STA, IQ_STA_PORT_BASE, 0},   // empty: the store addresses are in the memory queue
-#else
-    {IQ_LD, CFG_LD_IQ_SIZE, CFG_LD_IQ_ENQ_WIDTH, OP_MASK_LD, IQ_LD_PORT_BASE,
-     count_ports_with_mask(OP_MASK_LD)},
-    {IQ_STA, CFG_STA_IQ_SIZE, CFG_STA_IQ_ENQ_WIDTH, OP_MASK_STA, IQ_STA_PORT_BASE,
-     count_ports_with_mask(OP_MASK_STA)},
-#endif
     {IQ_STD, CFG_STD_IQ_SIZE, CFG_STD_IQ_ENQ_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
      count_ports_with_mask(OP_MASK_STD)},
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
@@ -762,16 +737,10 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
 // per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)
 // per-queue enqueue widths (dispatch write ports per cycle), exported for the RTL config package
 constexpr int IQ_INT_ENQ_WIDTH = CFG_INT_IQ_ENQ_WIDTH;
-#if CFG_MEM_MERGE
-constexpr int IQ_LD_ENQ_WIDTH = CFG_MEM_IQ_ENQ_WIDTH;
-constexpr int IQ_STA_ENQ_WIDTH = 1;
-#else
-constexpr int IQ_LD_ENQ_WIDTH = CFG_LD_IQ_ENQ_WIDTH;
-constexpr int IQ_STA_ENQ_WIDTH = CFG_STA_IQ_ENQ_WIDTH;
-#endif
+constexpr int IQ_MEM_ENQ_WIDTH = CFG_MEM_IQ_ENQ_WIDTH;
 constexpr int IQ_STD_ENQ_WIDTH = CFG_STD_IQ_ENQ_WIDTH;
 constexpr int IQ_BR_ENQ_WIDTH = CFG_BR_IQ_ENQ_WIDTH;
-static_assert(IQ_INT_ENQ_WIDTH <= DECODE_WIDTH && IQ_LD_ENQ_WIDTH <= DECODE_WIDTH && IQ_STA_ENQ_WIDTH <= DECODE_WIDTH &&
+static_assert(IQ_INT_ENQ_WIDTH <= DECODE_WIDTH && IQ_MEM_ENQ_WIDTH <= DECODE_WIDTH &&
                   IQ_STD_ENQ_WIDTH <= DECODE_WIDTH && IQ_BR_ENQ_WIDTH <= DECODE_WIDTH,
               "IQ enqueue width must be <= DECODE_WIDTH");
 
@@ -945,13 +914,7 @@ constexpr int BPU_SCL_META_IDX_BITS = 16;
 constexpr int BPU_LOOP_META_IDX_BITS = 16;
 constexpr int BPU_LOOP_META_TAG_BITS = 16;
 constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
-#if CFG_MEM_MERGE
-constexpr int IQ_LD_SIZE = CFG_MEM_IQ_SIZE;
-constexpr int IQ_STA_SIZE = 1;
-#else
-constexpr int IQ_LD_SIZE = CFG_LD_IQ_SIZE;
-constexpr int IQ_STA_SIZE = CFG_STA_IQ_SIZE;
-#endif
+constexpr int IQ_MEM_SIZE = CFG_MEM_IQ_SIZE;
 constexpr int IQ_STD_SIZE = CFG_STD_IQ_SIZE;
 constexpr int IQ_BR_SIZE = CFG_BR_IQ_SIZE;
 constexpr int LSU_LOAD_WINDOW_WIDTH = LSU_LDU_COUNT * 5;

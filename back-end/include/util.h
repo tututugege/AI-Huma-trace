@@ -32,28 +32,35 @@ inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
   return static_cast<uint8_t>(__builtin_popcount(static_cast<unsigned>(mask)));
 }
 
-// The queue a uop of logical queue `iq` is enqueued in: with one memory queue (CFG_MEM_MERGE) the store addresses go to the load queue.
-// (The ROB completion group stays the logical queue's.)
+// The queue a uop of kind `kind` (UopKind) is enqueued in: the loads and the store addresses go to the memory queue.
 // With two INT queues (CFG_INT_CLUSTERS=2) an integer uop goes to the queue of its position: CSR to IQ_INT, I2F to IQ_INT1, the others by
 // the parity of the ROB index (even / odd lane of the dispatch group).
-inline int route_iq(int iq, int op = 0, uint32_t rob_idx = 0) {
-  if (CFG_INT_CLUSTERS == 2 && iq == IQ_INT) return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
-  return (CFG_MEM_MERGE && iq == IQ_STA) ? IQ_LD : iq;
+inline int route_iq(int kind, int op = 0, uint32_t rob_idx = 0) {
+  switch (kind) {
+  case UK_INT:
+    if (CFG_INT_CLUSTERS == 2) return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
+    return IQ_INT;
+  case UK_LD:
+  case UK_STA: return IQ_MEM;
+  case UK_STD: return IQ_STD;
+  case UK_BR:  return IQ_BR;
+  default:     return IQ_FP;
+  }
 }
 
-inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_iq(int iq_id) {
-  switch (iq_id) {
-  case IQ_INT:
-  case IQ_LD:
-  case IQ_FP:
+inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_kind(int kind) {
+  switch (kind) {
+  case UK_INT:
+  case UK_LD:
+  case UK_FP:
     return ROB_CPLT_G0;
-  case IQ_BR:
-  case IQ_STA:
+  case UK_BR:
+  case UK_STA:
     return ROB_CPLT_G1;
-  case IQ_STD:
+  case UK_STD:
     return ROB_CPLT_G2;
   default:
-    Assert(0 && "Unknown IQ id for ROB completion mask");
+    Assert(0 && "Unknown uop kind for ROB completion mask");
     return 0;
   }
 }

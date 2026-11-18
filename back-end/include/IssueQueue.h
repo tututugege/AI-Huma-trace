@@ -24,7 +24,7 @@ struct PortBinding {
 };
 
 struct IssueQueueConfig {
-  int id;                         // IQ id (IQ_INT, IQ_LD, ...)
+  int id;                         // IQ id (IQ_INT, IQ_MEM, ...)
   int size;                       // depth
   int dispatch_width;             // max enqueues per cycle (write ports)
   uint64_t supported_ops;         // operations the IQ accepts
@@ -64,7 +64,7 @@ public:
   IssueQueueOut out;
 
 private:
-  int id_ = 0;   // IQ id (IQ_INT, IQ_LD, ...)
+  int id_ = 0;   // IQ id (IQ_INT, IQ_MEM, ...)
   int size;
   int dispatch_width;
   std::vector<PortBinding> ports;

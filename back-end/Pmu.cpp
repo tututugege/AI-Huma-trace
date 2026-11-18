@@ -139,7 +139,7 @@ void Pmu::report(uint64_t instructions) {
               pct(T(PMU_SLOT_BE_FLUSH_WAIT)), pct(T(PMU_SLOT_BE_SERIAL)));
 
   {
-    static const char *const nm[IQ_PMU_NUM] = {"INT", "LD", "STA", "STD", "BR", "FP"};
+    static const char *const nm[IQ_PMU_NUM] = {"INT", "MEM", "STD", "BR", "FP"};
     std::printf("  IQ stall (%% of slots, no-room/width): ");
     for (int q = 0; q < IQ_PMU_NUM; q++)
       std::printf(" %s %.2f/%.2f", nm[q], pct(T(static_cast<PmuEvent>(PMU_SLOT_BE_IQ_SPACE_INT + q))),
