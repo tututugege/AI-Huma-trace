@@ -65,12 +65,23 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
   }
 }
 
+// Issue grants refused after select (EXP-045).
+static void pmu_issue_refusals(PmuVec &e) {
+  static const PmuEvent REF[4] = {PMU_ISS_REF_FU, PMU_ISS_REF_WB, PMU_ISS_REF_FPWB, PMU_ISS_REF_AGU};
+  static const PmuEvent LOST[4] = {PMU_ISS_LOST_FU, PMU_ISS_LOST_WB, PMU_ISS_LOST_FPWB, PMU_ISS_LOST_AGU};
+  for (int k = 0; k < 4; k++) {
+    if (g_pmu_back.iss_ref[k]) e.add(REF[k], g_pmu_back.iss_ref[k]);
+    if (g_pmu_back.iss_lost[k]) e.add(LOST[k], g_pmu_back.iss_lost[k]);
+  }
+}
+
 void BackTop::pmu_sample() {
   Pmu &p = ctx->perf.pmu;
   if (!p.enabled || (ctx->is_ckpt && !ctx->perf.perf_start)) return;  // checkpoints: only the measurement window
   PmuVec &e = p.cur;
   e = PmuVec{};
   e.add(PMU_CYCLES);
+  pmu_issue_refusals(e);
 
   // ---- slots ----
   int be_slots = 0;

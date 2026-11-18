@@ -12,6 +12,9 @@
 #include <functional>
 #include <vector>
 
+// Why a selected grant was refused (0: granted). The order is the index + 1 of PmuBackSignals::iss_ref.
+enum GateRefuse : int { GATE_OK = 0, GATE_REF_FU = 1, GATE_REF_WB = 2, GATE_REF_FPWB = 3, GATE_REF_AGU = 4 };
+
 // operation-type bit masks of the issue ports
 
 // ==========================================
@@ -46,7 +49,12 @@ struct IssueQueueIn {
   wire<BR_MASK_WIDTH> flush_br_mask = 0;
   wire<BR_MASK_WIDTH> clear_mask = 0;
   wire<MAX_UOP_TYPE> port_fu_ready_mask[ISSUE_WIDTH] = {};
-  std::function<bool(const Uop &, int)> grant_gate;   // extra grant condition (completion-cycle reservation of the port, FP write-port reservation); called only for a grant about to be made
+  // extra grant condition (completion-cycle reservation of the port, FP write-port reservation, shared AGU): 0 = granted (the reservations
+  // are made), otherwise the GateRefuse reason; called only for a grant about to be made
+  std::function<int(const Uop &, int)> grant_gate;
+  std::function<int(const Uop &, int)> gate_probe;     // the same check without reserving (statistics only)
+  std::function<bool(const Uop &, int)> presel_ok;     // CFG_WB_PRESEL: the uop's completion cycle on the port is free (select mask)
+  std::function<void(int why, bool lost)> on_refuse;   // statistics: a selected grant was refused (why: GateRefuse)
 };
 
 struct IssueQueueOut {
@@ -215,12 +223,16 @@ public:
       int entry_idx = pair.first;
       int phys_port = pair.second;
       uint64_t req_bit = (1ULL << static_cast<uint32_t>(q.entry[entry_idx].uop.op));
-      if ((in.port_fu_ready_mask[phys_port] & req_bit) &&
-          !in.issue_block && (!in.grant_gate || in.grant_gate(q.entry[entry_idx].uop, phys_port))) {
+      if (in.issue_block) continue;
+      const int why = !(in.port_fu_ready_mask[phys_port] & req_bit) ? GATE_REF_FU
+                      : in.grant_gate ? in.grant_gate(q.entry[entry_idx].uop, phys_port) : 0;
+      if (!why) {
         out.issue_grants[phys_port].valid = true;
         out.issue_grants[phys_port].uop = q.entry[entry_idx].uop;
         grants_live = true;
         committed_indices.push_back(entry_idx);
+      } else if (in.on_refuse) {
+        in.on_refuse(why, alt_exists(phys_port));
       }
     }
 
@@ -340,6 +352,20 @@ private:
   std::vector<int> committed_indices;
   bool grants_live = true;  // out.issue_grants may hold a payload (conservative until the first comb_issue)
 
+  // Statistics (EXP-045): a ready uop that the select did not pick could have been granted on this port.
+  bool alt_exists(int phys_port) const {
+    int local = -1;
+    for (size_t k = 0; k < ports.size(); k++) if (ports[k].port_idx == phys_port) local = static_cast<int>(k);
+    if (local < 0) return false;
+    for (int idx : ready_indices) {
+      if (inst_issued[idx]) continue;
+      const uint64_t bit = 1ULL << static_cast<uint32_t>(q_.entry[idx].uop.op);
+      if (!(ports[local].capability_mask & bit) || !(in.port_fu_ready_mask[phys_port] & bit)) continue;
+      if (!in.gate_probe || in.gate_probe(q_.entry[idx].uop, phys_port) == 0) return true;
+    }
+    return false;
+  }
+
   const std::vector<std::pair<int, int>> &schedule() {
     std::vector<std::pair<int, int>> &result = sched_result;
     result.clear();
@@ -404,7 +430,9 @@ private:
         uint32_t op_type = q_.entry[idx].uop.op;
         uint64_t op_bit = (1ULL << op_type);
         
-        if (ports[p].capability_mask & op_bit) {
+        if ((ports[p].capability_mask & op_bit) &&
+            (!CFG_WB_PRESEL || ((in.port_fu_ready_mask[ports[p].port_idx] & op_bit) &&
+                                (!in.presel_ok || in.presel_ok(q_.entry[idx].uop, ports[p].port_idx))))) {
           result.push_back({idx, ports[p].port_idx});
           inst_issued[idx] = 1;
           break; // Move to the next port

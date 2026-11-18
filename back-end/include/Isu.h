@@ -98,7 +98,7 @@ private:
   void add_iq(const IssueQueueConfig &cfg);
   int get_latency(UopType uop_type, wire<7> func7, bool word = false);
   uint32_t agu_ports_used_ = 0;   // physical AGU ports granted this cycle (AguPorts.h)
-  bool grant_gate(const Uop &u, int port);   // extra grant conditions (port completion cycle, FP write port)
+  int grant_gate(const Uop &u, int port, bool reserve);   // extra grant conditions (port completion cycle, FP write port, AGU): GateRefuse
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
@@ -140,6 +140,7 @@ private:
       busy[(sim_time - 1) & (kRing - 1)] = 0;
       if (flush) std::memset(busy, 0, sizeof busy);
     }
+    bool full(int lat) const { return busy[(sim_time + lat) & (kRing - 1)] >= FP_WB_PORTS; }
     bool try_reserve(int lat) {
       uint8_t &b = busy[(sim_time + lat) & (kRing - 1)];
       if (b >= FP_WB_PORTS) return false;

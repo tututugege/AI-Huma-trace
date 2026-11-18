@@ -4,6 +4,7 @@
 #include "config.h"
 #include "debug_config.h"
 #include "trace_win.h"
+#include "Pmu.h"
 #include <cstdio>
 #include <cstdlib>
 #include <array>
@@ -60,7 +61,19 @@ void Isu::init() {
     }
     add_iq(cfg);
   }
-  for (auto &q : iqs) q.in.grant_gate = [this](const Uop &u, int port) { return grant_gate(u, port); };
+  for (auto &q : iqs) {
+    q.in.grant_gate = [this](const Uop &u, int port) { return grant_gate(u, port, true); };
+    q.in.gate_probe = [this](const Uop &u, int port) { return grant_gate(u, port, false); };
+    q.in.presel_ok = [this](const Uop &u, int port) {
+      const UopType t = decode_uop_type(u.op);
+      const int lat = get_latency(t, u->func7, u->is_word);
+      return wb_busy_.free(port, (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat);
+    };
+    q.in.on_refuse = [](int why, bool lost) {
+      g_pmu_back.iss_ref[why - 1]++;
+      if (lost) g_pmu_back.iss_lost[why - 1]++;
+    };
+  }
 }
 
 // Each IQ resets its default IO.
@@ -107,22 +120,23 @@ void Isu::enq() {
 
 // Extra grant conditions of a pick: its completion cycle on the port is free (EXP-035), and the FP register-file write cycle of an
 // FP-writing unit (EXP-032). The reservations are made here, only for a grant that is about to be made.
-bool Isu::grant_gate(const Uop &u, int port) {
+int Isu::grant_gate(const Uop &u, int port, bool reserve) {
   // Shared AGUs (AguPorts.h): the physical AGU port of a load / STA grant; the load queue is scheduled first, so a load wins a
   // shared port and the STA grant is refused (its slot stays in the queue).
   int agu_port = -1;
   if (port >= IQ_LD_PORT_BASE && port < IQ_LD_PORT_BASE + LSU_LDU_COUNT) agu_port = agu::ld_port(port - IQ_LD_PORT_BASE);
   if (port >= IQ_STA_PORT_BASE && port < IQ_STA_PORT_BASE + LSU_STA_COUNT) agu_port = agu::st_port(port - IQ_STA_PORT_BASE);
-  if (agu_port >= 0 && (agu_ports_used_ >> agu_port & 1)) return false;
+  if (agu_port >= 0 && (agu_ports_used_ >> agu_port & 1)) return GATE_REF_AGU;
   const UopType t = decode_uop_type(u.op);
   const int lat = get_latency(t, u->func7, u->is_word);
   const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
-  if (!wb_busy_.free(port, off)) return false;   // another uop of the port completes in that cycle
-  if (u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F) &&
-      !fp_wb_busy_.try_reserve(lat)) return false;
+  if (!wb_busy_.free(port, off)) return GATE_REF_WB;   // another uop of the port completes in that cycle
+  const bool fpw = u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F);
+  if (!reserve) return fpw && fp_wb_busy_.full(lat) ? GATE_REF_FPWB : GATE_OK;
+  if (fpw && !fp_wb_busy_.try_reserve(lat)) return GATE_REF_FPWB;
   wb_busy_.reserve(port, off);
   if (agu_port >= 0) agu_ports_used_ |= 1u << agu_port;
-  return true;
+  return GATE_OK;
 }
 
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
@@ -131,6 +145,7 @@ void Isu::issue() {
   wb_busy_.new_cycle(in.rob_bcast->flush);
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   agu_ports_used_ = 0;
+  for (int k = 0; k < 4; k++) g_pmu_back.iss_ref[k] = g_pmu_back.iss_lost[k] = 0;
   // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
   static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_MEM, IQ_STD, IQ_BR, IQ_FP};
   for (int qi : ORDER) {

@@ -118,3 +118,17 @@ PMU_EV(FEO_LOSS_ICNOTRDY,    slot,   4, "  empty cycle: I-cache not ready")  // 
 PMU_EV(FEO_LOSS_IFIFO,       slot,   4, "  empty cycle: instruction FIFO empty (I-cache latency)")  // model-only
 PMU_EV(FEO_LOSS_PTABLAG,     slot,   4, "  empty cycle: PTAB empty (prediction lags the fetch)")  // model-only
 PMU_EV(FEO_LOSS_F2B,         slot,   4, "  empty cycle: front-to-back FIFO / predecode check stage")  // model-only
+
+// ---- issue grants refused after select (EXP-045; trace-model only). The select picks one ready uop per port; the grant can still be
+// refused afterwards: the port's unit is busy (FU), the uop's completion cycle on the port is taken (WB, EXP-035), the FP register file
+// has no write port in that cycle (FPWB, EXP-032), or the shared AGU went to a load (AGU). The port then issues nothing this cycle.
+// ISS_LOST_* counts the refusals for which another ready, unpicked uop of the same queue could have been granted on that port
+// (upper bound of what checking these conditions before the select would gain).
+PMU_EV(ISS_REF_FU,           flow,   4, "selected grants refused: the port's functional unit cannot take the uop")  // model-only
+PMU_EV(ISS_REF_WB,           flow,   4, "selected grants refused: completion cycle on the port already reserved")  // model-only
+PMU_EV(ISS_REF_FPWB,         flow,   4, "selected grants refused: no FP register-file write port in the completion cycle")  // model-only
+PMU_EV(ISS_REF_AGU,          flow,   4, "selected grants refused: shared AGU taken by a load")  // model-only
+PMU_EV(ISS_LOST_FU,          flow,   4, "  of ISS_REF_FU: another ready uop could have been granted on the port")  // model-only
+PMU_EV(ISS_LOST_WB,          flow,   4, "  of ISS_REF_WB: another ready uop could have been granted on the port")  // model-only
+PMU_EV(ISS_LOST_FPWB,        flow,   4, "  of ISS_REF_FPWB: another ready uop could have been granted on the port")  // model-only
+PMU_EV(ISS_LOST_AGU,         flow,   4, "  of ISS_REF_AGU: another ready uop could have been granted on the port")  // model-only
