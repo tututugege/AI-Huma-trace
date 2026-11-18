@@ -365,6 +365,18 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
   const tb::Fact *f = tbhook::fact_by_rob(l.uop().rob_idx);
   const bool plain = f && f->is_load && f->rd_valid && (f->inst & 0x7f) == 0x03;
   xlen_t v = 0;
+  { static const char *dbg = std::getenv("MSD_DBG_PC");   // MSD_DBG_PC=<hex pc>: dump the STQ view of the stale-value computation of this pc's loads
+    if (dbg && f && f->pc == (xlen_t)std::strtoull(dbg, nullptr, 16)) {
+      constexpr uint32_t XB = XLEN / 8; const uint32_t W = l.paddr & ~(XB - 1);
+      std::fprintf(stderr, "[MSDBG] cyc=%lld load rob=%d pc=%llx W=%x paddr=%x defer=%d skip=%llx stq_head=%u count=%u snap=%u/%u\n", (long long)sim_time, (int)l.uop().rob_idx, (unsigned long long)f->pc, W, l.paddr, (int)defer,
+                   (unsigned long long)ml.skip, (unsigned)pnxt.stq_head, (unsigned)pnxt.stq_count, (unsigned)l.snap_flag, (unsigned)l.snap_idx);
+      for (uint32_t rank = 0; rank < pnxt.stq_count; rank++) {
+        const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE; const PStq &t = pnxt.stq[j]; const MsStq &m = ms_stq_[j];
+        std::fprintf(stderr, "[MSDBG]   (any) rank=%u stq=%u pc=%x va_v=%d pa_v=%d paddr=%x m.init=%d m.v=%d m.w=%x m.atnt=%d\n", rank, j, (unsigned)t.pc, (int)t.va_v, (int)t.pa_v, (unsigned)t.paddr, (int)m.init, (int)m.v, (unsigned)m.w, (int)m.atnt);
+        if (!m.v || m.w != W) continue;
+        std::fprintf(stderr, "[MSDBG]   rank=%u stq=%u pc=%x cmt=%d done=%d suppress=%d data_v=%d old=%llx new=%llx rs2=%llx skipbit=%d\n", rank, j, (unsigned)t.pc, (int)t.cmt, (int)t.done, (int)t.suppress, (int)t.data_v,
+                     (unsigned long long)m.old_, (unsigned long long)m.new_, (unsigned long long)m.rs2, (int)(ml.skip >> j & 1));
+      } } }
   if (msd::trace_on() && plain) {
     xlen_t sv = 0; const bool got = ms_load_value(pnxt, ms_stq_, l, ml, defer, sv);
     std::fprintf(stderr, "[MSL] cyc=%lld rob=%d p%u pc=%llx defer=%d atnt=%d stale_calc=%d v=%llx true=%llx\n", (long long)sim_time, (int)l.uop().rob_idx, (unsigned)dst,
@@ -379,7 +391,9 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
     else if (plain && ms_load_value(pnxt, ms_stq_, l, ml, defer, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);
   } else if (defer) {
     msd::taint[dst] = msd::TV{};
-    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, true, v) && v != f->rd_value) msd::set_taint(dst, true, v, 0);
+    // (the value of the DCache read: the one the L1 CAM pass recorded; the memory image of the write-back cycle may already hold stores the read did not see)
+    const bool have = ml.cam_ok ? (v = (xlen_t)ml.cam_val, true) : ms_load_value(pnxt, ms_stq_, l, ml, true, v);
+    if (plain && have && v != f->rd_value) msd::set_taint(dst, true, v, 0);
   } else {
     msd::release(dst);
     if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1);

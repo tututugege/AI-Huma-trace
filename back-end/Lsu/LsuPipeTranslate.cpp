@@ -293,6 +293,12 @@ void RealLsu::stlf() {
     const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/!e.second && !e.lrsc && !e.wait);
     pnxt.ldq[l.ldq].spec = c.unk;
     ms_ldq_[l.ldq].skip = c.skip;
+    {   // the stale value is what the DCache array holds in this cycle (the read is parallel with the CAM), not what it holds at the later write-back
+      PLdq t2 = tmp; t2.pa_v = 1;
+      xlen_t sv = 0;
+      ms_ldq_[l.ldq].cam_ok = ms_load_value(pnxt, ms_stq_, t2, ms_ldq_[l.ldq], /*apply_skip=*/true, sv);
+      ms_ldq_[l.ldq].cam_val = sv;
+    }
     l.cand_v = c.v;
     l.cand = c.idx;
   }
