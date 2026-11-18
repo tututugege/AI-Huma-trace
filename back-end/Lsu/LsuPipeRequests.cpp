@@ -420,6 +420,8 @@ void RealLsu::wake_loads() {
         e.rwait--;
       }
       if (e.rwait == 0) e.st = L_RDY;
+      { static const bool tr = std::getenv("PARK_TRACE") != nullptr;
+        if (tr && e.rwait == 0) std::fprintf(stderr, "[WAKE] cyc=%lld rob=%d paddr=%x fill=%d rtype=%d\n", (long long)sim_time, (int)e.uop().rob_idx, (unsigned)e.paddr, (int)pw.fill, (int)e.rtype); }
       break;
     case RC_ADDR:
       if ((ev_sta | pw.ev_ret) & b) {  // STA broadcast: confirm against the store now (same decision as L2)

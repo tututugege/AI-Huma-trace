@@ -16,6 +16,9 @@
 #include "env.h"
 #include "fatal.h"
 #include "fpr.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 #include <utility>
@@ -45,7 +48,7 @@ inline uint32_t hr_mask() { static const uint32_t m = (cfg_pair() ? 512u : 256u)
 
 constexpr uint32_t mask_of(int bits) { return bits >= 32 ? 0xffffffffu : ((1u << bits) - 1u); }
 // uBTB entry field widths: every field is truncated to its declared width on write.
-constexpr int UB_TAG_BITS = 10, UB_SLOT_BITS = clog2(FETCH_WIDTH), UB_TYPE_BITS = 3, UB_CTR_BITS = 2, UB_ND_BITS = 4, UB_TGT_BITS = 32 - SLOT_SHIFT;   // slot offset and target slot address
+constexpr int UB_TAG_BITS = 10, UB_SLOT_BITS = clog2(FETCH_WIDTH), UB_TYPE_BITS = 3, UB_CTR_BITS = 2, UB_ND_BITS = 4, UB_TGT_BITS = XLEN - SLOT_SHIFT;   // slot offset and target slot address
 
 // ---------------------------------------------------------------------------
 // Circular global history: bit ring + head pointer + folded histories. Repair restores head and fh; no ghr copy.
@@ -126,12 +129,11 @@ struct UbEnt {
   uint8_t nd_t = 0;       // 4 b: conditional branches up to and including the taken branch
   uint8_t nd_nt = 0;      // 4 b: conditional branches in the block if it falls through
   bool rvc = false;       // 1 b: the taken branch is a 16-bit instruction (RAS push value pc + 2)
-  uint32_t target = 0;    // 30 b: target word address
+  pc_t target = 0;        // XLEN - SLOT_SHIFT b: target slot address (the full target: a jump into another 4 GiB region, kernel <-> user, is predicted exactly)
 };
 enum UbEvKind : uint8_t { UE_TAKEN = 0, UE_FALL = 1, UE_NTSLOT = 2 };
-// uBTB targets hold the low 32 bits of the target slot address (UB_TGT_BITS); the upper bits come from the block's own address (a jump out of the 4 GiB
-// region is then mispredicted and corrected at S_D).  For rv32 this is the identity.
-inline pc_t ub_expand(uint32_t t, pc_t ref) { return (ref & ~static_cast<pc_t>(0xffffffffu)) | static_cast<pc_t>(static_cast<uint32_t>(t << SLOT_SHIFT)); }
+// uBTB targets hold the full target slot address (UB_TGT_BITS = XLEN - SLOT_SHIFT).
+inline pc_t ub_expand(pc_t t, pc_t /*ref*/) { return t << SLOT_SHIFT; }
 struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; pc_t target = 0; bool rvc = false; };
 
 // One set-associative table of UbEnt (the S0 uBTB, and the optional S1 level BPO_L1_*).
@@ -333,6 +335,11 @@ class BpuPipe {
     const uint8_t b = hsym(bpc, tgt);
     for (int i = 0; i < hsym_; i++) h.push((b >> i) & 1);
   }
+  // FPR_DUMP window + HP_TRACE=1: every speculative history push (site, block / branch pc, target, symbol bits)
+  static void hp(const char *site, pc_t pc, pc_t tgt, uint8_t n, uint8_t bits) {
+    static const bool tr = std::getenv("HP_TRACE") != nullptr;
+    if (tr && fpr::in_dump()) std::fprintf(stderr, "[HP] c=%llu %s pc=%llx tgt=%llx n=%u bits=%x\n", (unsigned long long)fpr::cycle(), site, (unsigned long long)pc, (unsigned long long)tgt, n, bits);
+  }
   static void push_bits(uint8_t n, uint8_t bits, uint8_t ras_op, target_addr_t ras_val, HistRing &h, RasQ &r) {
     for (int i = 0; i < n; i++) h.push((bits >> i) & 1);
     if (ras_op == 1) r.push(ras_val); else if (ras_op == 2) r.pop();
@@ -479,7 +486,7 @@ class BpuPipe {
   }
   static void ub_trunc(UbEnt &e, int tagb) {  // declared widths
     e.tag &= mask_of(tagb); e.type &= mask_of(UB_TYPE_BITS); e.slot &= mask_of(UB_SLOT_BITS); e.ctr &= mask_of(UB_CTR_BITS);
-    e.nd_t &= mask_of(UB_ND_BITS); e.nd_nt &= mask_of(UB_ND_BITS); e.target &= mask_of(UB_TGT_BITS);
+    e.nd_t &= mask_of(UB_ND_BITS); e.nd_nt &= mask_of(UB_ND_BITS); e.target &= (pc_t(1) << UB_TGT_BITS) - 1;
   }
   static bool ub_same(const UbEnt &a, const UbEnt &b) {
     return a.v == b.v && a.tag == b.tag && a.taken == b.taken && a.type == b.type && a.slot == b.slot && a.ctr == b.ctr &&
@@ -531,7 +538,7 @@ class BpuPipe {
     if (!(rc.valid && rc.id == in.rf_blk && rc.epoch == (*stp_).epoch && rslot < FW && (carried || rc.base + SLOT_BYTES * rslot == in.rf_pc))) return false;
     restore(rc.ck, n.spec, n.sras);
     const bool tk = in.rf_type == BR_DIRECT ? (in.refetch_address != in.rf_pc + ilen_of(in.rf_is_rvc)) : true;
-    if (tk) { const uint8_t sy = hsym(in.rf_pc, in.refetch_address); for (int k = 0; k < hsym_; k++) n.spec.push((sy >> k) & 1); }
+    if (tk) { const uint8_t sy = hsym(in.rf_pc, in.refetch_address); hp("RFIX", in.rf_pc, in.refetch_address, hsym_, sy); for (int k = 0; k < hsym_; k++) n.spec.push((sy >> k) & 1); }
     if (br_call(in.rf_type)) n.sras.push(in.rf_pc + ilen_of(in.rf_is_rvc)); else if (in.rf_type == BR_RET) n.sras.pop();
     return true;
   }
@@ -721,6 +728,7 @@ class BpuPipe {
     n.R[1].g = g1;
     n.R[1].pair = false;
     restore(b.ck, n.spec, n.sras);
+    hp("L1OVR", b.base, g1.next, g1.nbits, g1.bits);
     push_bits(g1.nbits, g1.bits, g1.ras_op, g1.ras_val, n.spec, n.sras);
     n.pc = g1.next;
     return true;
@@ -752,8 +760,15 @@ class BpuPipe {
       b.base = pc;
       b.bnd = block_bnd(b.base);
       b.g = s0_lookup(ub0_, b.base, b.bnd, n.sras.cnt, n.sras.top());
+      { static const bool tr = std::getenv("HP_TRACE") != nullptr;   // the uBTB set the S0 lookup reads: every way (valid, tag, slot, type, ctr, target)
+        if (tr && fpr::in_dump()) {
+          const uint32_t set = ub0_.index(b.base);
+          std::fprintf(stderr, "[UBS] c=%llu base=%llx set=%u hit=%d taken=%d slot=%u next=%llx ::", (unsigned long long)fpr::cycle(), (unsigned long long)b.base, set, (int)b.g.hit, (int)b.g.taken, (unsigned)b.g.slot, (unsigned long long)b.g.next);
+          for (int w = 0; w < ub0_.W; w++) { const UbEnt &x = ub0_.e[set * ub0_.W + w]; std::fprintf(stderr, " w%d{v%d tag=%x tk%d ty%u sl%u ctr%u tgt=%llx}", w, (int)x.v, (unsigned)x.tag, (int)x.taken, (unsigned)x.type, (unsigned)x.slot, (unsigned)x.ctr, (unsigned long long)x.target); }
+          std::fprintf(stderr, "\n"); } }
       b.ck = take_ckpt(n.spec, n.sras);
       main_index(b, n.spec);
+      hp("S0", b.base, b.g.next, b.g.nbits, b.g.bits);
       push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       n.pc = b.g.next;
       out.icache_read_valid = true;
@@ -773,6 +788,7 @@ class BpuPipe {
           if (lenB <= room) {
             c.ck = take_ckpt(n.spec, n.sras);
             main_index(c, n.spec);
+            hp("S0PAIR", c.base, c.g.next, c.g.nbits, c.g.bits);
             push_bits(c.g.nbits, c.g.bits, c.g.ras_op, c.g.ras_val, n.spec, n.sras);
             b.pair = true;
             n.pc = c.g.next;
@@ -842,6 +858,7 @@ class BpuPipe {
     } else if (d.ovr) {
       clear_R();
       restore(d.ock, n.spec, n.sras);
+      hp("OVR", 0, d.oout.next, d.oout.nbits, d.oout.bits);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
     } else if (l1_override(n.R[1], n, t)) {
@@ -864,8 +881,9 @@ class BpuPipe {
     if (in.refetch) {
       if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {   // predecode flush: exact repair from the checked block's checkpoint
         restore(pd_rec, n.spec, n.sras);
+        hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
         push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
-      } else if (!(in.rf_valid && repair_blk(in, n))) { n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1; }
+      } else if (!(in.rf_valid && repair_blk(in, n))) { hp("RARCH", in.rf_pc, in.refetch_address, 0, 0); n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1; }
       n.pq_n = 0;
       if (in.icache_read_ready) s0_issue(in.refetch_address);   // S0 issues the redirect target in the refetch cycle
     }
@@ -880,6 +898,8 @@ class BpuPipe {
     // uBTB training: head of the train queue is written, new events are appended behind it
     if (n.tq_n > 0) {
       const UbEv &e = n.tq[n.tq_h];
+      { static const char *f = std::getenv("UBH_START");   // UBH_START=<hex low32 start>[,..]: every uBTB train event of these block starts (model cycle, same fields as the RTL testbench's UBH line)
+        if (f) { char key[24]; std::snprintf(key, sizeof key, "%x", (unsigned)(uint32_t)e.start); if (!std::strcmp(f, "all") || std::strstr(f, key)) std::fprintf(stderr, "UBH c=%llu kind=%u start=%x slot=%u ty=%u tgt=%llx\n", (unsigned long long)fpr::cycle(), (unsigned)e.kind, (unsigned)(uint32_t)e.start, (unsigned)e.slot, (unsigned)e.type, (unsigned long long)(e.target >> SLOT_SHIFT) & 0x7fffffffffffffffull); } }
       ub_rmw(ub0_, e, t.ub_v[0], t.ub_wmask[0]); t.ub_set[0] = ub0_.index(e.start);
       ub_rmw(ub1_, e, t.ub_v[1], t.ub_wmask[1]); t.ub_set[1] = ub1_.index(e.start);
       n.tq_h = uint8_t((n.tq_h + 1) % TQ_N); n.tq_n--;

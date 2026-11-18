@@ -38,8 +38,8 @@
 ## 当前对齐状态
 
 - Linux 检查点窗口（12 个，各 400 万周期）：s00–s07、s10 **PASS**（PT / UP 指纹相等，逐条函数模型检查 0 不一致）；
-- **s08**：提交的分支更新在模型里比 RTL 早 1 拍（3528432 对 3528433），之后前端重新取指晚 3 拍：提交 / 重定向时序差别；
-- **s09**：UP 的 `idx` / `tag`（含全局历史的哈希）差 1～2 位，之后 RTL 多预测一个跳转：分支预测器历史 / 修复的差别（两边的重定向和 flush 逐个对得上）；
+- **s08**：已修（见下，PASS，RTL 侧的修复）；
+- **s09**：已修（见下，PASS，uBTB 目标全宽，模型和 RTL 都改）；
 - **s11**：已修（见下，PASS）；
 - 从复位的 1.4 亿周期：第一处 PT 分歧 6840 万周期（PMU 第 136 个区间），UP 指纹到 1.3 亿周期全部相等。
 
@@ -55,3 +55,21 @@ CSR 写指令提交时带 flush，`commit_flush` 在决策那一拍就把它的 
 FS-dirty 丢了。结果：陷入内核后 `csrrc s1,sstatus,t0` 在模型 CSR 文件里读到 FS=Clean（`0x200004020`），与函数模型（`0x8000000200006020`）不同，
 `patch_rd` 把错值写回函数模型的 s1，随后 `sd s1,256(sp)` 的数据错，RTL 与模型出现不同的预测更新。修复：`on_flush` 先记下提交指令的 fs_dirty，
 `fs_dirty_at_commit` 在 fact 已退休时返回它（bridge/trace_hook.cpp）。s11 窗口 PASS，67 程序周期不变。诊断开关 `REWIND_TRACE=1` 打印 `[REWIND]`、`[PATCH]`、`[FSD]`、`[FSC]`。
+
+## s08：LDQ 应答选择没比 epoch（RTL bug，已修）
+
+RTL 的 `lp_ldq.sv` 对每个 LDQ 项按"最后一个匹配的 load 口"选 DCache 应答，选择时不比 epoch。被冲刷的旧 load（epoch 6）的 HIT 应答和同一
+LDQ 位置新分配的 load（epoch 8）的 CONFLICT 应答在同一拍到达（端口 2 对端口 0）时，过期应答赢，`lp_ldq_ent` 再按 epoch 拒绝，新应答丢了，
+load 一直停在 DCW（RTL 没有 watchdog）。模型对每个口分别检查 epoch，所以立刻重发，多占一拍 L1 口，之后 replay 相位差 3 拍，队首 load 提交晚 6 拍，
+UP 指纹差 1 拍。修复：应答匹配条件里加 epoch 相等（rtl `b69f661`，分支 `exp/ldq-resp-epoch`）。取证用 `SOC_TB_LDQ=1`（逐拍 LDQ 状态、replay 寄存器），
+模型 `PARK_TRACE=1`。
+
+## s09：uBTB 目标读出位宽（RTL bug + 模型残留，已修）
+
+uBTB 条目的目标在 RTL 里存 63 位（`UB_TGT_W`），读出却只用低 32 位，在 64 位上下文里左移（低 32 位最高位为 1 时进位到第 32 位），高位取自块地址。
+内核目标 `0xffffffff80045212` 从用户块 `2ae50d52e0` 读出得到 `0x2b80045212`（模型 `ub_expand` 截成 32 位得 `0x2a80045212`），S0 推进的 3 位历史符号不同
+（RTL 7，模型 5），之后的 UP 的 idx / tag 差 1～2 位。这是被 OVR 覆盖的错误路径 S0 预测，PT 流不受影响。取证用 RTL 波形（`SOC_TB_VCD`，`--trace` 编译）
+读 `u_ub_look`，模型 `HP_TRACE=1`（每次推测历史 push 的位置 / pc / 目标 / 位、S0 读的整组 uBTB）。
+
+两边统一为全宽：模型 `UbEnt::target` 改成 `pc_t`、`UB_TGT_BITS = XLEN - SLOT_SHIFT`、`ub_expand` 直接移位；RTL 读出直接用存储的目标（rtl `bpu_ub_look.sv`）。
+主 BTB（`bta`）两边本来就是全宽。67 个程序周期不变（低地址程序）。索引 / tag 的哈希输入、`hist_sym`、更新队列窗口比较仍只用低 32 位（哈希宽度，两边一致，不影响值）。

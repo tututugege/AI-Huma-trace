@@ -55,6 +55,8 @@ void RealLsu::dcache2lsu() {
 
 // a load waits for a replay: its cause, the STQ entry it waits for, the countdown
 static void park(PLdq &e, uint8_t cause, uint32_t blk, uint32_t wait) {
+  { static const bool tr = std::getenv("PARK_TRACE") != nullptr;
+    if (tr) std::fprintf(stderr, "[PARK] cyc=%lld rob=%d paddr=%x cause=%d blk=%u wait=%u rtype=%d\n", (long long)sim_time, (int)e.uop().rob_idx, (unsigned)e.paddr, (int)cause, blk, wait, (int)e.rtype); }
   e.st = L_RPW;
   e.rcause = cause;
   e.blk_idx = blk;
