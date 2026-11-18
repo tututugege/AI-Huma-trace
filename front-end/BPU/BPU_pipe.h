@@ -659,6 +659,14 @@ class BpuPipe {
   // seq() commits it at the clock edge; txn() is this cycle's transaction (PMU attribution).
   void comb_cycle(const InputPayload &in, const Decision &d, OutputPayload &out) { comb(in, d, out, txn_d_); txn_d_valid_ = true; }
   void seq() { if (txn_d_valid_) commit(txn_d_); txn_d_valid_ = false; }
+  // FPR_DUMP window: the speculative and the architectural history after this cycle's update (the RTL testbench prints the same line from bpu_spec):
+  // head, the low 64 ring bits, a hash of all folded histories, and the RAS counters
+  void dump_hist(uint32_t c) const {
+    auto fhash = [](const HistRing &h) { uint64_t x = 1469598103934665603ull; for (int k = 0; k < FH_N_MAX; k++) for (int i = 0; i < TN; i++) x = (x ^ h.fh[k][i]) * 1099511628211ull; return x; };
+    auto recent = [](const HistRing &h) { uint64_t x = 0; for (int k = 0; k < 64; k++) x |= uint64_t(h.back(k)) << k; return x; };   // the 64 newest history bits, newest in bit 0
+    std::fprintf(stderr, "H c=%u sr=%016llx sf=%016llx ar=%016llx af=%016llx\n", c, (unsigned long long)recent(st_.spec), (unsigned long long)fhash(st_.spec), (unsigned long long)recent(st_.arch),
+                 (unsigned long long)fhash(st_.arch));
+  }
 
   static constexpr int depth() { return MAIN_LAT; }
 

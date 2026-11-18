@@ -8,6 +8,7 @@
 // Taint exists from the first (deferred) write-back of a stale load to its second write-back, and is dropped at every ROB flush.
 #pragma once
 #include "config.h"
+#include "trace_win.h"
 #include "trace_hook.h"
 #include "types.h"
 #include <algorithm>
@@ -276,7 +277,7 @@ inline X load_extend(X raw, uint32_t f3) {
 inline bool trace_on() { static const bool on = std::getenv("MSD_TRACE") != nullptr; return on; }
 inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
-  if (trace_on() && t) std::fprintf(stderr, "[MSD] cyc=%lld taint p%u v=%llx depth=%u\n", (long long)sim_time, preg, (unsigned long long)v, depth);
+  if (trace_on() && trace_win::ok() && t) std::fprintf(stderr, "[MSD] cyc=%lld taint p%u v=%llx depth=%u\n", (long long)sim_time, preg, (unsigned long long)v, depth);
   taint[preg].t = t;
   taint[preg].v = v;
   taint[preg].depth = depth;
@@ -322,7 +323,7 @@ inline void exec(Inst &inst) {
     const X pc = u.pc, pc_br = pc + xs((int32_t)(uint32_t)u.imm);
     const X pred_target = pred_taken ? (X)u.ftq_next_pc : pc + ilen_of(u.is_rvc);
     inst.mispred = !((taken && pred_taken && pred_target == pc_br) || (!taken && !pred_taken));
-    if (trace_on()) std::fprintf(stderr, "[MSD] cyc=%lld BRANCH FLIP pc=%llx stale_taken=%d true_taken=%d mispred=%d\n", (long long)sim_time, (unsigned long long)u.pc, (int)taken, (int)f->br_taken, (int)inst.mispred);
+    if (trace_on() && trace_win::ok()) std::fprintf(stderr, "[MSD] cyc=%lld BRANCH FLIP pc=%llx stale_taken=%d true_taken=%d mispred=%d\n", (long long)sim_time, (unsigned long long)u.pc, (int)taken, (int)f->br_taken, (int)inst.mispred);
     inst.br_taken = taken;
     inst.diag_val = taken ? pc_br : pc + ilen_of(u.is_rvc);
     return;
@@ -334,7 +335,7 @@ inline void exec(Inst &inst) {
     const bool pred_taken = u.ftq_pred_taken;
     const X pred_target = pred_taken ? (X)u.ftq_next_pc : (X)u.pc + ilen_of(u.is_rvc);
     inst.mispred = !(pred_taken && pred_target == tgt);
-    if (trace_on()) std::fprintf(stderr, "[MSD] cyc=%lld JALR FLIP pc=%llx tgt=%llx\n", (long long)sim_time, (unsigned long long)u.pc, (unsigned long long)tgt);
+    if (trace_on() && trace_win::ok()) std::fprintf(stderr, "[MSD] cyc=%lld JALR FLIP pc=%llx tgt=%llx\n", (long long)sim_time, (unsigned long long)u.pc, (unsigned long long)tgt);
     inst.br_taken = true;
     inst.diag_val = tgt;
     return;

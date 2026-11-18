@@ -1,4 +1,7 @@
+#include <cstdio>
+#include <cstdlib>
 #include "Rob.h"
+#include "trace_win.h"
 #include "Csr.h"
 #include "PreIduQueue.h"
 #include "IO.h"
@@ -429,7 +432,7 @@ void Rob::redirect() {
   o.stall = !in.pre2front->ready;
   o.redirect_pc = in.idu_br_latch->redirect_pc;
   { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
-    if (tr && o.mispred) std::fprintf(stderr, "[MP] cyc=%lld redirect_pc=%llx\n", (long long)sim_time, (unsigned long long)o.redirect_pc); }
+    if (tr && trace_win::ok() && o.mispred) std::fprintf(stderr, "[MP] cyc=%lld redirect_pc=%llx\n", (long long)sim_time, (unsigned long long)o.redirect_pc); }
   o.rf_valid = in.dec_bcast->mispred;
   if (o.rf_valid) {
     const uint32_t fi = in.idu_br_latch->ftq_idx;
@@ -458,7 +461,7 @@ void Rob::report_commit() {
     o.commit_ftq[i] = in.ftq_commit_info->resp[i];
     if (o.flush) o.commit_entry[i].uop.diag_val = o.redirect_pc;
     if (interrupt) continue;
-    if (tbhook::fs_dirty_at_commit((uint64_t)c.uop->dbg.inst_idx)) out.rob2csr.fs_dirty = true;
+    if (tbhook::fs_dirty_at_commit((uint64_t)c.uop->dbg.inst_idx)) { out.rob2csr.fs_dirty = true; if (getenv("REWIND_TRACE")) fprintf(stderr, "[FSC] pc=%llx uid=%llu\n", (unsigned long long)c.uop->dbg.pc, (unsigned long long)c.uop->dbg.inst_idx); }
     tbhook::on_commit((uint64_t)c.uop->dbg.inst_idx);
   }
   if (!interrupt)

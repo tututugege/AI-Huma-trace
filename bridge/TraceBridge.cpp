@@ -1,4 +1,5 @@
 #include "TraceBridge.h"
+#include "trace_win.h"
 #include "InstDecode.h"
 #include "refcpu_api.h"
 #include <cstdio>
@@ -286,7 +287,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     e->f.next_pc = npc;
     push(e);
     { static const bool tr = std::getenv("BRIDGE_TRACE") != nullptr;
-      if (tr) std::fprintf(stderr, "[DISP-BLOCKED] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d reason=%d vaddr=%llx rs1=%llx data_xlate_ok=%d pc_pa=%x data_pa=%x\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
+      if (tr && trace_win::ok()) std::fprintf(stderr, "[DISP-BLOCKED] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d reason=%d vaddr=%llx rs1=%llx data_xlate_ok=%d pc_pa=%x data_pa=%x\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
                    (int)e->f.forced_jump, (int)blk, (unsigned long long)e->f.vaddr, (unsigned long long)e->f.rs1_value, (int)data_xlate_ok, pc_pa, data_pa); }
     return e->f;
   }
@@ -309,6 +310,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   refcpu_get_step_info(ctx_, &info);
   const xlen_t mstatus_after = refcpu_csr(ctx_, 7);
   e->f.fs_dirty = ((mstatus_after >> 13) & 3) == 3 && ((mstatus_before >> 13) & 3) != 3;
+  { static const bool tr = std::getenv("REWIND_TRACE") != nullptr; if (tr && e->f.fs_dirty) std::fprintf(stderr, "[FSD] cyc=%lld uid=%llu pc=%llx inst=%08x\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst); }
 
   if (info.is_exception) {
     RefCpuState after{};   // (rare: the whole state, kept as the trap's result)
@@ -368,7 +370,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   }
   push(e);
   { static const bool tr = std::getenv("BRIDGE_TRACE") != nullptr;
-    if (tr) std::fprintf(stderr, "[DISP] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d rd=%d v=%llx br_taken=%d rs1=%llx rs2=%llx next=%llx\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
+    if (tr && trace_win::ok()) std::fprintf(stderr, "[DISP] cyc=%lld uid=%llu pc=%llx inst=%08x forced=%d rd=%d v=%llx br_taken=%d rs1=%llx rs2=%llx next=%llx\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)pc, inst,
                  (int)e->f.forced_jump, e->f.rd_valid ? (int)e->f.rd : -1, (unsigned long long)e->f.rd_value, (int)e->f.br_taken, (unsigned long long)e->f.rs1_value, (unsigned long long)e->f.rs2_value, (unsigned long long)e->f.next_pc); }
   return e->f;
 }
@@ -388,6 +390,7 @@ void Bridge::rewind_after(int64_t uid) {
     }
   }
   if (chain_.size() <= keep) return;
+  { static const bool tr = std::getenv("REWIND_TRACE") != nullptr; if (tr) std::fprintf(stderr, "[REWIND] cyc=%lld uid=%lld keep=%zu size=%zu s1=%llx\n", (long long)sim_time, (long long)uid, keep, chain_.size(), (unsigned long long)refcpu_gpr(ctx_)[9]); }
   RefCpuState st;
   refcpu_get_state(ctx_, &st);
   // youngest first
@@ -442,6 +445,7 @@ bool Bridge::patch_rd(uint64_t uid, xlen_t value) {
   if (!t) return false;
   const uint32_t rd = bits(t->f.inst, 11, 7);
   if (rd == 0) return false;
+  { static const bool tr = std::getenv("REWIND_TRACE") != nullptr; if (tr) std::fprintf(stderr, "[PATCH] cyc=%lld uid=%llu pc=%llx rd=%u value=%llx\n", (long long)sim_time, (unsigned long long)uid, (unsigned long long)t->f.pc, rd, (unsigned long long)value); }
   struct Re { uint64_t uid; xlen_t pc; uint32_t inst; uint32_t len; };
   std::vector<Re> younger;
   for (auto *e : chain_) if (e->f.uid > uid) younger.push_back({e->f.uid, e->f.pc, e->f.inst, e->f.len});
@@ -472,6 +476,8 @@ void Bridge::commit_flush(uint64_t uid) {
 
 bool Bridge::take_interrupt(xlen_t cause, uint8_t target_priv, uint32_t pending_snapshot) {
   rewind_after(-1);
+  { static const bool tr = std::getenv("IRQ_TRACE") != nullptr;   // the instruction the interrupt takes place before (the first one that did not commit)
+    if (tr) std::fprintf(stderr, "[IRQ] c=%llu sim=%lld cause=%llx priv=%u pending=%x pc=%llx\n", (unsigned long long)trace_win::cycle, (long long)sim_time, (unsigned long long)cause, (unsigned)target_priv, pending_snapshot, (unsigned long long)refcpu_pc(ctx_)); }
   return refcpu_take_forced_interrupt(ctx_, cause, target_priv, pending_snapshot);
 }
 

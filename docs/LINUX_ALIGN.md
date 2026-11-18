@@ -40,10 +40,18 @@
 - Linux 检查点窗口（12 个，各 400 万周期）：s00–s07、s10 **PASS**（PT / UP 指纹相等，逐条函数模型检查 0 不一致）；
 - **s08**：提交的分支更新在模型里比 RTL 早 1 拍（3528432 对 3528433），之后前端重新取指晚 3 拍：提交 / 重定向时序差别；
 - **s09**：UP 的 `idx` / `tag`（含全局历史的哈希）差 1～2 位，之后 RTL 多预测一个跳转：分支预测器历史 / 修复的差别（两边的重定向和 flush 逐个对得上）；
-- **s11**：PT / UP 在 285 万周期处不同，尚未下钻；
+- **s11**：已修（见下，PASS）；
 - 从复位的 1.4 亿周期：第一处 PT 分歧 6840 万周期（PMU 第 136 个区间），UP 指纹到 1.3 亿周期全部相等。
 
 ## 工具
 
 `rtl-agu/build/segtools/seg_cmp.sh <seg...>`（RTL 缓存 + 模型）、`drill.sh <seg> <fp0> <fp1> <abs0> <abs1>`（带打印的下钻）。测试台的事件打印在 `rtl-i2`
 （`6d7ed85` + `tb/soc/soc_tb.cpp`、`soc_public.vlt` 的打印补丁，不改 RTL）。注意：`rtl-agu` 工作区被另一个会话（fork-2）同时修改，RTL 对照一律用 `rtl-i2` 这个独立副本。
+
+## s11：flush 型提交指令的 FS-dirty 丢失（已修）
+
+用户态 `csrw fflags,sp`（`00171073`）在函数模型里把 mstatus.FS 置为 Dirty，时序模型本应在提交时把 FS/SD 写进自己的 CSR 文件。
+CSR 写指令提交时带 flush，`commit_flush` 在决策那一拍就把它的 fact 退休了，之后提交报告里的 `fs_dirty_at_commit(uid)` 找不到 fact，
+FS-dirty 丢了。结果：陷入内核后 `csrrc s1,sstatus,t0` 在模型 CSR 文件里读到 FS=Clean（`0x200004020`），与函数模型（`0x8000000200006020`）不同，
+`patch_rd` 把错值写回函数模型的 s1，随后 `sd s1,256(sp)` 的数据错，RTL 与模型出现不同的预测更新。修复：`on_flush` 先记下提交指令的 fs_dirty，
+`fs_dirty_at_commit` 在 fact 已退休时返回它（bridge/trace_hook.cpp）。s11 窗口 PASS，67 程序周期不变。诊断开关 `REWIND_TRACE=1` 打印 `[REWIND]`、`[PATCH]`、`[FSD]`、`[FSC]`。

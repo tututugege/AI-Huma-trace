@@ -1,4 +1,5 @@
 #include "trace_hook.h"
+#include "trace_win.h"
 #include "env.h"
 #include "TraceBridge.h"
 extern long long sim_time;   // timing-model cycle counter (main.cpp)
@@ -60,10 +61,15 @@ const tb::Fact *fact_by_rob(uint32_t rob_idx) {
   return g_bridge->find(g_rob_uid[rob_idx & 4095]);
 }
 
+// A committing instruction that flushes (csrw fflags / frm / fcsr, other CSR writes) is retired by commit_flush in the cycle of the
+// flush decision, before the commit report asks for its FS-dirty: its answer is kept here.
+static struct { bool valid = false; uint64_t uid = 0; bool dirty = false; } g_flush_fs;
+
 bool fs_dirty_at_commit(uint64_t uid) {
   ensure();
   const tb::Fact *f = g_bridge->find(uid);
-  return f && f->fs_dirty && !f->trapped && f->blocked == tb::Blocked::None;
+  if (!f) return g_flush_fs.valid && g_flush_fs.uid == uid && g_flush_fs.dirty;
+  return f->fs_dirty && !f->trapped && f->blocked == tb::Blocked::None;
 }
 
 void on_commit(uint64_t uid) {
@@ -72,7 +78,14 @@ void on_commit(uint64_t uid) {
   // dispatched after the mispredict): undo them and re-execute the younger ones before the fact is used.
   g_bridge->kill_older_than(uid);
   // TB_TRACE_COMMIT=1: one line per committed instruction, compared with the RTL's SOC_TB_COMMIT by rtl/scripts/first_diff.sh
-  if (sim_env().tb_trace_commit) {
+  { static const char *fr = std::getenv("FMC_REG");   // FMC_REG=<n>: every commit that writes integer register n: index, pc, value (the same line as the RTL testbench's function-model check)
+    static unsigned long long n = 0;
+    if (const tb::Fact *tf = g_bridge->find(uid)) {
+      ++n;
+      if (fr && tf->rd_valid && !tf->rd_is_fp && tf->rd != 0 && int(tf->rd) == std::atoi(fr))
+        std::fprintf(stderr, "[FMC] cyc=%lld n=%llu pc=%llx inst=%08x rd=%d v=%llx\n", (long long)sim_time, n, (unsigned long long)tf->pc, tf->inst, (int)tf->rd, (unsigned long long)tf->rd_value);
+    } }
+  if (sim_env().tb_trace_commit && trace_win::ok()) {
     if (const tb::Fact *tf = g_bridge->find(uid))
       std::fprintf(stderr, "[COMMIT] cyc=%lld pc=0x%08llx inst=0x%08x rd=%d v=0x%08llx\n", (long long)sim_time, (unsigned long long)tf->pc, tf->inst,
                    tf->rd_valid ? tf->rd : -1, (unsigned long long)tf->rd_value);
@@ -83,6 +96,9 @@ void on_commit(uint64_t uid) {
 void on_flush(int64_t uid, bool interrupt) {
   ensure();
   if (interrupt || uid < 0) return;  // interrupt: handled by on_interrupt; no committing instruction: nothing to do yet
+  { const tb::Fact *f = g_bridge->find((uint64_t)uid);
+    g_flush_fs.valid = f != nullptr; g_flush_fs.uid = (uint64_t)uid;
+    g_flush_fs.dirty = f && f->fs_dirty && !f->trapped && f->blocked == tb::Blocked::None; }
   g_bridge->commit_flush((uint64_t)uid);
 }
 

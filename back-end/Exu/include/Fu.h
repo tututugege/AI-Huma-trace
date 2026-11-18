@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include "ExuTypes.h"
+#include "trace_win.h"
 #include "IO.h"
 #include "config.h"
 #include "trace_hook.h"
@@ -59,7 +60,7 @@ inline void compute(FuKind kind, ExuInst &inst) {
     inst.result = 0;
     if (const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx)) inst.result = f->vaddr;
     { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
-      if (tr) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
+      if (tr && trace_win::ok()) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
         std::fprintf(stderr, "[AGU] cyc=%lld rob=%d op=%d pc=%llx inst=%08x vaddr=%llx rs1=%llx src1=p%d live1=%d\n", (long long)sim_time, (int)inst->rob_idx, (int)inst.op, f ? (unsigned long long)f->pc : 0ull, f ? f->inst : 0u,
                      f ? (unsigned long long)f->vaddr : 0ull, f ? (unsigned long long)f->rs1_value : 0ull, (int)inst->src1_preg, (int)(inst->src1_en && msd::live(inst->src1_preg))); } }
     break;
@@ -70,7 +71,7 @@ inline void compute(FuKind kind, ExuInst &inst) {
   case FuKind::BRU:
     resolve_branch(inst);
     { static const bool tr = std::getenv("MSD_TRACE") != nullptr;
-      if (tr) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
+      if (tr && trace_win::ok()) { const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
         std::fprintf(stderr, "[BRU] cyc=%lld rob=%d pc=%llx mispred=%d taken=%d fact_pc=%llx fact_taken=%d rs1=%llx rs2=%llx src1=p%d src2=p%d\n", (long long)sim_time, (int)inst->rob_idx, (unsigned long long)inst->pc, (int)inst.mispred, (int)inst.br_taken,
                      f ? (unsigned long long)f->pc : 0ull, f ? (int)f->br_taken : -1, f ? (unsigned long long)f->rs1_value : 0ull, f ? (unsigned long long)f->rs2_value : 0ull, (int)inst->src1_preg, (int)inst->src2_preg); } }
     break;

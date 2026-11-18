@@ -8,6 +8,7 @@
 //              FPR_DUMP=<from>:<to> also prints every event of that cycle window ("FPRRAW ...").
 // The event cycle is the cycle of the RTL's free-running counter (0 in the first cycle after reset): the model's cycle counter is one ahead.
 #include <cstdint>
+#include "trace_win.h"
 #include "env.h"
 #include <cstdio>
 #include <cstdlib>
@@ -45,7 +46,10 @@ struct State {
 };
 inline State &st() { static State s; return s; }
 inline bool on() { return st().on; }
-inline void set_cycle(uint64_t model_cycle) { st().cycle = model_cycle ? model_cycle - 1 : 0; }
+inline bool in_dump() { const State &s = st(); return s.dump && s.cycle >= s.from && s.cycle <= s.to; }
+inline uint64_t cycle() { return st().cycle; }
+
+inline void set_cycle(uint64_t model_cycle) { st().cycle = model_cycle ? model_cycle - 1 : 0; trace_win::cycle = st().cycle; trace_win::active = st().dump; trace_win::from = st().from; trace_win::to = st().to; }
 
 // the RTL testbench: its PMU cycle counter, 0 in the first cycle after reset
 inline void pt(uint32_t base, uint32_t next, uint32_t dir) {
