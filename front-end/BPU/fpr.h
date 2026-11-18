@@ -63,7 +63,7 @@ inline void up(uint32_t pc, uint32_t dir, uint32_t ty, uint32_t tgt, uint32_t pr
   const uint32_t c = static_cast<uint32_t>(s.cycle);
   const uint32_t meta = dir | (ty << 1) | (pred << 4) | (pcpn << 5) | (rvc << 8);
   const uint32_t ix = mix(static_cast<uint32_t>(idxp) + mix(static_cast<uint32_t>(idxp >> 32) + mix(tagp + 1u)));   // TAGE indices (4 x 10 bit) and tags (4 x 8 bit) of the entry
-  s.up.add(c / s.bin, mix(pc + mix(tgt + mix(meta + 1u + mix(ix)))));
+  s.up.add(c / s.bin, mix(pc + mix((dir ? tgt : 0u) + mix(meta + 1u + mix(ix)))));   // the target of a not-taken branch is not used by the predictor (a stale value on both sides): not part of the fingerprint
   if (s.dump && c >= s.from && c <= s.to) std::fprintf(stderr, "FPRRAW UP cyc=%u pc=%x dir=%u ty=%u tgt=%x pred=%u pcpn=%u rvc=%u idx=%010llx tag=%08x\n", c, pc, dir, ty, tgt, pred, pcpn, rvc, static_cast<unsigned long long>(idxp), tagp);
 }
 }  // namespace fpr

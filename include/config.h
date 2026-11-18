@@ -381,7 +381,7 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #define CFG_MEM_IQ_SIZE 64
 #endif
 #ifndef CFG_MEM_IQ_ENQ_WIDTH
-#define CFG_MEM_IQ_ENQ_WIDTH 8
+#define CFG_MEM_IQ_ENQ_WIDTH 6
 #endif
 // EXP-LSUTIM: one more pipeline stage in the load / store path (timing study, default 0 = unchanged):
 //  CFG_LSU_AGU_REG=1   the AGU results (loads and STA) reach the LSU one cycle later (a register between the AGU and L1: DTLB + CAM)
@@ -391,15 +391,15 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 // clears itself in the cycle of the decision, the front end is redirected in that cycle; the IDU, rename, dispatch, ISU, EXU and LSU clear one cycle
 // later, so what they do in the cycle of the decision is dropped by that clear. Default 0 = unchanged.
 #ifndef CFG_FE_OVR_REG
-#define CFG_FE_OVR_REG 0   // the fetch-address FIFO pop does not depend on the BPU last stage's override of the same cycle (one cycle later pop)
+#define CFG_FE_OVR_REG 1   // the fetch-address FIFO pop does not depend on the BPU last stage's override of the same cycle (one cycle later pop)
 #endif
 
 #ifndef CFG_LSU_WBMERGE_REG
-#define CFG_LSU_WBMERGE_REG 0   // write-buffer insert merges only into an entry started in the same cycle (not into the registered tail)
+#define CFG_LSU_WBMERGE_REG 1   // write-buffer insert merges only into an entry started in the same cycle (not into the registered tail)
 #endif
 
 #ifndef CFG_FLUSH_REG
-#define CFG_FLUSH_REG 0
+#define CFG_FLUSH_REG 1
 #endif
 #ifndef CFG_LSU_AGU_REG
 #define CFG_LSU_AGU_REG 0
@@ -410,16 +410,16 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 //                      the free slots (a slot is free when its AGU has no valid request) and the free DTLB ports; the acceptance check is off the
 //                      replay allocation (implies the port rule of CFG_LSU_FREEPORT_RAW)
 #ifndef CFG_LSU_SLOT_FIXED
-#define CFG_LSU_SLOT_FIXED 0
+#define CFG_LSU_SLOT_FIXED 1
 #endif
 #ifndef CFG_LSU_FREEPORT_RAW
 #define CFG_LSU_FREEPORT_RAW 0
 #endif
 #ifndef CFG_LSU_STAEV_REG
-#define CFG_LSU_STAEV_REG 0
+#define CFG_LSU_STAEV_REG 1
 #endif
 #ifndef CFG_AGU_SHARED
-#define CFG_AGU_SHARED 0
+#define CFG_AGU_SHARED 2
 #endif
 #ifndef CFG_STD_IQ_SIZE
 #define CFG_STD_IQ_SIZE 16
@@ -427,17 +427,17 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 // 2: two INT issue queues (IQ_INT: ports 0, 1, 4; IQ_INT1: ports 2, 3, 5), CFG_INT_IQ_SIZE slots and CFG_INT_IQ_ENQ_WIDTH enqueue lanes each.
 // Dispatch steers a uop by position: CSR to IQ_INT, I2F to IQ_INT1, the others by the parity of the ROB index.
 #ifndef CFG_INT_CLUSTERS
-#define CFG_INT_CLUSTERS 1
+#define CFG_INT_CLUSTERS 2
 #endif
 #ifndef CFG_INT_IQ_SIZE
-#define CFG_INT_IQ_SIZE 64
+#define CFG_INT_IQ_SIZE 32
 #endif
 #ifndef CFG_BR_IQ_SIZE
 #define CFG_BR_IQ_SIZE 32
 #endif
 // Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014; 8 = unrestricted).
 #ifndef CFG_INT_IQ_ENQ_WIDTH
-#define CFG_INT_IQ_ENQ_WIDTH 7
+#define CFG_INT_IQ_ENQ_WIDTH 4
 #endif
 #ifndef CFG_STD_IQ_ENQ_WIDTH
 #define CFG_STD_IQ_ENQ_WIDTH 4
@@ -661,14 +661,14 @@ enum class IssueSchedulePolicy : int {
 // 1: a slot freed by an issue can be taken by an enqueue of the same cycle (the slot allocation sees this cycle's issue);
 // 0: the allocation sees only the registered valid bits (the enqueue does not wait for the issue)
 #ifndef CFG_IQ_SAME_CYCLE_REUSE
-#define CFG_IQ_SAME_CYCLE_REUSE 1
+#define CFG_IQ_SAME_CYCLE_REUSE 0
 #endif
 #ifndef CFG_ISSUE_OLDEST_FIRST
-#define CFG_ISSUE_OLDEST_FIRST 0   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
+#define CFG_ISSUE_OLDEST_FIRST 2   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
 #endif
 // queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
 #ifndef CFG_ISSUE_OLDEST_QUEUES
-#define CFG_ISSUE_OLDEST_QUEUES 0xff
+#define CFG_ISSUE_OLDEST_QUEUES 2
 #endif
 constexpr IssueSchedulePolicy ISSUE_SCHEDULE_POLICY =
     CFG_ISSUE_OLDEST_FIRST == 2 ? IssueSchedulePolicy::OLDEST_ON_FIRST_PORT
