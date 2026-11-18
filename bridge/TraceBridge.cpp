@@ -222,6 +222,7 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   }
 
   Blocked blk = Blocked::None;
+  bool fp_mem_fs_off = false;   // an FP load / store with mstatus.FS = Off: it is not blocked, it traps in the function model (see below)
   // Virtual -> physical for the checks below (identity when translation is off). A page fault
   // is not "blocked": the core executes the access and raises the exception itself.
   uint32_t pc_pa = static_cast<uint32_t>(pc);
@@ -238,7 +239,6 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     const uint32_t sz = e->f.size;
     // An FP load / store with mstatus.FS = Off is an illegal instruction before its address is looked at (the RTL flags it at completion, which stalls the
     // dispatch while it sits in the ROB window): it must reach the function model to trap, not be "blocked" for a misaligned / out-of-RAM address.
-    bool fp_mem_fs_off = false;
     { const uint32_t opc = inst & 0x7f; fp_mem_fs_off = (opc == 0x07 || opc == 0x27) && ((mstatus_before >> 13) & 3) == 0; }   // (csr index 7 = mstatus)
     if (fp_mem_fs_off) { /* executed: traps */ }
     else if ((sz == 2 && (a & 1)) || (sz == 4 && (a & 3)) || (sz == 8 && (a & 7))) blk = Blocked::MemMisalign;
@@ -292,7 +292,9 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
     return e->f;
   }
 
-  if (e->f.is_store && data_xlate_ok) {
+  // (an FP store that traps because FS = Off writes nothing: nothing to undo, and its address may be anywhere - a wrong path with a stale base register -
+  // so the old word must not be read through the function model, which exits on an address that is not in RAM or MMIO)
+  if (e->f.is_store && data_xlate_ok && !fp_mem_fs_off) {
     const uint32_t wa = data_pa & ~3u;
     e->has_undo = true;
     e->undo_addr = wa;
