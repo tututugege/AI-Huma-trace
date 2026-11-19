@@ -18,6 +18,7 @@ struct SimEnv {
   bool pmu_pcprof = true;            // PMU_PCPROF=0: no per-PC profile
   // front end (experimental)
   int fe_pair = 0;                   // FE_PAIR: two fetch blocks per cycle
+  int fe_ovr_oracle = 0;             // FE_OVR_ORACLE=1: the S0 guess is the main predictor's result (no S1 / S_D override bubbles; upper-bound study)
   int fe_ipf = 0;                    // FE_IPF: I-cache prefetch
   int fe_ipf_lat = 12;               // FE_IPF_LAT: its latency (cycles)
   // L1D prefetcher
@@ -39,6 +40,7 @@ struct SimEnv {
     if (const char *v = std::getenv("PMU_INTERVAL")) pmu_interval = std::strtoull(v, nullptr, 0);
     if (const char *v = std::getenv("PMU_PCPROF")) pmu_pcprof = std::strcmp(v, "0") != 0;
     if (const char *v = std::getenv("FE_PAIR")) fe_pair = std::atoi(v);
+    if (const char *v = std::getenv("FE_OVR_ORACLE")) fe_ovr_oracle = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF")) fe_ipf = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF_LAT")) fe_ipf_lat = std::atoi(v);
     pf_enable = std::getenv("PF_ENABLE");

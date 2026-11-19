@@ -31,8 +31,14 @@ namespace bpuf {
 
 // Fixed design (the run-time sweeps BPU_* / BPO_* / FE_BFAST were removed; git history has them):
 constexpr int MAIN_LAT = 2;            // main predictor S1..S2: S1 reads the arrays, S2 selects and compares with the S0 guess
-constexpr int S0_N = 128, S0_W = 4;    // uBTB entries / ways
-constexpr int L1_N = 512, L1_W = 2;    // S1-level uBTB entries / ways (override at S1, 1 bubble)
+#ifndef CFG_UB_S0_N
+#define CFG_UB_S0_N 128
+#endif
+#ifndef CFG_UB_L1_N
+#define CFG_UB_L1_N 512
+#endif
+constexpr int S0_N = CFG_UB_S0_N, S0_W = 4;    // uBTB entries / ways (CFG_UB_S0_N: capacity study only, the RTL has 128)
+constexpr int L1_N = CFG_UB_L1_N, L1_W = 2;    // S1-level uBTB entries / ways (override at S1, 1 bubble)
 constexpr int UB_TAGB = 10;            // uBTB tag bits
 constexpr int UQ_N = 8, UPD_PORTS = 2; // update queue entries, table writes per cycle
 constexpr int BANKBLK = 4;             // block banks (32 B windows), one row access per bank and cycle
@@ -718,7 +724,7 @@ class BpuPipe {
   // the guess of the block is replaced, the spec history / RAS are repaired from its checkpoint and S0 does not issue this cycle
   // (1 bubble instead of the 2 of an S_D override).
   bool l1_override(const Blk &b, State &n, Txn &t) const {
-    if (!b.valid) return false;
+    if (!b.valid || sim_env().fe_ovr_oracle) return false;
     const S0Guess g1 = s0_lookup(ub1_, b.base, b.bnd, b.ck.ras_cnt, b.ck.ras_top);
     if (!g1.hit) return false;
     MainOut m; m.next = g1.next; m.nbits = g1.nbits; m.bits = g1.bits; m.ras_op = g1.ras_op; m.ras_val = g1.ras_val;
@@ -768,6 +774,12 @@ class BpuPipe {
           std::fprintf(stderr, "\n"); } }
       b.ck = take_ckpt(n.spec, n.sras);
       main_index(b, n.spec);
+      if (sim_env().fe_ovr_oracle) {   // FE_OVR_ORACLE (study): S0 already has the main predictor's result -> S1 / S_D never disagree
+        MainRaw raw; main_read(b, raw);
+        MainOut m; main_select(b, raw, m);
+        b.g.hit = true; b.g.taken = m.taken; b.g.slot = m.slot; b.g.type = m.type; b.g.next = m.next;
+        b.g.nbits = m.nbits; b.g.bits = m.bits; b.g.ras_op = m.ras_op; b.g.ras_val = m.ras_val;
+      }
       hp("S0", b.base, b.g.next, b.g.nbits, b.g.bits);
       push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       n.pc = b.g.next;
