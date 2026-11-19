@@ -8,7 +8,7 @@ static uint32_t buf[4] __attribute__((aligned(8)));
 
 static void handler(void) __attribute__((interrupt("machine")));
 static void handler(void) {
-    uint32_t c, e;
+    uintptr_t c, e;   // XLEN-wide: a uint32_t mepc is sign-extended on rv64 (addiw), mret then goes to 0xffffffff8xxxxxxx and faults forever
     asm volatile("csrr %0, mcause" : "=r"(c));
     asm volatile("csrr %0, mepc" : "=r"(e));
     last_cause = c;
