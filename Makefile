@@ -26,10 +26,18 @@ ZLIB_CFLAGS := $(shell pkg-config --silence-errors --cflags zlib)
 ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)
 CXXFLAGS += $(ZLIB_CFLAGS)
 
-# Libraries
-REFCPU_LIB ?= ./function-model/librefcpu.a
-# the function model's API header: from the same checkout as REFCPU_LIB (default: the function-model symlink)
-REFCPU_INC ?= ./function-model/include/api/
+# Function model (librefcpu): built here, from the pinned revision FM_REV of the function-model repository FM_GIT, with this build's
+# XLEN / RVC (FP=1), into a directory named by revision and configuration -- so the library always matches the simulator and no
+# shared, possibly stale copy is used (2026-11-19). The checkout's branch does not matter (git archive of FM_REV). Bump FM_REV
+# deliberately when the model needs a newer function model. REFCPU_LIB / REFCPU_INC can still be given explicitly (e.g. the static
+# server builds), then they must match XLEN / RVC.
+FM_GIT ?= ./function-model
+FM_REV ?= 55affa0
+FM_DIR := $(BUILD_DIR)/fm-$(FM_REV)-x$(XLEN)c$(RVC)
+REFCPU_LIB ?= $(FM_DIR)/librefcpu.a
+REFCPU_INC ?= $(FM_DIR)/include/api/
+# the function model's RVC expansion table (front-end/front_top.cpp), from the same tree as the API header
+CXXFLAGS += -DREFCPU_RVC_H='"$(abspath $(REFCPU_INC))/../rvc.h"'
 LIBS := $(REFCPU_LIB) ./libs/softfloat.a
 LDFLAGS := -lz -lstdc++fs
 ifneq ($(ZLIB_LIBDIR),)
@@ -135,11 +143,14 @@ $(SIM_EXE): $(OBJS) $(LIBS)
 	@echo "Linking $@"
 	@$(CXX) $(OBJS) $(LIBS) $(LDFLAGS) -o $@ $(CXXFLAGS)
 
-$(REFCPU_LIB):
-	$(error Missing $(REFCPU_LIB). Build the function-model first with 'make -C function-model librefcpu.a LDFLAGS=-lz' (function-model is a symlink to ../function-model)')
+$(FM_DIR)/librefcpu.a:
+	@echo "Building the function model $(FM_REV) (XLEN=$(XLEN) RVC=$(RVC) FP=1) in $(FM_DIR)"
+	@mkdir -p $(FM_DIR)
+	@git -C $(FM_GIT) archive $(FM_REV) | tar -x -C $(FM_DIR)
+	@$(MAKE) -s -C $(FM_DIR) librefcpu.a XLEN=$(XLEN) RVC=$(RVC) FP=1 LDFLAGS=-lz > $(FM_DIR)/build.log 2>&1 || { tail -20 $(FM_DIR)/build.log; exit 1; }
 
 # Compile
-$(BUILD_DIR)/%.o: %.cpp
+$(BUILD_DIR)/%.o: %.cpp | $(REFCPU_LIB)
 	@mkdir -p $(dir $@)
 	@echo "Compiling $<"
 	@$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -154,7 +165,7 @@ help:
 	@echo "  make          - Build the simulator (single configuration: include/config.h)"
 	@echo "  make DEBUG=1  - Build with debug symbols"
 	@echo "  make clean    - Clean build files"
-	@echo "  make XLEN=64 RVC=1 BUILD_DIR=build64c REFCPU_LIB=<rv64gc librefcpu.a>  - rv64gc build"
+	@echo "  The function model is built automatically (FM_REV=$(FM_REV), same XLEN / RVC) into $(FM_DIR)"
 
 # Include dependencies
 -include $(DEPS)

@@ -1,4 +1,4 @@
-#include "../function-model/include/rvc.h"
+#include REFCPU_RVC_H   // the function model's RVC table (Makefile: from the same tree as the librefcpu API header)
 #include "fatal.h"
 #include "trace_hook.h"
 #include "BPU/BPU.h"

@@ -5,7 +5,7 @@ atomic-boundary.bin,0,0,2420
 bit.bin,0,0,1809
 bitmanip-boundary.bin,0,0,2934
 bubble-sort.bin,0,0,4984
-crc32.bin,0,0,3439
+crc32.bin,0,0,3437
 csr-alias-boundary.bin,0,0,2244
 dcache-conflict-writeback.bin,0,0,6030
 dcache-mshr-pressure.bin,0,0,1567

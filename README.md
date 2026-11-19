@@ -53,7 +53,7 @@ FastWarm 重放里的 Sv39。
 | [docs/SCHEDULING.md](docs/SCHEDULING.md) | 一拍的调度：模块契约、自动生成的 `SimCpu::cycle()`、改了模块之后怎么做、工具看不见的共享状态 |
 | [docs/STYLE.md](docs/STYLE.md) | 代码风格的完整规则 |
 | [docs/NEXT_STATE.md](docs/NEXT_STATE.md), [docs/MODULE_CLEANUP.md](docs/MODULE_CLEANUP.md), [docs/UNIFIED_MODULES.md](docs/UNIFIED_MODULES.md) | 现行模块结构的由来：统一写法、下一状态放到 seq、各模块的整理 |
-| [docs/ENV_VARS.md](docs/ENV_VARS.md) | 全部运行期环境变量及默认值(**与 RTL 比较周期时用 `LSU_PIPE_NOWD=1`**) |
+| [docs/ENV_VARS.md](docs/ENV_VARS.md) | 全部运行期环境变量及默认值(默认配置 = RTL 配置,与 RTL 比周期不需要任何环境变量) |
 | [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | 分级 LSU:规格、近似、结果、IPC 研究 |
 | [docs/history/](docs/history/) | 历史记录:2026-11-04 的蒸馏(P0-P3)、FRONTEND_NOTES / INTEG_NOTES / MS_DATA_NOTES(前端快速路径、memspec 集成、memspec 值通路);可能已过时 |
 | [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/) | 前端编码规范,vendored 的 AXI/LLC/DDR kit |
@@ -67,12 +67,13 @@ submodule `third_party/DRAMsim3`(`git submodule update --init third_party/DRAMsi
 rv64(main 上唯一的配置;rv32 在分支 `rv32-legacy`):
 
 ```bash
-gmake -C function-model librefcpu.a RVC=1 LDFLAGS="-lz"   # 构建 ../function-model(构建产物,不入库);RVC 要与 trace-model 一致(默认 1)
-gmake -j4 LDFLAGS="-lz"                               # build/simulator;macOS 没有 -lstdc++fs,所以要覆盖 LDFLAGS
+gmake -j4 LDFLAGS="-lz"                               # build/simulator;第一次会先构建 function-model(见下)
 ```
 
-寄存器宽度是两个仓库共同的编译期参数(`XLEN`,默认 64);目标文件不带它的标记,
-所以切换 `XLEN` / `FP` / `RVC` 之后,要在 function-model 的另一份拷贝里构建 `librefcpu.a`,并使用单独的 `BUILD_DIR`。
+function-model(`librefcpu`)由 Makefile 自己构建:取 `../function-model` 仓库里固定的版本 `FM_REV`(`git archive`,与那个 checkout
+当前在哪个分支无关),用本次构建相同的 `XLEN` / `RVC`(FP=1)编进 `$(BUILD_DIR)/fm-<rev>-x<XLEN>c<RVC>/`。所以不会再链到一份旧的、
+配置不同的共享库(2026-11-19 之前常见的错误:门禁大面积失败或周期悄悄不对)。模型需要更新的 function-model 时,有意识地改 `FM_REV`
+(rtl 的 `scripts/env.sh` 里同名变量一起改)。`REFCPU_LIB` / `REFCPU_INC` 仍可显式指定(服务器上的静态构建),这时由使用者保证配置一致。
 
 改过编译选项后用干净的 `BUILD_DIR`。配置宏(`CFG_*`,见 `include/config.h`)用
 `gmake EXTRA_CXXFLAGS="-DCFG_...=..." BUILD_DIR=build_x` 覆盖。核频:`gmake CPU_FREQ_MHZ=...` 或环境变量 `CPU_FREQ_MHZ`。
@@ -82,7 +83,6 @@ gmake -j4 LDFLAGS="-lz"                               # build/simulator;macOS �
 ```bash
 ./build/simulator path/to/program.bin                  # 裸二进制加载到 0x80000000,结束时打印 sim-time(cycle)= ...
 PMU_OUT=out/prog ./build/simulator prog.bin            # PMU 默认开:TMA / 事件统计,写 <PMU_OUT>_*.csv(默认当前目录 pmu_*.csv);PMU=0 关掉
-LSU_PIPE_NOWD=1 ./build/simulator prog.bin             # 周期可与 RTL 比较
 SIM_MAX_CYCLES=1000000 ./build/simulator prog.bin      # N 个周期后停止(退出码 3);任何可能挂死的运行都要设
 ./build/simulator --mode ckpt checkpoint/mcf/ckpt_sp1.gz   # SimPoint checkpoint(./build/simulator -h)
 ```
@@ -107,7 +107,7 @@ bash scripts/run_gate.sh build/simulator results/gate  # 并行;通过 = 周期�
 `results/baseline/baseline.csv`、`baseline_nopf.csv` 是 RVC=1 构建在 `build_tests.sh` 程序(rv64ima,不含压缩指令)上的周期,`baseline_c.csv` 是 C 编译的程序。
 
 ```bash
-make BUILD_DIR=build_rvc REFCPU_LIB=<用 RVC=1 构建的 librefcpu>
+make BUILD_DIR=build_rvc
 scripts/build_rvc_tests.sh                                           # build_c/tests(用 C 编译的 cpu-tests),build_c/gen(function-model 生成的 C 压力测试)
 bash scripts/run_gate_c.sh build_rvc/simulator results/gate_c        # 周期数等于 results/baseline/baseline_c.csv;FULL=1 加上长的生成测试
 ```
@@ -120,7 +120,7 @@ bash scripts/run_gate_c.sh build_rvc/simulator results/gate_c        # 周期数
 
 - `function-model`:功能 core `librefcpu`(rv64,XLEN 编译期确定),fact 的来源。
 - `rtl`:SystemVerilog 实现。它的配置包由 `include/config.h` 生成(`rtl/scripts/gen_cfg.sh`,
-  默认值与覆盖方式相同);RTL 的 `fm_gate.sh` 把它的周期与本模型的比较(使用 `LSU_PIPE_NOWD=1`)。
+  默认值与覆盖方式相同);RTL 的 `fm_gate.sh` 把它的周期与本模型的默认配置比较(2026-11-19 起模型的 LDQ / STQ 看门狗删掉了,默认配置就是 RTL 配置)。
 - AI-Huma(上层仓库):`docs/MAIN_RECORDS.md`(每次合入 main 的性能与验证),`docs/EXPLORATION.md`(EXP-xxx)。
 
 ## 来源

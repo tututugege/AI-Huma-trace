@@ -2,7 +2,7 @@
 
 `build/simulator` 运行时读取的全部环境变量，共 16 个（exp/tm-simplify，2026-11-16；之前是 77 个）。写法：`NAME=值 build/simulator prog.bin`。
 
-> **和 RTL 比周期必须设 `LSU_PIPE_NOWD=1`。** RTL 的参考周期是关掉 63 周期看门狗标定的；不设时模型会在 load / store 停住 63 周期后重发，`crc32` 这类程序会差几十周期。
+> **模型的默认配置就是 RTL 配置**：和 RTL 比周期不需要设任何环境变量。（2026-11-19 删掉了 RTL 没有的 DCache 响应看门狗和它的开关 `LSU_PIPE_NOWD`；以前忘了设它会让 crc32、memory-stress-small 这类程序差几十周期。）
 
 | 变量 | 默认 | 作用 | 位置 |
 |---|---|---|---|
@@ -12,7 +12,6 @@
 | `PMU_OUT` | `pmu` | PMU 输出文件名前缀 | 同上 |
 | `PMU_INTERVAL` | 0 | 每隔这么多周期记一行时间序列 | 同上 |
 | `PMU_PCPROF` | 开 | 设 `0` 关掉按 PC 的统计 | 同上 |
-| `LSU_PIPE_NOWD` | 关 | 设了就关掉 DCache 响应看门狗（和 RTL 比周期时必须设） | `back-end/Lsu/RealLsuPipe.cpp` |
 | `FE_PAIR` | 0 | 设 `1`：一拍取两块（实验特性） | `front-end/BPU/BPU_pipe.h` |
 | `FE_IPF` | 0 | 设 `1`：I$ 预取（实验特性） | `front-end/front_top.cpp` |
 | `FE_IPF_LAT` | 12 | I$ 预取的固定延迟（周期） | 同上 |

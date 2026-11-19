@@ -99,7 +99,6 @@ void RealLsu::l2_decide() {
     }
     if (!sl.cand_v) {  // no conflicting older store: the DCache read of L1 decides
       e.st = L_DCW;
-      wd_arm(e.wd_t);
       continue;
     }
     // STLF confirm against the registered STQ entry (full physical address check)

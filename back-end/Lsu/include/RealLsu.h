@@ -122,8 +122,6 @@ private:
   void check();
   void ms_capture_stores();   // LSU_MS_DATA: the trace's store data, the cycle after allocation
   void ms_load_written_back(int ldq_idx, bool defer);   // LSU_MS_DATA: the destination's (stale?) value at a load write-back
-  long long wd_next_ = 0x7fffffffffffffffLL;  // earliest watchdog deadline (stale entries only cause an extra scan)
-  void wd_arm(long long &t) { t = sim_time; if (sim_time + 62 < wd_next_) wd_next_ = sim_time + 62; }
   void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
   void tlb_out();
   void tlb_in_ldq();
@@ -140,7 +138,6 @@ private:
   void mmio_store_issue(uint32_t n, const bool *rdy);
   void wb_drain(uint32_t n, const bool *rdy);
   void stq_retire();
-  void watchdog();
   void print_events();
   void wake_loads();
   void fill_replay_registers();

@@ -13,7 +13,7 @@
 //   LDQ: st (PLd state below), pa_v / paddr translated, rcause / blk_idx / rwait the replay's cause / store / countdown,
 //        rtype last DCache replay type, epoch request tag (drops stale responses), snap_idx / snap_flag the STQ tail at dispatch
 //        (the older stores), spec passed an unknown-address store, vio a later store address overlaps, second the
-//        completion / re-execution pass, wait predicted to wait (MDP), wd_t watchdog start
+//        completion / re-execution pass, wait predicted to wait (MDP)
 //   STQ: va_v / pa_v / data_v address (partial) / translated / data known, trp DTLB retry pending, wbp / wbd completion to
 //        the ROB pending / sent, cmt committed, iss sent to the DCache, mmw on the MMIO bus, wbi / wbe write-buffer state /
 //        entry, mf / ml merged follower of leader ml, done written or cancelled (may retire), suppress cancelled (no write),
@@ -86,7 +86,6 @@ struct PLdq {
   wire<RWAIT_W> rwait = 0;
   wire<2> rtype = 0;                 // ReplayType of the last DCache response
   wire<EPOCH_W> epoch = 0;
-  long long wd_t = 0;         // DCache response watchdog: cycle it entered DCW (replayed 62 cycles later)
   wire<1> spec = 0;           // memory speculation: passed an older store whose address was unknown at issue
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
   wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
@@ -121,7 +120,6 @@ struct PStq {
   wire<BR_MASK_WIDTH> br_mask = 0;
   wire<2> rtype = 0;
   wire<RWAIT_W> rwait = 0;
-  long long wd_t = 0;         // DCache response watchdog: cycle it was sent (re-sent 62 cycles later)
 };
 
 // LSU_MS_DATA (MsData.h, the stale-value path of memory speculation): what it keeps per LDQ / STQ entry, beside the queues

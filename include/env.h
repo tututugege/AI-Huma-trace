@@ -23,7 +23,6 @@ struct SimEnv {
   // L1D prefetcher
   const char *pf_enable = nullptr;   // PF_ENABLE (raw; the prefetcher has the default)
   // RTL comparison and alignment prints
-  bool lsu_pipe_nowd = false;        // LSU_PIPE_NOWD: no D-cache response watchdog (as the RTL)
   bool lsu_pipe_evt = false;         // LSU_PIPE_EVT: per-cycle LSU boundary events (E t=..)
   const char *lsu_pipe_stq = nullptr;   // LSU_PIPE_STQ=<idx>: one STQ entry's state with each event line
   bool fpr = false;                  // FPR=<bin>: BPU alignment fingerprint (FPR PT/UP)
@@ -43,7 +42,6 @@ struct SimEnv {
     if (const char *v = std::getenv("FE_IPF")) fe_ipf = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF_LAT")) fe_ipf_lat = std::atoi(v);
     pf_enable = std::getenv("PF_ENABLE");
-    lsu_pipe_nowd = std::getenv("LSU_PIPE_NOWD") != nullptr;
     lsu_pipe_evt = std::getenv("LSU_PIPE_EVT") != nullptr;
     lsu_pipe_stq = std::getenv("LSU_PIPE_STQ");
     if (const char *v = std::getenv("FPR")) { fpr = std::atoi(v) > 0; if (fpr) fpr_bin = static_cast<unsigned>(std::atoi(v)); }
