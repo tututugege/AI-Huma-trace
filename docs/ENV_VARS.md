@@ -13,6 +13,9 @@
 | `PMU_INTERVAL` | 0 | 每隔这么多周期记一行时间序列 | 同上 |
 | `PMU_PCPROF` | 开 | 设 `0` 关掉按 PC 的统计 | 同上 |
 | `FE_PAIR` | 0 | 设 `1`：一拍取两块（实验特性） | `front-end/BPU/BPU_pipe.h` |
+| `FE_OVR_ORACLE` | 0 | 设 `1`：S0 猜测 = 主预测器结果，无 S1 / S_D 覆盖（EXP-049 上界研究） | `front-end/BPU/BPU_pipe.h` |
+| `FE_OVR_FAST` | 0 | 覆盖那一拍 S0 按纠正后的地址发射；位 0 = S_D，位 1 = S1（EXP-049） | `front-end/BPU/BPU_pipe.h` |
+| `FE_UB_STRONG` | 0 | 设 `1`：S0 uBTB 计数器饱和才预测条件分支 taken（EXP-049，变慢） | `front-end/BPU/BPU_pipe.h` |
 | `FE_IPF` | 0 | 设 `1`：I$ 预取（实验特性） | `front-end/front_top.cpp` |
 | `FE_IPF_LAT` | 12 | I$ 预取的固定延迟（周期） | 同上 |
 | `PF_ENABLE` | 1 | 设 `0` 关掉 L1D 预取器（nopf 门禁 / RTL 的 nopf 表用） | `MemSubSystem/include/DataPrefetcher.h` |
