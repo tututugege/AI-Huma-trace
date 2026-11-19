@@ -28,11 +28,13 @@ def tma(rows):  # slot shares, cycle-weighted over points of one benchmark (sum 
     s = collections.Counter()
     for _, _, _, ev in rows:
         for k, v in ev.items(): s[k] += v
+    REN, BRT = ("SLOT_REN_NOPREG", "SLOT_IDU_NOBRTAG") if "SLOT_REN_NOPREG" in s else ("SLOT_FE_OTHER_NOPREG", "SLOT_FE_OTHER_NOBRTAG")
     sl = 8 * s["CYCLES"]; g = lambda k: s[k] / sl
     rec = s["SLOT_FE_RECOV_MISPRED"] + s["SLOT_FE_RECOV_FLUSH"]
     return dict(ret=s["INSTRET"] / sl, bad=(max(0, s["SLOT_FIRE"] - s["INSTRET"]) + rec + s["SLOT_KILLED"]) / sl,
-                fe=(s["SLOT_FE_EMPTY"] - rec) / sl, be=g("SLOT_BE"), rob=g("SLOT_BE_ROB_FULL"), iq=g("SLOT_BE_IQ_FULL"),
-                ldq=g("SLOT_BE_LDQ_FULL"), stq=g("SLOT_BE_STQ_FULL"), preg=g("SLOT_FE_OTHER_NOPREG"), brt=g("SLOT_FE_OTHER_NOBRTAG"),
+                # rename / IDU stalls are Backend Bound (old files: SLOT_FE_OTHER_NOPREG / _NOBRTAG)
+                fe=(s["SLOT_FE_EMPTY"] - rec - s[REN] - s[BRT]) / sl, be=g("SLOT_BE") + g(REN) + g(BRT), rob=g("SLOT_BE_ROB_FULL"), iq=g("SLOT_BE_IQ_FULL"),
+                ldq=g("SLOT_BE_LDQ_FULL"), stq=g("SLOT_BE_STQ_FULL"), preg=g(REN), brt=g(BRT),
                 occrob=s["OCC_ROB"] / s["CYCLES"], occldq=s["OCC_LDQ"] / s["CYCLES"], occstq=s["OCC_STQ"] / s["CYCLES"])
 cfgs = sorted(d for d in os.listdir(res) if os.path.isdir(f"{res}/{d}"))
 data = {c: load(c) for c in cfgs}

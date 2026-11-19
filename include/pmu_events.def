@@ -93,10 +93,13 @@ PMU_EV(OCC_IQ_BR,            occ,    6, "BR issue-queue entries in use")
 PMU_EV(OCC_IQ_FP,            occ,    6, "FP issue-queue entries in use")
 
 // ---- back-pressure causes (EXP-016; appended so the ids above do not move; trace-model only, not on the RTL bus) ----
-// "of which" parts of SLOT_FE_OTHER: the empty dispatch slot is empty because rename/IDU is stalled (cause sampled in the same cycle),
-// not because the frontend failed to deliver.
-PMU_EV(SLOT_FE_OTHER_NOPREG, slot,   4, "  of SLOT_FE_OTHER: rename stalled, no free physical register (PRF too small)")  // model-only
-PMU_EV(SLOT_FE_OTHER_NOBRTAG,slot,   4, "  of SLOT_FE_OTHER: IDU stalled, no free branch tag (MAX_BR_NUM too small)")  // model-only
+// Empty dispatch slots while rename (no free physical register) or the IDU (no free branch tag) is stalled: the instructions
+// exist but wait for a backend resource that is freed at commit / branch resolution, so top-down counts these slots in Backend
+// Bound (as Intel's allocation-resource stalls), not in Frontend. They are part of SLOT_FE_EMPTY (the RTL tier-1 event, which
+// cannot see the cause) and take precedence over the ICache / ITLB / other causes; a recovery bubble is still bad speculation.
+// (Before 2026-11-19 these were SLOT_FE_OTHER_NOPREG / _NOBRTAG, a part of SLOT_FE_OTHER, reported inside Frontend Bound.)
+PMU_EV(SLOT_REN_NOPREG,      slot,   4, "empty slots, rename stalled: no free physical register (Backend Bound)")  // model-only
+PMU_EV(SLOT_IDU_NOBRTAG,     slot,   4, "empty slots, IDU stalled: no free branch tag, MAX_BR_NUM (Backend Bound)")  // model-only
 
 // ---- frontend delivery split (EXP-025; trace-model only). Sampled at the front-end -> back-end interface, in slots of one fetch group (FETCH_WIDTH),
 // only in cycles where the back end can read (front.in.FIFO_read_enable). Independent of backend stalls, so the sum is "what the frontend failed to deliver".

@@ -14,14 +14,17 @@ for d in sorted(p for p in out.iterdir() if p.is_dir()):
     rec = e["SLOT_FE_RECOV_MISPRED"] + e["SLOT_FE_RECOV_FLUSH"]
     wrong = max(0, e["SLOT_FIRE"] - e["INSTRET"])
     bad = wrong + rec + e["SLOT_KILLED"]
-    fe = e["SLOT_FE_EMPTY"] - rec
-    be = e["SLOT_BE"]
+    # rename / IDU stalls on a physical register / branch tag are Backend Bound (old files: SLOT_FE_OTHER_NOPREG / _NOBRTAG, part of FE_OTHER)
+    old = "SLOT_REN_NOPREG" not in e
+    ren = (e.get("SLOT_FE_OTHER_NOPREG", 0) + e.get("SLOT_FE_OTHER_NOBRTAG", 0)) if old else e["SLOT_REN_NOPREG"] + e["SLOT_IDU_NOBRTAG"]
+    fe = e["SLOT_FE_EMPTY"] - rec - ren
+    be = e["SLOT_BE"] + ren
     mem = e["SLOT_BE_HEAD_MISS"] + e["SLOT_BE_HEAD_MEM"]
     ki = e["INSTRET"] / 1000
     rows.append((d.name, dict(
         ipc=e["INSTRET"] / cyc, ret=e["INSTRET"] / sl, bad=bad / sl, fe=fe / sl, be=be / sl,
         mis=e["SLOT_FE_RECOV_MISPRED"] / sl, wrong=wrong / sl, flat=(e["SLOT_FE_ICACHE"] + e["SLOT_FE_ITLB"]) / sl,
-        fbw=e["SLOT_FE_OTHER"] / sl, mem=mem / sl, l1m=e["SLOT_BE_HEAD_MISS"] / sl,
+        fbw=(e["SLOT_FE_OTHER"] - (ren if old else 0)) / sl, mem=mem / sl, l1m=e["SLOT_BE_HEAD_MISS"] / sl,
         core=(e["SLOT_BE_HEAD_CORE"] + e["SLOT_BE_HEAD_DONE"]) / sl, rob=e["SLOT_BE_ROB_FULL"] / sl,
         iq=e["SLOT_BE_IQ_FULL"] / sl, lsq=(e["SLOT_BE_LDQ_FULL"] + e["SLOT_BE_STQ_FULL"]) / sl,
         brmpki=(e["COMMIT_MISPRED_BR"] + e["COMMIT_MISPRED_JALR"] + e["COMMIT_MISPRED_RET"]) / ki,

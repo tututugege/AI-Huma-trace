@@ -5,7 +5,8 @@
 
 Per benchmark the event counts of its points are summed with the SimPoint weights (every point measures the same 10M
 instructions, so this is the weighted average per instruction) and turned into % of slots (DECODE_WIDTH = 8 per cycle) with
-the formulas of docs/PMU.md / spec_summary.py. With a second result directory each row shows run 2 and the change
+the formulas of docs/PMU.md (rename / IDU stalls in Backend Bound, column BE.ren; BE.mem / BE.core split the dispatch-blocked
+slots by the ROB head). With a second result directory each row shows run 2 and the change
 (percentage points). Only points present in every given directory are used. The last row is the plain mean over benchmarks.
 """
 import csv, glob, os, re, sys
@@ -26,20 +27,29 @@ def events(f):
     return {r['event']: int(r['count']) for r in csv.DictReader(open(f))}
 
 
+def ren_stall(e):
+    """Empty dispatch slots while rename / the IDU wait for a physical register / branch tag (Backend Bound) and whether the
+    file is from before 2026-11-19, when these were SLOT_FE_OTHER_NOPREG / _NOBRTAG, a part of SLOT_FE_OTHER."""
+    if 'SLOT_REN_NOPREG' in e:
+        return e['SLOT_REN_NOPREG'] + e['SLOT_IDU_NOBRTAG'], False
+    return e.get('SLOT_FE_OTHER_NOPREG', 0) + e.get('SLOT_FE_OTHER_NOBRTAG', 0), True
+
+
 def tma(e):
     sl = e['CYCLES'] * SLOTS_PER_CYCLE
     rec = e['SLOT_FE_RECOV_MISPRED'] + e['SLOT_FE_RECOV_FLUSH']
+    ren, old = ren_stall(e)
     wrong = max(0, e['SLOT_FIRE'] - e['INSTRET'])
     p = lambda x: 100.0 * x / sl
     return {
         'IPC': e['INSTRET'] / e['CYCLES'],
         'Ret': p(e['INSTRET']),
         'BadSp': p(wrong + rec + e['SLOT_KILLED']),
-        'FE': p(e['SLOT_FE_EMPTY'] - rec),
+        'FE': p(e['SLOT_FE_EMPTY'] - rec - ren),
         'FE.lat': p(e['SLOT_FE_ICACHE'] + e['SLOT_FE_ITLB']),
-        'FE.bw': p(e['SLOT_FE_OTHER'] - e.get('SLOT_FE_OTHER_NOPREG', 0) - e.get('SLOT_FE_OTHER_NOBRTAG', 0)),
-        'FE.preg': p(e.get('SLOT_FE_OTHER_NOPREG', 0) + e.get('SLOT_FE_OTHER_NOBRTAG', 0)),
-        'BE': p(e['SLOT_BE']),
+        'FE.bw': p(e['SLOT_FE_OTHER'] - (ren if old else 0)),
+        'BE': p(e['SLOT_BE'] + ren),
+        'BE.ren': p(ren),
         'BE.mem': p(e['SLOT_BE_HEAD_MISS'] + e['SLOT_BE_HEAD_MEM']),
         'BE.core': p(e['SLOT_BE_HEAD_CORE'] + e['SLOT_BE_HEAD_DONE']),
         'L1Dmpki': 1000.0 * e['DC_LD_MISS'] / e['INSTRET'],
@@ -48,7 +58,7 @@ def tma(e):
     }
 
 
-COLS = ['IPC', 'Ret', 'BadSp', 'FE', 'FE.lat', 'FE.bw', 'FE.preg', 'BE', 'BE.mem', 'BE.core', 'L1Dmpki', 'MLP', 'MissLat']
+COLS = ['IPC', 'Ret', 'BadSp', 'FE', 'FE.lat', 'FE.bw', 'BE', 'BE.ren', 'BE.mem', 'BE.core', 'L1Dmpki', 'MLP', 'MissLat']
 
 
 def bench_tma(sp, dirs, b):

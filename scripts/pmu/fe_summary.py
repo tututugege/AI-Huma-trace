@@ -39,8 +39,11 @@ def main():
         b = os.path.basename(os.path.dirname(p))
         cyc, ret = e.get("CYCLES", 0), e.get("INSTRET", 0)
         slots = 8 * cyc if cyc else 1
-        fe = (e.get("SLOT_FE_EMPTY", 0) - e.get("SLOT_FE_RECOV_MISPRED", 0) - e.get("SLOT_FE_RECOV_FLUSH", 0)) * 100.0 / slots
-        fbw = e.get("SLOT_FE_OTHER", 0) * 100.0 / slots
+        # rename / IDU stalls are Backend Bound, not frontend (old files: SLOT_FE_OTHER_NOPREG / _NOBRTAG, part of SLOT_FE_OTHER)
+        old = "SLOT_REN_NOPREG" not in e
+        ren = (e.get("SLOT_FE_OTHER_NOPREG", 0) + e.get("SLOT_FE_OTHER_NOBRTAG", 0)) if old else e["SLOT_REN_NOPREG"] + e["SLOT_IDU_NOBRTAG"]
+        fe = (e.get("SLOT_FE_EMPTY", 0) - e.get("SLOT_FE_RECOV_MISPRED", 0) - e.get("SLOT_FE_RECOV_FLUSH", 0) - ren) * 100.0 / slots
+        fbw = (e.get("SLOT_FE_OTHER", 0) - (ren if old else 0)) * 100.0 / slots
         fc, fg, fi = e.get("FEO_CYC", 0), e.get("FEO_GROUPS", 0), e.get("FEO_INSTS", 0)
         tot = max(1, 8 * fc)
         line = f"{b:<16}{ret / cyc if cyc else 0:>5.2f} | {fe:>5.1f}{fbw:>6.1f} | {fi / fg if fg else 0:>8.2f}{fg / fc if fc else 0:>8.2f}{fi / fc if fc else 0:>9.2f} |"

@@ -64,6 +64,10 @@ void Pmu::accumulate() {
   uint64_t iq_sub = 0;  // the IQ stall split must add up to SLOT_BE_IQ_FULL
   for (int q = 0; q < IQ_PMU_NUM; q++) iq_sub += cur.v[PMU_SLOT_BE_IQ_SPACE_INT + q] + cur.v[PMU_SLOT_BE_IQ_WIDTH_INT + q];
   if (iq_sub != cur.v[PMU_SLOT_BE_IQ_FULL]) identity_violations++;
+  // the empty slots: recovery, rename / IDU stall, ICache, ITLB, other, each in exactly one
+  if (cur.v[PMU_SLOT_FE_EMPTY] != cur.v[PMU_SLOT_FE_RECOV_MISPRED] + cur.v[PMU_SLOT_FE_RECOV_FLUSH] + cur.v[PMU_SLOT_REN_NOPREG] +
+                                  cur.v[PMU_SLOT_IDU_NOBRTAG] + cur.v[PMU_SLOT_FE_ICACHE] + cur.v[PMU_SLOT_FE_ITLB] + cur.v[PMU_SLOT_FE_OTHER])
+    identity_violations++;
   if (interval && ncycles >= series_next) {
     if (!series) {
       series = std::fopen((out_prefix + "_series.csv").c_str(), "w");
@@ -114,9 +118,11 @@ void Pmu::report(uint64_t instructions) {
   const double recov = T(PMU_SLOT_FE_RECOV_MISPRED) + T(PMU_SLOT_FE_RECOV_FLUSH);
   const double killed = T(PMU_SLOT_KILLED);
   const double bad_spec = wrong_path + recov + killed;
-  const double fe = T(PMU_SLOT_FE_EMPTY) - recov;
+  // empty slots while rename / the IDU wait for a backend resource (physical register, branch tag) are Backend Bound
+  const double ren_stall = T(PMU_SLOT_REN_NOPREG) + T(PMU_SLOT_IDU_NOBRTAG);
+  const double fe = T(PMU_SLOT_FE_EMPTY) - recov - ren_stall;
   const double be = T(PMU_SLOT_BE_ROB_FULL) + T(PMU_SLOT_BE_FLUSH_WAIT) + T(PMU_SLOT_BE_SERIAL) + T(PMU_SLOT_BE_LDQ_FULL) +
-                    T(PMU_SLOT_BE_STQ_FULL) + T(PMU_SLOT_BE_IQ_FULL);
+                    T(PMU_SLOT_BE_STQ_FULL) + T(PMU_SLOT_BE_IQ_FULL) + ren_stall;
   std::printf("%s*********Top-Down Analysis (PMU counters only; %d slots per cycle)*********%s\n", G, DECODE_WIDTH, Z);
   std::printf("Total Slots      : %.0f\n", slots);
   std::printf("Retiring         : %6.2f%%\n", pct(retired));
@@ -128,8 +134,10 @@ void Pmu::report(uint64_t instructions) {
   std::printf("Frontend Bound   : %6.2f%%\n", pct(fe));
   std::printf("  - Fetch latency  (ICache %.2f%% + ITLB %.2f%%)\n", pct(T(PMU_SLOT_FE_ICACHE)), pct(T(PMU_SLOT_FE_ITLB)));
   std::printf("  - Fetch bandwidth: %6.2f%%\n", pct(T(PMU_SLOT_FE_OTHER)));
-  std::printf("      of which rename no free preg: %6.2f%%  IDU no branch tag: %6.2f%%\n", pct(T(PMU_SLOT_FE_OTHER_NOPREG)), pct(T(PMU_SLOT_FE_OTHER_NOBRTAG)));
   std::printf("Backend Bound    : %6.2f%%\n", pct(be));
+  std::printf("  - Rename / IDU stall (empty dispatch slots): no free physical register %.2f%%, no branch tag %.2f%%\n",
+              pct(T(PMU_SLOT_REN_NOPREG)), pct(T(PMU_SLOT_IDU_NOBRTAG)));
+  std::printf("  - Dispatch blocked (SLOT_BE): %6.2f%%\n", pct(be - ren_stall));
   const double mem = T(PMU_SLOT_BE_HEAD_MISS) + T(PMU_SLOT_BE_HEAD_MEM);
   std::printf("  by ROB head  : Memory %.2f%% (L1D miss %.2f%%, L1D hit/other %.2f%%)  Core %.2f%% (exec %.2f%%, head done %.2f%%)\n",
               pct(mem), pct(T(PMU_SLOT_BE_HEAD_MISS)), pct(T(PMU_SLOT_BE_HEAD_MEM)),

@@ -52,16 +52,15 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
       be_slots++;
       continue;
     }
-    // an empty slot (no valid instruction, nothing blocked)
+    // an empty slot (no valid instruction, nothing blocked): recovery bubble, else a rename / IDU stall on a backend resource
+    // (top-down: Backend Bound), else a frontend cause
     e.add(PMU_SLOT_FE_EMPTY);
     if (recov) e.add(by_flush ? PMU_SLOT_FE_RECOV_FLUSH : PMU_SLOT_FE_RECOV_MISPRED);
+    else if (g_pmu_back.ren_no_preg) e.add(PMU_SLOT_REN_NOPREG);
+    else if (g_pmu_back.idu_no_brtag) e.add(PMU_SLOT_IDU_NOBRTAG);
     else if (g_pmu_front.icache_miss_busy) e.add(PMU_SLOT_FE_ICACHE);
     else if (g_pmu_front.itlb_miss) e.add(PMU_SLOT_FE_ITLB);
-    else {
-      e.add(PMU_SLOT_FE_OTHER);
-      if (g_pmu_back.ren_no_preg) e.add(PMU_SLOT_FE_OTHER_NOPREG);
-      else if (g_pmu_back.idu_no_brtag) e.add(PMU_SLOT_FE_OTHER_NOBRTAG);
-    }
+    else e.add(PMU_SLOT_FE_OTHER);
   }
 }
 

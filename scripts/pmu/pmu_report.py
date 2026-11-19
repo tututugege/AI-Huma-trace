@@ -96,9 +96,11 @@ def main():
             retire = g("INSTRET")
             rec = g("SLOT_FE_RECOV_MISPRED") + g("SLOT_FE_RECOV_FLUSH")
             bad = max(0, g("SLOT_FIRE") - retire) + rec + g("SLOT_KILLED")
-            fe = g("SLOT_FE_EMPTY") - rec
+            # rename / IDU stalls on a physical register / branch tag are Backend Bound (old files: SLOT_FE_OTHER_NOPREG / _NOBRTAG)
+            ren = sum(int(r.get(k, 0) or 0) for k in ("SLOT_REN_NOPREG", "SLOT_IDU_NOBRTAG", "SLOT_FE_OTHER_NOPREG", "SLOT_FE_OTHER_NOBRTAG"))
+            fe = g("SLOT_FE_EMPTY") - rec - ren
             be = sum(g(k) for k in ("SLOT_BE_ROB_FULL", "SLOT_BE_FLUSH_WAIT", "SLOT_BE_SERIAL", "SLOT_BE_LDQ_FULL",
-                                    "SLOT_BE_STQ_FULL", "SLOT_BE_IQ_FULL"))
+                                    "SLOT_BE_STQ_FULL", "SLOT_BE_IQ_FULL")) + ren
             print(f"{c:>10} {retire / d:>5.2f} {100 * retire / sl:>5.1f} {100 * bad / sl:>6.1f} {100 * fe / sl:>5.1f} "
                   f"{100 * be / sl:>5.1f} {g('DC_LD_MISS_OUT') / d:>10.2f}")
 
