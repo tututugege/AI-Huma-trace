@@ -236,7 +236,7 @@ struct ExePrfIO {
     Uop uop = {};
   };
 
-  ExePrfEntry entry[ISSUE_WIDTH] = {};
+  ExePrfEntry entry[WB_LANES] = {};   // register write-back bus, by lane (config.h WB_*; the model fills the ALU and load lanes)
   ExePrfEntry bypass[TOTAL_FU_COUNT] = {};
 };
 

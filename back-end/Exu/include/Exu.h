@@ -90,7 +90,7 @@ private:
   };
   // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
   // is still updated in place in comb: not yet under the contract.)
-  struct Regs { LoadWake lwake_r[ISSUE_WIDTH] = {}; };
+  struct Regs { LoadWake lwake_r[WB_LANES] = {}; };
   Regs q_;
   std::vector<FuUnit> units;
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order

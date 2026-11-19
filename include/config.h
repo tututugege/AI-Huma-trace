@@ -666,13 +666,13 @@ enum class IssueSchedulePolicy : int {
 #ifndef CFG_ISSUE_OLDEST_FIRST
 #define CFG_ISSUE_OLDEST_FIRST 2   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
 #endif
-// queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
 // EXP-046: the select skips a ready uop whose completion cycle on its port is already reserved (EXP-035), so the next ready uop gets the
 // port instead of the port idling. 0: the check comes after the select (a refused pick leaves the port idle); 2: the select also skips a
 // uop the port's unit cannot take now (unit busy). The checks read only registered per-port state.
 #ifndef CFG_WB_PRESEL
 #define CFG_WB_PRESEL 0
 #endif
+// queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
 #ifndef CFG_ISSUE_OLDEST_QUEUES
 #define CFG_ISSUE_OLDEST_QUEUES 2
 #endif
@@ -690,6 +690,17 @@ constexpr int IQ_STA_PORT_BASE = find_first_port_with_mask(OP_MASK_STA);
 constexpr int IQ_STD_PORT_BASE = find_first_port_with_mask(OP_MASK_STD);
 constexpr int IQ_BR_PORT_BASE = find_first_port_with_mask(OP_MASK_BR);
 constexpr int IQ_FP_PORT_BASE = find_first_port_with_mask(OP_MASK_FPQ);
+
+// Register write-back bus (EXP-046): one lane per result source that can write a register, numbered by lane, not by issue port.
+// Lanes 0 .. ALU_NUM-1: the ALU ports (issue port IQ_ALU_PORT_BASE + i; ports 2 and 3 also carry I2F results to the FP file);
+// then the LSU load write-backs (loads and SC); then the FP issue ports (FP results, and integer results of fmv.x / fcvt.w /
+// fcmp / fclass). The store-address, store-data and branch ports never write a register and have no lane (their completions go
+// to the ROB only). The integer file has one write port per lane; the FP file is written by the load lanes and the FP-unit / I2F
+// lanes, which the issue stage limits to FP_WB_PORTS writes per cycle (EXP-032).
+constexpr int WB_ALU_BASE = 0;
+constexpr int WB_LD_BASE = WB_ALU_BASE + ALU_NUM;
+constexpr int WB_FP_BASE = WB_LD_BASE + LSU_LOAD_WB_WIDTH;
+constexpr int WB_LANES = WB_FP_BASE + count_ports_with_mask(OP_MASK_FPQ);
 
 // ============================================================
 // Derived Counts
