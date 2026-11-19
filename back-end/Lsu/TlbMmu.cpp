@@ -1,4 +1,8 @@
 #include "TlbMmu.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include "Csr.h"
 #include "ref.h"
 
@@ -21,7 +25,64 @@ inline uint32_t vpn_at(vaddr_t v, int level) { return static_cast<uint32_t>((v >
 inline uint64_t page_of(vaddr_t v) { return static_cast<uint64_t>(v) >> 12; }
 }  // namespace
 
-TlbMmu::TlbMmu(int entries, Kind kind) : kind_(kind), entries_(entries > 0 ? entries : 1), capacity_(entries > 0 ? entries : 1) { reset(); }
+namespace {
+// TLB_REPL (read once): rr (default, = RTL) round-robin pointer; nru: not-recently-used bit per entry (a hit on any
+// port sets it; when all are set, all but the touched one clear; the victim is the first invalid entry, else the lowest
+// unused); plru: tree pseudo-LRU over the entries (first invalid entry first). Both TLBs.
+int tlb_repl() {
+  static const int m = [] {
+    const char *v = std::getenv("TLB_REPL");
+    if (!v || std::strcmp(v, "rr") == 0) return 0;
+    if (std::strcmp(v, "nru") == 0) return 1;
+    if (std::strcmp(v, "plru") == 0) return 2;
+    std::fprintf(stderr, "TLB_REPL=%s: unknown\n", v);
+    std::abort();
+  }();
+  return m;
+}
+}  // namespace
+
+void TlbMmu::repl_touch(int slot) {
+  if (tlb_repl() == 1) {
+    used_[slot] = 1;
+    bool all = true;
+    for (uint8_t u : used_) all = all && u;
+    if (all) { for (auto &u : used_) u = 0; used_[slot] = 1; }
+  } else if (tlb_repl() == 2) {
+    int node = 0, lo = 0, hi = capacity_;
+    while (hi - lo > 1) {
+      const int mid = (lo + hi) / 2;
+      const bool right = slot >= mid;
+      plru_[node] = right ? 0 : 1;
+      node = 2 * node + (right ? 2 : 1);
+      if (right) lo = mid; else hi = mid;
+    }
+  }
+}
+
+int TlbMmu::repl_victim() const {
+  for (int i = 0; i < capacity_; ++i)
+    if (!entries_[i].valid) return i;
+  if (tlb_repl() == 1) {
+    for (int i = 0; i < capacity_; ++i)
+      if (!used_[i]) return i;
+    return 0;
+  }
+  int node = 0, lo = 0, hi = capacity_;
+  while (hi - lo > 1) {
+    const int mid = (lo + hi) / 2;
+    const bool right = plru_[node] != 0;
+    node = 2 * node + (right ? 2 : 1);
+    if (right) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+
+TlbMmu::TlbMmu(int entries, Kind kind) : kind_(kind), entries_(entries > 0 ? entries : 1), capacity_(entries > 0 ? entries : 1) {
+  used_.assign(capacity_, 0);
+  plru_.assign(capacity_, 0);
+  reset();
+}
 
 void TlbMmu::reset() {
   flush_ = true;
@@ -84,7 +145,7 @@ bool TlbMmu::check_perm(uint8_t perm, uint32_t type, int eff_priv, bool sum, boo
 TlbMmu::Refill TlbMmu::make_refill(vaddr_t v_addr, uint16_t asid, const PtwWalkResp &wr) const {
   Refill f;
   f.valid = true;
-  f.slot = repl_ptr_ % capacity_;
+  f.slot = tlb_repl() ? repl_victim() : repl_ptr_ % capacity_;
   f.next_repl = (f.slot + 1) % capacity_;
   f.entry.valid = true;
   f.entry.global = (wr.leaf_pte & PTE_G) != 0;
@@ -159,6 +220,7 @@ TlbMmu::Resp TlbMmu::translate_one(const Req &r, const Ctx &c, WalkRegs &w) {
   const uint16_t asid = sv_asid(c.satp);
   const TlbEntry *hit = refill_.valid && entry_matches(refill_.entry, r.vaddr, asid) ? &refill_.entry : lookup(r.vaddr, asid);
   if (hit) {
+    if (tlb_repl() && hit != &refill_.entry) touch_.push_back(int(hit - entries_.data()));
     if (!check_perm(static_cast<uint8_t>(hit->perm), r.type, c.eff_priv, c.sum, c.mxr)) return out;
     out.result = Result::OK;
     out.paddr = compose_paddr(r.vaddr, *hit);
@@ -247,13 +309,19 @@ void TlbMmu::seq() {
   if (flush_) {
     for (auto &e : entries_) e = {};
     repl_ptr_ = 0;
+    std::fill(used_.begin(), used_.end(), 0);
+    std::fill(plru_.begin(), plru_.end(), 0);
+    touch_.clear();
     walk_ = {};
     walk_next_valid_ = false;
     refill_ = {};
     flush_ = false;
     return;
   }
+  for (int s : touch_) repl_touch(s);
+  touch_.clear();
   if (refill_.valid) {
+    if (tlb_repl()) repl_touch(refill_.slot);
     entries_[refill_.slot] = refill_.entry;
     repl_ptr_ = refill_.next_repl;
     refill_ = {};

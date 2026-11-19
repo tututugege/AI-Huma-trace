@@ -28,7 +28,7 @@ constexpr uint8_t AXI_LLC_META_VALID = 1u << 0;
 constexpr uint8_t AXI_LLC_META_DIRTY = 1u << 1;
 constexpr uint8_t AXI_LLC_META_PREFETCH = 1u << 2;
 constexpr uint32_t AXI_LLC_META_ENTRY_BYTES = 4;
-constexpr uint32_t AXI_LLC_REPL_BYTES = 4;
+constexpr uint32_t AXI_LLC_REPL_BYTES = 8;   // LLC_REPL: rr pointer | plru tree (ways-1 bits) | lru ages
 constexpr uint32_t AXI_LLC_MAX_PREFETCH_QUEUE = 8;
 constexpr uint8_t AXI_LLC_INVALID_VICTIM_MSHR_SLOT = 0xFFu;
 constexpr uint8_t AXI_LLC_READ_RESP_QUEUE_DEPTH = MAX_OUTSTANDING;
@@ -283,6 +283,8 @@ struct AXI_LLC_Regs_t {
   uint8_t rr_write_master_r = 0;
   uint8_t invalidate_epoch_r = 0;
   uint32_t dirty_line_count_r = 0;
+  uint16_t repl_psel_r = 512;   // LLC_REPL=drrip: set-dueling counter (>= 512: brrip insertion for the follower sets)
+  uint8_t repl_bip_ctr_r = 0;   // LLC_REPL=brrip / drrip: 1-in-32 RRPV-2 insertion
 
   bool read_resp_valid_r[NUM_READ_MASTERS] = {false};
   bool read_resp_fresh_r[NUM_READ_MASTERS] = {false};
@@ -393,7 +395,7 @@ private:
   bool victim_snapshot_waits_for_write_resolution(const AXI_LLC_Regs_t &regs, uint32_t victim_addr) const;
   bool victim_line_pending(const AXI_LLC_Regs_t &regs, uint32_t line_addr) const;
   bool way_reserved(const AXI_LLC_Regs_t &regs, uint32_t set, uint8_t way, uint32_t line_addr) const;
-  int pick_unreserved_way(const AXI_LLC_Regs_t &regs, uint32_t set, int first_invalid_way, uint32_t repl_way_raw,
+  int pick_unreserved_way(const AXI_LLC_Regs_t &regs, uint32_t set, int first_invalid_way, uint64_t repl_state,
                           uint32_t line_addr) const;
   bool can_accept_invalidate_line_now(uint32_t line_addr) const;
   bool has_dirty_or_write_hazard(const AXI_LLC_Regs_t &regs) const;
@@ -409,6 +411,8 @@ private:
   bool enqueue_read_victim_snapshot(uint8_t owner_slot, uint32_t victim_addr, const WideWriteStrb_t &victim_strobe);
   void arm_victim_writeback(bool for_write, uint8_t write_master, uint8_t mshr_slot, uint32_t addr);
   void write_line_tables(uint32_t set, uint32_t way, const AXI_LLCMetaEntry_t &meta, uint32_t repl_next_way);
+  void touch_repl_at_lookup(uint32_t set, uint32_t way, bool alloc, bool prefetch);
+  bool lookup_tbl_busy_ = false;   // the table write port was taken (commit) when this cycle's lookup completed
   void write_valid_table(uint32_t set, uint32_t way, bool valid);
 
   // --- prefetch ---

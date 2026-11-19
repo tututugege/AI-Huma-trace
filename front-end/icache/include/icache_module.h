@@ -88,6 +88,8 @@ struct ICacheLookupIn {
   wire<1> meta_resp_valid = false;
   wire<ICACHE_TAG_BITS> lookup_set_tag[ICACHE_WAY_NUM] = {0};
   wire<1> lookup_set_valid[ICACHE_WAY_NUM] = {false};
+  // ICACHE_REPL=plru / srrip: the looked-up set's replacement state
+  wire<16> lookup_set_repl = 0;
   // Single-way data response selected after the module finishes tag compare.
   wire<1> data_resp_valid = false;
   wire<8> data_resp_way = 0;
@@ -143,7 +145,19 @@ struct ICacheTableWrite {
   wire<8> way = 0;
   wire<ICACHE_TAG_BITS> tag = 0;
   wire<1> valid = false;
+  // ICACHE_REPL=plru / srrip: a hit (touch_fill = 0) or a refill (1) of way touch_way in set touch_index
+  wire<1> touch_we = false;
+  wire<1> touch_fill = false;
+  wire<ICACHE_INDEX_BITS> touch_index = 0;
+  wire<8> touch_way = 0;
 };
+
+// ICACHE_REPL (read once): srrip is the default (EXP-045); rr (old main) one global round-robin pointer, hits do not update it; plru: tree
+// pseudo-LRU per set (ways-1 bits); srrip: a 2-bit RRPV per way (hit: 0; victim: the largest RRPV, lowest way on a tie;
+// refill: the set is aged until its largest RRPV is 3, then the new line gets 2). An invalid way is always used first.
+int icache_repl_mode();
+uint16_t icache_repl_update(uint16_t st, uint32_t way, bool fill);
+uint32_t icache_repl_victim(uint16_t st);
 
 struct ICacheModuleIn {
   // Input from the IFU (Instruction Fetch Unit)

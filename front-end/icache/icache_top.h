@@ -64,7 +64,8 @@ private:
   icache_module_n::ICache mod_;   // the I-cache module (rtl/frontend/icache/icache_ctl.sv)
   TagTable tags_;
   ValidTable valid_;
-  uint8_t prefetch_rot_[ICACHE_SET_NUM] = {};   // FE_IPF: rotating victim per set
+  uint8_t prefetch_rot_[ICACHE_SET_NUM] = {};
+  uint16_t repl_[ICACHE_SET_NUM] = {};   // ICACHE_REPL=plru / srrip: replacement state per set (written at the edge)   // FE_IPF: rotating victim per set
   // The array read of this cycle, as the module sees it.
   struct LookupResp {
     bool meta_valid = false, data_valid = false;

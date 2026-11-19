@@ -1,3 +1,6 @@
+#include <cstring>
+#include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include "fatal.h"
 #include "trace_hook.h"
@@ -5,6 +8,63 @@
 #include "config.h"
 
 using namespace icache_module_n;
+
+namespace icache_module_n {
+int icache_repl_mode() {
+  static const int m = [] {
+    const char *v = std::getenv("ICACHE_REPL");
+    if (!v || std::strcmp(v, "srrip") == 0) return 2;   // default (EXP-045)
+    if (std::strcmp(v, "rr") == 0) return 0;
+    if (std::strcmp(v, "plru") == 0) return 1;
+    std::fprintf(stderr, "ICACHE_REPL=%s: unknown\\n", v);
+    std::abort();
+  }();
+  return m;
+}
+
+uint16_t icache_repl_update(uint16_t st, uint32_t way, bool fill) {
+  constexpr uint32_t W = ICACHE_WAY_NUM;
+  if (icache_repl_mode() == 1) {
+    uint32_t node = 0, lo = 0, hi = W;
+    while (hi - lo > 1) {
+      const uint32_t mid = (lo + hi) / 2;
+      const bool right = way >= mid;
+      if (right) st = uint16_t(st & ~(1u << node)); else st = uint16_t(st | (1u << node));
+      node = 2 * node + (right ? 2 : 1);
+      if (right) lo = mid; else hi = mid;
+    }
+    return st;
+  }
+  auto get = [&](uint32_t w) { return (st >> (2 * w)) & 3u; };
+  auto set = [&](uint32_t w, uint32_t v) { st = uint16_t((st & ~(3u << (2 * w))) | ((v & 3u) << (2 * w))); };
+  if (!fill) { set(way, 0); return st; }
+  uint32_t mx = 0;
+  for (uint32_t w = 0; w < W; ++w) mx = std::max(mx, get(w));
+  for (uint32_t w = 0; w < W; ++w) set(w, get(w) + (3u - mx));
+  set(way, 2);
+  return st;
+}
+
+uint32_t icache_repl_victim(uint16_t st) {
+  constexpr uint32_t W = ICACHE_WAY_NUM;
+  if (icache_repl_mode() == 1) {
+    uint32_t node = 0, lo = 0, hi = W;
+    while (hi - lo > 1) {
+      const uint32_t mid = (lo + hi) / 2;
+      const bool right = (st >> node) & 1u;
+      node = 2 * node + (right ? 2 : 1);
+      if (right) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
+  uint32_t best = 0, bv = 0;
+  for (uint32_t w = 0; w < W; ++w) {
+    const uint32_t v = (st >> (2 * w)) & 3u;
+    if (v > bv) best = w, bv = v;
+  }
+  return best;
+}
+}  // namespace icache_module_n
 
 namespace {
 inline bool lookup_latency_enabled() { return ICACHE_LOOKUP_LATENCY > 0; }
@@ -471,6 +531,8 @@ void ICache::eval_state_machine() {
                                  /*compare_valid=*/false);
       if (lookup_has_invalid_way_w) {
         replace_idx_next = lookup_first_invalid_way_w;
+      } else if (icache_repl_mode() != 0 && io.lookup_in.meta_resp_valid) {
+        replace_idx_next = icache_repl_victim(static_cast<uint16_t>(io.lookup_in.lookup_set_repl));
       } else {
         replace_idx_next = (io.regs.replace_idx + 1) % way_cnt;
       }
@@ -494,6 +556,12 @@ void ICache::eval_state_machine() {
       io.table_write.way = replace_way;
       io.table_write.tag = io.regs.ppn_r;
       io.table_write.valid = true;
+      if (icache_repl_mode() != 0) {
+        io.table_write.touch_we = true;
+        io.table_write.touch_fill = true;
+        io.table_write.touch_index = io.regs.req_index_r;
+        io.table_write.touch_way = replace_way;
+      }
     }
 
     if (!io.in.refetch && !io.in.flush) {
@@ -529,6 +597,12 @@ void ICache::eval_state_machine() {
       uint32_t index = (io.in.pc >> offset_bits) & (set_num - 1u);
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
+      if (lookup_hit_valid_w && icache_repl_mode() != 0) {
+        io.table_write.touch_we = true;
+        io.table_write.touch_fill = false;
+        io.table_write.touch_index = index;
+        io.table_write.touch_way = lookup_hit_way_w;
+      }
       if (lookup_hit_valid_w && lookup_data_ready_w) {
         io.out.ifu_resp_paddr = ((io.in.ppn & 0xFFFFFu) << 12) | (io.out.ifu_resp_pc & 0xFFFu);
         io.out.ifu_resp_valid = true;
@@ -560,6 +634,12 @@ void ICache::eval_state_machine() {
 
       capture_lookup_meta_result(io.in.ppn & 0xFFFFF, /*compare_valid=*/true);
       capture_lookup_data_result();
+      if (lookup_hit_valid_w && icache_repl_mode() != 0) {
+        io.table_write.touch_we = true;
+        io.table_write.touch_fill = false;
+        io.table_write.touch_index = io.regs.req_index_r;
+        io.table_write.touch_way = lookup_hit_way_w;
+      }
       io.out.ifu_resp_valid = lookup_hit_valid_w && lookup_data_ready_w;
       req_ready_w = lookup_hit_valid_w && lookup_data_ready_w;
       if (lookup_hit_valid_w && lookup_data_ready_w) {
