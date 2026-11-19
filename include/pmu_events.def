@@ -121,6 +121,12 @@ PMU_EV(FEO_LOSS_ICNOTRDY,    slot,   4, "  empty cycle: I-cache not ready")  // 
 PMU_EV(FEO_LOSS_IFIFO,       slot,   4, "  empty cycle: instruction FIFO empty (I-cache latency)")  // model-only
 PMU_EV(FEO_LOSS_PTABLAG,     slot,   4, "  empty cycle: PTAB empty (prediction lags the fetch)")  // model-only
 PMU_EV(FEO_LOSS_F2B,         slot,   4, "  empty cycle: front-to-back FIFO / predecode check stage")  // model-only
+PMU_EV(BPU_OVR_SD_NEWTK,      front,  1, "S_D override: S0 had no taken branch in the block, the main predictor has one")  // model-only
+PMU_EV(BPU_OVR_SD_NOTTK,      front,  1, "S_D override: S0 guessed taken, the main predictor not taken")  // model-only
+PMU_EV(BPU_OVR_SD_SLOT,       front,  1, "S_D override: both taken, at different slots")  // model-only
+PMU_EV(BPU_OVR_SD_TGT,        front,  1, "S_D override: same taken slot, different target")  // model-only
+PMU_EV(BPU_OVR_SD_OTHER,      front,  1, "S_D override: same next pc, history bits / RAS differ (or FE_PAIR fallback)")  // model-only
+PMU_EV(BPU_OVR_L1,            front,  1, "S1 (uBTB L1) overrides")  // model-only
 
 // ---- issue grants refused after select (EXP-046; trace-model only). The select picks one ready uop per port; the grant can still be
 // refused afterwards: the port's unit is busy (FU), the uop's completion cycle on the port is taken (WB, EXP-035), the FP register file

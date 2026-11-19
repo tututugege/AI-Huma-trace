@@ -149,6 +149,8 @@ void BackTop::pmu_sample() {
     if (g_pmu_front.feo_n > 0) { e.add(PMU_FEO_GROUPS); e.add(PMU_FEO_INSTS, g_pmu_front.feo_n); }
     if (g_pmu_front.feo_cause) e.add(static_cast<PmuEvent>(g_pmu_front.feo_cause), FETCH_WIDTH - g_pmu_front.feo_n);
   }
+  if (g_pmu_front.ovr_sd_ev) e.add(static_cast<PmuEvent>(g_pmu_front.ovr_sd_ev));
+  if (g_pmu_front.ovr_l1) e.add(PMU_BPU_OVR_L1);
   if (g_pmu_front.icache_req_fire) e.add(PMU_ICACHE_ACCESS);
   if (g_pmu_front.icache_miss_issue) e.add(PMU_ICACHE_MISS);
   if (g_pmu_front.icache_miss_busy) e.add(PMU_CYC_ICACHE_MISS_BUSY);

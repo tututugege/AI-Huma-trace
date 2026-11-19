@@ -275,8 +275,19 @@ void FrontControl::finish() {
     const uint64_t cyc = ctx ? ctx->perf.cycle : 0;
     const uint64_t last_refetch = out.global_refetch ? cyc : in.rd->q.pmu_last_refetch;
     out.front_state.d.pmu_last_refetch = last_refetch;
+    const uint64_t last_sd = out.pipe_dec.ovr ? cyc : in.rd->q.pmu_last_ovr_sd, last_l1 = *in.pmu_l1_ovr ? cyc : in.rd->q.pmu_last_ovr_l1;
+    const uint64_t last_pd = predecode_flush ? cyc : in.rd->q.pmu_last_pdflush;
+    out.front_state.d.pmu_last_ovr_sd = last_sd; out.front_state.d.pmu_last_ovr_l1 = last_l1; out.front_state.d.pmu_last_pdflush = last_pd;
     PmuFrontSignals &pf = g_pmu_front;
     pf.feo_ready = in.in->ctrl.fifo_read_enable;
+    pf.ovr_l1 = *in.pmu_l1_ovr;
+    pf.ovr_sd_ev = 0;
+    if (out.pipe_dec.ovr) {   // what the main predictor changed in the S0 guess of the overridden block
+      const bpuf::S0Guess &g = out.pipe_dec.og; const bpuf::MainOut &m = out.pipe_dec.oout;
+      const bool gt = g.hit && g.taken;
+      pf.ovr_sd_ev = !gt && m.taken ? PMU_BPU_OVR_SD_NEWTK : gt && !m.taken ? PMU_BPU_OVR_SD_NOTTK : gt && m.taken && g.slot != m.slot ? PMU_BPU_OVR_SD_SLOT
+                   : m.next != g.next ? PMU_BPU_OVR_SD_TGT : PMU_BPU_OVR_SD_OTHER;
+    }
     pf.feo_n = 0;
     pf.feo_cause = 0;
     if (pf.feo_ready) {
@@ -296,7 +307,11 @@ void FrontControl::finish() {
         }
       } else if (out.global_refetch || cyc - last_refetch <= 6) pf.feo_cause = PMU_FEO_LOSS_REFETCH;
       else if (ic_last.perf_miss_busy) pf.feo_cause = PMU_FEO_LOSS_ICMISS;
-      else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
+      // an override / predecode flush empties the BPU pipeline and the fetch-address FIFO behind it: its bubble reaches the output up to 4 cycles
+      // later, when the BPU already issues again (before 2026-11-19 those cycles were counted as IFIFO: 'instruction FIFO empty')
+      else if (predecode_flush || cyc - last_pd <= 4) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
+      else if (cyc - last_sd <= 4 && (cyc - last_l1 > 4 || last_sd >= last_l1)) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
+      else if (cyc - last_l1 <= 4) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
       else if (in.rd->q.fetch_addr_fifo_empty && !bpu_output.icache_read_valid) {
         if (out.pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
         else if (*in.pmu_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;

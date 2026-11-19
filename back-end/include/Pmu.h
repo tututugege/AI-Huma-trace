@@ -42,6 +42,8 @@ struct PmuFrontSignals {
   bool feo_ready = false;      // the back end could read a fetch group this cycle
   int feo_n = 0;               // valid instructions delivered (0 = none)
   int feo_cause = 0;           // PmuEvent of the lost-slot bucket for the empty slots of this cycle (0 = none lost)
+  int ovr_sd_ev = 0;           // PmuEvent of this cycle's S_D override kind (0 = none)
+  bool ovr_l1 = false;         // an S1 override this cycle
 };
 inline PmuFrontSignals g_pmu_front;
 

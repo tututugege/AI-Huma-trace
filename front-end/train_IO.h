@@ -53,6 +53,7 @@ struct FrontRegs {
   fetch_addr_t pend_addr = 0;
   FetchPair pend_pair{};
   uint64_t pmu_last_refetch = ~0ull;   // PMU: the cycle of the last refetch (front-end delivery attribution)
+  uint64_t pmu_last_ovr_sd = ~0ull, pmu_last_ovr_l1 = ~0ull, pmu_last_pdflush = ~0ull;   // PMU: the cycles of the last BPU overrides / predecode flush (their bubbles reach the output a few cycles later)
 };
 
 struct PendingFrontState {
