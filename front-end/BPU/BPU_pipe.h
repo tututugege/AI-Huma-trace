@@ -39,7 +39,10 @@ constexpr int MAIN_LAT = 2;            // main predictor S1..S2: S1 reads the ar
 #define CFG_UB_L1_N 512
 #endif
 constexpr int S0_N = CFG_UB_S0_N, S0_W = 4;    // uBTB entries / ways (CFG_UB_S0_N: capacity study only, the RTL has 128)
-constexpr int L1_N = CFG_UB_L1_N, L1_W = 2;    // S1-level uBTB entries / ways (override at S1, 1 bubble)
+#ifndef CFG_UB_L1_W
+#define CFG_UB_L1_W 2
+#endif
+constexpr int L1_N = CFG_UB_L1_N, L1_W = CFG_UB_L1_W;    // S1-level uBTB entries / ways (override at S1, 1 bubble)
 constexpr int UB_TAGB = 10;            // uBTB tag bits
 constexpr int UQ_N = 8, UPD_PORTS = 2; // update queue entries, table writes per cycle
 constexpr int BANKBLK = 4;             // block banks (32 B windows), one row access per bank and cycle
@@ -146,7 +149,11 @@ enum UbEvKind : uint8_t { UE_TAKEN = 0, UE_FALL = 1, UE_NTSLOT = 2 };
 #define CFG_UB_TGT_BITS 0
 #endif
 inline pc_t ub_expand(pc_t t, pc_t /*ref*/) { return t << SLOT_SHIFT; }
-inline bool ub0_far(pc_t start, pc_t target) { return CFG_UB_TGT_BITS > 0 && (((start ^ target) >> SLOT_SHIFT) >> CFG_UB_TGT_BITS) != 0; }
+#ifndef CFG_UB1_TGT_BITS
+#define CFG_UB1_TGT_BITS 0
+#endif
+inline bool ub_far(pc_t start, pc_t target, int bits) { return bits > 0 && (((start ^ target) >> SLOT_SHIFT) >> bits) != 0; }
+inline bool ub0_far(pc_t start, pc_t target) { return ub_far(start, target, CFG_UB_TGT_BITS); }
 // model-only uBTB statistics (EXP-049): S0 allocations, and those whose branch pc was allocated before under a different block start
 inline uint64_t g_ub0_alloc = 0, g_ub0_alloc_other = 0;
 struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; pc_t target = 0; bool rvc = false; };
@@ -528,7 +535,7 @@ class BpuPipe {
       if (ev.kind == UE_TAKEN && e.taken && e.slot == ev.slot) same = w;
     }
     const bool is0 = &tb == &ub0_;
-    if (ev.kind == UE_TAKEN && is0 && ub0_far(ev.start, ev.target)) { if (same >= 0) nw[same].v = false; }   // far target: not kept in the S0 uBTB
+    if (ev.kind == UE_TAKEN && ub_far(ev.start, ev.target, is0 ? CFG_UB_TGT_BITS : CFG_UB1_TGT_BITS)) { if (same >= 0) nw[same].v = false; }   // far target: not kept in this uBTB (CFG_UB_TGT_BITS / CFG_UB1_TGT_BITS)
     else if (ev.kind == UE_TAKEN) {
       int w = same;
       if (w < 0 && is0) {   // statistics only
