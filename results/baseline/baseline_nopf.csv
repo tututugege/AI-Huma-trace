@@ -7,7 +7,7 @@ bitmanip-boundary.bin,0,0,2934
 bubble-sort.bin,0,0,4984
 crc32.bin,0,0,3439
 csr-alias-boundary.bin,0,0,2244
-dcache-conflict-writeback.bin,0,0,6104
+dcache-conflict-writeback.bin,0,0,6030
 dcache-mshr-pressure.bin,0,0,1567
 div.bin,0,0,2430
 dummy.bin,0,0,841
@@ -30,14 +30,14 @@ load-store-aligned.bin,0,0,2155
 matrix-mul.bin,0,0,3544
 max.bin,0,0,2027
 memory-boundary.bin,0,0,1701
-memory-stress-small.bin,0,0,351809
+memory-stress-small.bin,0,0,351734
 mersenne.bin,0,0,2463
 min3.bin,0,0,2979
 mov-c.bin,0,0,1128
 movsx.bin,0,0,1381
 mul-longlong.bin,0,0,2019
 pascal.bin,0,0,2087
-pf-stress.bin,0,0,608611
+pf-stress.bin,0,0,564327
 prime.bin,0,0,12121
 quick-sort.bin,0,0,4984
 recursion.bin,0,0,3099
