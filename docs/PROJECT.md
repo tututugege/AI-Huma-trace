@@ -66,7 +66,7 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 `XLEN` 是 function-model、trace-model 和 RTL 包共同的编译期参数(`XLEN_BITS`;现在默认 64)。
 `XLEN=64` 覆盖 rv64imab:寄存器宽度的 PC 与地址、Sv39 页表遍历 / TLB、64 位 CSR、8 字节访存、OP-IMM-32 / OP-32,乘法器 3 周期、除法器 32 周期(`*W` 除法 16);
 `addiw rd, rs, 0` 不是 move(不做消除)。构建:见 [../README.md](../README.md)。通过 RTL gate 验证(cpu-tests、Linux 到 `rv64 login:`;`docs/MAIN_RECORDS.md`,2026-11-12)。
-未做:SPEC rv64 流程、FastWarm 重放里的 Sv39。
+未做:SPEC rv64 流程。FastWarm 重放的 TLB 只支持 Sv39(不再有 Sv32);重放期间参考核打开设备和中断投递并推进 mtime(否则内核收不到时钟中断,重放出的是另一条指令流,预热结果完全不对)。验证(2026-11-19,同一二进制):本地 rv64 Linux 检查点 +0.7% 到 +6.1%;eda 上 SPEC06 rv64gc 的 bzip2 / gcc / mcf / hmmer 各 2 个点,fast-warmup 与精确预热(10M 详细预热)的周期差在 -1.1% 到 +0.5%。
 
 ## Gate(每次改动后运行)
 所有脚本都以仓库根作为 `<simulator-repo>`,例如 `scripts/run_gate.sh build/simulator results/gate`。

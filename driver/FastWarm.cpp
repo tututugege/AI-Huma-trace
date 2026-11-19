@@ -27,48 +27,62 @@ extern long long sim_time;
 namespace {
 
 constexpr uint32_t kMret = 0x30200073u;
+constexpr uint64_t kCyclesPerStep = 1;   // machine-time ticks per replayed instruction
 
 inline uint32_t bits(uint32_t v, int hi, int lo) { return (v >> lo) & ((1u << (hi - lo + 1)) - 1u); }
 inline int32_t sext(uint32_t v, int n) { return int32_t(v << (32 - n)) >> (32 - n); }
 
-// Functional Sv32 TLB with the DUT's organisation: 64 entries, global or same-ASID match, round-robin refill.
+// Functional Sv39 TLB with the DUT's organisation: 64 entries, global or same-ASID match, round-robin refill.
+// (Sv39 only: the model is rv64.) A translation that faults, is non-canonical or lands above the 32-bit physical space
+// returns false and leaves the TLB untouched.
 struct TlbModel {
   std::vector<TlbMmu::TlbEntry> e;
   int ptr = 0;
   explicit TlbModel(int n) : e(n) {}
   void flush() { for (auto &x : e) x = TlbMmu::TlbEntry{}; ptr = 0; }
-  static bool match(const TlbMmu::TlbEntry &x, uint32_t va, uint32_t asid) {
+  static uint32_t vpn(uint64_t va, int level) { return uint32_t((va >> (12 + 9 * level)) & 0x1ff); }
+  static bool match(const TlbMmu::TlbEntry &x, uint64_t va, uint32_t asid) {
     if (!x.valid || !(x.global || x.asid == asid)) return false;
-    if (x.vpn1 != ((va >> 22) & 0x3ff)) return false;
-    return x.level == 1 || x.vpn0 == ((va >> 12) & 0x3ff);
+    const uint32_t stored[3] = {x.vpn0, x.vpn1, x.vpn2};
+    for (int k = 2; k >= int(x.level); --k)
+      if (stored[k] != vpn(va, k)) return false;
+    return true;
   }
-  // returns false on a page fault (leave untouched); *miss tells whether a refill happened
-  bool translate(RefCpuContext *rc, uint32_t satp, uint32_t va, uint32_t &pa, bool &miss) {
-    const uint32_t asid = (satp >> 22) & 0x1ff;
+  static bool canonical(uint64_t va) { const int64_t t = int64_t(va) >> 38; return t == 0 || t == -1; }
+  static uint64_t load_pte(RefCpuContext *rc, uint64_t pa) {   // physical memory is 32 bit: two word reads
+    return uint64_t(refcpu_load_word(rc, uint32_t(pa))) | (uint64_t(refcpu_load_word(rc, uint32_t(pa + 4))) << 32);
+  }
+  bool translate(RefCpuContext *rc, uint64_t satp, uint64_t va, uint32_t &pa, bool &miss) {
     miss = false;
+    if (!canonical(va)) return false;
+    const uint32_t asid = uint32_t((satp >> 44) & 0xffff);
     for (auto &x : e)
       if (match(x, va, asid)) { pa = compose(x, va); return true; }
-    const uint32_t root = (satp & 0x3fffffu) << 12;
-    uint32_t pte = refcpu_load_word(rc, root + ((va >> 22) & 0x3ff) * 4);
-    int level = 1;
-    if (!(pte & 1)) return false;
-    if (!(pte & 0xe)) {
-      pte = refcpu_load_word(rc, ((pte >> 10) << 12) + ((va >> 12) & 0x3ff) * 4);
-      level = 0;
-      if (!(pte & 1) || !(pte & 0xe)) return false;
+    uint64_t table = (satp & 0xfffffffffffull) << 12;
+    uint64_t pte = 0;
+    int level = 2;
+    for (;; --level) {
+      if (table >> 32) return false;
+      pte = load_pte(rc, table + uint64_t(vpn(va, level)) * 8);
+      if (!(pte & 1) || ((pte & 2) && !(pte & 1))) return false;
+      if (pte & 0xe) break;                       // leaf
+      if (level == 0) return false;
+      table = ((pte >> 10) & 0xfffffffffffull) << 12;
     }
+    const uint64_t ppn = (pte >> 10) & 0xfffffffffffull;
+    if ((ppn << 12) >> 32) return false;          // above the 32-bit physical space
     miss = true;
     TlbMmu::TlbEntry n{};
     n.valid = true; n.global = (pte >> 5) & 1; n.asid = asid; n.level = level;
-    n.vpn1 = (va >> 22) & 0x3ff; n.vpn0 = (va >> 12) & 0x3ff; n.ppn = (pte >> 10) & 0x3fffff; n.perm = pte & 0xff;
+    n.vpn2 = vpn(va, 2); n.vpn1 = vpn(va, 1); n.vpn0 = vpn(va, 0); n.ppn = ppn; n.perm = pte & 0xff;
     e[ptr] = n;
     ptr = (ptr + 1) % int(e.size());
     pa = compose(n, va);
     return true;
   }
-  static uint32_t compose(const TlbMmu::TlbEntry &x, uint32_t va) {
-    if (x.level == 1) return ((x.ppn << 12) & ~((1u << 22) - 1u)) | (va & ((1u << 22) - 1u));
-    return (x.ppn << 12) | (va & 0xfff);
+  static uint32_t compose(const TlbMmu::TlbEntry &x, uint64_t va) {
+    const uint64_t mask = (1ull << (12 + 9 * int(x.level))) - 1ull;
+    return uint32_t((((uint64_t(x.ppn) << 12) & ~mask) | (va & mask)) & 0xffffffffull);
   }
 };
 
@@ -145,7 +159,14 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
   g_warm = std::make_unique<Warm>();
   Warm &W = *g_warm;
   W.llc.init(cpu.axi.interconnect.get_llc_config());
-  refcpu_set_sim_time(rc, static_cast<uint64_t>(sim_time));
+  const uint64_t t0 = static_cast<uint64_t>(sim_time);
+  refcpu_set_sim_time(rc, t0);
+  // The reference core delivers the timer / external interrupts itself during the replay (in the detailed run the trace
+  // bridge does it). Without them a kernel never sees a tick and spins in its time waits: the replayed stream, and so the
+  // warmed state, would be a different one (EXP-011 on rv64, 2026-11-19). The restore program needs the device effects
+  // too (it writes the timer and the interrupt controller). Machine time advances one tick per replayed instruction.
+  refcpu_set_device_effects(rc, true);
+  refcpu_set_interrupt_delivery(rc, true);
 
   RefCpuStepInfo info{};
   if (skip_until_mret) {
@@ -159,19 +180,20 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
   }
 
   cpu.front.warm_finish();  // no-op on a fresh BPU; keeps spec == arch
-  uint32_t last_iline = 0xffffffffu;
+  uint64_t last_iline = ~0ull;
   RefCpuState s{}, post{};
   for (uint64_t i = 0; i < steps; ++i) {
     refcpu_get_state(rc, &s);
-    const uint32_t pc = narrow_pc(s.pc, "warm-up pc");
+    const xlen_t pc = s.pc;
     const xlen_t satp = s.csr[csr_satp];
     const bool vm = satp_on(satp) && s.privilege != 3;
     // instruction line: L1I + ITLB (translate once per line)
-    const uint32_t iline = pc >> ICACHE_OFFSET_BITS;
+    const uint64_t iline = pc >> ICACHE_OFFSET_BITS;
     if (iline != last_iline) {
-      uint32_t ipa = pc;
-      bool ok = true, miss = false;
-      if (vm) ok = W.itlb.translate(rc, narrow_pc(satp, "satp"), pc, ipa, miss);   // (the warm-up TLB model is Sv32 only)
+      uint32_t ipa = uint32_t(pc);
+      bool ok = vm || (pc >> 32) == 0;   // (a bare-mode pc above the 32-bit space is outside RAM)
+      bool miss = false;
+      if (vm) ok = W.itlb.translate(rc, satp, pc, ipa, miss);
       if (miss) ++st.itlb_miss;
       if (ok && is_ram(ipa)) {
         ++st.ifetch_lines;
@@ -182,6 +204,8 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       }
       last_iline = iline;
     }
+    // machine time: the reference's single step does not advance it, and with mtime frozen the kernel spins in its time waits
+    refcpu_set_sim_time(rc, t0 + i * kCyclesPerStep);
     refcpu_step(rc, 1);
     refcpu_get_step_info(rc, &info);
     ++st.steps;
@@ -200,7 +224,7 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       if (op == 0x63) { dir = info.br_taken; }
       else if (op == 0x6f) type = (bits(inst, 11, 7) == 1) ? BR_CALL : BR_JAL;
       else type = (bits(inst, 19, 15) == 1 && bits(inst, 11, 7) == 0 && bits(inst, 31, 20) == 0) ? BR_RET : (bits(inst, 11, 7) == 1) ? BR_ICALL : BR_IDIRECT;
-      cpu.front.warm_commit(pc, type, dir, dir ? narrow_pc(post.pc, "warm-up target") : pc + info.inst_len, info.inst_len == 2);
+      cpu.front.warm_commit(pc, type, dir, dir ? post.pc : pc + info.inst_len, info.inst_len == 2);
       ++st.branches;
     } else {
       cpu.front.warm_commit(pc, BR_NONCTL, false, pc + info.inst_len, info.inst_len == 2);
@@ -211,10 +235,10 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       const xlen_t base = s.gpr[bits(inst, 19, 15)];
       const xlen_t va_x = base + (is_ld ? xlen_t(sxlen_t(sext(bits(inst, 31, 20), 12)))
                                 : is_st ? xlen_t(sxlen_t(sext((bits(inst, 31, 25) << 5) | bits(inst, 11, 7), 12))) : xlen_t(0));
-      const uint32_t va = narrow_pc(va_x, "warm-up address");
-      uint32_t pa = va;
-      bool ok = true, miss = false;
-      if (vm) ok = W.dtlb.translate(rc, narrow_pc(satp, "satp"), va, pa, miss);
+      uint32_t pa = uint32_t(va_x);
+      bool ok = vm || (va_x >> 32) == 0;   // (a bare-mode address above the 32-bit space is outside RAM)
+      bool miss = false;
+      if (vm) ok = W.dtlb.translate(rc, satp, va_x, pa, miss);
       if (miss) ++st.dtlb_miss;
       if (ok && is_ram(pa)) {
         const bool wr = is_st || (is_amo && bits(inst, 31, 27) != 2);
@@ -231,6 +255,8 @@ bool fast_warm_replay(SimCpu &cpu, bool skip_until_mret, uint64_t steps, FastWar
       }
     }
   }
+  refcpu_set_device_effects(rc, false);
+  refcpu_set_interrupt_delivery(rc, false);
   return true;
 }
 

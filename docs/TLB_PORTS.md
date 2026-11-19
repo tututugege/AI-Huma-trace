@@ -15,7 +15,7 @@
 
 ## 测量方法
 
-eda 上 rv64gc SPEC06 检查点（`/nfs_global/S/houruyao/spec06_rv64gc`），8 个访存重的程序各取权重最高的 2 个点，共 16 个；stub 前门恢复（`ckpt2stub.py` + `--restore-stub`，不加 `-w`，不能用 `--fast-warmup`，它的预热 TLB 只有 Sv32），10M 条详细预热加 4M 条测量。
+eda 上 rv64gc SPEC06 检查点（`/nfs_global/S/houruyao/spec06_rv64gc`），8 个访存重的程序各取权重最高的 2 个点，共 16 个；stub 前门恢复（`ckpt2stub.py` + `--restore-stub`，不加 `-w`，当时不能用 `--fast-warmup`(预热 TLB 只有 Sv32;2026-11-19 起已改为 Sv39 并验证,见 PROJECT.md)），10M 条详细预热加 4M 条测量。
 
 ## 结果（IPC 相对 4 load + 3 STA = 7 口的变化，16 点几何平均）
 
