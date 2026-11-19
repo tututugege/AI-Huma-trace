@@ -144,6 +144,9 @@ private:
   // this cycle's DTLB requests and responses, the load ports then the STA ports (also printed by LSU_PIPE_EVT)
   TlbMmu::Req tlb_req_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
   TlbMmu::Resp tlb_resp_[LSU_LDU_COUNT + LSU_STA_COUNT]{};
+  int pf_walk_port_ = -1;   // EXP-048: the DTLB port of this cycle's prefetch translation (-1: none)
+  struct PfX { bool valid = false; uint64_t va = 0; bool llc = false; };
+  PfX pf_x_[LSU_LDU_COUNT + LSU_STA_COUNT];   // EXP-048 XPORT: the prefetch translation on each DTLB port this cycle
   // Wait table of the memory-dependence predictor (Alpha 21264 style, EXP-018/019): 2^CFG_LSU_MDP_BITS one-bit entries
   // indexed by a PC hash, set when a load of that PC violated, cleared every CFG_LSU_MDP_CLR cycles. A load whose bit is
   // set does not pass unknown-address stores. Training as in the RTL: the violators of a cycle are only flagged (trn, one

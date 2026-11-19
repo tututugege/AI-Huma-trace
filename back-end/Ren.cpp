@@ -3,6 +3,7 @@
 #include "Pmu.h"
 #include "MsData.h"
 #include "config.h"
+#include "DseCap.h"
 #include <cstring>
 
 #include "util.h"
@@ -49,7 +50,7 @@ bool Ren::elim_refs_ok(int i) const {
 void Ren::comb_rename() {
   const Regs &q = q_;
   fp_freelist_sanity(q.f);
-  int left[2] = {q.x.free_count(), q.f.free_count()};
+  int left[2] = {dse_free(q.x.free_count() - (PRF_NUM - g_dse.prf), 0), dse_free(q.f.free_count() - (FPRF_NUM - g_dse.fprf), 0)};
   int next[2] = {q.x.head, q.f.head};
   bool stall = false;
   for (int i = 0; i < DECODE_WIDTH; i++) {

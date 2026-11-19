@@ -2,6 +2,7 @@
 #include "BackPorts.h"
 #include "IO.h"
 #include "config.h"
+#include "DseCap.h"
 #include <cstdlib>
 
 
@@ -89,5 +90,5 @@ private:
   } cw_;
   Regs q_;
   bool is_empty() const { return q_.c_count == 0; }
-  bool is_full() const { return q_.c_count == ROB_NUM; }
+  bool is_full() const { return q_.c_count >= g_dse.rob; }
 };

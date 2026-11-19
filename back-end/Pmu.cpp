@@ -1,3 +1,7 @@
+#include "Bop.h"
+#include "DseCap.h"
+#include "DataPrefetcher.h"
+#include <vector>
 #include "Pmu.h"
 #include "env.h"
 #include "config.h"
@@ -38,6 +42,8 @@ void Pmu::init_from_env() {
 
 void Pmu::reset() {
   std::memset(total, 0, sizeof(total));
+  g_pf_stats.diag_reset();   // EXP-048: the prefetch diagnostics cover the measurement window only
+  if (g_measure_reset_hook) g_measure_reset_hook();
   cur = PmuVec{};
   recovering = false;
   pc_stat.clear();
@@ -176,6 +182,38 @@ void Pmu::report(uint64_t instructions) {
   std::printf("prefetch: issued %llu useful %llu late %llu (accuracy %.1f%%)\n", (unsigned long long)total[PMU_PF_ISSUED],
               (unsigned long long)total[PMU_PF_USEFUL], (unsigned long long)total[PMU_PF_LATE],
               T(PMU_PF_ISSUED) ? 100.0 * T(PMU_PF_USEFUL) / T(PMU_PF_ISSUED) : 0.0);
+  std::printf("[PF-PROBE] queue: pushed %llu dup %llu full %llu | probe: alloc %llu present %llu in-mshr %llu no-mshr %llu\n",
+              (unsigned long long)g_pf_stats.q_push, (unsigned long long)g_pf_stats.q_dup, (unsigned long long)g_pf_stats.q_full,
+              (unsigned long long)g_pf_stats.pr_alloc, (unsigned long long)g_pf_stats.pr_present, (unsigned long long)g_pf_stats.pr_inflight,
+              (unsigned long long)g_pf_stats.pr_nomshr);
+  if (!g_pf_stats.pc_miss.empty()) {   // EXP-048: where in the 4 KiB page the misses / first uses of prefetched lines fall
+    std::printf("[PF-PAGEPOS] line-in-page bins 0-7 8-15 ... 56-63 | miss:");
+    for (auto x : g_pf_stats.off_miss) std::printf(" %llu", (unsigned long long)x);
+    std::printf(" | pf_first_use:");
+    for (auto x : g_pf_stats.off_pfu) std::printf(" %llu", (unsigned long long)x);
+    std::printf("\n");
+  }
+  if (!g_pf_stats.pc_miss.empty()) {   // EXP-048: PCs with the most L1D demand misses (PF_STATS)
+    std::vector<std::pair<uint64_t, uint32_t>> v;
+    for (auto &kv : g_pf_stats.pc_miss) v.push_back({kv.second.first, kv.first});
+    std::sort(v.rbegin(), v.rend());
+    for (size_t i = 0; i < v.size() && i < 12; i++)
+      std::printf("[PF-PCMISS] pc=%#x miss %llu pf_first_use %llu\n", v[i].second, (unsigned long long)v[i].first,
+                  (unsigned long long)g_pf_stats.pc_miss[v[i].second].second);
+  }
+  if (g_pf_stats.x_ok + g_pf_stats.x_miss + g_pf_stats.x_port)
+    std::printf("[PF-XPAGE] cross-page candidates: translated %llu dtlb-miss %llu no-lookup-left %llu\n", (unsigned long long)g_pf_stats.x_ok,
+                (unsigned long long)g_pf_stats.x_miss, (unsigned long long)g_pf_stats.x_port);
+  if (g_pf_xq.pushed)
+    std::printf("[PF-XPORT] cross-page translations on DTLB ports: queued %llu dropped %llu sent %llu hit %llu miss %llu fault %llu\n",
+                (unsigned long long)g_pf_xq.pushed, (unsigned long long)g_pf_xq.dropped, (unsigned long long)g_pf_xq.sent,
+                (unsigned long long)g_pf_xq.hit, (unsigned long long)g_pf_xq.miss, (unsigned long long)g_pf_xq.fault);
+  if (g_pf_walk.pushed)
+    std::printf("[PF-WALK] prefetch translations: queued %llu sent %llu dtlb-hit %llu walk %llu fault %llu\n",
+                (unsigned long long)g_pf_walk.pushed, (unsigned long long)g_pf_walk.sent, (unsigned long long)g_pf_walk.hit,
+                (unsigned long long)g_pf_walk.walk, (unsigned long long)g_pf_walk.fault);
+  if (g_bop_l1) g_bop_l1->print("L1D");   // EXP-048
+  if (g_bop_llc) g_bop_llc->print("LLC");
 
   // ---- CSV ----
   if (FILE *f = std::fopen((out_prefix + "_events.csv").c_str(), "w")) {

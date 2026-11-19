@@ -178,6 +178,14 @@ void RealDcache::stage1() {
             lsu_req.valid ? lsu_req.req_id
                           : (use_pending_retry ? pending_retry.req_id
                                                : new_retry.req_id);
+        const uint32_t req_pc =
+            lsu_req.valid ? uint32_t(lsu_req.pc)
+                          : (use_pending_retry ? uint32_t(pending_retry.pc)
+                                               : uint32_t(new_retry.pc));
+        const uint64_t req_va =
+            lsu_req.valid ? uint64_t(lsu_req.vaddr)
+                          : (use_pending_retry ? uint64_t(pending_retry.va)
+                                               : uint64_t(new_retry.va));
         S1S2Reg::LoadSlot &slot = d.s1s2.loads[i];
         slot.pf = false;
         if (use_pending_retry) {
@@ -201,6 +209,8 @@ void RealDcache::stage1() {
             slot.valid    = true;
             slot.addr     = req_addr;
             slot.req_id   = req_id;
+            slot.pc       = req_pc;
+            slot.va       = req_va;
             slot.replayed  = !bank_granted;
             slot.bank_conflict = !bank_granted;
             slot.perf_replay = use_hidden_retry ? true : lsu_req.replay;
@@ -370,6 +380,7 @@ void RealDcache::stage2() {
                 fill_write_.set_idx = q.s1s2.fill_write.set_idx;
                 fill_write_.tag = q.s1s2.fill_write.tag;
                 fill_write_.way_idx = select_way;
+                pf.fill_in = PfFill{true, get_addr(q.s1s2.fill_write.set_idx, q.s1s2.fill_write.tag, 0), q.s1s2.fill_write.is_prefetch};
                 out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the writeback to be issued in parallel with the fill, improving performance when the evicted line is dirty.
                 out.dcache2mshr->fill_resp.id = q.s1s2.fill_write.id;
             }
@@ -386,6 +397,7 @@ void RealDcache::stage2() {
             fill_write_.set_idx = q.s1s2.fill_write.set_idx;
             fill_write_.tag = q.s1s2.fill_write.tag;
             fill_write_.way_idx = select_way;
+            pf.fill_in = PfFill{true, get_addr(q.s1s2.fill_write.set_idx, q.s1s2.fill_write.tag, 0), q.s1s2.fill_write.is_prefetch};
             out.dcache2mshr->fill_resp.done = true; // Mark the MSHR fill as done to unblock the waiting load/store, even though the line is not yet filled into the cache. This allows the fill to complete and the line to be allocated in cache without waiting for an unnecessary writeback to drain when the evicted line is clean.
             out.dcache2mshr->fill_resp.id = q.s1s2.fill_write.id;
         }
@@ -411,6 +423,8 @@ void RealDcache::stage2() {
                 bank_retry_issue_wires.loads[i].valid = true;
                 bank_retry_issue_wires.loads[i].addr = slot.addr;
                 bank_retry_issue_wires.loads[i].req_id = slot.req_id;
+                bank_retry_issue_wires.loads[i].pc = slot.pc;
+                bank_retry_issue_wires.loads[i].va = slot.va;
 
                 continue;
             }
@@ -442,7 +456,7 @@ void RealDcache::stage2() {
                 if (arrays.pf_array[f.set_idx][hit_way]) {        // first use of a prefetched line
                     arrays.pf_array[f.set_idx][hit_way] = false;
                     g_pf_stats.useful++;
-                    pf.acc[i] = PfAccess{true, slot.addr, false, true};
+                    pf.acc[i] = PfAccess{true, slot.addr, false, true, slot.pc, slot.va};
                 }
             }
             // ── Cache Hit ────────────────────────────────────────────────────
@@ -466,7 +480,7 @@ void RealDcache::stage2() {
             }
             if (!slot.perf_replay && dcache_req_id_is_lsu(slot.req_id)) {
                 g_pf_stats.demand_miss++;
-                pf.acc[i] = PfAccess{true, slot.addr, true, false};
+                pf.acc[i] = PfAccess{true, slot.addr, true, false, slot.pc, slot.va};
             }
             if(in.mshr2dcache->find_resp[i].valid){
                 resp.valid = true;
@@ -620,6 +634,9 @@ void RealDcache::stage2() {
         const bool fill_same =
             (q.s1s2.fill_write.valid && q.s1s2.fill_write.set_idx == f.set_idx && q.s1s2.fill_write.tag == f.tag) ||
             (in.mshr2dcache->fill_req.valid && cache_line_match(slot.addr, in.mshr2dcache->fill_req.addr));
+        // EXP-048 diagnostics: the outcome of this cycle's probe (counted once in seq)
+        pf_probe_outcome_ = (in.wb2dcache->bypass_resp[pf_slot].valid || hit_way >= 0 || fill_same) ? 2
+                            : in.mshr2dcache->find_resp[pf_slot].valid ? 3 : mshr_free_entries <= PF_MSHR_RESERVE ? 4 : 1;
         if (in.wb2dcache->bypass_resp[pf_slot].valid || hit_way >= 0 || fill_same || in.mshr2dcache->find_resp[pf_slot].valid ||
             mshr_free_entries <= PF_MSHR_RESERVE) {
             // the line is in the write buffer / the cache / an MSHR, or the MSHRs are reserved for demand misses: the prefetch is dropped
@@ -642,6 +659,13 @@ void RealDcache::stage2() {
 void RealDcache::seq() {
     // 1. Advance pipeline register.
     q_ = d;
+    switch (pf_probe_outcome_) {   // EXP-048 diagnostics
+    case 1: g_pf_stats.pr_alloc++; break;
+    case 2: g_pf_stats.pr_present++; break;
+    case 3: g_pf_stats.pr_inflight++; break;
+    case 4: g_pf_stats.pr_nomshr++; break;
+    }
+    pf_probe_outcome_ = 0;
     pf.seq();
     // 2. the stage-1 requests (find / bypass / merge, line reads, fill read) and the response metadata of this cycle
     std::memcpy(s1_q_.find_req, out.dcache2mshr->find_req, sizeof(s1_q_.find_req));

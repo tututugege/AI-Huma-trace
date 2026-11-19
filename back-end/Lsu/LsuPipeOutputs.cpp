@@ -1,5 +1,6 @@
 // The staged LSU: outputs phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
 #include "LsuPipeInternal.h"
+#include "DseCap.h"
 
 void RealLsu::cal() {
   const lp::LsuPipeState &pcur = pcur_;
@@ -35,10 +36,10 @@ void RealLsu::lsu2dis() {
   out.lsu2dis.stq_tail_flag = stq_tail_flag(head, count, pcur.stq_head_flag);
   uint32_t empty = 0;
   for (const PLdq &l : pcur.ldq) empty += l.st == L_EMPTY;
-  out.lsu2dis.ldq_free = empty;
-  out.lsu2dis.stq_free = STQ_SIZE - count;
+  out.lsu2dis.ldq_free = dse_free(g_dse.ldq, LDQ_SIZE - int(empty));
+  out.lsu2dis.stq_free = dse_free(g_dse.stq, count);
   uint32_t n = 0;
-  for (int i = 0; i < LDQ_SIZE && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
+  for (int i = 0; i < g_dse.ldq && n < (uint32_t)MAX_LDQ_DISPATCH_WIDTH; i++)
     if (pcur.ldq[i].st == L_EMPTY) {
       out.lsu2dis.ldq_alloc_idx[n] = i;
       out.lsu2dis.ldq_alloc_valid[n++] = true;

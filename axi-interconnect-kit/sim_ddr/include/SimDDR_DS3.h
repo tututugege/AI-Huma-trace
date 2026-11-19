@@ -8,6 +8,7 @@
  * (SoC/CDC/PHY path that DRAMsim3 does not model); writes are posted, B is returned once all lines are accepted.
  * Env: CPU_FREQ_MHZ (core frequency, default CONFIG_CPU_FREQ_MHZ), DS3_CONFIG (ini), DS3_OUT (output dir), DS3_EXTRA_NS, DS3_STATS=1.
  */
+#include "DseCap.h"
 #include "dramsim3.h"
 #ifndef DS3_DEFAULT_CONFIG  // DS3_CFG_PATH: unquoted path, for build systems where quoting a -D string is painful
 #define DS3_S2_(x) #x
@@ -26,6 +27,7 @@
 
 namespace sim_ddr {
 
+inline dramsim3::MemorySystem *g_ds3_live = nullptr;   // EXP-048
 struct Ds3 {
   struct Rd { uint64_t first; uint32_t lines, issued = 0, done = 0; uint64_t ar_cycle, done_cycle = 0; std::vector<uint64_t> pend; };
   struct Wr { uint64_t first; uint32_t lines, issued = 0; uint8_t id; };
@@ -38,6 +40,7 @@ struct Ds3 {
   std::deque<Wr> wq;
   std::vector<uint64_t> done_addrs;
   uint32_t next_tag = 1;
+  std::string out_dir_;
 
   // one tick() = one SimDDR::seq() call = 1/div of a core cycle (CONFIG_AXI_SUBSYSTEM_FREQ_DIV)
   explicit Ds3(uint32_t cpu_mhz, uint32_t div, uint32_t default_extra_ns) {
@@ -45,6 +48,7 @@ struct Ds3 {
     std::string cfgs = DS3_DEFAULT_CONFIG;
     std::string outs = out ? out : "ds3_out";
     std::filesystem::create_directories(outs);
+    out_dir_ = outs;
     ms = dramsim3::GetMemorySystem(
         cfgs, outs, [this](uint64_t a) { done_addrs.push_back(a); }, [](uint64_t) {});
     line_bytes = uint32_t(ms->GetBurstLength() * ms->GetBusBits() / 8);
@@ -53,8 +57,14 @@ struct Ds3 {
     const uint64_t extra_ns = default_extra_ns;
     sub_fs = cpu_fs / div;
     extra_cycles = (extra_ns * 1000000ull + sub_fs / 2) / sub_fs;
+    g_ds3_live = ms;
+    g_measure_reset_hook = [] { if (g_ds3_live) g_ds3_live->ResetStats(); };   // EXP-048: DRAM statistics of the measurement window
   }
   ~Ds3() {
+    if (std::getenv("DS3_STATS")) {   // (a forked DSE child runs in its own directory: a relative DS3_OUT is created there)
+      std::filesystem::create_directories(out_dir_);
+      ms->PrintStats();
+    }   // EXP-048: DRAMsim3's statistics (dramsim3.json / .txt in DS3_OUT)
     delete ms;
   }
 

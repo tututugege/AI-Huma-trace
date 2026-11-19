@@ -8,6 +8,7 @@
 #include "BackPorts.h"
 #include "config.h"
 #include "util.h"
+#include "DseCap.h"
 
 // The DECODE_WIDTH dispatch slots, each in exactly one bucket (the identity checked in Pmu::accumulate):
 //   fired -> FIRE;  killed by a flush/mispredict -> KILLED;  blocked by the backend -> BE_<cause>;  empty -> FE_*.
@@ -16,7 +17,7 @@
 void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, int &be_slots) const {
   const Regs &q = q_;
   for (int q = 0; q < IQ_NUM; q++)  // entries in use = size - free (free_slots is what the IQ reports to dispatch); IQ_INT1 counts with IQ_INT
-    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + (q == IQ_INT1 ? IQ_INT : q)), GLOBAL_IQ_CONFIG[q].size - in.iss2dis->ready_num[q]);
+    e.add(static_cast<PmuEvent>(PMU_OCC_IQ_INT + (q == IQ_INT1 ? IQ_INT : q)), dse_iq_cap(q, GLOBAL_IQ_CONFIG[q].size) - in.iss2dis->ready_num[q]);
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
   const bool recov = recovering || kill;
   const bool by_flush = kill ? static_cast<bool>(in.rob_bcast->flush) : recovering_by_flush;
@@ -169,7 +170,7 @@ void BackTop::pmu_sample() {
   if (outstanding) e.add(PMU_CYC_LD_MISS_OUT);
 
   // ---- occupancy ----
-  const int ldq_occ = LDQ_SIZE - static_cast<int>(lsu->out.lsu2dis.ldq_free), stq_occ = STQ_SIZE - static_cast<int>(lsu->out.lsu2dis.stq_free);
+  const int ldq_occ = g_dse.ldq - static_cast<int>(lsu->out.lsu2dis.ldq_free), stq_occ = g_dse.stq - static_cast<int>(lsu->out.lsu2dis.stq_free);
   e.add(PMU_OCC_ROB, rob_occ);
   e.add(PMU_OCC_LDQ, ldq_occ);
   e.add(PMU_OCC_STQ, stq_occ);

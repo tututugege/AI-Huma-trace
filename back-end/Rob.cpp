@@ -9,6 +9,7 @@
 #include "SimCpu.h"
 #include "BackPorts.h"
 #include "config.h"
+#include "DseCap.h"
 #include "trace_hook.h"
 #include "util.h"
 #include "Pmu.h"
@@ -70,7 +71,8 @@ void count_commit(SimContext *ctx, const Uop &u) {
     }
     return;
   }
-  if (!ctx->perf.perf_start && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
+  if (g_dse_active && !g_dse_forked && ctx->perf.commit_num >= g_dse_fork_at) g_dse_fork_pending = true;  // the driver forks after this cycle
+  if (!ctx->perf.perf_start && !(g_dse_active && !g_dse_forked) && ctx->perf.commit_num >= ctx->ckpt_warmup_commit_target) {
     std::cout << "[CKPT] O3 warmup done at commit " << std::dec << ctx->perf.commit_num << "/"
               << ctx->ckpt_warmup_commit_target << ". Resetting perf counters and starting measure phase." << std::endl;
     ctx->perf.perf_reset();
@@ -191,7 +193,7 @@ void Rob::commit() {
   const int tail = (q.c_head + q.c_count) % ROB_NUM;
   out.rob2dis.enq_idx = tail;
   out.rob2dis.rob_flag = q.c_hflag ^ (q.c_head + q.c_count >= ROB_NUM);
-  out.rob2dis.free_cnt = ROB_NUM - q.c_count;
+  out.rob2dis.free_cnt = dse_free(g_dse.rob, q.c_count);
 
   cw_.stall_cycle = (n > 0 ? 0 : q.stall_cycle) + 1;
   if (cw_.stall_cycle > 50000) {

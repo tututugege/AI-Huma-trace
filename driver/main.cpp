@@ -1,3 +1,5 @@
+#include "DseCap.h"
+#include "DseFork.h"
 #include "FastWarm.h"
 #include "env.h"
 #include "SimDDR.h"
@@ -410,6 +412,7 @@ int main(int argc, char *argv[]) {
     cpu.ctx.front_door_pending = front_door && !fast_warm_active;  // the measurement starts at the restore program's mret
     cpu.ctx.ckpt_warmup_commit_target = warmup_target;
     cpu.ctx.ckpt_measure_commit_target = config.max_commit_inst;
+    dse_init(warmup_target);  // EXP-047: DSE_CONFIGS -> fork one child per configuration near the end of the warm-up
     if (front_door && !fast_warm_active) {
       std::cout << "[Plan] front-door restore: the restore program runs first; warmup (" << warmup_target
                 << ") and measure (" << config.max_commit_inst << ") count from its mret." << std::endl;
@@ -451,6 +454,13 @@ int main(int argc, char *argv[]) {
       }
 
       cpu.cycle();
+      if (g_dse_fork_pending) {  // EXP-047: the parent forks the configurations and waits; a child carries on
+        const int rc = dse_fork();
+        if (rc >= 0) {
+          refcore_release();
+          return rc;
+        }
+      }
 
     if (handle_pending_sigint()) {
         refcore_release();

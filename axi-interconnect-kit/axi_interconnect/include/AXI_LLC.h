@@ -469,6 +469,12 @@ private:
   bool rw_is_regs_ = false;
   // regs hold nothing in flight (idle fixed point, no lookup, no pending write response).
   bool quiet_ = false;
+  // EXP-048 Best-Offset prefetcher in the LLC (LLC_BOP=1): model-side state outside the registers. comb only records the
+  // events of the cycle (idempotent: comb can run several times), seq feeds them to the BOP and keeps the candidate queue.
+  struct BopEv { bool trig = false, trig_pf = false, fill = false, fill_pf = false, launched = false, sent = false; uint32_t trig_line = 0, fill_line = 0; };
+  BopEv bop_ev_;
+  std::vector<uint32_t> bop_q_;   // candidate line addresses (bytes), oldest first
+  void bop_seq();
 
 public:
   bool regs_quiet() const { return quiet_; }

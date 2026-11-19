@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "DseCap.h"
 #include "IO.h"
 #include "util.h"
 #include <algorithm>
@@ -142,7 +143,7 @@ public:
 
   void comb_begin() {
     const Regs &q = q_;
-    out.free_slots = size - q.count;
+    out.free_slots = dse_free(dse_iq_cap(id_, size), q.count);
     // (the wake-up inputs, the enqueue requests and the FU ready masks are written by the Isu phases every cycle before they are read)
     in.issue_block = 0;
     in.flush_all = 0;
@@ -243,13 +244,14 @@ public:
 private:
   // enqueue (returns the number enqueued)
   int enqueue(const IqStoredEntry &inst) {
-    if (q_.count >= size)
+    const int cap = dse_iq_cap(id_, size);
+    if (q_.count >= cap)
       return 0;
     for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
       const uint64_t freebits = CFG_IQ_SAME_CYCLE_REUSE ? ~d_vmask[w] : ~(alloc_mask_[w] | d_vmask[w]);
       if (!freebits) continue;
       const int i = int(w * 64) + __builtin_ctzll(freebits);
-      if (i >= size) break;
+      if (i >= cap) break;
 #ifndef IQ_NEG_CONTROL
       mark_slot(i);
 #endif

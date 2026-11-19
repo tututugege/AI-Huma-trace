@@ -1,11 +1,19 @@
 #include "BackPorts.h"
 #include "RealLsu.h"
+#include "DataPrefetcher.h"
 #include "config.h"
 #include <algorithm>
 #include <cstdlib>
 
 // The LSU is the staged pipeline in RealLsuPipe.cpp; this file holds its setup and the commit-time store view.
+namespace {
+TlbMmu *g_lsu_dtlb = nullptr;   // EXP-048: the DTLB the L1D prefetcher's translations look into
+bool pf_translate(uint32_t &pa, uint64_t va) { return g_lsu_dtlb && g_lsu_dtlb->peek_translate(pa, va, 1); }
+}  // namespace
+
 void RealLsu::init() {
+  g_lsu_dtlb = &dtlb;
+  g_pf_translate = pf_translate;
   cur_ = {};
   nxt = {};
   pcur_ = {};
