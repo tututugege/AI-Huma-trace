@@ -889,6 +889,12 @@ class BpuPipe {
     }
 
     auto clear_R = [&] { for (int k = 0; k < MAIN_LAT; k++) { n.R[k].valid = false; n.R[k].pair = false; } };
+    auto try_issue = [&] {   // S0 issues the block at n.pc unless the I-cache / PTAB credits stall it
+      const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
+      t.pmu_ptab_stall = ptab_stall;
+      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
+    };
+    const int ovr_fast = sim_env().fe_ovr_fast;   // FE_OVR_FAST (study): the corrected next block is issued in the override's cycle
     if (in.refetch) {
       clear_R();
       n.pc = in.refetch_address;
@@ -898,13 +904,13 @@ class BpuPipe {
       hp("OVR", 0, d.oout.next, d.oout.nbits, d.oout.bits);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
+      if (ovr_fast & 1) try_issue();
     } else if (l1_override(n.R[1], n, t)) {
       // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
+      if (ovr_fast & 2) try_issue();
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
-      const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
-      t.pmu_ptab_stall = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
+      try_issue();
     }
 
     // ---- commit side ---------------------------------------------------------------------------------------------------------

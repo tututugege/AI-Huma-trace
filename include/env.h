@@ -18,6 +18,7 @@ struct SimEnv {
   bool pmu_pcprof = true;            // PMU_PCPROF=0: no per-PC profile
   // front end (experimental)
   int fe_pair = 0;                   // FE_PAIR: two fetch blocks per cycle
+  int fe_ovr_fast = 0;               // FE_OVR_FAST (study): after an override the corrected next block is issued in the same cycle; bit 0 = S_D override, bit 1 = S1 override
   int fe_ub_strong = 0;              // FE_UB_STRONG=1: the S0 uBTB predicts a conditional branch taken only with a saturated counter (study)
   int fe_ovr_oracle = 0;             // FE_OVR_ORACLE=1: the S0 guess is the main predictor's result (no S1 / S_D override bubbles; upper-bound study)
   int fe_ipf = 0;                    // FE_IPF: I-cache prefetch
@@ -43,6 +44,7 @@ struct SimEnv {
     if (const char *v = std::getenv("FE_PAIR")) fe_pair = std::atoi(v);
     if (const char *v = std::getenv("FE_OVR_ORACLE")) fe_ovr_oracle = std::atoi(v);
     if (const char *v = std::getenv("FE_UB_STRONG")) fe_ub_strong = std::atoi(v);
+    if (const char *v = std::getenv("FE_OVR_FAST")) fe_ovr_fast = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF")) fe_ipf = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF_LAT")) fe_ipf_lat = std::atoi(v);
     pf_enable = std::getenv("PF_ENABLE");
