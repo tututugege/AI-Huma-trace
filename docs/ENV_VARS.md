@@ -8,7 +8,7 @@
 |---|---|---|---|
 | `SIM_MAX_CYCLES` | 内部上限 | 周期数到了就停（退出码 3） | `driver/main.cpp` |
 | `FAST_WARMUP` | 关 | 设 `1`：检查点运行时用快速预热（同 `--fast-warmup`） | 同上 |
-| `PMU` | 关 | 非 `0`：打开 PMU / TMA 统计，结束时打印并写 `pmu_*.csv` | `back-end/Pmu.cpp` |
+| `PMU` | 开（2026-11-19 起） | `0` 关掉 PMU / TMA 统计；开着时结束时打印并写 `pmu_*.csv`（不改变周期，耗时几乎不变） | `back-end/Pmu.cpp` |
 | `PMU_OUT` | `pmu` | PMU 输出文件名前缀 | 同上 |
 | `PMU_INTERVAL` | 0 | 每隔这么多周期记一行时间序列 | 同上 |
 | `PMU_PCPROF` | 开 | 设 `0` 关掉按 PC 的统计 | 同上 |

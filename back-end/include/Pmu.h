@@ -1,7 +1,7 @@
 #pragma once
 // Performance monitoring unit of the model (EXP-013).
 //
-// Two layers, both off unless PMU=1 is set in the environment (they never change a cycle count):
+// Two layers, both on unless PMU=0 is set in the environment (default on since 2026-11-19; they never change a cycle count):
 //
 //  1. Hardware-style event counters. Every cycle the model fills one event vector (PmuVec, the "event bus": one small
 //     increment per event, the list is include/pmu_events.def) and adds it to 64-bit totals. This is exactly what the
@@ -12,7 +12,7 @@
 //     (commit per cycle, ROB/LDQ/STQ occupancy, outstanding misses), and a time series of all events every
 //     PMU_INTERVAL cycles. Written as CSV for scripts/pmu/pmu_report.py.
 //
-// Environment: PMU=1 enable; PMU_OUT=<prefix> output prefix for the CSV files (default "pmu");
+// Environment: PMU=0 disable; PMU_OUT=<prefix> output prefix for the CSV files (default "pmu");
 //              PMU_INTERVAL=<cycles> time-series interval (0/unset: off); PMU_PCPROF=0 turns the per-PC profile off.
 #include <cstdint>
 #include <cstdio>

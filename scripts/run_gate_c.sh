@@ -10,7 +10,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/logs"
 one() {
   b=$1; t=$(basename "$b"); base=$(grep "^$t," "$BASE" 2>/dev/null | cut -d, -f4)
   lim=$(( ${base:-1000000} * 4 > 3000 ? ${base:-1000000} * 4 : 3000 )); [ -n "$WRITE" ] && lim=100000000
-  SIM_MAX_CYCLES=$lim perl -e 'alarm shift; exec @ARGV' "${DEADLINE:-900}" "$SIM" "$b" > "$OUT/logs/$t.log" 2>&1; rc=$?
+  PMU_OUT="$OUT/logs/$t" SIM_MAX_CYCLES=$lim perl -e 'alarm shift; exec @ARGV' "${DEADLINE:-900}" "$SIM" "$b" > "$OUT/logs/$t.log" 2>&1; rc=$?
   c=$(grep -a -o 'sim-time(cycle)= *[0-9]*' "$OUT/logs/$t.log" | tail -1 | grep -o '[0-9]*$')
   if [ -n "$WRITE" ]; then echo "$t,$rc,0,${c:-NA}"; return; fi
   # tests that report their own result on the UART (tests/rvc): the pass line must be there, a fail line is a failure

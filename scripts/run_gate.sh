@@ -10,7 +10,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/logs"
 one() {
   b=$1; t=$(basename "$b"); base=$(grep "^$t," "$BASE" | cut -d, -f4)
   lim=$(( base * 4 > 3000 ? base * 4 : 3000 ))
-  SIM_MAX_CYCLES=$lim perl -e 'alarm shift; exec @ARGV' "${DEADLINE:-20}" "$SIM" "$b" > "$OUT/logs/$t.log" 2>&1; rc=$?
+  PMU_OUT="$OUT/logs/$t" SIM_MAX_CYCLES=$lim perl -e 'alarm shift; exec @ARGV' "${DEADLINE:-20}" "$SIM" "$b" > "$OUT/logs/$t.log" 2>&1; rc=$?
   c=$(grep -a -o 'sim-time(cycle)= *[0-9]*' "$OUT/logs/$t.log" | tail -1 | grep -o '[0-9]*$')
   if [ "$c" = "$base" ] && [ $rc -eq 0 -o $rc -eq 1 ]; then echo "PASS $t $c"; else echo "FAIL $t base=$base got=${c:-none} rc=$rc"; fi
 }

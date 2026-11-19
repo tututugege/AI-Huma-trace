@@ -12,7 +12,7 @@ struct SimEnv {
   long long sim_max_cycles = 0;
   bool fast_warmup = false;          // FAST_WARMUP=1: fast warm-up of a checkpoint run
   // PMU / TMA
-  bool pmu = false;                  // PMU (not "0"): statistics, pmu_*.csv at the end
+  bool pmu = true;                   // PMU (default on since 2026-11-19; "0" turns it off): statistics, pmu_*.csv at the end
   std::string pmu_out = "pmu";       // PMU_OUT: output file prefix
   unsigned long long pmu_interval = 0;   // PMU_INTERVAL: a time-series row every n cycles
   bool pmu_pcprof = true;            // PMU_PCPROF=0: no per-PC profile

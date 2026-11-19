@@ -18,8 +18,9 @@ CXXFLAGS += $(EXTRA_CXXFLAGS)
 XLEN ?= 64
 CXXFLAGS += -DXLEN=$(XLEN)
 # F/D (EXP-030) is always built in: librefcpu must be built with FP=1 (its default; RefCpuState carries the FP registers).
-# C extension (EXP-038): RVC=1 needs a librefcpu built with RVC=1 (inst_len, halfword fetch); default 0
-RVC ?= 0
+# C extension (EXP-038): RVC=1 (default since 2026-11-19, = the RTL) needs a librefcpu built with RVC=1 (inst_len, halfword fetch);
+# RVC=0 builds the old 4-byte front end (its cycles differ even on programs without C instructions)
+RVC ?= 1
 CXXFLAGS += -DRVC=$(RVC)
 ZLIB_CFLAGS := $(shell pkg-config --silence-errors --cflags zlib)
 ZLIB_LIBDIR := $(shell pkg-config --silence-errors --variable=libdir zlib)

@@ -67,7 +67,7 @@ submodule `third_party/DRAMsim3`(`git submodule update --init third_party/DRAMsi
 rv64(main 上唯一的配置;rv32 在分支 `rv32-legacy`):
 
 ```bash
-gmake -C function-model librefcpu.a LDFLAGS="-lz"     # 构建 ../function-model(构建产物,不入库)
+gmake -C function-model librefcpu.a RVC=1 LDFLAGS="-lz"   # 构建 ../function-model(构建产物,不入库);RVC 要与 trace-model 一致(默认 1)
 gmake -j4 LDFLAGS="-lz"                               # build/simulator;macOS 没有 -lstdc++fs,所以要覆盖 LDFLAGS
 ```
 
@@ -81,7 +81,7 @@ gmake -j4 LDFLAGS="-lz"                               # build/simulator;macOS �
 
 ```bash
 ./build/simulator path/to/program.bin                  # 裸二进制加载到 0x80000000,结束时打印 sim-time(cycle)= ...
-PMU=1 ./build/simulator prog.bin                       # TMA / 事件统计,在当前目录写 pmu_*.csv
+PMU_OUT=out/prog ./build/simulator prog.bin            # PMU 默认开:TMA / 事件统计,写 <PMU_OUT>_*.csv(默认当前目录 pmu_*.csv);PMU=0 关掉
 LSU_PIPE_NOWD=1 ./build/simulator prog.bin             # 周期可与 RTL 比较
 SIM_MAX_CYCLES=1000000 ./build/simulator prog.bin      # N 个周期后停止(退出码 3);任何可能挂死的运行都要设
 ./build/simulator --mode ckpt checkpoint/mcf/ckpt_sp1.gz   # SimPoint checkpoint(./build/simulator -h)
@@ -102,11 +102,12 @@ bash scripts/run_gate.sh build/simulator results/gate  # 并行;通过 = 周期�
 
 ### C 扩展(`RVC=1`,EXP-038)
 
-`RVC=1` 让前端按 2 字节位置取指(每 32 字节块 16 个槽)并接受 16 位压缩指令;`RVC=0`(默认)不变
-(gate 64/64)。它需要用相同的 `XLEN`、`FP`、`RVC` 从 `function-model` 构建的 `librefcpu.a`(`make FP=1 RVC=1 librefcpu.a`)。
+`RVC=1`(2026-11-19 起默认,与 RTL 一致)让前端按 2 字节位置取指(每 32 字节块 16 个槽)并接受 16 位压缩指令;`RVC=0` 是旧的 4 字节前端,
+即使程序里没有压缩指令周期也不同。它需要用相同的 `XLEN`、`FP`、`RVC` 从 `function-model` 构建的 `librefcpu.a`(`make FP=1 RVC=1 librefcpu.a`)。
+`results/baseline/baseline.csv`、`baseline_nopf.csv` 是 RVC=1 构建在 `build_tests.sh` 程序(rv64ima,不含压缩指令)上的周期,`baseline_c.csv` 是 C 编译的程序。
 
 ```bash
-make BUILD_DIR=build_rvc RVC=1 REFCPU_LIB=<用 RVC=1 构建的 librefcpu>
+make BUILD_DIR=build_rvc REFCPU_LIB=<用 RVC=1 构建的 librefcpu>
 scripts/build_rvc_tests.sh                                           # build_c/tests(用 C 编译的 cpu-tests),build_c/gen(function-model 生成的 C 压力测试)
 bash scripts/run_gate_c.sh build_rvc/simulator results/gate_c        # 周期数等于 results/baseline/baseline_c.csv;FULL=1 加上长的生成测试
 ```
