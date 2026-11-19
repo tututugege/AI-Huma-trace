@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EXP-045: PMU=1 on every RVC gate program, collect the ISS_REF_* / ISS_LOST_* counters (issue grants refused after select).
+# EXP-046: PMU=1 on every RVC gate program, collect the ISS_REF_* / ISS_LOST_* counters (issue grants refused after select).
 #   usage: wb_refuse_stats.sh <simulator> <outdir (new)> [jobs]
 SIM=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); OUT=$2; JOBS=${3:-4}
 T=$(cd "$(dirname "$0")/.." && pwd)

@@ -48,7 +48,7 @@ inline PmuFrontSignals g_pmu_front;
 // Model-only back-pressure flags (EXP-016): written by the comb stage of Ren / Idu, read by the sampler.
 struct PmuBackSignals {
   bool ren_no_preg = false, idu_no_brtag = false;
-  // issue grants refused after select (EXP-045), indexed by GateRefuse - 1: FU, WB, FPWB, AGU; written by Isu::issue every cycle
+  // issue grants refused after select (EXP-046), indexed by GateRefuse - 1: FU, WB, FPWB, AGU; written by Isu::issue every cycle
   uint8_t iss_ref[4] = {}, iss_lost[4] = {};
 };
 inline PmuBackSignals g_pmu_back;

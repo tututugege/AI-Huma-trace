@@ -352,7 +352,7 @@ private:
   std::vector<int> committed_indices;
   bool grants_live = true;  // out.issue_grants may hold a payload (conservative until the first comb_issue)
 
-  // Statistics (EXP-045): a ready uop that the select did not pick could have been granted on this port.
+  // Statistics (EXP-046): a ready uop that the select did not pick could have been granted on this port.
   bool alt_exists(int phys_port) const {
     int local = -1;
     for (size_t k = 0; k < ports.size(); k++) if (ports[k].port_idx == phys_port) local = static_cast<int>(k);

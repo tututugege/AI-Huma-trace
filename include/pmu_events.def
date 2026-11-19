@@ -119,7 +119,7 @@ PMU_EV(FEO_LOSS_IFIFO,       slot,   4, "  empty cycle: instruction FIFO empty (
 PMU_EV(FEO_LOSS_PTABLAG,     slot,   4, "  empty cycle: PTAB empty (prediction lags the fetch)")  // model-only
 PMU_EV(FEO_LOSS_F2B,         slot,   4, "  empty cycle: front-to-back FIFO / predecode check stage")  // model-only
 
-// ---- issue grants refused after select (EXP-045; trace-model only). The select picks one ready uop per port; the grant can still be
+// ---- issue grants refused after select (EXP-046; trace-model only). The select picks one ready uop per port; the grant can still be
 // refused afterwards: the port's unit is busy (FU), the uop's completion cycle on the port is taken (WB, EXP-035), the FP register file
 // has no write port in that cycle (FPWB, EXP-032), or the shared AGU went to a load (AGU). The port then issues nothing this cycle.
 // ISS_LOST_* counts the refusals for which another ready, unpicked uop of the same queue could have been granted on that port

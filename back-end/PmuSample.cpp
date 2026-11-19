@@ -65,7 +65,7 @@ void Dispatch::pmu_slots(PmuVec &e, bool recovering, bool recovering_by_flush, i
   }
 }
 
-// Issue grants refused after select (EXP-045).
+// Issue grants refused after select (EXP-046).
 static void pmu_issue_refusals(PmuVec &e) {
   static const PmuEvent REF[4] = {PMU_ISS_REF_FU, PMU_ISS_REF_WB, PMU_ISS_REF_FPWB, PMU_ISS_REF_AGU};
   static const PmuEvent LOST[4] = {PMU_ISS_LOST_FU, PMU_ISS_LOST_WB, PMU_ISS_LOST_FPWB, PMU_ISS_LOST_AGU};
