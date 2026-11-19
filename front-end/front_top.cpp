@@ -382,6 +382,9 @@ void InstPort::comb_read() {
         int last = -1;
         for (int i = 0; i < FETCH_WIDTH; i++) if (out.fifo_head.inst_valid[i]) last = i;
         if (last >= 0) out.fifo_head.seq_next_pc = out.fifo_head.pc[last] + SLOT_BYTES;
+        // the new last slot's 32-bit window is complete in the fetched group (only the original group end was cut to its low half): it is the
+        // upper half the RVC head fix uses for a 32-bit instruction there (not the upper half of the original last slot, which belongs to the cut part)
+        if constexpr (kRvc) if (last >= 0 && last < FETCH_WIDTH - 1) { out.fifo_head.up16 = uint16_t(out.fifo_head.instructions[last] >> 16); out.fifo_head.up_ok = true; }
       }
     } else
     for (int i = 0; i < FETCH_WIDTH; i++) {
@@ -417,13 +420,16 @@ void InstPort::comb_write() {
   if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1]) {
     uint32_t w2[FETCH_WIDTH];
     const bool ok = icache->fetch_second(ic_out.fetch_pc, ic_out.fetch_paddr, pr.addr2, pr.b_len, w2);
-    for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
-      const int j = i - pr.a_len;
-      gpc[i] = pr.addr2 + SLOT_BYTES * j;
-      gv[i] = ok && j < pr.b_len; gpf[i] = false; grp[i] = ok && j < pr.b_len ? w2[j] : INST_NOP;
-    }
+    // The second block cannot be read in this cycle: the group stays the first block's own window (as without FE_PAIR); the slots behind its taken
+    // branch differ from the PTAB entry's second-block pcs and are cut when the group is read. (Invalidating them here made the first block's last
+    // slot the group end, whose 32-bit window is then cut to its low half for the RVC carry: a 32-bit jal there decoded to a wrong target.)
+    if (ok)
+      for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
+        const int j = i - pr.a_len;
+        gpc[i] = pr.addr2 + SLOT_BYTES * j;
+        gv[i] = j < pr.b_len; gpf[i] = false; grp[i] = j < pr.b_len ? w2[j] : INST_NOP;
+      }
     fused = ok;
-    if (!ok) for (int i = pr.a_len; i < FETCH_WIDTH; i++) gv[i] = false;   // the group stays the first block only; the PTAB entry (with the second block) then fails the check below
   }
   uint16_t rvc_up16 = 0; bool rvc_up_ok = false;
   if constexpr (kRvc) {   // C910-style carry: the window of the last slot of a group has no upper half (a 32-bit instruction starting there is carried to the next group)

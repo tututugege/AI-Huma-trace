@@ -779,13 +779,13 @@ class BpuPipe {
       if (pm && ty_ok && b.g.hit && b.g.taken && int(b.g.slot) + 1 < FW) {
         const int lenA = b.g.slot + 1;
         const pc_t T = b.g.next;
-        if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && (T >> 12) == (b.base >> 12)) {   // same 4 KiB page: one translation serves both blocks
+        if ((T & (SLOT_BYTES - 1)) == 0 && T != b.base + SLOT_BYTES * lenA && !(kRvc && T == b.base + SLOT_BYTES * (lenA + 1)) && (T >> 12) == (b.base >> 12)) {   // (a target equal to the fall-through pc of a 2- or 4-byte branch is not a second block: Front2Back cuts blocks at pc discontinuities)   // same 4 KiB page: one translation serves both blocks
           BlkB &c = b.b2;   // the second block is a normal fetch block (natural end), it must fit into the slots the first one leaves
           c.valid = true; c.base = T; c.bnd = block_bnd(T);
           c.g = s0_lookup(ub0_, T, c.bnd, n.sras.cnt, n.sras.top());
           const int room = FW - lenA, natlen = int((c.bnd - T) >> SLOT_SHIFT);
           const int lenB = c.g.taken ? c.g.slot + 1 : natlen;
-          if (lenB <= room) {
+          if (lenB <= room && lenB * SLOT_BYTES >= 4) {   // (RVC: a one-slot second block whose instruction is 32-bit would be carried whole to the next group, leaving the group without any instruction of it)
             c.ck = take_ckpt(n.spec, n.sras);
             main_index(c, n.spec);
             hp("S0PAIR", c.base, c.g.next, c.g.nbits, c.g.bits);
