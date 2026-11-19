@@ -53,7 +53,9 @@ struct IssueQueueIn {
   // are made), otherwise the GateRefuse reason; called only for a grant about to be made
   std::function<int(const Uop &, int)> grant_gate;
   std::function<int(const Uop &, int)> gate_probe;     // the same check without reserving (statistics only)
-  std::function<bool(const Uop &, int)> presel_ok;     // CFG_WB_PRESEL: the uop's completion cycle on the port is free (select mask)
+  // EXP-046: the select skips a ready uop whose completion cycle on the port is already reserved (EXP-035), so the next ready uop
+  // gets the port instead of the port idling (the check reads only registered per-port state; grant_gate keeps its own check)
+  std::function<bool(const Uop &, int)> presel_ok;
   std::function<void(int why, bool lost)> on_refuse;   // statistics: a selected grant was refused (why: GateRefuse)
 };
 
@@ -431,8 +433,7 @@ private:
         uint64_t op_bit = (1ULL << op_type);
         
         if ((ports[p].capability_mask & op_bit) &&
-            (!CFG_WB_PRESEL || ((CFG_WB_PRESEL != 2 || (in.port_fu_ready_mask[ports[p].port_idx] & op_bit)) &&
-                                (!in.presel_ok || in.presel_ok(q_.entry[idx].uop, ports[p].port_idx))))) {
+            (!in.presel_ok || in.presel_ok(q_.entry[idx].uop, ports[p].port_idx))) {
           result.push_back({idx, ports[p].port_idx});
           inst_issued[idx] = 1;
           break; // Move to the next port

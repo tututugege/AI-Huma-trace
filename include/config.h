@@ -666,12 +666,6 @@ enum class IssueSchedulePolicy : int {
 #ifndef CFG_ISSUE_OLDEST_FIRST
 #define CFG_ISSUE_OLDEST_FIRST 2   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
 #endif
-// EXP-046: the select skips a ready uop whose completion cycle on its port is already reserved (EXP-035), so the next ready uop gets the
-// port instead of the port idling. 0: the check comes after the select (a refused pick leaves the port idle); 2: the select also skips a
-// uop the port's unit cannot take now (unit busy). The checks read only registered per-port state.
-#ifndef CFG_WB_PRESEL
-#define CFG_WB_PRESEL 0
-#endif
 // queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
 #ifndef CFG_ISSUE_OLDEST_QUEUES
 #define CFG_ISSUE_OLDEST_QUEUES 2
