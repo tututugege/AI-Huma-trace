@@ -21,6 +21,7 @@
 #include <cstring>
 #include <type_traits>
 #include <vector>
+#include <unordered_map>
 #include <utility>
 
 struct FrontTopIn;
@@ -139,7 +140,15 @@ struct UbEnt {
 };
 enum UbEvKind : uint8_t { UE_TAKEN = 0, UE_FALL = 1, UE_NTSLOT = 2 };
 // uBTB targets hold the full target slot address (UB_TGT_BITS = XLEN - SLOT_SHIFT).
+// CFG_UB_TGT_BITS (study, 0 = full target): the S0 uBTB keeps only the low bits of the target slot address; the upper bits are the block start's.
+// A target outside that region is not stored in the S0 uBTB (the S1 uBTB / main predictor still predict it, through an override).
+#ifndef CFG_UB_TGT_BITS
+#define CFG_UB_TGT_BITS 0
+#endif
 inline pc_t ub_expand(pc_t t, pc_t /*ref*/) { return t << SLOT_SHIFT; }
+inline bool ub0_far(pc_t start, pc_t target) { return CFG_UB_TGT_BITS > 0 && (((start ^ target) >> SLOT_SHIFT) >> CFG_UB_TGT_BITS) != 0; }
+// model-only uBTB statistics (EXP-049): S0 allocations, and those whose branch pc was allocated before under a different block start
+inline uint64_t g_ub0_alloc = 0, g_ub0_alloc_other = 0;
 struct UbEv { uint8_t kind = 0, src = 0; pc_t start = 0; uint8_t slot = 0, type = 0, nd = 0; pc_t target = 0; bool rvc = false; };
 
 // One set-associative table of UbEnt (the S0 uBTB, and the optional S1 level BPO_L1_*).
@@ -363,7 +372,7 @@ class BpuPipe {
       const UbEnt &e = tb.e[set * tb.W + w];
       if (!(e.v && e.tag == tag)) continue;
       if (!g.hit) { g.hit = true; g.nbits = 0; }
-      const bool tk = e.taken && base + SLOT_BYTES * e.slot < bnd && (e.type != BR_DIRECT || e.ctr >= 2);
+      const bool tk = e.taken && base + SLOT_BYTES * e.slot < bnd && (e.type != BR_DIRECT || e.ctr >= ((&tb == &ub0_ && sim_env().fe_ub_strong) ? 3 : 2));
       if (tk && (best < 0 || e.slot < tb.e[set * tb.W + best].slot)) best = w;
     }
     if (best < 0) return g;
@@ -518,8 +527,17 @@ class BpuPipe {
       if (ev.kind == UE_FALL) e.nd_nt = ev.nd;
       if (ev.kind == UE_TAKEN && e.taken && e.slot == ev.slot) same = w;
     }
-    if (ev.kind == UE_TAKEN) {
+    const bool is0 = &tb == &ub0_;
+    if (ev.kind == UE_TAKEN && is0 && ub0_far(ev.start, ev.target)) { if (same >= 0) nw[same].v = false; }   // far target: not kept in the S0 uBTB
+    else if (ev.kind == UE_TAKEN) {
       int w = same;
+      if (w < 0 && is0) {   // statistics only
+        static std::unordered_map<uint64_t, uint64_t> first_start;   // branch pc -> the block start of its first allocation
+        const uint64_t bpc = ev.start + SLOT_BYTES * ev.slot;
+        auto it = first_start.find(bpc);
+        g_ub0_alloc++;
+        if (it == first_start.end()) first_start.emplace(bpc, ev.start); else if (it->second != ev.start) g_ub0_alloc_other++;
+      }
       if (w < 0) {  // allocate: the fall-through placeholder of this block, an invalid way, else the lowest counter
         w = fall;
         for (int i = 0; w < 0 && i < W; i++) if (!nw[i].v) w = i;
@@ -530,7 +548,7 @@ class BpuPipe {
       } else {
         nw[w].ctr = ev.type == BR_DIRECT ? (nw[w].ctr < 3 ? nw[w].ctr + 1 : 3) : 3;
       }
-      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT; nw[w].rvc = ev.rvc;
+      nw[w].type = ev.type; nw[w].nd_t = ev.nd; nw[w].target = ev.target >> SLOT_SHIFT; nw[w].rvc = ev.rvc;   // (CFG_UB_TGT_BITS: only targets in the block start's region reach here for the S0 uBTB, so the stored value equals the expanded one)
     }
     for (int w = 0; w < W; w++) { ub_trunc(nw[w], tb.tagb); if (!ub_same(nw[w], tb.e[set * W + w])) wmask |= 1u << w; }
   }

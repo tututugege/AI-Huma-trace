@@ -126,6 +126,9 @@ PMU_EV(BPU_OVR_SD_NOTTK,      front,  1, "S_D override: S0 guessed taken, the ma
 PMU_EV(BPU_OVR_SD_SLOT,       front,  1, "S_D override: both taken, at different slots")  // model-only
 PMU_EV(BPU_OVR_SD_TGT,        front,  1, "S_D override: same taken slot, different target")  // model-only
 PMU_EV(BPU_OVR_SD_OTHER,      front,  1, "S_D override: same next pc, history bits / RAS differ (or FE_PAIR fallback)")  // model-only
+PMU_EV(BPU_OVR_SD_NEWTK_NOHIT, front, 1, "  of NEWTK: the S0 uBTB had no entry with the block's tag at all")  // model-only
+PMU_EV(UB0_ALLOC,             front,  1, "S0 uBTB allocations (taken branch not in the block's entries)")  // model-only
+PMU_EV(UB0_ALLOC_OTHER,       front,  1, "  of which the branch pc was allocated before under another block start")  // model-only
 PMU_EV(BPU_OVR_L1,            front,  1, "S1 (uBTB L1) overrides")  // model-only
 
 // ---- issue grants refused after select (EXP-046; trace-model only). The select picks one ready uop per port; the grant can still be

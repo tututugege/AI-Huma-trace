@@ -44,6 +44,8 @@ struct PmuFrontSignals {
   int feo_cause = 0;           // PmuEvent of the lost-slot bucket for the empty slots of this cycle (0 = none lost)
   int ovr_sd_ev = 0;           // PmuEvent of this cycle's S_D override kind (0 = none)
   bool ovr_l1 = false;         // an S1 override this cycle
+  bool ovr_sd_nohit = false;   // the S_D override is NEWTK and the S0 uBTB had no tag match
+  uint32_t ub_alloc = 0, ub_alloc_other = 0;   // S0 uBTB allocations this cycle
 };
 inline PmuFrontSignals g_pmu_front;
 

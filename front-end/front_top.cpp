@@ -282,11 +282,14 @@ void FrontControl::finish() {
     pf.feo_ready = in.in->ctrl.fifo_read_enable;
     pf.ovr_l1 = *in.pmu_l1_ovr;
     pf.ovr_sd_ev = 0;
+    pf.ovr_sd_nohit = false;
+    { static uint64_t la = 0, lo = 0; pf.ub_alloc = uint32_t(bpuf::g_ub0_alloc - la); pf.ub_alloc_other = uint32_t(bpuf::g_ub0_alloc_other - lo); la = bpuf::g_ub0_alloc; lo = bpuf::g_ub0_alloc_other; }
     if (out.pipe_dec.ovr) {   // what the main predictor changed in the S0 guess of the overridden block
       const bpuf::S0Guess &g = out.pipe_dec.og; const bpuf::MainOut &m = out.pipe_dec.oout;
       const bool gt = g.hit && g.taken;
       pf.ovr_sd_ev = !gt && m.taken ? PMU_BPU_OVR_SD_NEWTK : gt && !m.taken ? PMU_BPU_OVR_SD_NOTTK : gt && m.taken && g.slot != m.slot ? PMU_BPU_OVR_SD_SLOT
                    : m.next != g.next ? PMU_BPU_OVR_SD_TGT : PMU_BPU_OVR_SD_OTHER;
+      pf.ovr_sd_nohit = !gt && m.taken && !g.hit;
     }
     pf.feo_n = 0;
     pf.feo_cause = 0;

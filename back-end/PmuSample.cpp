@@ -151,6 +151,9 @@ void BackTop::pmu_sample() {
   }
   if (g_pmu_front.ovr_sd_ev) e.add(static_cast<PmuEvent>(g_pmu_front.ovr_sd_ev));
   if (g_pmu_front.ovr_l1) e.add(PMU_BPU_OVR_L1);
+  if (g_pmu_front.ovr_sd_nohit) e.add(PMU_BPU_OVR_SD_NEWTK_NOHIT);
+  if (g_pmu_front.ub_alloc) e.add(PMU_UB0_ALLOC, g_pmu_front.ub_alloc);
+  if (g_pmu_front.ub_alloc_other) e.add(PMU_UB0_ALLOC_OTHER, g_pmu_front.ub_alloc_other);
   if (g_pmu_front.icache_req_fire) e.add(PMU_ICACHE_ACCESS);
   if (g_pmu_front.icache_miss_issue) e.add(PMU_ICACHE_MISS);
   if (g_pmu_front.icache_miss_busy) e.add(PMU_CYC_ICACHE_MISS_BUSY);
