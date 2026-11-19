@@ -1664,6 +1664,7 @@ void AXI_LLC::memo_record() {
 }
 
 void AXI_LLC::comb() {
+  bop_ev_ = {};
   for (const auto &m : memo_) {
     if (m.valid && memo_matches(m)) {
       io.ext_out = m.ext_out;

@@ -128,12 +128,13 @@ class BertiPf {
  public:
   static constexpr int HSETS = 8, HWAYS = 64, DPCS = 16, DDELTAS = 16, ROUND = 16, INFL = 16;
   int hw = 16;   // history ways in use (PF_BERTI_HW, <= HWAYS)
+  int hdedup = 0;   // PF_BERTI_HDEDUP: 0=off, 1=set-wide (pc,line) dedup (keep oldest), 2=last-entry dedup
   int deg = 12, hi = 65, lo = 35;
   bool alloc_found = false;
   bool late_fix = true;
   bool far_first = false;
   bool cross_page = false;   // EXP-048 PF_BERTI_VA=1: virtual lines, targets may leave the page (the prefetcher translates them)
-  uint64_t st_latefix = 0;
+  uint64_t st_latefix = 0, st_hrec = 0, st_hdedup = 0;
   struct Cand { uint32_t line; bool llc; };
   // diagnostics (PF_STATS=1)
   uint64_t st_trig = 0, st_trig_c = 0, st_cand = 0, st_xpage = 0, st_replaced = 0, st_search = 0, st_found = 0, st_search_none = 0,
@@ -148,9 +149,10 @@ class BertiPf {
   ~BertiPf() {
     if (!std::getenv("PF_STATS") || !st_trig) return;
     const double sr = st_search ? double(st_search) : 1.0, un = u_n ? double(u_n) : 1.0;
-    std::fprintf(stderr, "[BERTI-HIST] ways=%d searches=%llu reach(no own entry / <0.5 lat / 0.5-1 lat / >=1 lat)=%.1f%%/%.1f%%/%.1f%%/%.1f%% "
+    std::fprintf(stderr, "[BERTI-HIST] ways=%d hdedup=%d rec=%llu dedup=%llu searches=%llu reach(no own entry / <0.5 lat / 0.5-1 lat / >=1 lat)=%.1f%%/%.1f%%/%.1f%%/%.1f%% "
                  "found_nothing=%.1f%% (window shorter than the latency %.1f%%, other %.1f%%) own_entries=%.1f own_share=%.1f%% pcs_per_set=%.1f\n",
-                 hw, (unsigned long long)st_search, 100 * r_none / sr, 100 * r_lt_half / sr, 100 * r_lt_1 / sr, 100 * r_ge_1 / sr,
+                 hw, hdedup, (unsigned long long)st_hrec, (unsigned long long)st_hdedup,
+                 (unsigned long long)st_search, 100 * r_none / sr, 100 * r_lt_half / sr, 100 * r_lt_1 / sr, 100 * r_ge_1 / sr,
                  100.0 * st_search_none / sr, 100 * nf_short / sr, 100 * nf_other / sr, same_sum / sr, 100 * share_sum / sr, npc_sum / sr);
     std::fprintf(stderr, "[BERTI-TAB] distinct_pcs_searched=%zu table=%d allocs=%llu evictions_with_status=%llu avg_valid_pcs=%.1f "
                  "avg_pcs_with_status=%.1f delta_slots_used=%.1f%% delta_slots_with_status=%.1f%% warm_pcs=%llu avg_searches_to_first_status=%.1f\n",
@@ -255,6 +257,16 @@ class BertiPf {
   static int hset(uint32_t pc) { return int((pc >> 1) ^ (pc >> 4) ^ (pc >> 7)) & (HSETS - 1); }
   void record(uint32_t pc, uint32_t line, long long now) {
     const int s = hset(pc);
+    st_hrec++;
+    if (hdedup == 1) {
+      for (int w = 0; w < hw; w++) {
+        const H &h = hist[s][w];
+        if (h.v && h.pc == pc && h.line == line) { st_hdedup++; return; }
+      }
+    } else if (hdedup == 2) {
+      const H &h = hist[s][(hptr[s] + hw - 1) % hw];
+      if (h.v && h.pc == pc && h.line == line) { st_hdedup++; return; }
+    }
     hist[s][hptr[s]] = {true, pc, line, now};
     hptr[s] = (hptr[s] + 1) % hw;
   }
@@ -331,6 +343,232 @@ class BertiPf {
   }
 };
 
+
+// ---------------------------------------------------------------------------------------------------------------
+// EXP-048 M3: Hardware-faithful Berti (PF_KIND=4) — exact 1-op/cycle RTL specification for dcache_pf_berti_*.sv:
+//   * 20-bit wrapping cycle counter, 16-entry pf_issue CAM, 64-entry pf_lat CAM, 16-entry infl CAM
+//   * 8x16 history table with set-wide (pc, line) dedup, 1 write + 1 search per cycle
+//   * 16x16 PC delta table with 4-bit exact LRU, parallel slot-hit + up to 2 new-delta allocs per search
+//   * 4-entry train FIFO (accepts up to 2/cycle, drains 1/cycle) + 4-entry search FIFO (1/cycle)
+//   * 16-delta tournament burst generator (1 candidate/cycle -> same-page to reqq or cross-page to g_pf_xq)
+// ---------------------------------------------------------------------------------------------------------------
+class BertiHw {
+ public:
+  static constexpr int HSETS = 8, HWAYS = 16, DPCS = 16, DDELTAS = 16, INFL = 16;
+  static constexpr int PFI_N = 16, PFL_N = 64, ROUND = 16, HI_COV = 11, LO_COV = 6, DEG = 12;
+  static constexpr int TRNQ_N = 4, SRCHQ_N = 4;
+  static constexpr uint32_t CYC_MASK = (1u << 20) - 1u;
+
+  struct TrnEv { uint32_t pc = 0, vline = 0, pline = 0; bool vaneg = false, miss = false; };
+  struct SrchEv { uint32_t pc = 0, line = 0, t_dem = 0; uint16_t lat = 0; };
+  struct H { bool v = false; uint32_t pc = 0, line = 0, t = 0; };
+  struct Dl { bool v = false; int8_t d = 0; uint8_t cov = 0, last_cov = 0, st = 0; };
+  struct P { bool v = false; uint32_t pc = 0; uint8_t cnt = 0, lru = 0; Dl dl[DDELTAS]; };
+  struct F { bool v = false; uint32_t pline = 0, vline = 0, pc = 0, t = 0; };
+  struct PfI { bool v = false; uint32_t pline = 0, t = 0; };
+  struct PfL { bool v = false; uint32_t pline = 0; uint16_t lat = 0; };
+
+  struct Gen {
+    uint16_t mask = 0;
+    int8_t d[DDELTAS] = {};
+    uint8_t st[DDELTAS] = {}, cov[DDELTAS] = {};
+    uint32_t vline = 0, pline = 0;
+    bool vaneg = false;
+    uint8_t left = 0;
+  };
+
+  uint32_t cyc = 0;
+  H hist[HSETS][HWAYS];
+  uint8_t hptr[HSETS] = {};
+  P tab[DPCS];
+  F infl[INFL];
+  uint8_t infl_ptr = 0;
+  PfI pfi[PFI_N];
+  uint8_t pfi_ptr = 0;
+  PfL pfl[PFL_N];
+  uint8_t pfl_ptr = 0;
+  TrnEv trnq[TRNQ_N];
+  int trnq_n = 0;
+  SrchEv srchq[SRCHQ_N];
+  int srchq_n = 0;
+  Gen gen;
+  int alloc_per_srch = 2;
+
+  static int hset(uint32_t pc) { return int((pc >> 1) ^ (pc >> 4) ^ (pc >> 7)) & (HSETS - 1); }
+
+  void pf_issued(uint32_t pline) {
+    for (int i = 0; i < PFI_N; i++) {
+      if (pfi[i].v && pfi[i].pline == pline) { pfi[i].t = cyc; return; }
+    }
+    pfi[pfi_ptr] = {true, pline, cyc};
+    pfi_ptr = (pfi_ptr + 1) & (PFI_N - 1);
+  }
+
+  void push_srch(const SrchEv &e) {
+    if (srchq_n < SRCHQ_N) srchq[srchq_n++] = e;
+  }
+
+  void on_fill(uint32_t pline, bool is_pf) {
+    if (is_pf) {
+      for (int i = 0; i < PFI_N; i++) {
+        if (pfi[i].v && pfi[i].pline == pline) {
+          uint32_t diff = (cyc - pfi[i].t) & CYC_MASK;
+          uint16_t lat12 = uint16_t(diff > 4095u ? 4095u : diff);
+          pfi[i].v = false;
+          for (int k = 0; k < PFL_N; k++) {
+            if (pfl[k].v && pfl[k].pline == pline) { pfl[k].lat = lat12; return; }
+          }
+          pfl[pfl_ptr] = {true, pline, lat12};
+          pfl_ptr = (pfl_ptr + 1) & (PFL_N - 1);
+          return;
+        }
+      }
+      return;
+    }
+    for (int i = 0; i < INFL; i++) {
+      if (infl[i].v && infl[i].pline == pline) {
+        uint32_t diff = (cyc - infl[i].t) & CYC_MASK;
+        uint16_t lat12 = uint16_t(diff > 4095u ? 4095u : diff);
+        push_srch({infl[i].pc, infl[i].vline, infl[i].t, lat12});
+        infl[i].v = false;
+        return;
+      }
+    }
+  }
+
+  void record(uint32_t pc, uint32_t line) {
+    const int s = hset(pc);
+    for (int w = 0; w < HWAYS; w++) {
+      if (hist[s][w].v && hist[s][w].pc == pc && hist[s][w].line == line) return;
+    }
+    hist[s][hptr[s]] = {true, pc, line, cyc};
+    hptr[s] = (hptr[s] + 1) & (HWAYS - 1);
+  }
+
+  void run_search(const SrchEv &ev) {
+    const int s = hset(ev.pc);
+    bool ok[HWAYS] = {};
+    int8_t dw[HWAYS] = {};
+    for (int w = 0; w < HWAYS; w++) {
+      const H &h = hist[s][w];
+      if (!h.v || h.pc != ev.pc) continue;
+      uint32_t age = (ev.t_dem - h.t) & CYC_MASK;
+      if (age >= (1u << 19) || age < ev.lat) continue;
+      int32_t d = int32_t(ev.line - h.line);
+      if (d == 0 || d >= 64 || d <= -64) continue;
+      ok[w] = true;
+      dw[w] = int8_t(d);
+    }
+    bool uniq[HWAYS] = {};
+    bool any_u = false;
+    for (int w = 0; w < HWAYS; w++) {
+      if (!ok[w]) continue;
+      bool dup = false;
+      for (int j = 0; j < w; j++) if (ok[j] && dw[j] == dw[w]) dup = true;
+      if (!dup) { uniq[w] = true; any_u = true; }
+    }
+    int e = -1;
+    for (int i = 0; i < DPCS; i++) if (tab[i].v && tab[i].pc == ev.pc) { e = i; break; }
+    if (e < 0 && !any_u) return;
+    bool hit_pc = (e >= 0);
+    if (e < 0) {
+      for (int i = 0; i < DPCS; i++) if (!tab[i].v) { e = i; break; }
+      if (e < 0) {
+        e = 0;
+        for (int i = 0; i < DPCS; i++) if (tab[i].lru == DPCS - 1) { e = i; break; }
+      }
+      tab[e] = P{};
+      tab[e].v = true;
+      tab[e].pc = ev.pc;
+    }
+    const uint8_t old_lru = hit_pc ? tab[e].lru : uint8_t(DPCS - 1);
+    for (int i = 0; i < DPCS; i++) {
+      if (tab[i].v && i != e && tab[i].lru < old_lru) tab[i].lru++;
+    }
+    tab[e].lru = 0;
+
+    P &p = tab[e];
+    // 1. Parallel hit increment on existing delta slots
+    bool matched_w[HWAYS] = {};
+    for (int m = 0; m < DDELTAS; m++) {
+      if (!p.dl[m].v) continue;
+      bool hit_m = false;
+      for (int w = 0; w < HWAYS; w++) {
+        if (uniq[w] && dw[w] == p.dl[m].d) { hit_m = true; matched_w[w] = true; }
+      }
+      if (hit_m) p.dl[m].cov++;
+    }
+    // 2. Allocate up to alloc_per_srch unmatched unique deltas into free or lowest-cov non-status slots
+    int ins = 0;
+    for (int w = 0; w < HWAYS && ins < alloc_per_srch; w++) {
+      if (!uniq[w] || matched_w[w]) continue;
+      int slot = -1;
+      for (int m = 0; m < DDELTAS; m++) if (!p.dl[m].v) { slot = m; break; }
+      if (slot < 0) {
+        for (int m = 0; m < DDELTAS; m++)
+          if (p.dl[m].st == 0 && (slot < 0 || p.dl[m].cov < p.dl[slot].cov)) slot = m;
+      }
+      if (slot < 0) break;
+      p.dl[slot] = Dl{true, dw[w], 1, 0, 0};
+      ins++;
+    }
+    p.cnt++;
+    if (p.cnt >= ROUND) {
+      for (int m = 0; m < DDELTAS; m++) {
+        if (!p.dl[m].v) continue;
+        p.dl[m].st = p.dl[m].cov >= HI_COV ? 1 : p.dl[m].cov >= LO_COV ? 2 : 0;
+        p.dl[m].last_cov = p.dl[m].cov;
+        p.dl[m].cov = 0;
+      }
+      p.cnt = 0;
+    }
+  }
+
+  void start_gen(const TrnEv &a) {
+    int e = -1;
+    for (int i = 0; i < DPCS; i++) if (tab[i].v && tab[i].pc == a.pc) { e = i; break; }
+    if (e < 0) return;
+    uint16_t mask = 0;
+    for (int m = 0; m < DDELTAS; m++) if (tab[e].dl[m].v && tab[e].dl[m].st != 0) mask |= uint16_t(1u << m);
+    if (!mask) return;
+    gen.mask = mask;
+    for (int m = 0; m < DDELTAS; m++) {
+      gen.d[m] = tab[e].dl[m].d;
+      gen.st[m] = tab[e].dl[m].st;
+      gen.cov[m] = tab[e].dl[m].last_cov;
+    }
+    gen.vline = a.vline;
+    gen.pline = a.pline;
+    gen.vaneg = a.vaneg;
+    gen.left = DEG;
+  }
+
+  // Step generator: returns 0 (idle/stalled), 1 (same-page -> out_line/out_llc), 2 (cross-page -> pushed to g_pf_xq)
+  int step_gen(bool reqq_busy, uint32_t &out_line, bool &out_llc) {
+    if (gen.left == 0 || gen.mask == 0) return 0;
+    int best = -1;
+    uint8_t best_key = 0;
+    for (int m = 0; m < DDELTAS; m++) {
+      if (!(gen.mask & (1u << m))) continue;
+      uint8_t key = uint8_t(((gen.st[m] == 1 ? 1u : 0u) << 5) | (gen.cov[m] & 31u));
+      if (best < 0 || key > best_key) { best = m; best_key = key; }
+    }
+    const uint32_t t = gen.vline + uint32_t(int32_t(gen.d[best]));
+    const bool same_page = (t >> 6) == (gen.vline >> 6);
+    if (same_page && reqq_busy) return 0;
+    gen.mask &= uint16_t(~(1u << best));
+    gen.left--;
+    if (same_page) {
+      out_line = ((gen.pline >> 6) << 6) | (t & 63u);
+      out_llc = (gen.st[best] == 2);
+      return 1;
+    }
+    const uint64_t hi = gen.vaneg ? ~uint64_t(0x3fffffffffull) : 0ull;
+    g_pf_xq.push({hi | (uint64_t(t) << 6), gen.st[best] == 2});
+    return 2;
+  }
+};
+
 // ---------------------------------------------------------------------------------------------------------------
 class DataPrefetcher {
  public:
@@ -352,6 +590,7 @@ class DataPrefetcher {
     const char *k = std::getenv("PF_KIND");   // EXP-048: 0 = h1 (default), 1 = Best-Offset (Bop.h, parameters PF_BOP_*)
     kind_ = k ? std::atoi(k) : 0;
     if (kind_ == 1) { bop_ = new Bop("PF_BOP"); g_bop_l1 = bop_; }
+    if (kind_ == 4) { const char *a = std::getenv("PF_BERTI_HWALLOC"); if (a) bertihw_.alloc_per_srch = std::max(1, std::atoi(a)); }
     if (kind_ == 2 || kind_ == 3) {   // EXP-048 Berti (3: together with h1): defaults = the best EXP-043 variant (ALLOC + 64 history ways)
       auto g = [](const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; };
       berti_.deg = g("PF_BERTI_DEG", 12);
@@ -359,6 +598,7 @@ class DataPrefetcher {
       berti_.lo = g("PF_BERTI_LO", 35);
       berti_.alloc_found = g("PF_BERTI_ALLOC", 1) != 0;
       berti_.hw = std::max(1, std::min(BertiPf::HWAYS, g("PF_BERTI_HW", 64)));
+      berti_.hdedup = g("PF_BERTI_HDEDUP", 0);
       berti_.late_fix = g("PF_BERTI_LATEFIX", 1) != 0;
       berti_.far_first = g("PF_BERTI_FAR", 0) != 0;
       bappend_ = g("PF_BERTI_APPEND", 0) != 0;
@@ -376,7 +616,8 @@ class DataPrefetcher {
   void seq() {
     bxlate_used_ = 0;
     if (head_taken) {
-      if ((kind_ == 2 || kind_ == 3) && !reqq.front().llc) berti_.pf_issued(reqq.front().line, sim_time);   // Berti: prefetch latency from here
+      if ((kind_ == 2 || kind_ == 3) && !reqq.front().llc) berti_.pf_issued(reqq.front().line, sim_time);
+      if (kind_ == 4 && !reqq.front().llc) bertihw_.pf_issued(reqq.front().line);   // Berti: prefetch latency from here
       reqq.pop();
     }
     head_taken = false;
@@ -389,6 +630,7 @@ class DataPrefetcher {
       }
     if (kind_ == 1) { seq_bop(); return; }
     if (kind_ == 2) { seq_berti(); return; }
+    if (kind_ == 4) { seq_berti_hw(); return; }
 
     // EXP-048 PF_KIND=3: h1 and Berti together (one FIFO push per cycle: h1 stride burst > Berti > h1 LLC next-line)
     if (kind_ == 3 && fill_in.valid) berti_.fill((fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS), fill_in.is_prefetch, sim_time);
@@ -481,6 +723,68 @@ class DataPrefetcher {
 
   // EXP-048 Berti in place of h1 (PF_KIND=2): fills measure latencies, the registered triggers train and produce candidates
   // (a new trigger with candidates replaces the pending ones), one candidate per cycle into the request FIFO
+  // EXP-048 M3: hardware-faithful Berti (PF_KIND=4)
+  void seq_berti_hw() {
+    // 1. Pop 1 pending search from srchq (registered from previous cycle) and run it
+    if (bertihw_.srchq_n > 0) {
+      BertiHw::SrchEv ev = bertihw_.srchq[0];
+      for (int i = 1; i < bertihw_.srchq_n; i++) bertihw_.srchq[i - 1] = bertihw_.srchq[i];
+      bertihw_.srchq_n--;
+      bertihw_.run_search(ev);
+    }
+    // 2. Push 1 candidate to reqq (xans_q takes priority; gen steps same-page if free, or cross-page into g_pf_xq)
+    bool reqq_used = false;
+    if (g_pf_xans_n > 0) {
+      push_candidate(g_pf_xans[0].line, g_pf_xans[0].llc);
+      for (int i = 1; i < g_pf_xans_n; i++) g_pf_xans[i - 1] = g_pf_xans[i];
+      g_pf_xans_n--;
+      reqq_used = true;
+    }
+    uint32_t gline = 0; bool gllc = false;
+    if (bertihw_.step_gen(reqq_used, gline, gllc) == 1) push_candidate(gline, gllc);
+    // 3. Process fill_in (latency measurement -> pf_lat or demand search enqueue)
+    if (fill_in.valid) bertihw_.on_fill((fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS), fill_in.is_prefetch);
+    // 4. Pop 1 training event from trnq -> miss/pf_hit + history record + start_gen
+    if (bertihw_.trnq_n > 0) {
+      BertiHw::TrnEv a = bertihw_.trnq[0];
+      for (int i = 1; i < bertihw_.trnq_n; i++) bertihw_.trnq[i - 1] = bertihw_.trnq[i];
+      bertihw_.trnq_n--;
+      if (a.miss) {
+        bool have = false;
+        for (int i = 0; i < BertiHw::INFL; i++) if (bertihw_.infl[i].v && bertihw_.infl[i].pline == a.pline) have = true;
+        if (!have) {
+          bertihw_.infl[bertihw_.infl_ptr] = {true, a.pline, a.vline, a.pc, bertihw_.cyc};
+          bertihw_.infl_ptr = (bertihw_.infl_ptr + 1) & (BertiHw::INFL - 1);
+        }
+      } else {
+        for (int i = 0; i < BertiHw::PFL_N; i++) {
+          if (bertihw_.pfl[i].v && bertihw_.pfl[i].pline == a.pline) {
+            bertihw_.push_srch({a.pc, a.vline, bertihw_.cyc, bertihw_.pfl[i].lat});
+            bertihw_.pfl[i].v = false;
+            break;
+          }
+        }
+      }
+      bertihw_.record(a.pc, a.vline);
+      bertihw_.start_gen(a);
+    }
+    // 5. Enqueue up to PF_TRAIN_PORTS new load miss/pf_hit events into trnq
+    int taken = 0;
+    for (int i = 0; i < LSU_LDU_COUNT && taken < PF_TRAIN_PORTS; i++) {
+      const PfAccess &a = acc[i];
+      if (!a.valid || !(a.miss || a.pf_hit)) continue;
+      if (bertihw_.trnq_n < BertiHw::TRNQ_N) {
+        bertihw_.trnq[bertihw_.trnq_n++] = {
+          a.pc, uint32_t(a.va >> 6), (a.paddr >> 6) & pf::wmask(PF_LINE_BITS), ((a.va >> 38) & 1ull) != 0, a.miss
+        };
+      }
+      taken++;
+    }
+    bertihw_.cyc = (bertihw_.cyc + 1u) & BertiHw::CYC_MASK;
+    clear_in();
+    reqq.tick(); stride.tick();
+  }
+
   void seq_berti() {
     if (fill_in.valid) berti_.fill((fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS), fill_in.is_prefetch, sim_time);
     if (g_pf_xans_n > 0) {   // EXP-048 XPORT: a translated cross-page candidate takes this cycle's FIFO push
@@ -641,6 +945,7 @@ class DataPrefetcher {
   Bop *bop_ = nullptr;
   std::deque<uint32_t> bop_pend_;
   BertiPf berti_;
+  BertiHw bertihw_;
   uint32_t brf_[256] = {};   // recently pushed lines + 1 (0 = empty)
   int brf_n_ = 0, brf_ptr_ = 0;
   uint64_t st_rfilt_ = 0;
