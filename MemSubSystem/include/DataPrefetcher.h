@@ -588,7 +588,7 @@ class DataPrefetcher {
     enabled_ = pf::param("ENABLE", 1) != 0;   // default on; PF_ENABLE=0 turns the prefetcher off
     pc_stats_ = std::getenv("PF_STATS") != nullptr;
     const char *k = std::getenv("PF_KIND");   // EXP-048: 0 = h1 (default), 1 = Best-Offset (Bop.h, parameters PF_BOP_*)
-    kind_ = k ? std::atoi(k) : 0;
+    kind_ = k ? std::atoi(k) : 4;
     if (kind_ == 1) { bop_ = new Bop("PF_BOP"); g_bop_l1 = bop_; }
     if (kind_ == 4) { const char *a = std::getenv("PF_BERTI_HWALLOC"); if (a) bertihw_.alloc_per_srch = std::max(1, std::atoi(a)); }
     if (kind_ == 2 || kind_ == 3) {   // EXP-048 Berti (3: together with h1): defaults = the best EXP-043 variant (ALLOC + 64 history ways)

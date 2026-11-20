@@ -24,7 +24,7 @@ struct LlcBopCfg {
   Bop *bop = nullptr;
   LlcBopCfg() {
     auto g = [](const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; };
-    on = g("LLC_BOP", 0) != 0;
+    on = g("LLC_BOP", 1) != 0;
     res = g("LLC_BOP_RES", res);
     inf = g("LLC_BOP_INF", inf);
     if (on) { bop = new Bop("LLC_BOP"); g_bop_llc = bop; }
@@ -565,7 +565,7 @@ void AXI_LLC::set_config(const AXI_LLCConfig &config) {
 }
 
 void AXI_LLC::reset() {
-  io = {};
+  io = AXI_LLC_IO_t();
   memo_drop();
   io.regs.enable_r = config_.enable;
   io.regs.state = config_.enable ? AXI_LLCState::kIdle : AXI_LLCState::kDisabled;
