@@ -22,9 +22,8 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 指令/PTE/LLC 读数据来自 pmem。
 
 当前微架构(`include/config.h` 的默认值;RTL 包取相同的值):
-- 前端(`front-end/`):8 宽取指,流水 BPU(S0 uBTB、S1、S_D;TAGE/ITT/L1 预测器、update queue;`BPU_PIPE=3`,源码注释在
-  `front-end/BPU/BPU_pipe.h`,RTL 描述 `rtl/docs/analysis/bpu-pipe-rtl.md`),取指地址 FIFO / PTAB / 指令 FIFO 各 16 项,pre-IDU buffer,
-  32 KiB 8 路 I-cache(64 B 行),redirect 快速路径 `CFG_FE_RFAST` 15(EXP-019/023;`CFG_FE_BFAST` 0)。
+- 前端(`front-end/`):16 槽(32 B, RVC=1)按块取指,块级 1-Ahead FTB + S2 Block-TAGE/ITT 流水 BPU(EXP-050 里程碑 A:`ah1_4k_a2k1k` + 1-branch/cycle `brq[16]` + 512 项 `ftb_rec`,源码在 `front-end/BPU/BpuFtb.h` / `BPU_pipe.h`,RTL 描述 `rtl/docs/modules/bpu.md`),取指地址 FIFO / PTAB / 指令 FIFO 各 16 项,pre-IDU buffer,
+  32 KiB 8 路 I-cache(64 B 行,SRRIP 替换),redirect 快速路径 `CFG_FE_RFAST` 15(EXP-019/023;`CFG_FE_BFAST` 0)。
 - 后端(`back-end/`):8 宽 decode / rename / dispatch / commit,move elimination(见下),`CFG_PRF_NUM` 128,`CFG_ROB_NUM` 128 且为 compact ROB
   (`CFG_ROB_COMPACT` 1,EXP-028),`CFG_MAX_BR_NUM` 32,发射队列 INT 64 / LD 64 / STA 64 / STD 16 / BR 32,入队宽度 7/6/4/4/5(EXP-017)。
 - 发射口:6 个整数 ALU 口(其中 4 个带 MUL/DIV/FP/CSR 能力,`CFG_PLAIN_ALU_PORTS` 2 个为纯 ALU),`CFG_BR_PORTS` 2,`CFG_LD_PORTS` 4,`CFG_STA_PORTS` 3,`CFG_STD_PORTS` 3。

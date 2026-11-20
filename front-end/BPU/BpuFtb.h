@@ -1,33 +1,40 @@
 #pragma once
-// Block-based FTB Branch Prediction Unit (Phase 1 of docs/BPU_OPT_PLAN.md, EXP-050).
+// Block-based 1-Ahead FTB Branch Prediction Unit (EXP-050 Milestone A, ah1_4k_a2k1k + FTB_BRQ=2).
 //
-// Replaces the 16-bank per-slot Type + BTB + TAGE + ITT arrays (~325 KB) with a compact block-based hierarchy (~80 KB):
-//   S0 (0 bubble)   uFTB (256 x 4, optional 20-bit compressed targets) -> fast guess g0, next PC, and one block-level index
-//   S1 (main pred)  Main FTB (2K/4K x 4, up to 2 branch slots per block) + 2-slot fast history direction table (mini-TAGE)
-//                   -> S1 prediction g1, S1 override on disagreement (1 bubble, or 0 bubble with FTB_OVR_FAST bit 1)
-//   S2 (fallback)   2-slot Block-TAGE (4 tables x 2048 x 2) + single Block-ITT (3 tables x 256) + RAS
-//                   -> final prediction fin, S2 override only when long-history TAGE or ITT disagrees with S1
-//   Commit side     Commit-order block tracker -> block train queue -> updates uFTB, Main FTB, S1 mini-TAGE, S2 Block-TAGE, Block-ITT.
-//
-// All storage, indices, tags, counters and replacement policies are fixed-width and hardware-faithful.
+// Matches rtl/frontend/bpu/ cycle-for-cycle and bit-for-bit:
+//   S0 (0 bubble)   1-ahead registered SRAM select (aftb 2048x8, atage 1024x4x4, aitt 256x3) with uFTB (256x4, 20b tgt)
+//                   cold-start fallback; simultaneously launches the next-block 1-ahead SRAM read from (s0_base, s0_fh).
+//   S1 (cold ovr)   Exact-PC SRAM read: Main FTB (4096x4, 4 slots/entry, no slot swapping) + S2 Block-TAGE (4096x4x4 + base)
+//                   + Single Block-ITT (256x3). Triggers 1-bubble S1 override only on cold cycles (!r0.ah_hit).
+//   S2 (fallback)   Exact-PC/exact-history Block-TAGE + Block-ITT + RAS final prediction -> PTAB write, ftb_rec_[512] write,
+//                   2-bubble override on disagreement.
+//   Commit side     16-entry 1-branch/cycle queue (brq[16], never backpressures ROB) + 1R1W ftb_rec_[512] -> single-branch RMW
+//                   update to all 7 arrays.
 #include "BPU.h"
-#include "env.h"
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <vector>
 
 namespace bpuf {
 
-constexpr int FTB_SLOTS = 4;    // max branch slots stored per fetch block (runtime FTB_SLOTS in [2..4], NO slot swapping)
-constexpr int FTB_MAXW  = 8;    // max set-associativity supported by FtbTab
-constexpr int FTB_TQ_N  = 16;   // block-level commit train queue depth
-constexpr uint16_t FTB_TAGE_TAG_MASK = 0x3ffu;  // 10-bit TAGE tag (4x fewer false tag collisions than 8-bit)
-
-inline int ftb_active_slots() {
-  const int s = sim_env().ftb_slots;
-  return s < 2 ? 2 : (s > FTB_SLOTS ? FTB_SLOTS : s);
-}
+// Fixed geometry (matches rtl/frontend/bpu/bpu_types_pkg.sv)
+constexpr int FTB_SLOTS     = 4;
+constexpr int FTB_MAXW      = 8;
+constexpr int FTB_S0_N      = 256;
+constexpr int FTB_S0_W      = 4;
+constexpr int FTB_S0_TAGB   = 12;
+constexpr int FTB_S0_TGTB   = 20;
+constexpr int FTB_S1_N      = 4096;
+constexpr int FTB_S1_W      = 4;
+constexpr int FTB_S1_TAGB   = 14;
+constexpr int FTB_TAGE_N    = 4096;
+constexpr int FTB_ITT_N     = 256;
+constexpr int FTB_AH_N      = 2048;
+constexpr int FTB_AH_W      = 8;
+constexpr int FTB_AH_TAGE_N = 1024;
+constexpr int FTB_BRQ_N     = 16;
+constexpr int FTB_REC_N     = 512;
+constexpr uint16_t FTB_TAGE_TAG_MASK = 0x3ffu;
 
 struct FtbSlot {
   bool valid = false;
@@ -49,27 +56,24 @@ struct FtbEnt {
 
 // Block-level index/tag bundle computed ONCE in S0 from (block_base, spec_fh).
 struct FtbBlkIdx {
-  uint32_t w = 0;                 // low 32b of (base >> SLOT_SHIFT)
-  uint32_t base_idx = 0;          // base table index (full width, masked per table)
-  uint32_t idx[TN] = {};          // folded-history XOR pc index (full width, masked per table)
-  uint16_t tag[TN] = {};          // 10-bit tag per TAGE table
+  uint32_t w = 0;
+  uint32_t base_idx = 0;
+  uint32_t idx[TN] = {};
+  uint16_t tag[TN] = {};
 };
 
-// Exact prediction-time block record (shadow of FTQ per-block metadata for training)
+// Prediction-time block metadata stored in 512-entry 1R1W ftb_rec_
 struct FtbBlkRec {
   bool valid = false;
   uint16_t id = 0;
   pc_t base = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
-  // Phase 2 (FTB_AHEAD): exact prediction-time predecessor key & history
   bool ah_v = false;
   pc_t ah_key_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
 };
 
-// ---------------------------------------------------------------------------
-// Set-associative FTB table (used for both S0 uFTB and S1 Main FTB)
-// ---------------------------------------------------------------------------
+// Set-associative FTB table (used for S0 uFTB and S1 Main FTB)
 struct FtbTab {
   int N = 0, W = 1, S = 1, set_bits = 0, tag_bits = 14, tgt_bits = 0;
   std::vector<FtbEnt> e;
@@ -97,7 +101,6 @@ struct FtbTab {
   }
 
   bool lookup(pc_t base, FtbEnt &out) const {
-    if (N <= 0) return false;
     const uint32_t s = index(base);
     const uint16_t t = tag(base);
     for (int w = 0; w < W; w++) {
@@ -118,10 +121,9 @@ struct FtbTab {
     }
   }
 
-  // Invalidate a false branch slot (reported by predecode checker).
   void clear_slot(pc_t base, pc_t br_pc) {
     const bool carried = (br_pc + SLOT_BYTES == base);
-    if (N <= 0 || (!carried && br_pc < base)) return;
+    if (!carried && br_pc < base) return;
     const uint32_t off = carried ? 0u : static_cast<uint32_t>((br_pc - base) >> SLOT_SHIFT);
     const uint32_t s = index(base);
     const uint16_t t = tag(base);
@@ -139,20 +141,17 @@ struct FtbTab {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Block-indexed 2-slot TAGE (replaces 16-bank per-slot TAGE; also used for S1 mini-TAGE)
-// ---------------------------------------------------------------------------
+// Block-indexed 4-slot TAGE (used for S2 Block-TAGE and 1-Ahead Block-TAGE)
 struct BlockTage {
-  int N = 2048;
-  uint32_t mask = 2047;
-  uint32_t active_mask = 0xf;   // bitmask over TN tables (e.g. 0x3 for 2-table S1 mini-TAGE, 0xf for 4-table)
+  int N = FTB_TAGE_N;
+  uint32_t mask = FTB_TAGE_N - 1;
   std::vector<uint8_t> base[FTB_SLOTS];
   std::vector<uint16_t> tag[TN][FTB_SLOTS];
   std::vector<uint8_t> cnt[TN][FTB_SLOTS];
   std::vector<uint8_t> useful[TN][FTB_SLOTS];
   uint8_t lsfr = 8;
   uint32_t reset_cnt = 0;
-  uint8_t use_alt[64] = {};
+  uint8_t use_alt = static_cast<uint8_t>(TAGE_USE_ALT_CTR_INIT);
 
   struct RawSlot {
     uint8_t base_cnt = 0;
@@ -170,10 +169,9 @@ struct BlockTage {
     bool used_alt = false;
   };
 
-  void init(int entries, uint32_t amask = 0xf) {
-    N = entries > 0 ? entries : 256;
+  void init(int entries) {
+    N = entries;
     mask = static_cast<uint32_t>(N - 1);
-    active_mask = amask;
     for (int sl = 0; sl < FTB_SLOTS; sl++) {
       base[sl].assign(N, 0);
       for (int t = 0; t < TN; t++) {
@@ -184,7 +182,7 @@ struct BlockTage {
     }
     lsfr = 8;
     reset_cnt = 0;
-    for (auto &u : use_alt) u = static_cast<uint8_t>(TAGE_USE_ALT_CTR_INIT);
+    use_alt = static_cast<uint8_t>(TAGE_USE_ALT_CTR_INIT);
   }
 
   void read(const FtbBlkIdx &ix, Raw &r) const {
@@ -192,7 +190,6 @@ struct BlockTage {
     for (int sl = 0; sl < FTB_SLOTS; sl++) {
       r.s[sl].base_cnt = base[sl][bi];
       for (int t = 0; t < TN; t++) {
-        if (!((active_mask >> t) & 1u)) continue;
         const uint32_t ti = ix.idx[t] & mask;
         r.s[sl].tag[t] = tag[t][sl][ti];
         r.s[sl].cnt[t] = cnt[t][sl][ti];
@@ -204,7 +201,6 @@ struct BlockTage {
   void select_slot(const FtbBlkIdx &ix, const RawSlot &r, Pred &o, int base_override = -1) const {
     int pcpn = TN, altpcpn = TN;
     for (int t = 0; t < TN; t++) {
-      if (!((active_mask >> t) & 1u)) continue;
       if (r.tag[t] == ix.tag[t]) {
         altpcpn = pcpn;
         pcpn = t;
@@ -216,8 +212,7 @@ struct BlockTage {
     const bool pp = (pcpn == TN) ? bp : (r.cnt[pcpn] >= 4);
     const bool weak = (pcpn != TN) && (r.cnt[pcpn] == 3);
     const bool ulow = (pcpn != TN) && (r.useful[pcpn] == 0);
-    const bool prefer_alt = use_alt[ix.base_idx & (tcfg().ualt - 1)] <= 8;
-    o.used_alt = (pcpn != TN) && weak && ulow && prefer_alt;
+    o.used_alt = (pcpn != TN) && weak && ulow && (use_alt <= 8);
     o.pred = o.used_alt ? o.alt : pp;
   }
 
@@ -226,7 +221,6 @@ struct BlockTage {
     const uint32_t bi = ix.base_idx & mask;
     r.base_cnt = base[sl][bi];
     for (int t = 0; t < TN; t++) {
-      if (!((active_mask >> t) & 1u)) continue;
       const uint32_t ti = ix.idx[t] & mask;
       r.tag[t] = tag[t][sl][ti];
       r.cnt[t] = cnt[t][sl][ti];
@@ -241,16 +235,15 @@ struct BlockTage {
     if (pcpn == TN) {
       uint8_t &bc = base[sl][bi];
       bc = real_dir ? (bc < 3 ? bc + 1 : 3) : (bc > 0 ? bc - 1 : 0);
-    } else if (pcpn >= 0 && pcpn < TN && ((active_mask >> pcpn) & 1u)) {
+    } else if (pcpn >= 0 && pcpn < TN) {
       const uint32_t ti = ix.idx[pcpn] & mask;
       uint8_t &c = cnt[pcpn][sl][ti];
       const bool pdir = c >= 4;
       const bool weak = (c == 3);
       if (weak && pdir != alt_pred) {
-        uint8_t &ua = use_alt[bi & (tcfg().ualt - 1)];
-        const uint8_t uamax = static_cast<uint8_t>((1u << TAGE_USE_ALT_CTR_BITS) - 1u);
-        if (alt_pred == real_dir) { if (ua > 0) ua--; }
-        else { if (ua < uamax) ua++; }
+        constexpr uint8_t uamax = static_cast<uint8_t>((1u << TAGE_USE_ALT_CTR_BITS) - 1u);
+        if (alt_pred == real_dir) { if (use_alt > 0) use_alt--; }
+        else { if (use_alt < uamax) use_alt++; }
       }
       c = real_dir ? (c < 7 ? c + 1 : 7) : (c > 0 ? c - 1 : 0);
       if (pdir != alt_pred) {
@@ -260,12 +253,10 @@ struct BlockTage {
       }
     }
 
-    // Allocate on misprediction
     if (pred_dir != real_dir) {
       int free_t[TN]; int nf = 0;
       const int start_t = (pcpn == TN) ? 0 : (pcpn + 1);
       for (int t = start_t; t < TN; t++) {
-        if (!((active_mask >> t) & 1u)) continue;
         if (useful[t][sl][ix.idx[t] & mask] == 0) free_t[nf++] = t;
       }
       if (nf > 0) {
@@ -277,31 +268,24 @@ struct BlockTage {
         useful[chosen][sl][ti] = 0;
       } else {
         for (int t = start_t; t < TN; t++) {
-          if (!((active_mask >> t) & 1u)) continue;
           uint8_t &u = useful[t][sl][ix.idx[t] & mask];
           if (u > 0) u--;
         }
       }
     }
 
-    // LFSR & periodic useful reset
     const uint8_t fb = ((lsfr >> 3) ^ (lsfr >> 2)) & 1u;
     lsfr = static_cast<uint8_t>(((lsfr << 1) | fb) & 0xfu);
     if (lsfr == 0) lsfr = 1;
     reset_cnt++;
     if ((reset_cnt & ((1u << TageCfg::urst) - 1u)) == 0) {
       const uint32_t row = (reset_cnt >> TageCfg::urst) & mask;
-      for (int t = 0; t < TN; t++) {
-        if (!((active_mask >> t) & 1u)) continue;
-        useful[t][sl][row] &= 1u;
-      }
+      for (int t = 0; t < TN; t++) useful[t][sl][row] &= 1u;
     }
   }
 };
 
-// ---------------------------------------------------------------------------
-// Single Block-level Indirect Target Table (replaces 16-bank ITT)
-// ---------------------------------------------------------------------------
+// Single Block-level 3-table Indirect Target Table
 struct BlockItt {
   struct Ent {
     bool valid = false;
@@ -314,12 +298,12 @@ struct BlockItt {
     Ent e[ITT_MAX];
   };
 
-  int N = 256;
-  uint32_t mask = 255;
+  int N = FTB_ITT_N;
+  uint32_t mask = FTB_ITT_N - 1;
   std::vector<Ent> tbl[ITT_MAX];
 
   void init(int entries) {
-    N = entries > 0 ? entries : 256;
+    N = entries;
     mask = static_cast<uint32_t>(N - 1);
     for (int k = 0; k < ITT_MAX; k++) tbl[k].assign(N, Ent{});
   }
@@ -389,22 +373,17 @@ struct BlockItt {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Set-associative Ahead FTB table (Phase 2: indexed by key_base = pc_{t-k}, tagged by (key_base, cur_base))
-// ---------------------------------------------------------------------------
+// Set-associative 1-Ahead FTB table (indexed by key_base = pc_{t-1}, tagged by (key_base, cur_base))
 struct AheadFtbTab {
-  int N = 0, W = 8, S = 1, set_bits = 0;
+  int N = FTB_AH_N, W = FTB_AH_W, S = FTB_AH_N / FTB_AH_W, set_bits = 8;
   std::vector<FtbEnt> e;
 
   struct SetRaw {
-    int W = 0;
-    FtbEnt ways[FTB_MAXW];
+    FtbEnt ways[FTB_AH_W];
   };
 
   void init(int n, int w) {
-    W = w < 1 ? 1 : (w > FTB_MAXW ? FTB_MAXW : w);
-    N = n; S = (n > 0) ? (n / W) : 1;
-    if (S < 1) S = 1;
+    W = w; N = n; S = n / w;
     set_bits = ceil_log2_u32(static_cast<uint32_t>(S));
     e.assign(static_cast<size_t>(S) * W, FtbEnt{});
   }
@@ -416,23 +395,19 @@ struct AheadFtbTab {
   uint32_t tag(pc_t key_base, pc_t cur_base) const {
     const uint32_t wk = static_cast<uint32_t>(key_base >> SLOT_SHIFT);
     const uint32_t wc = static_cast<uint32_t>(cur_base >> SLOT_SHIFT);
-    const uint32_t tk = (wk >> set_bits) & 0x3ffu;   // 10b key_base tag
-    const uint32_t tc = (wc ^ (wc >> 12)) & 0xfffu;  // 12b cur_base folded tag
+    const uint32_t tk = (wk >> set_bits) & 0x3ffu;
+    const uint32_t tc = (wc ^ (wc >> 12)) & 0xfffu;
     return (tk << 12) | tc;
   }
 
-  // Stage t-k SRAM read: uses ONLY key_base!
   void read_set(pc_t key_base, SetRaw &raw) const {
-    raw.W = W;
-    if (N <= 0) { raw.W = 0; return; }
     const uint32_t s = index(key_base);
     for (int w = 0; w < W; w++) raw.ways[w] = e[s * W + w];
   }
 
-  // Stage t (S0) tag compare: uses ONLY latched SetRaw + (key_base, cur_base)!
   bool select_way(const SetRaw &raw, pc_t key_base, pc_t cur_base, FtbEnt &out) const {
     const uint32_t t = tag(key_base, cur_base);
-    for (int w = 0; w < raw.W; w++) {
+    for (int w = 0; w < W; w++) {
       if (raw.ways[w].valid && raw.ways[w].tag32 == t) {
         out = raw.ways[w];
         return true;
@@ -450,7 +425,6 @@ struct AheadFtbTab {
   }
 };
 
-// Latched ahead SRAM output (1-cycle or 2-cycle pipelined before S0)
 struct FtbAhRaw {
   AheadFtbTab::SetRaw ftb_set{};
   BlockTage::Raw tage_raw{};
@@ -464,18 +438,13 @@ struct FtbAhPipe {
   FtbAhRaw raw{};
 };
 
-// ---------------------------------------------------------------------------
-// S1 -> S2 registered raw bundle for Block-based FTB BPU (much smaller than 16-bank MainRaw)
-// ---------------------------------------------------------------------------
 struct FtbRaw {
   bool ftb_hit = false;
   FtbEnt ent{};
-  BlockTage::Raw s1_dir_raw{};
   BlockTage::Raw s2_tage_raw{};
   BlockItt::Raw itt_raw{};
 };
 
-// One committed branch within a tracked fetch block
 struct FtbTrkBr {
   uint8_t offset = 0;
   bool carried = false;
@@ -485,11 +454,9 @@ struct FtbTrkBr {
   bool pred_dir = false;
   bool alt_pred = false;
   uint8_t pcpn = TN;
-  tage_tag_t pred_tag0 = 0;
   pc_t target = 0;
 };
 
-// Block-level commit training event
 struct FtbTrainEv {
   pc_t start = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
@@ -498,11 +465,9 @@ struct FtbTrainEv {
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
   uint8_t nbr = 0;
   FtbTrkBr br[FW];
-  bool end_taken = false;
-  bool end_mispred_nt = false;
 };
 
-// RTL-style 1-branch commit queue entry (FTB_BRQ=1: zero block-tracker FSM, 1R1W ftb_rec_[512], 1-branch/cycle RMW)
+// 1-branch/cycle commit queue entry (matches rtl/frontend/bpu/bpu_ftb_brq.sv)
 struct FtbBrqEnt {
   uint16_t blk_id = 0;
   pc_t pc = 0;
@@ -512,90 +477,41 @@ struct FtbBrqEnt {
   bool pred_dir = false;
   bool alt_pred = false;
   uint8_t pcpn = TN;
-  tage_tag_t pred_tag0 = 0;
   pc_t target = 0;
 };
 
-// Commit-order block tracker state (kept inside BpuPipe::State)
 struct FtbTrkState {
+  // FastWarm block tracker state (used only by warm_commit)
   bool v = false;
-  uint16_t cur_blk = 0;
   pc_t start = 0;
   pc_t expect = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
-  bool ah_v = false;
-  pc_t ah_key_base = 0;
-  uint32_t ah_key_fh[FH_N_MAX][TN] = {};
   uint8_t nbr = 0;
   FtbTrkBr br[FW];
-  FtbTrainEv tq[FTB_TQ_N];
-  uint8_t tq_h = 0, tq_n = 0;
-  FtbBrqEnt brq[FTB_TQ_N];
+  // Commit-side 1-branch/cycle queue
+  FtbBrqEnt brq[FTB_BRQ_N];
   uint8_t brq_h = 0, brq_n = 0;
 };
 
-// ---------------------------------------------------------------------------
-// Complete Block-based FTB BPU subsystem (owned by BpuPipe when BPU_FTB=1)
-// ---------------------------------------------------------------------------
-struct FtbStats {
-  uint64_t s0_lookups = 0, s0_hits = 0;
-  uint64_t ah_lookups = 0, ah_hits = 0, ah_cold = 0;
-  uint64_t s1_lookups = 0, s1_hits = 0, s1_ovr = 0, s1_ovr_cap = 0, s1_ovr_dir = 0;
-  uint64_t s2_lookups = 0, s2_ovr = 0, s2_ovr_dir = 0, s2_ovr_itt = 0, s2_ovr_miss = 0;
-  uint64_t train_blocks = 0, train_drops = 0, slot_evicts = 0, pd_clears = 0;
-  uint64_t br_upd = 0, tag_mismatch = 0, pcpn_tn = 0;
-};
-
 struct BpuFtb {
-  FtbTab ftb0_;       // S0 uFTB
-  FtbTab ftb1_;       // S1 Main FTB
-  BlockTage s1_tage_; // S1 fast direction predictor (mini-TAGE)
-  BlockTage s2_tage_; // S2 main Block-TAGE
-  BlockItt itt_;      // S2 single Block-ITT
-  // Phase 2: Ahead-pipelined FTB + Block-TAGE + Block-ITT (used when FTB_AHEAD > 0)
-  AheadFtbTab aftb_;
-  BlockTage atage_;
-  BlockItt aitt_;
-  mutable FtbStats stats_{};
-
-  ~BpuFtb() {
-    if (sim_env().bpu_ftb && sim_env().ftb_stats && stats_.s0_lookups > 0) {
-      std::fprintf(stderr,
-        "[FTB_STATS] s0=%llu hit=%llu(%.1f%%) ah=%llu/%llu(%.1f%% cold=%llu) | s1=%llu hit=%llu(%.1f%%) ovr=%llu(cap=%llu dir=%llu) | "
-        "s2=%llu ovr=%llu(dir=%llu itt=%llu miss=%llu) | train=%llu drop=%llu evict3=%llu pdclr=%llu | br_upd=%llu tag_mm=%llu pcpn_tn=%llu\n",
-        (unsigned long long)stats_.s0_lookups, (unsigned long long)stats_.s0_hits,
-        100.0 * stats_.s0_hits / std::max<uint64_t>(1, stats_.s0_lookups),
-        (unsigned long long)stats_.ah_hits, (unsigned long long)stats_.ah_lookups,
-        100.0 * stats_.ah_hits / std::max<uint64_t>(1, stats_.ah_lookups),
-        (unsigned long long)stats_.ah_cold,
-        (unsigned long long)stats_.s1_lookups, (unsigned long long)stats_.s1_hits,
-        100.0 * stats_.s1_hits / std::max<uint64_t>(1, stats_.s1_lookups),
-        (unsigned long long)stats_.s1_ovr, (unsigned long long)stats_.s1_ovr_cap, (unsigned long long)stats_.s1_ovr_dir,
-        (unsigned long long)stats_.s2_lookups, (unsigned long long)stats_.s2_ovr,
-        (unsigned long long)stats_.s2_ovr_dir, (unsigned long long)stats_.s2_ovr_itt, (unsigned long long)stats_.s2_ovr_miss,
-        (unsigned long long)stats_.train_blocks, (unsigned long long)stats_.train_drops,
-        (unsigned long long)stats_.slot_evicts, (unsigned long long)stats_.pd_clears,
-        (unsigned long long)stats_.br_upd, (unsigned long long)stats_.tag_mismatch, (unsigned long long)stats_.pcpn_tn);
-    }
-  }
+  FtbTab ftb0_;       // S0 uFTB (256 x 4, 20b compressed target)
+  FtbTab ftb1_;       // S1/S2 Main FTB (4096 x 4, full target)
+  BlockTage s2_tage_; // S2 Block-TAGE (4096 x 4 slots x 4 tables + base)
+  BlockItt itt_;      // S2 Single Block-ITT (256 x 3 tables)
+  AheadFtbTab aftb_;  // 1-Ahead FTB (2048 x 8)
+  BlockTage atage_;   // 1-Ahead Block-TAGE (1024 x 4 slots x 4 tables, reuses aftb ctr as base)
+  BlockItt aitt_;     // 1-Ahead Block-ITT (256 x 3 tables)
 
   void reset() {
-    const SimEnv &env = sim_env();
-    ftb0_.init(env.ftb_s0_n, 4, 12, env.ftb_s0_tgtb);
-    ftb1_.init(env.ftb_s1_n, env.ftb_s1_w, 14, 0);
-    const uint32_t s1_mask = (env.ftb_s1_dir == 1) ? 0x3u : 0xfu;
-    s1_tage_.init(env.ftb_s1_dir_n, s1_mask);
-    s2_tage_.init(env.ftb_tage_n, 0xfu);
-    itt_.init(env.ftb_itt_n);
-    if (env.ftb_ahead > 0) {
-      aftb_.init(env.ftb_ah_n, env.ftb_ah_w);
-      atage_.init(env.ftb_ah_tage_n, 0xfu);
-      aitt_.init(env.ftb_itt_n);
-    }
-    stats_ = FtbStats{};
+    ftb0_.init(FTB_S0_N, FTB_S0_W, FTB_S0_TAGB, FTB_S0_TGTB);
+    ftb1_.init(FTB_S1_N, FTB_S1_W, FTB_S1_TAGB, 0);
+    s2_tage_.init(FTB_TAGE_N);
+    itt_.init(FTB_ITT_N);
+    aftb_.init(FTB_AH_N, FTB_AH_W);
+    atage_.init(FTB_AH_TAGE_N);
+    aitt_.init(FTB_ITT_N);
   }
 
-  // Compute block-level index & 10-bit tags ONCE per fetch block (in S0).
   static FtbBlkIdx make_index(pc_t base, const uint32_t fh[FH_N_MAX][TN]) {
     FtbBlkIdx ix;
     const uint32_t w = static_cast<uint32_t>(base >> SLOT_SHIFT);
@@ -608,7 +524,6 @@ struct BpuFtb {
     return ix;
   }
 
-  // Phase 2: Ahead index depends ONLY on (key_base, key_fh); tags depend on (cur_base, key_base, key_fh).
   static FtbBlkIdx make_ahead_index(pc_t key_base, pc_t cur_base, const uint32_t fh[FH_N_MAX][TN]) {
     FtbBlkIdx ix;
     const uint32_t wk = static_cast<uint32_t>(key_base >> SLOT_SHIFT);
@@ -622,7 +537,6 @@ struct BpuFtb {
     return ix;
   }
 
-  // Stage t-k ahead SRAM read: uses ONLY registered (key_base, key_fh)!
   void ahead_read(pc_t key_base, const uint32_t key_fh[FH_N_MAX][TN], FtbAhRaw &r) const {
     const FtbBlkIdx ix = make_ahead_index(key_base, 0, key_fh);
     aftb_.read_set(key_base, r.ftb_set);
@@ -630,63 +544,28 @@ struct BpuFtb {
     aitt_.read(ix, r.itt_raw);
   }
 
-  // Stage t (S0) ahead select: uses ONLY latched FtbAhPipe + current (base, bnd, rcnt, rtop) — ZERO SRAM access!
-  template <class S0GuessT, class MainOutT>
-  bool ahead_select(pc_t base, pc_t bnd, const FtbAhPipe &ah, uint8_t rcnt, target_addr_t rtop,
-                    S0GuessT &g, MainOutT &mo) const {
-    if (!ah.valid) { stats_.ah_cold++; return false; }
-    stats_.ah_lookups++;
+  template <class S0GuessT>
+  bool ahead_select(pc_t base, pc_t bnd, const FtbAhPipe &ah, uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
+    if (!ah.valid) return false;
     FtbEnt ent;
     if (!aftb_.select_way(ah.raw.ftb_set, ah.key_base, base, ent)) return false;
-    stats_.ah_hits++;
 
     const FtbBlkIdx ix = make_ahead_index(ah.key_base, base, ah.key_fh);
-    const int nsl = ftb_active_slots();
     bool dirs[FTB_SLOTS] = {};
     BlockTage::Pred tp[FTB_SLOTS];
-    for (int k = 0; k < nsl; k++) {
+    for (int k = 0; k < FTB_SLOTS; k++) {
       atage_.select_slot(ix, ah.raw.tage_raw.s[k], tp[k], ent.s[k].valid ? int(ent.s[k].ctr) : -1);
       dirs[k] = tp[k].pred;
     }
     target_addr_t itt_tgt = 0;
-    const bool itt_hit = sim_env().ftb_no_aitt ? false : aitt_.select(ix, ah.raw.itt_raw, itt_tgt);
+    const bool itt_hit = aitt_.select(ix, ah.raw.itt_raw, itt_tgt);
 
     g = S0GuessT{};
     g.hit = true;
-    bool slot_tk[FTB_SLOTS] = {};
-    eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g, slot_tk);
-
-    // Populate MainOut as well (used when FTB_AH_ONLY=2 skips S2 override)
-    mo = MainOutT{};
-    mo.next = g.next; mo.slot = g.slot; mo.type = g.type; mo.taken = g.taken;
-    mo.nbits = g.nbits; mo.bits = g.bits; mo.ras_op = g.ras_op; mo.ras_val = g.ras_val;
-    if (g.taken) {
-      for (int k = 0; k < nsl; k++) {
-        if (ent.s[k].valid && ent.s[k].offset == g.slot) { mo.rvc = ent.s[k].is_rvc; break; }
-      }
-    }
-    for (int i = 0; i < FW; i++) {
-      mo.meta.pcpn[i] = TN;
-      mo.meta.alt_pred[i] = false;
-      for (int t = 0; t < TN; t++) {
-        mo.meta.tage_idx[i][t] = static_cast<tage_idx_t>(ix.idx[t] & TAGE_IDX_MASK);
-        mo.meta.tage_tag[i][t] = static_cast<tage_tag_t>(ix.tag[t] & tcfg().tagmask[t]);
-      }
-    }
-    for (int k = 0; k < nsl; k++) {
-      const FtbSlot &sl = ent.s[k];
-      if (!sl.valid || sl.offset >= FW) continue;
-      if (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES >= bnd) continue;
-      const int off = sl.offset;
-      mo.dir[off] = slot_tk[k];
-      mo.meta.alt_pred[off] = tp[k].alt;
-      mo.meta.pcpn[off] = tp[k].pcpn;
-      mo.meta.ps_info[off] = ps_pack(sl.type, (br_ind(sl.type) && itt_hit) ? 4 : (sl.type == BR_RET && rcnt > 0 ? 7 : 1), tp[k].used_alt);
-    }
+    eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g);
     return true;
   }
 
-  // Evaluate an FTB entry: scan all active slots and pick the valid taken slot with MINIMUM offset (no slot swapping!).
   template <class GuessT>
   static void eval_ent(pc_t base, pc_t bnd, const FtbEnt &ent,
                        bool use_dir_ovr, const bool dir_ovr[FTB_SLOTS],
@@ -701,10 +580,9 @@ struct BpuFtb {
     g.bits = 0;
     g.ras_op = 0;
     g.ras_val = 0;
-    const int nsl = ftb_active_slots();
     int best_k = -1;
     uint8_t best_off = 255;
-    for (int k = 0; k < nsl; k++) {
+    for (int k = 0; k < FTB_SLOTS; k++) {
       const FtbSlot &sl = ent.s[k];
       if (!sl.valid) continue;
       const pc_t bpc = (sl.offset == 0 && sl.carried)
@@ -737,70 +615,41 @@ struct BpuFtb {
     }
   }
 
-  // S0 uFTB lookup (0 bubble)
   template <class S0GuessT>
   S0GuessT s0_lookup(pc_t base, pc_t bnd, uint8_t rcnt, target_addr_t rtop) const {
-    stats_.s0_lookups++;
     S0GuessT g{};
     g.next = bnd;
     FtbEnt ent;
     if (!ftb0_.lookup(base, ent)) return g;
-    stats_.s0_hits++;
     g.hit = true;
     const bool dummy[FTB_SLOTS] = {};
     eval_ent(base, bnd, ent, false, dummy, false, 0, rcnt, rtop, g);
     return g;
   }
 
-  // S1 array reads: Main FTB + S1 mini-TAGE + S2 Block-TAGE + Single Block-ITT
   void s1_read(pc_t base, const FtbBlkIdx &ix, FtbRaw &r) const {
-    stats_.s1_lookups++;
     r = FtbRaw{};
     r.ftb_hit = ftb1_.lookup(base, r.ent);
-    if (r.ftb_hit) stats_.s1_hits++;
-    if (sim_env().ftb_s1_dir == 1 || sim_env().ftb_s1_dir == 2) s1_tage_.read(ix, r.s1_dir_raw);
     s2_tage_.read(ix, r.s2_tage_raw);
     itt_.read(ix, r.itt_raw);
   }
 
-  // S1 prediction using Main FTB + S1 fast direction table (mini-TAGE / bimodal / oracle)
   template <class S0GuessT>
-  S0GuessT s1_predict(pc_t base, pc_t bnd, const FtbBlkIdx &ix, const FtbRaw &r, uint8_t rcnt, target_addr_t rtop) const {
+  S0GuessT s1_predict(pc_t base, pc_t bnd, const FtbRaw &r, uint8_t rcnt, target_addr_t rtop) const {
     S0GuessT g{};
     g.next = bnd;
     if (!r.ftb_hit) return g;
     g.hit = true;
-    const int dir_mode = sim_env().ftb_s1_dir;
-    bool use_dir = false;
-    bool dirs[FTB_SLOTS] = {};
-    const int nsl = ftb_active_slots();
-    if (dir_mode == 1 || dir_mode == 2) {
-      use_dir = true;
-      for (int k = 0; k < nsl; k++) {
-        BlockTage::Pred p;
-        s1_tage_.select_slot(ix, r.s1_dir_raw.s[k], p);
-        dirs[k] = p.pred;
-      }
-    } else if (dir_mode == 3) {
-      use_dir = true;
-      for (int k = 0; k < nsl; k++) {
-        BlockTage::Pred p;
-        s2_tage_.select_slot(ix, r.s2_tage_raw.s[k], p);
-        dirs[k] = p.pred;
-      }
-    }
-    eval_ent(base, bnd, r.ent, use_dir, dirs, false, 0, rcnt, rtop, g);
+    const bool dummy[FTB_SLOTS] = {};
+    eval_ent(base, bnd, r.ent, false, dummy, false, 0, rcnt, rtop, g);
     return g;
   }
 
-  // S2 fallback prediction using Main FTB + 2-slot Block-TAGE + Single Block-ITT + RAS
   template <class MainOutT>
   void s2_select(pc_t base, pc_t bnd, const FtbBlkIdx &ix, const FtbRaw &r,
                  uint8_t rcnt, target_addr_t rtop, MainOutT &o) const {
-    stats_.s2_lookups++;
     o = MainOutT{};
     o.next = bnd;
-    // Initialize default meta so cold branches still carry valid pcpn=TN and pred tag
     for (int i = 0; i < FW; i++) {
       o.meta.pcpn[i] = TN;
       o.meta.alt_pred[i] = false;
@@ -811,10 +660,9 @@ struct BpuFtb {
     }
     if (!r.ftb_hit) return;
 
-    const int nsl = ftb_active_slots();
     bool dirs[FTB_SLOTS] = {};
     BlockTage::Pred tp[FTB_SLOTS];
-    for (int k = 0; k < nsl; k++) {
+    for (int k = 0; k < FTB_SLOTS; k++) {
       s2_tage_.select_slot(ix, r.s2_tage_raw.s[k], tp[k]);
       dirs[k] = tp[k].pred;
     }
@@ -824,12 +672,11 @@ struct BpuFtb {
     bool slot_tk[FTB_SLOTS] = {};
     eval_ent(base, bnd, r.ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, o, slot_tk);
     if (o.taken) {
-      for (int k = 0; k < nsl; k++) {
+      for (int k = 0; k < FTB_SLOTS; k++) {
         if (r.ent.s[k].valid && r.ent.s[k].offset == o.slot) { o.rvc = r.ent.s[k].is_rvc; break; }
       }
     }
-    // Populate per-slot outputs for PTAB / PredecodeChecker / BpuTrain
-    for (int k = 0; k < nsl; k++) {
+    for (int k = 0; k < FTB_SLOTS; k++) {
       const FtbSlot &sl = r.ent.s[k];
       if (!sl.valid || sl.offset >= FW) continue;
       if (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES >= bnd) continue;
@@ -841,11 +688,8 @@ struct BpuFtb {
     }
   }
 
-  // ---- Commit-order block training -----------------------------------------------------------------------------------
-  // Insert/update one branch into an FTB entry WITHOUT swapping slot indices (so BlockTage slot k stays stable!).
-  int upsert_branch(FtbEnt &ent, const FtbTrkBr &b, bool count_evict) {
-    const int nsl = ftb_active_slots();
-    for (int k = 0; k < nsl; k++) {
+  static int upsert_branch(FtbEnt &ent, const FtbTrkBr &b) {
+    for (int k = 0; k < FTB_SLOTS; k++) {
       if (ent.s[k].valid && ent.s[k].offset == b.offset) {
         ent.s[k].type = b.type;
         ent.s[k].carried = b.carried;
@@ -861,14 +705,12 @@ struct BpuFtb {
       }
     }
     int pos = -1;
-    for (int k = 0; k < nsl; k++) if (!ent.s[k].valid) { pos = k; break; }
+    for (int k = 0; k < FTB_SLOTS; k++) if (!ent.s[k].valid) { pos = k; break; }
     if (pos < 0) {
       if (!b.actual_dir && b.type == BR_DIRECT) return -1;
-      if (count_evict) stats_.slot_evicts++;
-      // Evict the weakest conditional slot (lowest ctr), else last slot
-      pos = nsl - 1;
+      pos = FTB_SLOTS - 1;
       int min_c = 99;
-      for (int k = 0; k < nsl; k++) {
+      for (int k = 0; k < FTB_SLOTS; k++) {
         if (ent.s[k].type == BR_DIRECT && int(ent.s[k].ctr) < min_c) { min_c = ent.s[k].ctr; pos = k; }
       }
     }
@@ -884,12 +726,9 @@ struct BpuFtb {
     return pos;
   }
 
-  // Update an FtbTab with a block train event; returns pointer to updated entry (or nullptr if not allocated).
-  FtbEnt *update_tab(FtbTab &tab, const FtbTrainEv &ev, bool alloc_only_taken, bool count_evict) {
-    if (tab.N <= 0 || ev.nbr == 0) return nullptr;
-    // Check if any branch is eligible for this table (e.g. target compression filter for uFTB; BR_RET uses RAS so target width does not apply)
-    bool has_taken = false;
-    bool any_fits = false;
+  static FtbEnt *update_tab(FtbTab &tab, const FtbTrainEv &ev, bool alloc_only_taken) {
+    if (ev.nbr == 0) return nullptr;
+    bool has_taken = false, any_fits = false;
     for (int i = 0; i < ev.nbr; i++) {
       if (ev.br[i].actual_dir) has_taken = true;
       if (!ev.br[i].actual_dir || ev.br[i].type == BR_RET || tab.tgt_fits(ev.start, ev.br[i].target)) any_fits = true;
@@ -904,7 +743,6 @@ struct BpuFtb {
     }
     if (hit < 0) {
       if (alloc_only_taken && !has_taken) return nullptr;
-      // Pick invalid way or LRU way
       int vic = -1;
       for (int w = 0; w < tab.W; w++) if (!tab.e[s * tab.W + w].valid) { vic = w; break; }
       if (vic < 0) {
@@ -923,60 +761,34 @@ struct BpuFtb {
     for (int i = 0; i < ev.nbr; i++) {
       const FtbTrkBr &b = ev.br[i];
       if (b.actual_dir && b.type != BR_RET && !tab.tgt_fits(ev.start, b.target)) continue;
-      upsert_branch(en, b, count_evict);
+      upsert_branch(en, b);
     }
     bool any_v = false;
-    const int nsl = ftb_active_slots();
-    for (int k = 0; k < nsl; k++) if (en.s[k].valid) any_v = true;
-    if (!any_v) {
-      en.valid = false;
-      return nullptr;
-    }
+    for (int k = 0; k < FTB_SLOTS; k++) if (en.s[k].valid) any_v = true;
+    if (!any_v) { en.valid = false; return nullptr; }
     tab.touch_lru(s, hit);
     return &en;
   }
 
-  // Apply one block-level commit training event to all FTB/TAGE/ITT tables.
-  void apply_train_ev(const FtbTrainEv &ev, bool use_live_s1_pred = true) {
-    stats_.train_blocks++;
-    // 1. Update Main FTB (allocates all branch blocks) and uFTB (allocates only taken blocks to avoid S0 pollution)
-    FtbEnt *main_ent = update_tab(ftb1_, ev, /*alloc_only_taken=*/false, /*count_evict=*/true);
-    update_tab(ftb0_, ev, /*alloc_only_taken=*/true, /*count_evict=*/false);
+  void apply_train_ev(const FtbTrainEv &ev) {
+    FtbEnt *main_ent = update_tab(ftb1_, ev, false);
+    update_tab(ftb0_, ev, true);
     if (!main_ent) return;
 
     const FtbBlkIdx ix = make_index(ev.start, ev.fh);
-    const int s1_dir_mode = sim_env().ftb_s1_dir;
-    const int nsl = ftb_active_slots();
-
-    // 2. Update Block-TAGE, S1 mini-TAGE, and Single Block-ITT
     for (int i = 0; i < ev.nbr; i++) {
       const FtbTrkBr &b = ev.br[i];
       if (b.type == BR_DIRECT) {
         int sl = -1;
-        for (int k = 0; k < nsl; k++) {
+        for (int k = 0; k < FTB_SLOTS; k++) {
           if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
         }
-        if (sl >= 0) {
-          stats_.br_upd++;
-          if (b.pcpn == TN) stats_.pcpn_tn++;
-          if (b.pred_tag0 != static_cast<tage_tag_t>(ix.tag[0] & tcfg().tagmask[0])) stats_.tag_mismatch++;
-          // Update S2 Block-TAGE using prediction-time pcpn/alt/pred
-          s2_tage_.update_slot(ix, sl, b.actual_dir, b.pred_dir, b.alt_pred, b.pcpn);
-          // Update S1 mini-TAGE (if enabled) using its own prediction for this slot
-          if (s1_dir_mode == 1 || s1_dir_mode == 2) {
-            BlockTage::Pred sp;
-            s1_tage_.predict_slot(ix, sl, sp);
-            (void)use_live_s1_pred;
-            s1_tage_.update_slot(ix, sl, b.actual_dir, sp.pred, sp.alt, sp.pcpn);
-          }
-        }
+        if (sl >= 0) s2_tage_.update_slot(ix, sl, b.actual_dir, b.pred_dir, b.alt_pred, b.pcpn);
       }
-      if (br_ind(b.type) && b.actual_dir) {
-        itt_.update(ix, b.target);
-      }
+      if (br_ind(b.type) && b.actual_dir) itt_.update(ix, b.target);
     }
-    // 3. Phase 2: Train Ahead FTB, Ahead Block-TAGE, and Ahead Block-ITT
-    if (sim_env().ftb_ahead > 0 && ev.ah_v && aftb_.N > 0 && ev.nbr > 0) {
+
+    if (ev.ah_v && ev.nbr > 0) {
       const uint32_t s = aftb_.index(ev.ah_key_base);
       const uint32_t t = aftb_.tag(ev.ah_key_base, ev.start);
       int hit = -1;
@@ -998,7 +810,7 @@ struct BpuFtb {
         en.lru = static_cast<uint8_t>(aftb_.W - 1);
       }
       FtbEnt &aen = aftb_.e[s * aftb_.W + hit];
-      for (int i = 0; i < ev.nbr; i++) upsert_branch(aen, ev.br[i], /*count_evict=*/false);
+      for (int i = 0; i < ev.nbr; i++) upsert_branch(aen, ev.br[i]);
       aftb_.touch_lru(s, hit);
 
       const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, ev.start, ev.ah_key_fh);
@@ -1006,7 +818,7 @@ struct BpuFtb {
         const FtbTrkBr &b = ev.br[i];
         if (b.type == BR_DIRECT) {
           int sl = -1;
-          for (int k = 0; k < nsl; k++) {
+          for (int k = 0; k < FTB_SLOTS; k++) {
             if (aen.s[k].valid && aen.s[k].offset == b.offset) { sl = k; break; }
           }
           if (sl >= 0) {
@@ -1015,15 +827,12 @@ struct BpuFtb {
             atage_.update_slot(aix, sl, b.actual_dir, ap.pred, ap.alt, ap.pcpn);
           }
         }
-        if (br_ind(b.type) && b.actual_dir) {
-          aitt_.update(aix, b.target);
-        }
+        if (br_ind(b.type) && b.actual_dir) aitt_.update(aix, b.target);
       }
     }
   }
 
   void clear_false_branch(pc_t base, pc_t nb_pc) {
-    stats_.pd_clears++;
     ftb0_.clear_slot(base, nb_pc);
     ftb1_.clear_slot(base, nb_pc);
   }

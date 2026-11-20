@@ -12,6 +12,7 @@ python3 - "$OUT/link.lds.0" "$OUT/link.lds" <<'PY'
 import sys
 t=open(sys.argv[1]).read()
 t=t.replace("  .data ","  .rodata : { *(.rodata .rodata.* .srodata .srodata.*) } >ram AT>ram\n  .data ",1)
+t=t.replace("PROVIDE( __global_pointer = . + 0x800 );","*(.data .data.* .sdata .sdata.*)\n    PROVIDE( __global_pointer = . + 0x800 );",1)
 t=t.replace("  .dma_buffer","  .bss (NOLOAD) : { *(.sbss .sbss.* .bss .bss.* COMMON) . = ALIGN(8); } >ram AT>ram\n\n  .dma_buffer",1)
 open(sys.argv[2],"w").write(t)
 PY
@@ -26,7 +27,7 @@ for t in "${tests[@]}"; do
   ok=1
   for s in "${srcs[@]}"; do
     o=$d/$(basename "$s").o
-    cf=$CF; case $t in fd-*) cf=$CFD;; esac
+    cf=$CF; case $t in fd-*) cf=$CFD;; unalign) cf="$CF -fmax-type-align=1";; esac
     $L/clang $cf -c "$s" -o "$o" 2>"$d/cc.log" || { ok=0; break; }; objs+=("$o")
   done
   [ $ok = 1 ] && ${LLD:-/opt/homebrew/bin/ld.lld} -T "$OUT/link.lds" --gc-sections "${objs[@]}" -o "$d/$t.elf" 2>"$d/ld.log" \

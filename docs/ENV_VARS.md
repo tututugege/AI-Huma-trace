@@ -21,6 +21,7 @@
 | `LSU_PIPE_EVT` | 关 | 每拍打印 LSU 边界事件（`E t=..`），与 RTL tb 的 `SOC_TB_LSUEVT` 同格式，逐拍对齐 LSU 用 | `back-end/Lsu/RealLsuPipe.cpp` |
 | `FPR_DUMP` | 关 | `<from>:<to>`：再逐条打印这段周期里的事件（`FPRRAW`） | 同上 |
 | `DS3_OUT` | `ds3_out` | DRAMsim3 输出目录（并行运行时每个运行一个） | `axi-interconnect-kit/sim_ddr/include/SimDDR_DS3.h` |
+| `DS3_CONFIG` | 编译期默认 `.ini` | DRAMsim3 配置文件路径覆盖（跨机静态二进制在集群运行时使用） | `axi-interconnect-kit/sim_ddr/include/SimDDR_DS3.h` |
 
 ## 已删除（2026-11-16，exp/tm-simplify）
 

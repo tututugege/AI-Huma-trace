@@ -20,26 +20,6 @@ struct SimEnv {
   int fe_pair = 0;                   // FE_PAIR: two fetch blocks per cycle
   int fe_ipf = 0;                    // FE_IPF: I-cache prefetch
   int fe_ipf_lat = 12;               // FE_IPF_LAT: its latency (cycles)
-  // Block-based FTB BPU (exp/ftb-bpu, Phase 1; default off -> cycle-identical to main)
-  int bpu_ftb = 0;                   // BPU_FTB=1: enable block-based FTB + S1 fast pred + S2 2-slot TAGE/ITT
-  int ftb_s0_n = 256;                // FTB_S0_N: S0 uFTB entries (4-way)
-  int ftb_s0_tgtb = 20;              // FTB_S0_TGTB: S0 uFTB target compression bits (0 = full 64b)
-  int ftb_s1_n = 2048;               // FTB_S1_N: S1 Main FTB entries
-  int ftb_s1_w = 4;                  // FTB_S1_W: S1 Main FTB associativity
-  int ftb_s1_dir = 2;                // FTB_S1_DIR: 0=bimodal, 1=2-table mini-TAGE, 2=4-table mini-TAGE, 3=S2-TAGE oracle
-  int ftb_s1_dir_n = 256;            // FTB_S1_DIR_N: S1 mini-TAGE entries per table (x2 slots)
-  int ftb_tage_n = 2048;             // FTB_TAGE_N: S2 Block-TAGE entries per table (x2 slots)
-  int ftb_itt_n = 256;               // FTB_ITT_N: S2 Single Block-ITT entries per table (x3 tables)
-  int ftb_ovr_fast = 0;              // FTB_OVR_FAST: same-cycle re-issue on override (bit 0 = S2, bit 1 = S1)
-  int ftb_slots = 4;                 // FTB_SLOTS: max branch slots per FTB entry (2..4, default 4 for non-truncating 32B RVC blocks)
-  int ftb_ahead = 0;                 // FTB_AHEAD: 0=off, 1=1-ahead (cycle t-1 SRAM), 2=2-ahead (cycle t-2 SRAM)
-  int ftb_ah_only = 0;               // FTB_AH_ONLY: 0=S1+S2 verify, 1=S2 verify only (skip S1 on ah_hit), 2=pure ahead (no S1/S2 ovr on ah_hit)
-  int ftb_ah_n = 4096;               // FTB_AH_N: ahead FTB total entries
-  int ftb_ah_w = 8;                  // FTB_AH_W: ahead FTB associativity (4 or 8 ways to hold multi-step successors)
-  int ftb_ah_tage_n = 4096;          // FTB_AH_TAGE_N: ahead Block-TAGE entries per table
-  int ftb_brq = 0;                   // FTB_BRQ=1: RTL-style 1-branch/cycle br_q[16] + 1R1W ftb_rec_[512] (no block tracker FSM)
-  int ftb_no_aitt = 0;               // FTB_NO_AITT=1: omit ahead ITT (S2 ITT still predicts indirect targets)
-  bool ftb_stats = false;            // FTB_STATS=1: print FTB hit/override/eviction stats on exit
   // L1D prefetcher
   const char *pf_enable = nullptr;   // PF_ENABLE (raw; the prefetcher has the default)
   // RTL comparison and alignment prints
@@ -61,25 +41,6 @@ struct SimEnv {
     if (const char *v = std::getenv("FE_PAIR")) fe_pair = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF")) fe_ipf = std::atoi(v);
     if (const char *v = std::getenv("FE_IPF_LAT")) fe_ipf_lat = std::atoi(v);
-    if (const char *v = std::getenv("BPU_FTB")) bpu_ftb = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S0_N")) ftb_s0_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S0_TGTB")) ftb_s0_tgtb = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S1_N")) ftb_s1_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S1_W")) ftb_s1_w = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S1_DIR")) ftb_s1_dir = std::atoi(v);
-    if (const char *v = std::getenv("FTB_S1_DIR_N")) ftb_s1_dir_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_TAGE_N")) ftb_tage_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_ITT_N")) ftb_itt_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_OVR_FAST")) ftb_ovr_fast = std::atoi(v);
-    if (const char *v = std::getenv("FTB_SLOTS")) ftb_slots = std::atoi(v);
-    if (const char *v = std::getenv("FTB_AHEAD")) ftb_ahead = std::atoi(v);
-    if (const char *v = std::getenv("FTB_AH_ONLY")) ftb_ah_only = std::atoi(v);
-    if (const char *v = std::getenv("FTB_AH_N")) ftb_ah_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_AH_W")) ftb_ah_w = std::atoi(v);
-    if (const char *v = std::getenv("FTB_AH_TAGE_N")) ftb_ah_tage_n = std::atoi(v);
-    if (const char *v = std::getenv("FTB_BRQ")) ftb_brq = std::atoi(v);
-    if (const char *v = std::getenv("FTB_NO_AITT")) ftb_no_aitt = std::atoi(v);
-    if (const char *v = std::getenv("FTB_STATS")) ftb_stats = v[0] == '1';
     pf_enable = std::getenv("PF_ENABLE");
     lsu_pipe_evt = std::getenv("LSU_PIPE_EVT") != nullptr;
     lsu_pipe_stq = std::getenv("LSU_PIPE_STQ");
