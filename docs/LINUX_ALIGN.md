@@ -95,3 +95,12 @@ A/B 开关：`MSD_NOPREV=1` 关闭修复。
 4. **模型**（`MsData.h`、`RealLsuPipe.h`、`LsuPipeWriteback.cpp`）：s08 周期 3214679。访存相关性推测（LSU_MEMSPEC）下，一条推测 load 写回两次：第一次（`rob_defer=1`，ROB 不完成）把读到的值写进目的寄存器，第二次（`second=1`，违例时带 `flush_pipe`，是修正值）覆盖它（设计见 rtl `docs/modules/lsu.md`，EXP-019，`f6daf0a`）。本例里第一次写回的值恰好等于真值（干净），第二次是陈旧值 `0`，依赖这条 load 的分支与第二次写回**同拍**执行。RTL 在 grant 时读寄存器堆，同拍写回不可见，分支读到第一次的值，判成 taken、与预测不同，误预测、多取了一段错误路径；模型的 `6916f44`（上一节）只在“旧值也是陈旧值”时保留旧值一拍，这里旧值是干净的，没保留，分支直接读到新值 `0`，不误预测（`[MSD] BRANCH FLIP … mispred=0`）。修复：`MsLdq::early_clean`（早期写回把干净值写进寄存器）、`set_taint(..., keep_clean)`、`TV::pclean`：最终写回覆盖时，同拍的消费者仍读自己的真值（`f->rs1_value`）。这个差别只影响时序（消费者比违例的 load 年轻，会被违例冲刷冲掉）。
 
 验证：模型 67 个程序周期对 ev5 差 0；12 个窗口 PASS；Linux 从复位启动到 `rv64 login:`（无 oops / panic）。诊断方法：窗口取两边 `FPR_DUMP` 原始事件（PT / UP 分流比较），RTL 用 `SOC_TB_VCD=<from>:<to>:<file>` 波形（`--trace` 构建，`SOC_TB_TRACE`），模型 `MSD_TRACE=1`。
+
+
+## 2026-11-20：EXP-048（MSHR 16/16 + LLC BOP + 硬件 L1 Berti）全程 27 窗 Linux 对齐
+
+在 5M 指令步长、覆盖完整启动 `0 → 130M`（直至 `rv64 login:`）的 27 个 rv64gc Linux 窗口（`s00..s26`，每窗 `SOC_TB_MAX_INSTS=5100000`）上验证 `exp/pf-berti-bop`（RTL）对 `sim64_bop14`（`PF_KIND=4 LLC_BOP=1`），定位并修掉了三类问题：
+
+1. **RTL `axi_llc_pkg.sv`（`VQD = 8 → 32`）**：`s01` / `s07` 在 16 MSHR + LLC BOP 并发换出下触发 `axi_llc_victim: victim queue full` 断言；模型 `AXI_LLC.h` 深度本就是 32，RTL 同步扩至 32（`NVL = 51`）后消除。
+2. **双边译码器（RTL `idu_ctrl_decode.sv` + 模型 `bridge/InstDecode.cpp`）**：`s03` 周期 44,141，分支误预测跳入 32-bit 指令中间，取出非法 `OP-32` 编码 `0x0d13e4bb`（`funct7=0x06, funct3=6, rd=s1`）。原译码器把任意 `funct7 != 1` 的 `OP-32` 都当作合法 ALU，导致 RTL 改写了 `s1` 而 `Ref_cpu` 识别为非法指令未改 `s1`，下游错误路径 `ld a5, 8(s1)` 地址分叉。双边同步补全 `OP-32` 精确合法性检查后，`s03` 全程 0 差异。
+3. **模型 `back-end/Lsu/LsuPipeInternal.h`（`ms_load_value` 跨 dword 非对齐 load）**：`s20` 周期 2,137,691，错误路径 `ld a5, 0(a0)`（`0x800ebc3a`）的陈旧基址为 `0xffffffff800484de`（`off = 6, lw = 8`，`off + lw = 14 > 8`）。原代码 `if (off + lw > XB) return false;` 直接放弃打污点，而 RTL `lsu_pkg.sv:extract_data` 不拆跨边界访问，直接对单个对齐 dword 右移 `8 * off` 位再按 `funct3` 扩展写回。删除该早退并统一改为 `msd::load_extend(word >> (8 * off), func3)` 后，`s20` 全程 7,226 箱 0 差异。
