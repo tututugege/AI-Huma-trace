@@ -284,6 +284,16 @@ void TlbMmu::comb(bool flush, bool cancel, const Req *req, Resp *resp, int n) {
     walk_next_ = {};
     walk_next_valid_ = true;
   }
+  if (kind_ == Kind::DTLB && pf_page_ != ~vaddr_t(0)) {   // EXP-048: a prefetch translation's walk ended in a fault: drop it
+    const WalkRegs &wk = walk();
+    const PtwWalkPortCombOut &p = port();
+    if (wk.active && wk.req_sent && p.resp_valid && page_of(p.resp.vaddr) == page_of(wk.v_addr) && (wk.v_addr >> 12) == pf_page_ &&
+        take_completed_walk(true)) {
+      walk_next_ = {};
+      walk_next_valid_ = true;
+      pf_page_ = ~vaddr_t(0);
+    }
+  }
   WalkRegs w = walk();
   for (int p = 0; p < n; p++) resp[p] = req[p].valid ? translate_one(req[p], context(req[p].type), w) : Resp{};
   walk_next_ = w;

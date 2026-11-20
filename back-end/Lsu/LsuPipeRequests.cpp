@@ -1,5 +1,6 @@
 // The staged LSU: requests phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
 #include "LsuPipeInternal.h"
+#include "DseCap.h"
 
 void RealLsu::mmio_out() {
   out.peripheral_req->is_mmio = false;
@@ -41,7 +42,7 @@ void RealLsu::dis2lsu() {
   for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) {
     if (!d.alloc_req[i]) continue;
     const UopS &u = uop_pool[d.id[i]];
-    if (pnxt.stq_count >= STQ_SIZE) continue;
+    if (pnxt.stq_count >= (uint32_t)g_dse.stq) continue;
     if (u.stq_flag != stq_tail_flag(pnxt.stq_head, pnxt.stq_count, pnxt.stq_head_flag)) continue;
     PStq &e = pnxt.stq[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE];
     e = {};
@@ -145,6 +146,8 @@ void RealLsu::lsu2dcache_ldq() {
       ports[k].valid = true;
       ports[k].addr = l.paddr;
       ports[k].req_id = (uint32_t(e.epoch) << LDQ_IDX_WIDTH) | l.ldq;
+      ports[k].pc = e.pc();
+      ports[k].vaddr = e.vaddr;
       ports[k].replay = e.rtype != (uint8_t)ReplayType::HIT;
     }
     sl.epoch = e.epoch;

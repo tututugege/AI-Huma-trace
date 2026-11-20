@@ -1,4 +1,5 @@
 #include "AXI_LLC.h"
+#include "Bop.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,22 @@ constexpr uint8_t kInvalidReadMaster = NUM_READ_MASTERS;
 
 // Only the data cache may have several demand misses in flight.
 bool allow_parallel_demand_mshr(uint8_t master) { return master == MASTER_DCACHE_R; }
+
+// EXP-048: LLC_BOP=1 turns the Best-Offset prefetcher on in the LLC (parameters LLC_BOP_*; LLC_BOP_RES MSHRs kept for demand
+// misses, LLC_BOP_INF prefetch MSHRs in flight at most)
+struct LlcBopCfg {
+  bool on = false;
+  int res = 2, inf = 4;
+  Bop *bop = nullptr;
+  LlcBopCfg() {
+    auto g = [](const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; };
+    on = g("LLC_BOP", 1) != 0;
+    res = g("LLC_BOP_RES", res);
+    inf = g("LLC_BOP_INF", inf);
+    if (on) { bop = new Bop("LLC_BOP"); g_bop_llc = bop; }
+  }
+};
+LlcBopCfg &llc_bop() { static LlcBopCfg c; return c; }
 
 uint32_t read_u32_le(const uint8_t *p) {
   return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
@@ -548,7 +565,7 @@ void AXI_LLC::set_config(const AXI_LLCConfig &config) {
 }
 
 void AXI_LLC::reset() {
-  io = {};
+  io = AXI_LLC_IO_t();
   memo_drop();
   io.regs.enable_r = config_.enable;
   io.regs.state = config_.enable ? AXI_LLCState::kIdle : AXI_LLCState::kDisabled;
@@ -703,6 +720,12 @@ bool AXI_LLC::prefetch_candidate_exists(const AXI_LLC_Regs_t &regs, uint32_t lin
 
 // A prefetch never takes the last free MSHR and only one is in flight at a time.
 bool AXI_LLC::can_allocate_prefetch_mshr(const AXI_LLC_Regs_t &regs) const {
+  if (llc_bop().on) {
+    if (int(count_free_mshrs(regs)) <= llc_bop().res) return false;
+    int n = 0;
+    for (uint32_t i = 0; i < mshr_limit(); ++i) n += regs.mshr[i].valid && regs.mshr[i].is_prefetch;
+    return n < llc_bop().inf;
+  }
   if (count_free_mshrs(regs) <= 1) return false;
   for (uint32_t i = 0; i < mshr_limit(); ++i)
     if (regs.mshr[i].valid && regs.mshr[i].is_prefetch) return false;
@@ -757,6 +780,16 @@ void AXI_LLC::try_schedule_prefetch(const AXI_LLCMissEntry_t &entry) {
 
 void AXI_LLC::try_launch_prefetch_lookup() {
   const auto &regs = io.reg_write;
+  if (llc_bop().on) {
+    if (bop_q_.empty() || regs.lookup_valid_r || !io.ext_in.mem.prefetch_allow || !can_allocate_prefetch_mshr(regs)) return;
+    bop_ev_.launched = true;   // seq pops the head (launched or dropped as already in flight)
+    const uint32_t a = bop_q_.front();
+    if (find_mshr_by_line_addr(regs, a) >= 0) return;
+    bop_ev_.sent = true;
+    start_lookup(a, uint8_t(config_.line_bytes - 1), kInvalidReadMaster, uint8_t(AXI_LLC_MAX_PREFETCH_QUEUE), true, false, false,
+                 false);
+    return;
+  }
   if (regs.lookup_valid_r || !io.ext_in.mem.prefetch_allow || has_demand_mshr(regs) ||
       count_free_mshrs(regs) != mshr_limit() || regs.prefetch_quiet_cycles_r == 0)
     return;
@@ -929,6 +962,11 @@ bool AXI_LLC::complete_hit_lookup(bool table_busy, uint32_t set, uint32_t tag, u
   if (!r.lookup_is_bypass_r) {  // a demand hit updates the replacement state and consumes the prefetch mark
     put_repl(t.repl, set, repl_after_use(decode_repl(io.lookup_in.repl), config_.ways, uint32_t(hit_way)));
     if (hit_meta.flags & AXI_LLC_META_PREFETCH) {
+      if (llc_bop().on && r.lookup_master_r == MASTER_DCACHE_R) {
+        bop_ev_.trig = true;   // EXP-048 trigger: the first demand use of a prefetched line
+        bop_ev_.trig_pf = true;
+        bop_ev_.trig_line = line_addr(config_, r.lookup_addr_r);
+      }
       AXI_LLCMetaEntry_t meta = hit_meta;
       meta.flags = uint8_t(meta.flags & ~AXI_LLC_META_PREFETCH);
       put_meta(t.meta, set, uint32_t(hit_way), meta);
@@ -1033,6 +1071,10 @@ bool AXI_LLC::complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int 
     }
     return true;
   };
+  if (llc_bop().on && !prefetch && !r.lookup_is_bypass_r && r.lookup_master_r == MASTER_DCACHE_R) {
+    bop_ev_.trig = true;   // EXP-048 trigger: an L1D read missing in the LLC (recorded at every attempt; the same line)
+    bop_ev_.trig_line = line;
+  }
   if (find_mshr_by_line_addr(r, line) >= 0) return give_up();
   const int free_slot = find_free_mshr(r);
   if (free_slot < 0 || (prefetch && !can_allocate_prefetch_mshr(r))) return give_up();
@@ -1412,6 +1454,11 @@ void AXI_LLC::drive_mem_read_path() {
     }
     AXI_LLCMetaEntry_t meta{e.tag, uint8_t(AXI_LLC_META_VALID | (e.is_prefetch ? AXI_LLC_META_PREFETCH : 0))};
     if (e.is_write) meta.flags = uint8_t(AXI_LLC_META_VALID | AXI_LLC_META_DIRTY);
+    if (llc_bop().on && !e.is_write) {   // EXP-048: the recent-requests table is written at fill time
+      bop_ev_.fill = true;
+      bop_ev_.fill_line = e.line_addr;
+      bop_ev_.fill_pf = e.is_prefetch;
+    }
     write_line_tables(e.set, e.way, meta, uint32_t((e.way + 1) % config_.ways));
     if (e.is_write) {
       w.write_ctx[e.master].cache_done = true;
@@ -1445,7 +1492,7 @@ void AXI_LLC::accept_new_requests() {
   const auto &req = io.ext_in.upstream.read_req[master];
   io.ext_out.upstream.read_req[master].ready = true;
   io.reg_write.rr_read_master_r = uint8_t((master + 1) % NUM_READ_MASTERS);
-  for (auto &p : io.reg_write.prefetch_q) p = {};  // a demand request invalidates the pending stream
+  if (!llc_bop().on) for (auto &p : io.reg_write.prefetch_q) p = {};  // a demand request invalidates the pending stream
   start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass);
 }
 
@@ -1617,6 +1664,7 @@ void AXI_LLC::memo_record() {
 }
 
 void AXI_LLC::comb() {
+  bop_ev_ = {};
   for (const auto &m : memo_) {
     if (m.valid && memo_matches(m)) {
       io.ext_out = m.ext_out;
@@ -1635,7 +1683,29 @@ void AXI_LLC::comb() {
   if (rw_is_regs_) memo_record();
 }
 
+void AXI_LLC::bop_seq() {
+  Bop *b = llc_bop().bop;
+  const uint32_t lb = config_.line_bytes;
+  if (bop_ev_.launched && !bop_q_.empty()) bop_q_.erase(bop_q_.begin());
+  b->stats_sent += bop_ev_.sent;
+  b->stats_useful += bop_ev_.trig && bop_ev_.trig_pf;
+  if (bop_ev_.fill) b->fill(bop_ev_.fill_line / lb, bop_ev_.fill_pf);
+  if (bop_ev_.trig) {
+    uint32_t out[8];
+    const int n = b->trigger(bop_ev_.trig_line / lb, out, 8);
+    for (int i = 0; i < n; i++) {
+      const uint32_t a = out[i] * lb;
+      if (std::find(bop_q_.begin(), bop_q_.end(), a) != bop_q_.end()) continue;
+      if (bop_q_.size() >= AXI_LLC_MAX_PREFETCH_QUEUE) bop_q_.erase(bop_q_.begin());
+      bop_q_.push_back(a);
+    }
+  }
+  bop_ev_ = {};
+  if (!bop_q_.empty()) memo_drop();   // the launch depends on the queue, which the memoised comb does not see
+}
+
 void AXI_LLC::seq() {
+  if (llc_bop().on) bop_seq();
   if (rw_is_regs_) return;
   copy_regs_live(io.regs, io.reg_write);
   rw_is_regs_ = true;

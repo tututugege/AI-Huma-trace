@@ -93,11 +93,21 @@ DecodedInst decode_inst(uint32_t inst) {
     r.imm = immI(inst);
     r.is_word = true;
     break;
-  case 0b0111011:  // OP-32: addw, subw, sllw, srlw, sraw, add.uw, shNadd.uw, rolw, rorw, zext.h; funct7 == 1 is mulw/divw/divuw/remw/remuw
-    set(true, true, true, f7 == 1 ? ((f3 & 0b100) ? DIV : MUL) : ADD);
+  case 0b0111011: {  // OP-32: addw, subw, sllw, srlw, sraw, add.uw, shNadd.uw, rolw, rorw, zext.h; funct7 == 1 is mulw/divw/divuw/remw/remuw
+    const bool m_mul = (f7 == 1) && (f3 == 0);
+    const bool m_div = (f7 == 1) && ((f3 & 0b100) != 0);
+    const bool alu_ok =
+      (f7 == 0x00 && (f3 == 0 || f3 == 1 || f3 == 5)) ||
+      (f7 == 0x20 && (f3 == 0 || f3 == 5)) ||
+      (f7 == 0x04 && (f3 == 0 || (f3 == 4 && r.rs2 == 0))) ||
+      (f7 == 0x10 && (f3 == 2 || f3 == 4 || f3 == 6)) ||
+      (f7 == 0x30 && (f3 == 1 || f3 == 5));
+    if (!m_mul && !m_div && !alu_ok) { set(false, false, false, NOP); r.illegal = true; break; }
+    set(true, true, true, m_div ? DIV : (m_mul ? MUL : ADD));
     r.src2_is_imm = false;
     r.is_word = true;
     break;
+  }
   case number_9_opcode_fence:  // funct3 001 is fence.i
     set(false, false, false, f3 == 0b001 ? FENCE_I : FENCE);
     break;

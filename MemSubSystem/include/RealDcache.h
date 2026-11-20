@@ -28,6 +28,8 @@ struct S1S2Reg {
         reg<1>    perf_replay = false;
         reg<1>    pf = false;        // prefetch tag probe riding an idle load port (no response to the LSU)
         reg<1>    pf_llc = false;    // ... whose line only goes to the LLC
+        reg<32>   pc = 0;            // EXP-048: the load's PC (prefetcher training)
+        reg<64>   va = 0;            // EXP-048: the load's virtual address
     } loads[LSU_LDU_COUNT];
 
     // Store slots
@@ -78,6 +80,8 @@ private:
         reg<1> valid = false;
         reg<32> addr = 0;
         reg<32> req_id = 0;
+        reg<32> pc = 0;
+        reg<64> va = 0;
     };
     struct BankRetryStore {
         reg<1> valid = false;
@@ -126,4 +130,5 @@ private:
     void record_metadata();
 public:
     DataPrefetcher pf; // L1D data prefetcher (EXP-009)
+    int pf_probe_outcome_ = 0;   // EXP-048 diagnostics: 1 alloc, 2 present, 3 in an MSHR, 4 no MSHR
 };

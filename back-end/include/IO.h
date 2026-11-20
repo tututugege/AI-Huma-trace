@@ -416,6 +416,8 @@ struct LoadReq {
   wire<32> addr;
   wire<32> req_id;
   wire<1> replay;
+  wire<32> pc = 0;   // EXP-048: the load's PC (L1D prefetcher training, Berti)
+  wire<XLEN> vaddr = 0;   // EXP-048: the load's virtual address (Berti in virtual mode)
 };
 
 struct StoreReq {

@@ -49,6 +49,12 @@ public:
   void reset();   // empty table, no walk (init; the walk port is not touched)
   // FE_IPF: translation without any side effect (no walk, no TLB update); false when the TLB cannot translate it now
   bool peek_translate(uint32_t &p_addr, vaddr_t v_addr, uint32_t type) const;
+  bool walk_busy() const { return walk_.active; }   // EXP-048: a page-table walk is in flight (registered state)
+  // EXP-048: the page of the prefetch translation sent this cycle; a walk for it that completes with a fault is dropped (nobody
+  // asks for that page again to consume it)
+  void set_pf_page(vaddr_t v_addr) { pf_page_ = v_addr >> 12; }
+  vaddr_t walk_page_next() const { const WalkRegs &w = walk(); return w.active ? (w.v_addr >> 12) : ~vaddr_t(0); }
+  vaddr_t pf_page_ = ~vaddr_t(0);
   // Fast-warmup replay (EXP-011): load a ready-made TLB state (entries in slot order, round-robin pointer).
   void warm_install(const TlbEntry *entries, int count, int repl_ptr);
 

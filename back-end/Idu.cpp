@@ -4,6 +4,7 @@
 #include "RISCV.h"
 #include "BackPorts.h"
 #include "config.h"
+#include "DseCap.h"
 #include "ref.h"
 #include "util.h"
 #include "InstDecode.h"
@@ -27,7 +28,7 @@ void Idu::decode() {
   const Regs &q = q_;
   bool alloc_valid[DECODE_WIDTH];
   int tags = 0;
-  for (int i = 0; i < MAX_BR_NUM && tags < max_br_per_cycle; i++)
+  for (int i = 0; i < g_dse.br && tags < max_br_per_cycle; i++)
     if (q.tag_vec[i]) {
       alloc_tag[tags] = i;
       alloc_valid[tags++] = true;

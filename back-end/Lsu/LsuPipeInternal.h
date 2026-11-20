@@ -130,8 +130,8 @@ inline Conf stlf_confirm(const PLdq &e, const PStq &s, bool alive) {
 inline bool ms_load_value(const LsuPipeState &S, const MsStq *ms, const PLdq &l, const MsLdq &ml, bool apply_skip, xlen_t &val) {
   constexpr uint32_t XB = XLEN / 8;   // the unit of the model: one word (rv32) / one aligned dword (rv64)
   if (!l.pa_v || !is_ram_addr(l.paddr & ~(XB - 1), XB)) return false;
-  const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1), lw = ld_width(l.uop().func3);
-  if (off + lw > XB) return false;   // crosses the unit: not modelled
+  const uint32_t W = l.paddr & ~(XB - 1), off = l.paddr & (XB - 1);
+  // Match RTL extract_data (lsu_pkg.sv): unaligned loads shift the single aligned dword right by 8*off without crossing.
   const uint32_t head = S.stq_head;
   uint32_t older;
   {
@@ -169,9 +169,7 @@ inline bool ms_load_value(const LsuPipeState &S, const MsStq *ms, const PLdq &l,
       for (uint32_t k = m.off; k < m.off + m.sz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - m.off))) & 0xff) << (8 * k));
     }
   }
-  const xlen_t mask = lw >= 8 ? ~(xlen_t)0 : (xlen_t)((1ull << (8 * lw)) - 1);
-  const xlen_t raw = lw >= XB ? word : (word >> (8 * off)) & mask;
-  val = msd::load_extend(raw, l.uop().func3);
+  val = msd::load_extend(word >> (8 * off), l.uop().func3);
   return true;
 }
 

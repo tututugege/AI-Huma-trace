@@ -1,4 +1,5 @@
 // The staged LSU: translate phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
+#include "DataPrefetcher.h"
 #include "LsuPipeInternal.h"
 #include "AguPorts.h"
 
@@ -143,6 +144,23 @@ void RealLsu::tlb() {
   // served in port order (the priority of the walk picks) and every request carries its own type
   dtlb.comb(fence, cancel, tlb_req_, tlb_resp_, fence || cancel ? 0 : agu::PORTS);
   if (fence || cancel) for (auto &r : tlb_resp_) r = {};
+  for (int q = 0; q < agu::PORTS; q++) {   // EXP-048 XPORT: the answers of the prefetch translations
+    if (!pf_x_[q].valid || !tlb_resp_[q].valid) continue;
+    const auto r = tlb_resp_[q].result;
+    if (r == TlbMmu::Result::OK) {
+      g_pf_xq.hit++;
+      if (g_pf_xans_n < 8) g_pf_xans[g_pf_xans_n++] = {tlb_resp_[q].paddr >> 6, pf_x_[q].llc};
+    } else if (r == TlbMmu::Result::RETRY) {
+      g_pf_xq.miss++;
+      if (dtlb.walk_page_next() == (pf_x_[q].va >> 12)) dtlb.set_pf_page(pf_x_[q].va);   // the walk it started: drop it on a fault
+    } else {
+      g_pf_xq.fault++;
+    }
+  }
+  if (pf_walk_port_ >= 0 && tlb_resp_[pf_walk_port_].valid) {   // EXP-048 statistics of the prefetch translation
+    const auto r = tlb_resp_[pf_walk_port_].result;
+    if (r == TlbMmu::Result::OK) g_pf_walk.hit++; else if (r == TlbMmu::Result::RETRY) g_pf_walk.walk++; else g_pf_walk.fault++;
+  }
   tlb_in_ldq();
   tlb_in_stq();
 }
@@ -216,6 +234,28 @@ void RealLsu::tlb_out() {
   for (int k = 0; k < STA; k++) {
     if (!pw.s1[k].v) continue;
     tlb_req_[pw.s1[k].phys] = {true, pnxt.stq[pw.s1[k].stq].vaddr, 2};
+  }
+  // EXP-048: a prefetch translation (PF_BERTI_WALK) on a load port nobody uses this cycle, while no walk is in flight; its
+  // response is read by no load / STA (they read their own ports): a hit is dropped, a miss starts the walk (the refill
+  // installs the page), a fault is dropped
+  pf_walk_port_ = -1;
+  for (auto &x : pf_x_) x.valid = false;
+  for (int q = 0; q < agu::PORTS && g_pf_xq.n > 0; q++) {   // EXP-048 XPORT: every free load port translates one queued candidate
+    if ((used >> q & 1) || tlb_req_[q].valid || !agu::ld_can(q)) continue;
+    const PfXReq r = g_pf_xq.pop();
+    tlb_req_[q] = {true, r.va, 1};
+    pf_x_[q] = {true, r.va, r.llc};
+    g_pf_xq.sent++;
+  }
+  if (g_pf_walk.n > 0 && !dtlb.walk_busy()) {
+    for (int q = 0; q < agu::PORTS; q++) {
+      if ((used >> q & 1) || tlb_req_[q].valid || !agu::ld_can(q)) continue;
+      tlb_req_[q] = {true, g_pf_walk.pop(), 1};
+      dtlb.set_pf_page(tlb_req_[q].vaddr);
+      g_pf_walk.sent++;
+      pf_walk_port_ = q;
+      break;
+    }
   }
 }
 

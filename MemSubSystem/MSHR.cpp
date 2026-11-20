@@ -1,5 +1,6 @@
 #include "MSHR.h"
 #include "types.h"
+#include "DseCap.h"
 #include "DataPrefetcher.h"
 
 #include <cassert>
@@ -42,7 +43,7 @@ void MSHR::init()
 }
 void MSHR::comb_outputs_dcache()
 {   
-    out.mshr2dcache->free = DCACHE_MSHR_ENTRIES - d.mshr_count;
+    out.mshr2dcache->free = dse_free(g_dse.mshr, d.mshr_count);
     out.mshr2dcache->release_event = nofill_released;
 
     for(int i=0;i<LSU_LDU_COUNT + LSU_STA_COUNT;i++){
@@ -149,7 +150,7 @@ void MSHR::comb_inputs_dcache()
 
             int entry_idx = find_entry_idx(d, line_addr);
 
-            if (entry_idx < 0) {
+            if (entry_idx < 0 && (int)d.mshr_count < g_dse.mshr) {
                 for(int j=0;j<DCACHE_MSHR_ENTRIES;j++){
                     if(!d.mshr_entries[j].valid){
                         entry_idx = j;
