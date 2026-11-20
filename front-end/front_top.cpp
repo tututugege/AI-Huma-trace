@@ -563,6 +563,8 @@ void bpuf::BpuPipe::comb_front() {
     bpu_input.in_pred_dir[i] = in.in->train[i].pred_dir;
     bpu_input.in_alt_pred[i] = in.in->train[i].alt_pred;
     bpu_input.in_pcpn[i] = in.in->train[i].pcpn;
+    bpu_input.in_blk_id[i] = in.in->train[i].blk_id;
+    bpu_input.in_ftq_is_last[i] = in.in->train[i].ftq_is_last;
     for (int j = 0; j < 4; j++) {
       bpu_input.in_tage_tags[i][j] = in.in->train[i].tage_tag[j];
       bpu_input.in_tage_idxs[i][j] = in.in->train[i].tage_idx[j];

@@ -45,7 +45,8 @@ struct Ds3 {
   // one tick() = one SimDDR::seq() call = 1/div of a core cycle (CONFIG_AXI_SUBSYSTEM_FREQ_DIV)
   explicit Ds3(uint32_t cpu_mhz, uint32_t div, uint32_t default_extra_ns) {
     const char *out = std::getenv("DS3_OUT");   // DRAMsim3's output directory (one per run when runs share a directory)
-    std::string cfgs = DS3_DEFAULT_CONFIG;
+    const char *cfg_env = std::getenv("DS3_CONFIG");
+    std::string cfgs = cfg_env ? cfg_env : DS3_DEFAULT_CONFIG;
     std::string outs = out ? out : "ds3_out";
     std::filesystem::create_directories(outs);
     out_dir_ = outs;

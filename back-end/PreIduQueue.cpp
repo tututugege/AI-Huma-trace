@@ -193,6 +193,8 @@ void PreIduQueue::comb_commit_info() {
       resp.alt_pred = m.alt_pred[off];
       resp.pcpn = m.pcpn[off];
       resp.ps_info = m.ps_info[off];
+      resp.blk_id = m.blk_id[off];
+      resp.ftq_is_last = commit.uop.ftq_is_last;
       for (int k = 0; k < 4; k++) {
         resp.tage_idx[k] = m.tage_idx[off][k];
         resp.tage_tag[k] = m.tage_tag[off][k];

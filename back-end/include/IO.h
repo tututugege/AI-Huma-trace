@@ -87,6 +87,8 @@ struct FtqCommitInfoResp {
   tage_idx_t tage_idx[4]{};
   tage_tag_t tage_tag[4]{};
   wire<8> ps_info{};  // statistics only (BPA_STATS)
+  uint16_t blk_id{};  // FTQ block sequence id (used by BPU_FTB=1 for exact block-based training)
+  wire<1> ftq_is_last{};
 };
 
 struct FtqCommitInfoIO {

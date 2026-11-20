@@ -13,6 +13,7 @@
 // comb() reads registers and arrays only and returns the next value of every register in a Txn; commit() is the clock edge.
 #pragma once
 #include "BPU.h"
+#include "BpuFtb.h"
 #include "env.h"
 #include "fatal.h"
 #include "fpr.h"
@@ -110,6 +111,7 @@ struct RasQ {
 
 // Per fetch block checkpoint, stored next to the block in the stage registers (state before the block's S0 push).
 struct Ckpt {
+  pc_t base = 0;                        // block start PC (used by FTB predecode clear)
   uint32_t head = 0;                    // 8 b
   uint32_t fh[FH_N_MAX][TN] = {};       // 12 folded histories (<= 11 b each)
   uint8_t ras_tosr = 0, ras_tosw = 0, ras_cnt = 0;   // the speculative RAS: read / write pointers (6 b each), depth
@@ -193,6 +195,12 @@ struct Blk {
   S0Guess g;
   Ckpt ck;
   Tage::Idx tix[FW];
+  FtbBlkIdx ftb_ix;              // BPU_FTB=1: single block-level index/tags
+  bool ah_v = false;             // FTB_AHEAD: predecessor key was valid
+  bool ah_hit = false;           // FTB_AHEAD: S0 predicted by ahead table
+  pc_t ah_key_base = 0;
+  uint32_t ah_key_fh[FH_N_MAX][TN] = {};
+  MainOut ah_out;                // FTB_AHEAD: ahead MainOut (for FTB_AH_ONLY=2)
 };
 
 struct Decision {                // outcome of the last stage, computed from registers only
@@ -259,6 +267,9 @@ class BpuPipe {
     uint8_t epoch = 0;                 // BPA_REPAIR: bumped whenever spec is overwritten by arch (the history ring is re-based: older checkpoints no longer index it)
     Blk R[MAIN_LAT];                   // R[0] = S1, R[1] = S2
     MainRaw raw, raw_b;                // S1 array read data of the block in S2 (and of its second block); valid with R[1]
+    FtbRaw ftb_raw;                    // BPU_FTB=1: compact block-level S1->S2 raw data
+    FtbAhPipe ah_pipe[2];              // FTB_AHEAD: pipelined ahead SRAM outputs ([0]=t-1, [1]=t-2)
+    FtbTrkState ftb_trk;               // BPU_FTB=1: commit-order block tracker + block train queue
     HistRing spec, arch;
     RasQ sras;
     RasC aras;
@@ -280,6 +291,10 @@ class BpuPipe {
     uint32_t ty_lane = 0;              // banks whose type lane an update of the queue used this cycle
     PortUse p_ty[NB], p_tg[NB], p_bt[NB];
     bool pmu_l1_ovr = false, pmu_ptab_stall = false;   // PMU (front-end loss cause) only
+    bool ftb_ev_v = false, ftb_clr_v = false, ftb_rec_v = false;
+    FtbTrainEv ftb_ev{};
+    FtbBlkRec ftb_rec{};
+    pc_t ftb_clr_base = 0, ftb_clr_pc = 0;
     // Only the enables and counters: every record is read under its enable (tage[b].upd, btb[b] write enables, ub_wmask,
     // n_type, rec_v) and is written whole by the update that sets it.
     void clear() {
@@ -290,6 +305,7 @@ class BpuPipe {
       n_type = 0; ty_lane = 0;
       std::memset(p_ty, 0, sizeof p_ty); std::memset(p_tg, 0, sizeof p_tg); std::memset(p_bt, 0, sizeof p_bt);
       pmu_l1_ovr = pmu_ptab_stall = false;
+      ftb_ev_v = ftb_clr_v = ftb_rec_v = false;
     }
   };
 
@@ -304,6 +320,8 @@ class BpuPipe {
   Tage tage_[NB];
   Btb btb_[NB];
   TypePred type_;
+  BpuFtb ftb_;
+  FtbBlkRec ftb_rec_[2048];
   RecP rec_[256];
 
   static pc_t block_bnd(pc_t base) {
@@ -612,11 +630,135 @@ class BpuPipe {
     n.uq_n = kn;
   }
 
+  // ---- BPU_FTB=1 commit-order block tracker & training queue --------------------------------------------------------
+  static void ftb_emit(FtbTrkState &ft, bool end_taken, bool end_mispred_nt, BpuFtb &ftb, bool immediate) {
+    if (ft.nbr == 0) return;
+    FtbTrainEv ev{};
+    ev.start = ft.start;
+    std::memcpy(ev.fh, ft.fh, sizeof ev.fh);
+    ev.ah_v = ft.ah_v;
+    ev.ah_key_base = ft.ah_key_base;
+    std::memcpy(ev.ah_key_fh, ft.ah_key_fh, sizeof ev.ah_key_fh);
+    ev.nbr = ft.nbr;
+    for (int i = 0; i < ft.nbr; i++) ev.br[i] = ft.br[i];
+    ev.end_taken = end_taken;
+    ev.end_mispred_nt = end_mispred_nt;
+    if (immediate) {
+      ftb.apply_train_ev(ev);
+    } else if (ft.tq_n < FTB_TQ_N) {
+      ft.tq[(ft.tq_h + ft.tq_n) % FTB_TQ_N] = ev;
+      ft.tq_n++;
+    } else {
+      ftb.stats_.train_drops++;
+    }
+  }
+
+  // FTQ-driven exact block commit tracker (BPU_FTB=1): uses the FTQ's exact blk_id -> ftb_rec_ (exact prediction-time base & fh).
+  void ftb_track_ftq_one(pc_t pc, br_type_t ty, bool actual_dir, pc_t target, bool pred_dir, bool alt_pred,
+                         uint8_t pcpn, tage_tag_t pred_tag0, uint16_t blk_id, bool ftq_is_last, bool rvc, State &n) {
+    FtbTrkState &ft = n.ftb_trk;
+    const FtbBlkRec &rc = ftb_rec_[blk_id & 2047];
+    const bool have_rc = rc.valid && rc.id == blk_id;
+    const bool taken = (ty != BR_NONCTL) && actual_dir;
+    if (have_rc) {
+      if (!ft.v || ft.cur_blk != blk_id) {
+        if (ft.v && ft.nbr > 0) ftb_emit(ft, false, false, ftb_, false);
+        ft.v = true;
+        ft.cur_blk = blk_id;
+        ft.start = rc.base;
+        ft.nbr = 0;
+        std::memcpy(ft.fh, rc.fh, sizeof ft.fh);
+        ft.ah_v = rc.ah_v;
+        ft.ah_key_base = rc.ah_key_base;
+        std::memcpy(ft.ah_key_fh, rc.ah_key_fh, sizeof ft.ah_key_fh);
+      }
+      const bool carried = (pc + SLOT_BYTES == ft.start);
+      if (ty != BR_NONCTL && ft.nbr < FW && (carried || (pc >= ft.start && pc < block_bnd(ft.start)))) {
+        const uint8_t off = carried ? 0 : static_cast<uint8_t>((pc - ft.start) >> SLOT_SHIFT);
+        FtbTrkBr &b = ft.br[ft.nbr++];
+        b.offset = off; b.carried = carried; b.is_rvc = rvc; b.type = ty;
+        b.actual_dir = taken; b.pred_dir = pred_dir; b.alt_pred = alt_pred; b.pcpn = pcpn; b.pred_tag0 = pred_tag0; b.target = target;
+      }
+      push_arch(n.arch, pc, taken, target, ty);
+      if (br_call(ty)) n.aras.push(pc + ilen_of(rvc));
+      else if (ty == BR_RET) n.aras.pop();
+      if (ftq_is_last || taken || (ty == BR_DIRECT && pred_dir)) {
+        ftb_emit(ft, taken, (!taken && ty == BR_DIRECT && pred_dir), ftb_, false);
+        ft.v = false; ft.nbr = 0;
+      }
+    } else {
+      ftb_track_one(pc, ty, actual_dir, target, pred_dir, alt_pred, pcpn, pred_tag0, rvc, n, false);
+    }
+  }
+
+  void ftb_track_one(pc_t pc, br_type_t ty, bool actual_dir, pc_t target, bool pred_dir, bool alt_pred,
+                     uint8_t pcpn, tage_tag_t pred_tag0, bool rvc, State &n, bool immediate) {
+    FtbTrkState &ft = n.ftb_trk;
+    if (!ft.v || pc != ft.expect || pc < ft.start || pc >= block_bnd(ft.start)) {
+      if (ft.v && ft.nbr > 0) ftb_emit(ft, false, false, ftb_, immediate);
+      ft.v = true;
+      ft.start = pc;
+      ft.nbr = 0;
+      std::memcpy(ft.fh, n.arch.fh, sizeof ft.fh);
+    }
+    const pc_t bnd = block_bnd(ft.start);
+    const uint8_t off = static_cast<uint8_t>((pc - ft.start) >> SLOT_SHIFT);
+    const bool taken = (ty != BR_NONCTL) && actual_dir;
+    if (ty != BR_NONCTL && ft.nbr < FW) {
+      FtbTrkBr &b = ft.br[ft.nbr++];
+      b.offset = off; b.is_rvc = rvc; b.type = ty;
+      b.actual_dir = taken; b.pred_dir = pred_dir; b.alt_pred = alt_pred; b.pcpn = pcpn; b.pred_tag0 = pred_tag0; b.target = target;
+    }
+    // Advance architectural history & RAS AFTER capturing block-start fh
+    push_arch(n.arch, pc, taken, target, ty);
+    if (br_call(ty)) n.aras.push(pc + ilen_of(rvc));
+    else if (ty == BR_RET) n.aras.pop();
+
+    if (taken) {
+      ftb_emit(ft, true, false, ftb_, immediate);
+      ft.start = target; ft.expect = target; ft.nbr = 0;
+      std::memcpy(ft.fh, n.arch.fh, sizeof ft.fh);
+    } else {
+      const pc_t nxt = pc + ilen_of(rvc);
+      if (ty == BR_DIRECT && pred_dir) {
+        ftb_emit(ft, false, true, ftb_, immediate);
+        ft.start = nxt; ft.nbr = 0;
+        std::memcpy(ft.fh, n.arch.fh, sizeof ft.fh);
+      } else if (nxt >= bnd) {
+        ftb_emit(ft, false, false, ftb_, immediate);
+        ft.start = bnd; ft.nbr = 0;
+        std::memcpy(ft.fh, n.arch.fh, sizeof ft.fh);
+      }
+      ft.expect = nxt;
+    }
+  }
+
  public:
   // Fast-warmup replay (EXP-011): one committed instruction in program order, applied straight to the tables, the architectural
   // history / RAS and the uBTB (through the same block tracker the commit stream uses).
   void warm_commit(pc_t pc, br_type_t type, bool dir, target_addr_t target, bool rvc = false) {
     State &n = (*stp_);
+    if (sim_env().bpu_ftb) {
+      // Predict current Block-TAGE for realistic TAGE allocation during FastWarm
+      bool pred = false, alt = false; uint8_t pcpn = TN;
+      if (type == BR_DIRECT && n.ftb_trk.v && pc >= n.ftb_trk.start && pc < block_bnd(n.ftb_trk.start)) {
+        FtbEnt ent;
+        if (ftb_.ftb1_.lookup(n.ftb_trk.start, ent)) {
+          const uint8_t off = static_cast<uint8_t>((pc - n.ftb_trk.start) >> SLOT_SHIFT);
+          for (int k = 0; k < FTB_SLOTS; k++) {
+            if (ent.s[k].valid && ent.s[k].offset == off) {
+              const FtbBlkIdx ix = BpuFtb::make_index(n.ftb_trk.start, n.ftb_trk.fh);
+              BlockTage::Pred tp;
+              ftb_.s2_tage_.predict_slot(ix, k, tp);
+              pred = tp.pred; alt = tp.alt; pcpn = tp.pcpn;
+              break;
+            }
+          }
+        }
+      }
+      ftb_track_one(pc, type, dir, target, pred, alt, pcpn, 0, rvc, n, /*immediate=*/true);
+      return;
+    }
     const br_type_t pty = type_.predict(pc);
     const uint32_t b = bank_of(pc);
     const pc_t bpc = bank_pc_of(pc);
@@ -679,8 +821,10 @@ class BpuPipe {
 
   void reset() {
     for (auto &r : rec_) r.valid = false;
+    for (auto &r : ftb_rec_) r.valid = false;
     ub0_.init(S0_N, S0_W, UB_TAGB);
     ub1_.init(L1_N, L1_W, UB_TAGB);
+    if (sim_env().bpu_ftb) ftb_.reset();
     st_ = State{};
     type_.reset();
   }
@@ -695,6 +839,26 @@ class BpuPipe {
     if (refetch || !b.valid) return;
     d.valid = true;
     d.blk = &b;
+    if (sim_env().bpu_ftb) {
+      if (sim_env().ftb_ahead > 0 && sim_env().ftb_ah_only == 2 && b.ah_hit) {
+        d.out = b.ah_out;
+        d.ovr = false;
+        d.ock = b.ck; d.oout = d.out; d.obase = b.base; d.og = b.g;
+        return;
+      }
+      ftb_.s2_select(b.base, b.bnd, b.ftb_ix, (*stp_).ftb_raw, b.ck.ras_cnt, b.ck.ras_top, d.out);
+      int why;
+      d.ovr = disagree(d.out, b.g, why);
+      if (d.ovr) {
+        ftb_.stats_.s2_ovr++;
+        if (!(*stp_).ftb_raw.ftb_hit) ftb_.stats_.s2_ovr_miss++;
+        else if (d.out.taken && br_ind(d.out.type) && b.g.taken && b.g.slot == d.out.slot && d.out.next != b.g.next) ftb_.stats_.s2_ovr_itt++;
+        else ftb_.stats_.s2_ovr_dir++;
+      }
+      d.ock = b.ck; d.oout = d.out; d.obase = b.base; d.og = b.g;
+      if (d.ovr) for (int k = 0; k < MAIN_LAT - 1; k++) d.squash_n += (*stp_).R[k].valid;
+      return;
+    }
     main_select(b, (*stp_).raw, d.out);
     int why;
     d.ovr = disagree(d.out, b.g, why);
@@ -719,6 +883,25 @@ class BpuPipe {
   // (1 bubble instead of the 2 of an S_D override).
   bool l1_override(const Blk &b, State &n, Txn &t) const {
     if (!b.valid) return false;
+    if (sim_env().bpu_ftb) {
+      if (sim_env().ftb_ahead > 0 && sim_env().ftb_ah_only >= 1 && b.ah_hit) return false;
+      const S0Guess g1 = ftb_.s1_predict<S0Guess>(b.base, b.bnd, b.ftb_ix, n.ftb_raw, b.ck.ras_cnt, b.ck.ras_top);
+      if (!g1.hit) return false;
+      MainOut m; m.next = g1.next; m.nbits = g1.nbits; m.bits = g1.bits; m.ras_op = g1.ras_op; m.ras_val = g1.ras_val;
+      int why;
+      if (!disagree(m, b.g, why)) return false;
+      ftb_.stats_.s1_ovr++;
+      if (!b.g.hit) ftb_.stats_.s1_ovr_cap++;
+      else ftb_.stats_.s1_ovr_dir++;
+      t.pmu_l1_ovr = true;
+      n.R[1].g = g1;
+      n.R[1].pair = false;
+      restore(b.ck, n.spec, n.sras);
+      hp("L1OVR", b.base, g1.next, g1.nbits, g1.bits);
+      push_bits(g1.nbits, g1.bits, g1.ras_op, g1.ras_val, n.spec, n.sras);
+      n.pc = g1.next;
+      return true;
+    }
     const S0Guess g1 = s0_lookup(ub1_, b.base, b.bnd, b.ck.ras_cnt, b.ck.ras_top);
     if (!g1.hit) return false;
     MainOut m; m.next = g1.next; m.nbits = g1.nbits; m.bits = g1.bits; m.ras_op = g1.ras_op; m.ras_val = g1.ras_val;
@@ -742,7 +925,8 @@ class BpuPipe {
     out = {};
     t.clear();
     State &n = st_;
-    const uint8_t uq_n0 = n.uq_n, tq_n0 = n.tq_n;
+    const bool use_ftb = sim_env().bpu_ftb != 0;
+    const uint8_t uq_n0 = n.uq_n, tq_n0 = n.tq_n, ftb_tq_n0 = n.ftb_trk.tq_n;
     const uint16_t seq0 = n.blk_seq;
     const uint8_t epoch0 = n.epoch;
     // BPO_PDCKPT: the checker consumed the PTAB head in the previous cycle -> its checkpoint leaves the record queue
@@ -759,6 +943,40 @@ class BpuPipe {
       b.pair = false;
       b.base = pc;
       b.bnd = block_bnd(b.base);
+      if (use_ftb) {
+        const int ah_mode = sim_env().ftb_ahead;
+        b.ah_v = false; b.ah_hit = false;
+        if (ah_mode == 1 || ah_mode == 2) {
+          const FtbAhPipe &ah_src = (ah_mode == 1) ? n.ah_pipe[0] : n.ah_pipe[1];
+          b.ah_v = ah_src.valid;
+          b.ah_key_base = ah_src.key_base;
+          std::memcpy(b.ah_key_fh, ah_src.key_fh, sizeof b.ah_key_fh);
+          if (ftb_.ahead_select(b.base, b.bnd, ah_src, n.sras.cnt, n.sras.top(), b.g, b.ah_out)) {
+            b.ah_hit = true;
+            ftb_.stats_.s0_lookups++;
+            ftb_.stats_.s0_hits++;
+          } else {
+            b.g = ftb_.s0_lookup<S0Guess>(b.base, b.bnd, n.sras.cnt, n.sras.top());
+          }
+          // Advance ahead pipeline using registered (b.base, n.spec.fh) BEFORE push_bits!
+          n.ah_pipe[1] = n.ah_pipe[0];
+          n.ah_pipe[0].valid = true;
+          n.ah_pipe[0].key_base = b.base;
+          std::memcpy(n.ah_pipe[0].key_fh, n.spec.fh, sizeof n.ah_pipe[0].key_fh);
+          ftb_.ahead_read(b.base, n.spec.fh, n.ah_pipe[0].raw);
+        } else {
+          b.g = ftb_.s0_lookup<S0Guess>(b.base, b.bnd, n.sras.cnt, n.sras.top());
+        }
+        b.ck = take_ckpt(n.spec, n.sras);
+        b.ck.base = b.base;
+        b.ftb_ix = BpuFtb::make_index(b.base, n.spec.fh);
+        hp("S0", b.base, b.g.next, b.g.nbits, b.g.bits);
+        push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
+        n.pc = b.g.next;
+        out.icache_read_valid = true;
+        out.fetch_address = b.base;
+        return;
+      }
       b.g = s0_lookup(ub0_, b.base, b.bnd, n.sras.cnt, n.sras.top());
       { static const bool tr = std::getenv("HP_TRACE") != nullptr;   // the uBTB set the S0 lookup reads: every way (valid, tag, slot, type, ctr, target)
         if (tr && fpr::in_dump()) {
@@ -823,6 +1041,14 @@ class BpuPipe {
       {
         t.rec_v = true;
         t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
+        if (use_ftb) {
+          t.ftb_rec_v = true;
+          t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
+          std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
+          t.ftb_rec.ah_v = d.blk->ah_v;
+          t.ftb_rec.ah_key_base = d.blk->ah_key_base;
+          std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
+        }
         for (int i = 0; i < FW; i++) { out.meta.blk_id[i] = seq0; t.rec.ptype[i] = d.out.meta.ps_info[i] & 7; }
         n.blk_seq = seq0 + 1;
         if (d.pair) {
@@ -845,32 +1071,171 @@ class BpuPipe {
     n.R[0].valid = false; n.R[0].pair = false;
     const Blk &s1 = n.R[1];
     if (s1.valid) {
-      count_reads(s1, t);
-      bb_reads(s1, t);
-      main_read(s1, n.raw);
-      if (s1.pair) main_read(s1.b2, n.raw_b);
+      if (use_ftb) {
+        ftb_.s1_read(s1.base, s1.ftb_ix, n.ftb_raw);
+      } else {
+        count_reads(s1, t);
+        bb_reads(s1, t);
+        main_read(s1, n.raw);
+        if (s1.pair) main_read(s1.b2, n.raw_b);
+      }
     }
 
+    auto try_s0_issue = [&] {
+      const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
+      t.pmu_ptab_stall = ptab_stall;
+      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
+    };
     auto clear_R = [&] { for (int k = 0; k < MAIN_LAT; k++) { n.R[k].valid = false; n.R[k].pair = false; } };
     if (in.refetch) {
       clear_R();
+      n.ah_pipe[0].valid = false; n.ah_pipe[1].valid = false;
       n.pc = in.refetch_address;
     } else if (d.ovr) {
       clear_R();
+      if (use_ftb && sim_env().ftb_ahead > 0) {
+        if (n.ah_pipe[1].valid && n.ah_pipe[1].key_base == d.obase) {
+          n.ah_pipe[0] = n.ah_pipe[1];
+          n.ah_pipe[1].valid = false;
+        } else if (!(n.ah_pipe[0].valid && n.ah_pipe[0].key_base == d.obase)) {
+          n.ah_pipe[0].valid = false;
+          n.ah_pipe[1].valid = false;
+        }
+      }
       restore(d.ock, n.spec, n.sras);
       hp("OVR", 0, d.oout.next, d.oout.nbits, d.oout.bits);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       n.pc = d.oout.next;
+      if (use_ftb && (sim_env().ftb_ovr_fast & 1)) { inflight = 0; try_s0_issue(); }
     } else if (l1_override(n.R[1], n, t)) {
-      // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle
+      // S1-level predictor disagrees with the S0 guess of the block in S1: that block's successor is not issued this cycle (unless FTB_OVR_FAST bit 1)
+      if (use_ftb && (sim_env().ftb_ovr_fast & 2)) try_s0_issue();
     } else {
       // ---- S0 ---------------------------------------------------------------------------------------------------------
-      const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
-      t.pmu_ptab_stall = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
+      try_s0_issue();
     }
 
     // ---- commit side ---------------------------------------------------------------------------------------------------------
+    if (use_ftb) {
+      if (sim_env().ftb_brq) {
+        // RTL-clean 1-branch/cycle queue (FTB_BRQ=1): no block-tracker FSM, 1R1W ftb_rec_[512] read at head pop!
+        FtbTrkState &ft = n.ftb_trk;
+        const uint8_t brq_n0 = ft.brq_n;
+        // 1. Pop 1 branch from head & build 1-branch FtbTrainEv using 1R1W ftb_rec_[blk_id & 511]
+        if (ft.brq_n > 0) {
+          const FtbBrqEnt &q = ft.brq[ft.brq_h];
+          ft.brq_h = static_cast<uint8_t>((ft.brq_h + 1) % FTB_TQ_N);
+          ft.brq_n--;
+          const FtbBlkRec &rc = ftb_rec_[q.blk_id & 511];
+          if (rc.valid && rc.id == q.blk_id) {
+            const bool carried = (q.pc + SLOT_BYTES == rc.base);
+            if (carried || (q.pc >= rc.base && q.pc < block_bnd(rc.base))) {
+              FtbTrainEv ev{};
+              ev.start = rc.base;
+              std::memcpy(ev.fh, rc.fh, sizeof ev.fh);
+              ev.ah_v = rc.ah_v;
+              ev.ah_key_base = rc.ah_key_base;
+              std::memcpy(ev.ah_key_fh, rc.ah_key_fh, sizeof ev.ah_key_fh);
+              ev.nbr = 1;
+              ev.br[0].offset = carried ? 0 : static_cast<uint8_t>((q.pc - rc.base) >> SLOT_SHIFT);
+              ev.br[0].carried = carried;
+              ev.br[0].is_rvc = q.is_rvc;
+              ev.br[0].type = q.type;
+              ev.br[0].actual_dir = q.actual_dir;
+              ev.br[0].pred_dir = q.pred_dir;
+              ev.br[0].alt_pred = q.alt_pred;
+              ev.br[0].pcpn = q.pcpn;
+              ev.br[0].pred_tag0 = q.pred_tag0;
+              ev.br[0].target = q.target;
+              t.ftb_ev_v = true;
+              t.ftb_ev = ev;
+              fpr::up(static_cast<uint32_t>(q.pc), q.actual_dir, q.type, static_cast<uint32_t>(q.target), q.pred_dir,
+                      q.pcpn, q.is_rvc, static_cast<uint64_t>(static_cast<uint32_t>(rc.base)),
+                      (static_cast<uint32_t>(carried) << 4) | static_cast<uint32_t>(ev.br[0].offset));
+            }
+          }
+        }
+        // 2. Advance arch history/RAS and enqueue control instructions into brq[16]
+        for (int i = 0; i < CW; i++) {
+          if (!in.in_upd_valid[i]) continue;
+          const pc_t pc = in.in_update_base_pc[i];
+          const br_type_t ty = in.in_actual_br_type[i];
+          const bool taken = (ty != BR_NONCTL) && in.in_actual_dir[i];
+          const bool rvc = in.in_update_is_rvc[i];
+          push_arch(n.arch, pc, taken, in.in_actual_targets[i], ty);
+          if (br_call(ty)) n.aras.push(pc + ilen_of(rvc));
+          else if (ty == BR_RET) n.aras.pop();
+          if (ty != BR_NONCTL) {
+            if (ft.brq_n < FTB_TQ_N) {
+              FtbBrqEnt &e = ft.brq[(ft.brq_h + ft.brq_n) % FTB_TQ_N];
+              e.blk_id = in.in_blk_id[i];
+              e.pc = pc; e.is_rvc = rvc; e.type = ty;
+              e.actual_dir = taken; e.pred_dir = in.in_pred_dir[i];
+              e.alt_pred = in.in_alt_pred[i]; e.pcpn = in.in_pcpn[i];
+              e.pred_tag0 = in.in_tage_tags[i][0]; e.target = in.in_actual_targets[i];
+              ft.brq_n++;
+            } else {
+              ftb_.stats_.train_drops++;
+            }
+          }
+        }
+        if (in.refetch) {
+          if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {
+            restore(pd_rec, n.spec, n.sras);
+            hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
+            push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
+          } else if (!(in.rf_valid && repair_blk(in, n))) {
+            hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
+            n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1;
+          }
+          n.pq_n = 0;
+          if (in.icache_read_ready) s0_issue(in.refetch_address);
+        }
+        if (in.pd.valid && in.pd.nb_valid && pd_have) {
+          t.ftb_clr_v = true;
+          t.ftb_clr_base = pd_rec.base;
+          t.ftb_clr_pc = in.pd.nb_pc;
+        }
+        const uint8_t free4 = (sim_env().ftb_brq >= 2)
+                                  ? uint8_t(15)
+                                  : static_cast<uint8_t>(std::min<int>(15, FTB_TQ_N - brq_n0));
+        out.upd_free = free4;
+        out.tq_free = free4;
+        return;
+      }
+      for (int i = 0; i < CW; i++) {
+        if (!in.in_upd_valid[i]) continue;
+        ftb_track_ftq_one(in.in_update_base_pc[i], in.in_actual_br_type[i], in.in_actual_dir[i], in.in_actual_targets[i],
+                          in.in_pred_dir[i], in.in_alt_pred[i], in.in_pcpn[i], in.in_tage_tags[i][0],
+                          in.in_blk_id[i], in.in_ftq_is_last[i], in.in_update_is_rvc[i], n);
+      }
+      if (in.refetch) {
+        if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {
+          restore(pd_rec, n.spec, n.sras);
+          hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
+          push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
+        } else if (!(in.rf_valid && repair_blk(in, n))) {
+          hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
+          n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1;
+        }
+        n.pq_n = 0;
+        if (in.icache_read_ready) s0_issue(in.refetch_address);
+      }
+      if (in.pd.valid && in.pd.nb_valid && pd_have) {
+        t.ftb_clr_v = true;
+        t.ftb_clr_base = pd_rec.base;
+        t.ftb_clr_pc = in.pd.nb_pc;
+      }
+      if (n.ftb_trk.tq_n > 0) {
+        t.ftb_ev_v = true;
+        t.ftb_ev = n.ftb_trk.tq[n.ftb_trk.tq_h];
+        n.ftb_trk.tq_h = static_cast<uint8_t>((n.ftb_trk.tq_h + 1) % FTB_TQ_N);
+        n.ftb_trk.tq_n--;
+      }
+      out.upd_free = static_cast<uint8_t>(FTB_TQ_N - ftb_tq_n0);
+      out.tq_free = static_cast<uint8_t>(FTB_TQ_N - ftb_tq_n0);
+      return;
+    }
     for (int i = 0; i < CW; i++) {
       if (!in.in_upd_valid[i]) continue;
       const br_type_t ty = in.in_actual_br_type[i];
@@ -910,6 +1275,14 @@ class BpuPipe {
   }
 
   void commit(const Txn &t) {
+    if (sim_env().bpu_ftb) {
+      if (t.rec_v) rec_[t.rec.id & 255] = t.rec;
+      if (t.rec2_v) rec_[t.rec2.id & 255] = t.rec2;
+      if (t.ftb_rec_v) ftb_rec_[t.ftb_rec.id & (sim_env().ftb_brq ? 511 : 2047)] = t.ftb_rec;
+      if (t.ftb_ev_v) ftb_.apply_train_ev(t.ftb_ev);
+      if (t.ftb_clr_v) ftb_.clear_false_branch(t.ftb_clr_base, t.ftb_clr_pc);
+      return;
+    }
     // declared port counts: S1 reads one set per bank and array; updates write one per bank and array; the arrays are single-ported.
     for (int b = 0; b < NB; b++) {
       const PortUse *p[3] = {&t.p_ty[b], &t.p_tg[b], &t.p_bt[b]};

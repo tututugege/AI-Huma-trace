@@ -44,6 +44,8 @@ struct BpuTrain {             // one committing instruction
   pcpn_t pcpn;
   tage_idx_t tage_idx[TN_MAX];
   tage_tag_t tage_tag[TN_MAX];
+  uint16_t blk_id;
+  wire<1> ftq_is_last;
 };
 struct FrontTopIn {
   FrontCtrl ctrl;

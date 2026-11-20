@@ -71,6 +71,8 @@ void Back2Front::seq() {
       d.in.train[i].br_type = br_type;
       d.in.train[i].alt_pred = ftq_info.alt_pred;
       d.in.train[i].pcpn = ftq_info.pcpn;
+      d.in.train[i].blk_id = ftq_info.blk_id;
+      d.in.train[i].ftq_is_last = ftq_info.ftq_is_last;
       for (int j = 0; j < 4; j++) { // TN_MAX
         d.in.train[i].tage_idx[j] = ftq_info.tage_idx[j];
         d.in.train[i].tage_tag[j] = ftq_info.tage_tag[j];

@@ -159,14 +159,18 @@ inline bool ms_load_value(const LsuPipeState &S, const MsStq *ms, const PLdq &l,
     const uint32_t j = (head + rank) % STQ_SIZE;
     const PStq &t = S.stq[j];
     const MsStq &m = ms[j];
-    if (!m.v || m.w != W || t.suppress || m.atnt) continue;
+    if (t.suppress) continue;
+    const bool stale_st = m.atnt && t.pa_v && !t.pf && !t.mmio && ((t.paddr & ~(XB - 1)) == W);
+    if (!stale_st && (!m.v || m.w != W || m.atnt)) continue;
     if (t.done && !(have && rank > base_rank)) continue;   // a done store younger than the base store is in the cache but not in its m_old snapshot
     if (apply_skip && (ml.skip >> j & 1)) continue;
-    if (m.amo) {
+    if (!stale_st && m.amo) {
       word = (xlen_t)m.new_;
     } else {
-      const xlen_t data = t.data_v ? (xlen_t)t.data : (xlen_t)m.rs2;
-      for (uint32_t k = m.off; k < m.off + m.sz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - m.off))) & 0xff) << (8 * k));
+      const xlen_t data = t.data_v ? (xlen_t)t.data : (m.v ? (xlen_t)m.rs2 : 0);
+      const uint32_t soff = stale_st ? (t.paddr & (XB - 1)) : m.off;
+      const uint32_t ssz  = stale_st ? ld_width(t.func3) : m.sz;
+      for (uint32_t k = soff; k < soff + ssz && k < XB; k++) word = (word & ~((xlen_t)0xff << (8 * k))) | (((data >> (8 * (k - soff))) & 0xff) << (8 * k));
     }
   }
   val = msd::load_extend(word >> (8 * off), l.uop().func3);
