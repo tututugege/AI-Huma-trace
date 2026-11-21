@@ -32,10 +32,16 @@ bool Ren::elim_refs_ok(int i) const {
   const Regs &q = q_;
   const int s1 = q.inst_r[i]->src1_areg;
   int older = 0;
+  int producer = -1;
   for (int j = 0; j < i; j++) {
     if (!q.inst_valid[j] || !q.inst_r[j].dest_en) continue;
-    if (q.inst_r[j]->dest_areg != 0 && !q.inst_r[j]->dest_fp && q.inst_r[j]->dest_areg == s1) return false;  // source bypassed inside the group
+    if (q.inst_r[j]->dest_areg != 0 && !q.inst_r[j]->dest_fp && q.inst_r[j]->dest_areg == s1) producer = j;
     older++;
+  }
+  if (producer >= 0) {
+    // 1-hop intra-group bypass from a non-eliminated producer (fresh preg: 0 prior RAT refs,
+    // at most (i - producer + 1) group refs, bounded by MOVE_ELIM_MAX_REFS).
+    return !elim_[producer] && (i - producer) < MOVE_ELIM_MAX_REFS;
   }
   int refs = 0;
   for (int e = 0; e < ARF_NUM + 1; e++)

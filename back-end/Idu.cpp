@@ -191,6 +191,16 @@ void Idu::decode(Uop &uop, uint32_t inst) {
   uop->tma.is_ret = type == JALR && uop->src1_areg == 1 && uop->dest_areg == 0 && uop->imm == 0;
   uop->tma.mem_commit_is_load = type == LOAD || (type == AMO && amo != AmoOp::SC);
   uop->tma.mem_commit_is_store = type == STORE || (type == AMO && amo != AmoOp::LR);
+  // Canonicalize `add rd, x0, rs2` (including every expanded `c.mv rd, rs2`) into `addi rd, rs2, 0` so move elimination sees RVC moves.
+  if (type == ADD && !uop->src2_is_imm && !uop->is_word && uop->func3 == 0 && uop->func7 == 0 &&
+      uop->src1_en && uop->src2_en && uop->src1_areg == 0 && uop->src2_areg != 0 &&
+      uop.dest_en && uop->dest_areg != 0) {
+    uop->src1_areg = uop->src2_areg;
+    uop->src2_areg = 0;
+    uop->src2_en = false;
+    uop->src2_is_imm = true;
+    uop->imm = 0;
+  }
   // an AMO that discards its result still writes through a dedicated register (it keeps the load's destination)
   if (type == AMO && uop->dest_areg == 0 && amo != AmoOp::LR && amo != AmoOp::SC) uop->dest_areg = 32;
   if (uop->dest_areg == 0 && !uop->dest_fp) uop.dest_en = false;   // x0 is not written (f0 is a register)

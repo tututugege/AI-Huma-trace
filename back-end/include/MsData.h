@@ -328,7 +328,12 @@ inline void exec(Inst &inst) {
   case UOP_MUL:
   case UOP_DIV: {
     X r;
-    if (!eval_alu(w, f->pc, a, b, r)) { if (d_en) taint[inst->dest_preg] = TV{}; return; }
+    if (u.src2_is_imm && opc == 0x33 && f3 == 0 && (w >> 25) == 0 && mbits(w, 19, 15) == 0) {
+      r = a;  // canonicalized `add rd, x0, rs2` -> `addi rd, rs2, 0` (Idu::decode)
+    } else if (!eval_alu(w, f->pc, a, b, r)) {
+      if (d_en) taint[inst->dest_preg] = TV{};
+      return;
+    }
     if (d_en) {
       if (f->rd_valid && r != f->rd_value) set_taint(inst->dest_preg, true, r, depth);
       else taint[inst->dest_preg] = TV{};
