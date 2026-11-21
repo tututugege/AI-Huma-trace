@@ -200,13 +200,9 @@ void FrontControl::control() {
   bpu_pipe->decide(out.global_refetch, out.pipe_dec);
   const auto &fa = in.rd->fetch_addr_fifo_rd_snapshot;
   const int min_age = bpu_pipe->depth() > 2 ? bpu_pipe->depth() - 2 : 0;
-#if CFG_FE_OVR_REG
-  // timing cut: the decision of the BPU's last stage no longer gates the pop in the same cycle; an entry is popped one cycle
-  // later, when every decision that can squash it has been made (and applied) in an earlier cycle
+  // Timing cut (EXP-044): the decision of the BPU's last stage does not gate the pop in the same cycle; an entry is
+  // popped one cycle later, when every decision that can squash it has been made (and applied) in an earlier cycle.
   out.pipe_head_ok = fa.head_age >= (bpu_pipe->depth() >= 2 ? min_age + 1 : min_age);
-#else
-  out.pipe_head_ok = !(out.pipe_dec.ovr && fa.size <= out.pipe_dec.squash_n) && fa.head_age >= min_age;
-#endif
 }
 
 // The read enables of the FIFOs and the PTAB write of the BPU's block (bypassed to the checker when the last stage

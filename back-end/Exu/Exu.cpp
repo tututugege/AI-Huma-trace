@@ -57,8 +57,6 @@ void Exu::init() {
 
 // Default (idle) outputs.
 void Exu::begin_cycle() {
-  for (int i = 0; i < TOTAL_FU_COUNT; i++) out.exe2prf.bypass[i].valid = false;
-  for (int i = 0; i < WB_LANES; i++) out.exe2prf.entry[i].valid = false;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     out.exu2rob.entry[i].valid = false;
     out.exe2iss.fu_ready_mask[i] = 0;
@@ -92,11 +90,11 @@ void Exu::ready() {
 // branch bits are cleared); a flush empties them.
 void Exu::seq() {
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
-  for (int i = 0; i < WB_LANES; i++) {
-    const auto &e = out.exe2prf.entry[i];
+  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
+    const auto &e = in.lsu2exe->wb_req[i];
     LoadWake &l = q_.lwake_r[i];
     l.valid = !in.rob_bcast->flush && e.valid && !is_br_killed(e.uop, (*in.dec_bcast)) && e.uop.dest_en &&
-              decode_uop_type(e.uop.op) == UOP_LOAD && !e.uop.early_woken;
+              !e.uop.early_woken;
     if (!l.valid) continue;
     l.preg = e.uop->dest_preg;
     l.br_mask = e.uop.br_mask & ~in.dec_bcast->clear_mask;
@@ -232,13 +230,7 @@ void Exu::exec() {
     }
   }
 
-  for (uint64_t m = cmask; m; m &= m - 1) {
-    const int i = __builtin_ctzll(m);
-    out.exe2prf.bypass[i].uop = *cinst[i];
-    out.exe2prf.bypass[i].valid = true;
-  }
-
-  ExuEntry int_res[ALU_NUM] = {}, br_res[BRU_NUM] = {};
+  ExuEntry br_res[BRU_NUM] = {};
   uint64_t consumed = 0;
   for (int p = 0; p < ISSUE_WIDTH && cmask; p++) {
     const uint64_t pm = cmask & port_fu_mask[p];
@@ -268,10 +260,6 @@ void Exu::exec() {
         out.exe2lsu.sdu_req[winner.lsu_sdu_port].uop = u;
       }
     }
-    if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM && u.dest_en) {
-      int_res[p - IQ_ALU_PORT_BASE].uop = u;
-      int_res[p - IQ_ALU_PORT_BASE].valid = true;
-    }
     if (!dead && p >= IQ_BR_PORT_BASE && p < IQ_BR_PORT_BASE + BRU_NUM) {  // a squashed branch must not drive recovery
       br_res[p - IQ_BR_PORT_BASE].uop = u;
       br_res[p - IQ_BR_PORT_BASE].valid = true;
@@ -292,12 +280,7 @@ void Exu::exec() {
     if (ready) f.slot_valid = false;
   }
 
-  for (int i = 0; i < ALU_NUM; i++)
-    if (int_res[i].valid) {
-      out.exe2prf.entry[WB_ALU_BASE + i].valid = true;
-      out.exe2prf.entry[WB_ALU_BASE + i].uop = int_res[i].uop;
-    }
-  // LSU write-backs: a load (or SC) goes to the register write-back bus and the ROB, a store address to the ROB only
+  // LSU write-backs: a load (or SC) and a store address complete in the ROB
   auto rob_complete = [&](int port, const Uop &u) {
     if (!(flush || is_br_killed(u, (*in.dec_bcast)))) {
       out.exu2rob.entry[port].valid = true;
@@ -306,8 +289,6 @@ void Exu::exec() {
   };
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
     if (!in.lsu2exe->wb_req[i].valid) continue;
-    out.exe2prf.entry[WB_LD_BASE + i].valid = true;
-    out.exe2prf.entry[WB_LD_BASE + i].uop = in.lsu2exe->wb_req[i].uop;
     rob_complete(IQ_LD_PORT_BASE + i, in.lsu2exe->wb_req[i].uop);
   }
   for (int i = 0; i < LSU_STA_COUNT; i++)
@@ -359,7 +340,7 @@ void Exu::load_wake() {
   begin_cycle();   // the first phase of the cycle: default outputs, d starts equal to q
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) out.prf_awake.wake[i].valid = false;
   int n = 0;
-  for (int i = 0; i < WB_LANES && n < LSU_LOAD_WB_WIDTH; i++) {
+  for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
     const LoadWake &l = q.lwake_r[i];
     if (!l.valid || (in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask))) continue;
     out.prf_awake.wake[n].valid = true;

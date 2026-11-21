@@ -13,7 +13,7 @@ struct DseCaps {
   int ldq = LDQ_SIZE;             // LDQ entries
   int stq = STQ_SIZE;             // STQ entries
   int mshr = DCACHE_MSHR_ENTRIES; // L1D MSHR entries
-  int iq_int = CFG_INT_IQ_SIZE;   // each INT queue (IQ_INT and IQ_INT1)
+  int iq_int = IQ_INT_SIZE;       // each INT queue (IQ_INT and IQ_INT1)
   int iq_mem = CFG_MEM_IQ_SIZE;
   int iq_std = CFG_STD_IQ_SIZE;
   int iq_br = CFG_BR_IQ_SIZE;

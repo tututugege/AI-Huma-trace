@@ -14,19 +14,7 @@ static bool lsutr_on() {
 }
 void RealLsu::exe2lsu() {
   const lp::LsuPipeState &pcur = pcur_;
-  ExeLsuIO x = (*in.exe2lsu);
-  if (CFG_LSU_AGU_REG) {   // the AGU results go through a register: this cycle's L1 input is last cycle's AGU output (if still alive)
-    for (int i = 0; i < LSU_AGU_COUNT; i++) {
-      agu_d_[i] = x.agu_req[i];
-      x.agu_req[i] = agu_q_[i];
-      if (!x.agu_req[i].valid) continue;
-      const MicroOp &u = x.agu_req[i].uop;
-      bool alive = false;
-      if (u.op == UOP_LOAD) alive = u->ldq_idx < LDQ_SIZE && pcur.ldq[u->ldq_idx].st == L_ALLOC;
-      else if (u.op == UOP_STA) alive = u->stq_idx < STQ_SIZE && stq_rank(u->stq_idx, pcur.stq_head) < pcur.stq_count;
-      if (!alive || in.rob_bcast->flush) x.agu_req[i].valid = false;
-    }
-  }
+  const ExeLsuIO &x = (*in.exe2lsu);
   for (int i = 0; i < LSU_SDU_COUNT; i++) {
     if (!x.sdu_req[i].valid) continue;
     const MicroOp &inst = x.sdu_req[i].uop;
@@ -41,7 +29,7 @@ void RealLsu::exe2lsu() {
   }
   agu_raw_ = raw_ld_ = raw_st_ = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    if (!(CFG_LSU_SLOT_FIXED || CFG_LSU_FREEPORT_RAW ? x.agu_req[i].raw : x.agu_req[i].valid)) continue;   // (raw: occupied, dead or not)
+    if (!x.agu_req[i].raw) continue;   // raw: occupied, dead or not (fixed-slot L1)
     if (x.agu_req[i].uop.op == UOP_LOAD) { agu_raw_ |= 1u << agu::ld_port(i); raw_ld_ |= 1u << i; }
     else if (x.agu_req[i].uop.op == UOP_STA) { agu_raw_ |= 1u << agu::st_port(i - LSU_LDU_COUNT); raw_st_ |= 1u << (i - LSU_LDU_COUNT); }
   }
@@ -69,7 +57,7 @@ void RealLsu::exe2lsu() {
     e.lrsc = inst->is_atomic && ((inst->func7 >> 2) == AmoOp::SC);
     e.trp = 0;
     LP_PORT_CHECK(ns + 1, LSU_STA_COUNT, "sta_agu");
-    const int ss = CFG_LSU_SLOT_FIXED ? i - LSU_LDU_COUNT : ns;
+    const int ss = i - LSU_LDU_COUNT;
     pw.s1[ss].v = true;
     pw.s1[ss].stq = inst->stq_idx;
     pw.s1[ss].phys = agu::st_port(i - LSU_LDU_COUNT);
@@ -123,7 +111,7 @@ void RealLsu::exe2lsu() {
     e.snap_flag = inst->stq_flag;
     e.lrsc = is_amo_lr_uop(inst);
     LP_PORT_CHECK(nl + 1, LD, "load_agu");
-    const int ls = CFG_LSU_SLOT_FIXED ? i : nl;
+    const int ls = i;
     pw.l1[ls].v = true;
     pw.l1[ls].need_tlb = true;
     pw.l1[ls].ldq = inst->ldq_idx;
@@ -171,7 +159,7 @@ void RealLsu::tlb_out() {
 
   // The DTLB ports the new requests of this cycle hold; a replay that needs the DTLB takes a free port it may use, otherwise its
   // replay register keeps it for the next cycle
-  uint32_t used = (CFG_LSU_FREEPORT_RAW || CFG_LSU_SLOT_FIXED) ? agu_raw_ : 0;
+  uint32_t used = agu_raw_;
   for (int k = 0; k < LD; k++) if (pw.l1[k].v) used |= 1u << pw.l1[k].phys;
   for (int k = 0; k < STA; k++) if (pw.s1[k].v) used |= 1u << pw.s1[k].phys;
   auto free_port = [&](bool ld) {
@@ -179,11 +167,10 @@ void RealLsu::tlb_out() {
       if (!(used >> q & 1) && (ld ? agu::ld_can(q) : agu::st_can(q))) return q;
     return -1;
   };
-  int n = 0;
-  while (n < LD && pw.l1[n].v) n++;
-  uint32_t lslot = raw_ld_;   // CFG_LSU_SLOT_FIXED: the load slots taken (valid AGU requests, then the replays)
+  uint32_t lslot = raw_ld_;   // load slots taken (valid AGU requests, then the replays)
   for (int r = 0; r < lp_rp_ports; r++) {
-    if (CFG_LSU_SLOT_FIXED) { n = 0; while (n < LD && (lslot >> n & 1)) n++; }
+    int n = 0;
+    while (n < LD && (lslot >> n & 1)) n++;
     if (n >= LD) continue;
     int src = -1, ph = -1;
     if (pcur.rp[r].v) {
@@ -212,8 +199,7 @@ void RealLsu::tlb_out() {
   }
 
   int ns = 0;
-  while (ns < STA && pw.s1[ns].v) ns++;
-  if (CFG_LSU_SLOT_FIXED) { ns = 0; while (ns < STA && (raw_st_ >> ns & 1)) ns++; }
+  while (ns < STA && (raw_st_ >> ns & 1)) ns++;
   int sph = -1;
   bool take_srp = ns < STA && pcur.srp.v;
   if (take_srp) {

@@ -380,65 +380,19 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #ifndef CFG_MEM_IQ_SIZE
 #define CFG_MEM_IQ_SIZE 64
 #endif
-#ifndef CFG_MEM_IQ_ENQ_WIDTH
-#define CFG_MEM_IQ_ENQ_WIDTH 6
-#endif
-// EXP-LSUTIM: one more pipeline stage in the load / store path (timing study, default 0 = unchanged):
-//  CFG_LSU_AGU_REG=1   the AGU results (loads and STA) reach the LSU one cycle later (a register between the AGU and L1: DTLB + CAM)
-//  CFG_LSU_STAEV_REG=1 the STQ address / data events that wake parked loads (ADDR, DATA) are registered and the confirm reads the registered store (no same-cycle bypass of the DTLB result): the wake-up is one cycle later
-// EXP-FLUSHREG: 1: the global flush (and the trap / fence information that comes with it) reaches the back-end modules one cycle after the
-// ROB decides it (a register in front of the broadcast: no commit -> trap -> flush logic in the combinational paths of the other modules). The ROB
-// clears itself in the cycle of the decision, the front end is redirected in that cycle; the IDU, rename, dispatch, ISU, EXU and LSU clear one cycle
-// later, so what they do in the cycle of the decision is dropped by that clear. Default 0 = unchanged.
-#ifndef CFG_FE_OVR_REG
-#define CFG_FE_OVR_REG 1   // the fetch-address FIFO pop does not depend on the BPU last stage's override of the same cycle (one cycle later pop)
-#endif
-
-#ifndef CFG_LSU_WBMERGE_REG
-#define CFG_LSU_WBMERGE_REG 1   // write-buffer insert merges only into an entry started in the same cycle (not into the registered tail)
-#endif
-
-#ifndef CFG_FLUSH_REG
-#define CFG_FLUSH_REG 1
-#endif
-#ifndef CFG_LSU_AGU_REG
-#define CFG_LSU_AGU_REG 0
-#endif
-//  CFG_LSU_FREEPORT_RAW=1 a DTLB port counts as taken by a replay's competitor when its AGU request is valid, accepted or not (the replay port
-//                      allocation does not wait for the LDQ / STQ acceptance check of the new request)
-//  CFG_LSU_SLOT_FIXED=1 slot k of L1 is AGU port k: a new load / STA sits in the slot of its AGU (no compress by acceptance), the replays take
-//                      the free slots (a slot is free when its AGU has no valid request) and the free DTLB ports; the acceptance check is off the
-//                      replay allocation (implies the port rule of CFG_LSU_FREEPORT_RAW)
-#ifndef CFG_LSU_SLOT_FIXED
-#define CFG_LSU_SLOT_FIXED 1
-#endif
-#ifndef CFG_LSU_FREEPORT_RAW
-#define CFG_LSU_FREEPORT_RAW 0
-#endif
-#ifndef CFG_LSU_STAEV_REG
-#define CFG_LSU_STAEV_REG 1
-#endif
-#ifndef CFG_AGU_SHARED
-#define CFG_AGU_SHARED 2
-#endif
+constexpr int IQ_MEM_ENQ_WIDTH = 6;
+constexpr int LSU_AGU_SHARED = 2;
 #ifndef CFG_STD_IQ_SIZE
 #define CFG_STD_IQ_SIZE 16
 #endif
-// 2: two INT issue queues (IQ_INT: ports 0, 1, 4; IQ_INT1: ports 2, 3, 5), CFG_INT_IQ_SIZE slots and CFG_INT_IQ_ENQ_WIDTH enqueue lanes each.
+// Two INT issue queues (IQ_INT: ports 0, 1, 4; IQ_INT1: ports 2, 3, 5), 32 slots and 4 enqueue lanes each.
 // Dispatch steers a uop by position: CSR to IQ_INT, I2F to IQ_INT1, the others by the parity of the ROB index.
-#ifndef CFG_INT_CLUSTERS
-#define CFG_INT_CLUSTERS 2
-#endif
-#ifndef CFG_INT_IQ_SIZE
-#define CFG_INT_IQ_SIZE 32
-#endif
+constexpr int IQ_INT_SIZE = 32;
 #ifndef CFG_BR_IQ_SIZE
 #define CFG_BR_IQ_SIZE 32
 #endif
-// Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014; 8 = unrestricted).
-#ifndef CFG_INT_IQ_ENQ_WIDTH
-#define CFG_INT_IQ_ENQ_WIDTH 4
-#endif
+// Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014).
+constexpr int IQ_INT_ENQ_WIDTH = 4;
 #ifndef CFG_STD_IQ_ENQ_WIDTH
 #define CFG_STD_IQ_ENQ_WIDTH 4
 #endif
@@ -628,12 +582,9 @@ constexpr int div_latency(bool word) { return (word) ? DIV_MAX_LATENCY / 2 : DIV
 constexpr int LSU_STA_COUNT = count_ports_with_mask(OP_MASK_STA);
 constexpr int LSU_LDU_COUNT = count_ports_with_mask(OP_MASK_LD);
 constexpr int LSU_AGU_COUNT = LSU_STA_COUNT + LSU_LDU_COUNT;
-// EXP-TLBPORTS: AGUs shared by the load and the store-address pipes (loads win). The load pipes and the STA pipes keep their lanes
-// (LSU_LDU_COUNT, LSU_STA_COUNT); the issue ports / DTLB ports are LSU_AGU_PHYS physical ports: LD - SHARED ports only for loads,
-// SHARED ports for both, STA - SHARED ports only for stores (docs/TLB_PORTS.md). 0 = every pipe has its own AGU.
-constexpr int LSU_AGU_SHARED = CFG_AGU_SHARED;
+// Shared AGUs (2 shared by load and STA pipes, loads win; 5 physical DTLB/AGU ports).
 constexpr int LSU_AGU_PHYS = LSU_STA_COUNT + LSU_LDU_COUNT - LSU_AGU_SHARED;
-static_assert(LSU_AGU_SHARED >= 0 && LSU_AGU_SHARED <= LSU_LDU_COUNT && LSU_AGU_SHARED <= LSU_STA_COUNT, "CFG_AGU_SHARED");
+static_assert(LSU_AGU_SHARED >= 0 && LSU_AGU_SHARED <= LSU_LDU_COUNT && LSU_AGU_SHARED <= LSU_STA_COUNT, "LSU_AGU_SHARED");
 constexpr int LSU_LDU_WIDTH = clog2(LSU_LDU_COUNT);
 constexpr int LSU_SDU_COUNT = count_ports_with_mask(OP_MASK_STD);
 constexpr int LSU_LOAD_WB_WIDTH = LSU_LDU_COUNT;
@@ -647,32 +598,6 @@ constexpr int MAX_WAKEUP_PORTS =
     LSU_LOAD_WB_WIDTH + count_ports_with_mask(OP_MASK_ALU) +
     count_ports_with_mask(OP_MASK_MUL) + count_ports_with_mask(OP_MASK_DIV) +
     FPW_CH;
-
-// ============================================================
-// ISU Scheduling Policy
-// ============================================================
-
-enum class IssueSchedulePolicy : int {
-  IQ_SLOT_PRIORITY = 0, // Deterministic slot-index priority
-  ROB_OLDEST_FIRST = 1, // Compare by (rob_flag, rob_idx)
-  OLDEST_ON_FIRST_PORT = 2, // lowest slot first, except the first issue port of each capability picks the oldest ready uop it can serve
-};
-
-// 1: a slot freed by an issue can be taken by an enqueue of the same cycle (the slot allocation sees this cycle's issue);
-// 0: the allocation sees only the registered valid bits (the enqueue does not wait for the issue)
-#ifndef CFG_IQ_SAME_CYCLE_REUSE
-#define CFG_IQ_SAME_CYCLE_REUSE 0
-#endif
-#ifndef CFG_ISSUE_OLDEST_FIRST
-#define CFG_ISSUE_OLDEST_FIRST 2   // 1: every queue selects the oldest ready uop (ROB order) instead of the lowest slot; 2: only the first port of each capability does
-#endif
-// queues (bit = IQ id) that use the policy above when it is 2; the others take the lowest slot. Default: every queue.
-#ifndef CFG_ISSUE_OLDEST_QUEUES
-#define CFG_ISSUE_OLDEST_QUEUES 2
-#endif
-constexpr IssueSchedulePolicy ISSUE_SCHEDULE_POLICY =
-    CFG_ISSUE_OLDEST_FIRST == 2 ? IssueSchedulePolicy::OLDEST_ON_FIRST_PORT
-    : CFG_ISSUE_OLDEST_FIRST ? IssueSchedulePolicy::ROB_OLDEST_FIRST : IssueSchedulePolicy::IQ_SLOT_PRIORITY;
 
 // ============================================================
 // Derived Port Bases
@@ -721,34 +646,20 @@ constexpr int TOTAL_FU_COUNT = calculate_total_fu_count();
 // ============================================================
 
 constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
-#if CFG_INT_CLUSTERS == 2
-    {IQ_INT, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
+    {IQ_INT, IQ_INT_SIZE, IQ_INT_ENQ_WIDTH,
      OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE, 3, 0x13},   // ports 0, 1, 4
-#else
-    {IQ_INT, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
-     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE,
-     count_ports_with_mask(OP_MASK_ALU)},
-#endif
-    {IQ_MEM, CFG_MEM_IQ_SIZE, CFG_MEM_IQ_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
+    {IQ_MEM, CFG_MEM_IQ_SIZE, IQ_MEM_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
      CFG_LD_PORTS + CFG_STA_PORTS},
     {IQ_STD, CFG_STD_IQ_SIZE, CFG_STD_IQ_ENQ_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
      count_ports_with_mask(OP_MASK_STD)},
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
-     count_ports_with_mask(OP_MASK_BR)}
-    ,
+     count_ports_with_mask(OP_MASK_BR)},
     {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)},
-#if CFG_INT_CLUSTERS == 2
-    {IQ_INT1, CFG_INT_IQ_SIZE, CFG_INT_IQ_ENQ_WIDTH,
-     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_I2F, IQ_ALU_PORT_BASE, 3, 0x2c}   // ports 2, 3, 5
-#else
-    {IQ_INT1, 1, 1, 0, 0, 0}   // empty: the integer uops are all in the INT queue
-#endif
+    {IQ_INT1, IQ_INT_SIZE, IQ_INT_ENQ_WIDTH,
+     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_I2F, IQ_ALU_PORT_BASE, 3, 0x2c}    // ports 2, 3, 5
 };
 
-// per-queue sizes as scalars (the RTL config package generator only exports integral constexpr scalars)
 // per-queue enqueue widths (dispatch write ports per cycle), exported for the RTL config package
-constexpr int IQ_INT_ENQ_WIDTH = CFG_INT_IQ_ENQ_WIDTH;
-constexpr int IQ_MEM_ENQ_WIDTH = CFG_MEM_IQ_ENQ_WIDTH;
 constexpr int IQ_STD_ENQ_WIDTH = CFG_STD_IQ_ENQ_WIDTH;
 constexpr int IQ_BR_ENQ_WIDTH = CFG_BR_IQ_ENQ_WIDTH;
 static_assert(IQ_INT_ENQ_WIDTH <= DECODE_WIDTH && IQ_MEM_ENQ_WIDTH <= DECODE_WIDTH &&
@@ -924,7 +835,6 @@ constexpr int BPU_SCL_META_NTABLE = 8;
 constexpr int BPU_SCL_META_IDX_BITS = 16;
 constexpr int BPU_LOOP_META_IDX_BITS = 16;
 constexpr int BPU_LOOP_META_TAG_BITS = 16;
-constexpr int IQ_INT_SIZE = CFG_INT_IQ_SIZE;
 constexpr int IQ_MEM_SIZE = CFG_MEM_IQ_SIZE;
 constexpr int IQ_STD_SIZE = CFG_STD_IQ_SIZE;
 constexpr int IQ_BR_SIZE = CFG_BR_IQ_SIZE;

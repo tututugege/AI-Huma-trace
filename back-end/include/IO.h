@@ -231,17 +231,6 @@ struct IssPrfIO {
   IssPrfEntry iss_entry[ISSUE_WIDTH] = {};
 };
 
-struct ExePrfIO {
-
-  struct ExePrfEntry {
-    wire<1> valid = {};
-    Uop uop = {};
-  };
-
-  ExePrfEntry entry[WB_LANES] = {};   // register write-back bus, by lane (config.h WB_*; the model fills the ALU and load lanes)
-  ExePrfEntry bypass[TOTAL_FU_COUNT] = {};
-};
-
 struct ExeIssIO {
 
   wire<MAX_UOP_TYPE> fu_ready_mask[ISSUE_WIDTH] = {};

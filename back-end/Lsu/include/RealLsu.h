@@ -88,7 +88,6 @@ public:
     cur_ = nxt;
     seq_pipe();
     mmio_resp_q_ = mmio_resp_d;
-    for (int i = 0; i < LSU_AGU_COUNT; i++) agu_q_[i] = agu_d_[i];
     ev_q_ = ev_d_;
   }
 
@@ -170,9 +169,8 @@ private:
       pend.clear();
     }
   };
-  ExeLsuIO::ExeLsuReqEntry agu_q_[LSU_AGU_COUNT] = {}, agu_d_[LSU_AGU_COUNT] = {};   // CFG_LSU_AGU_REG: the AGU stage register
-  uint32_t agu_raw_ = 0, raw_ld_ = 0, raw_st_ = 0;   // valid AGU requests of this cycle: DTLB ports, load slots, STA slots   // CFG_LSU_FREEPORT_RAW: DTLB ports whose AGU request is valid this cycle
-  struct EvReg { lp::stq_mask_t sta = 0, data = 0; } ev_q_, ev_d_;                    // CFG_LSU_STAEV_REG: registered wake events
+  uint32_t agu_raw_ = 0, raw_ld_ = 0, raw_st_ = 0;   // valid AGU requests of this cycle: DTLB ports, load slots, STA slots
+  struct EvReg { lp::stq_mask_t sta = 0, data = 0; } ev_q_, ev_d_;   // registered wake events (STAEV_REG)
   MemDepPred mdp_;
   LsuState cur_;
   lp::LsuPipeState pcur_;

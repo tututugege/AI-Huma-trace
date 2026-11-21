@@ -247,8 +247,8 @@ private:
     const int cap = dse_iq_cap(id_, size);
     if (q_.count >= cap)
       return 0;
-    for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot
-      const uint64_t freebits = CFG_IQ_SAME_CYCLE_REUSE ? ~d_vmask[w] : ~(alloc_mask_[w] | d_vmask[w]);
+    for (size_t w = 0; w < d_vmask.size(); w++) {   // lowest free slot (does not reuse slots freed this cycle)
+      const uint64_t freebits = ~(alloc_mask_[w] | d_vmask[w]);
       if (!freebits) continue;
       const int i = int(w * 64) + __builtin_ctzll(freebits);
       if (i >= cap) break;
@@ -323,7 +323,7 @@ public:
   // The clock edge: the picks of this cycle leave, the wake-ups clear busy bits, the enqueue requests enter (their
   // wake-ups already applied by the Isu), then the flush / resolved-branch clear; the ready bits of the changed slots.
   void seq() {
-    if (!CFG_IQ_SAME_CYCLE_REUSE) alloc_mask_ = d_vmask;
+    alloc_mask_ = d_vmask;
     commit_issue(committed_indices);
     committed_indices.clear();
     if (!wake_pregs_.empty()) wakeup(wake_pregs_.data(), int(wake_pregs_.size()));
@@ -380,33 +380,11 @@ private:
     for (size_t w = 0; w < ready_bits.size(); w++)
       for (uint64_t m = ready_bits[w]; m; m &= m - 1) ready_indices.push_back(int(w * 64) + __builtin_ctzll(m));
 
-    // 2. Sort ready instructions by priority
-    if (ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::ROB_OLDEST_FIRST) {
-      auto older_than = [&](int lhs, int rhs) {
-        const auto &a = q_.entry[lhs].uop;
-        const auto &b = q_.entry[rhs].uop;
-        if (a->rob_flag == b->rob_flag) {
-          if (a->rob_idx != b->rob_idx) {
-            return a->rob_idx < b->rob_idx;
-          }
-        } else {
-          if (a->rob_idx != b->rob_idx) {
-            return a->rob_idx > b->rob_idx;
-          }
-        }
-        return lhs < rhs; // Stable tie-breaker.
-      };
-      std::sort(ready_indices.begin(), ready_indices.end(), older_than);
-    }
-    // If IQ_SLOT_PRIORITY, ready_indices is already sorted by slot index (lowest first).
-
-    // 3. Port-centric scheduling: for each port, find the best instruction
+    // 2. Port-centric scheduling: ready_indices is already sorted by slot index (lowest first).
+    // For IQ_MEM, the first port of each capability takes the oldest ready uop it can serve; other ports take lowest slot.
     inst_issued.assign(size, 0);
-    
-    // OLDEST_ON_FIRST_PORT: the first port of each capability (no earlier port shares a capability bit with it) takes the oldest ready
-    // uop it can serve; the other ports take the lowest slot.
     std::vector<int> by_age;
-    const bool age_policy = ISSUE_SCHEDULE_POLICY == IssueSchedulePolicy::OLDEST_ON_FIRST_PORT && ((CFG_ISSUE_OLDEST_QUEUES >> id_) & 1);
+    const bool age_policy = (id_ == IQ_MEM);
     if (age_policy) {
       by_age = ready_indices;
       std::sort(by_age.begin(), by_age.end(), [&](int lhs, int rhs) {

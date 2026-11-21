@@ -32,14 +32,11 @@ inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
   return static_cast<uint8_t>(__builtin_popcount(static_cast<unsigned>(mask)));
 }
 
-// The queue a uop of kind `kind` (UopKind) is enqueued in: the loads and the store addresses go to the memory queue.
-// With two INT queues (CFG_INT_CLUSTERS=2) an integer uop goes to the queue of its position: CSR to IQ_INT, I2F to IQ_INT1, the others by
-// the parity of the ROB index (even / odd lane of the dispatch group).
+// The queue a uop of kind `kind` (UopKind) is enqueued in: loads and store addresses go to IQ_MEM;
+// integer uops split across IQ_INT / IQ_INT1 (CSR -> IQ_INT, I2F -> IQ_INT1, others by rob_idx parity).
 inline int route_iq(int kind, int op = 0, uint32_t rob_idx = 0) {
   switch (kind) {
-  case UK_INT:
-    if (CFG_INT_CLUSTERS == 2) return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
-    return IQ_INT;
+  case UK_INT: return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
   case UK_LD:
   case UK_STA: return IQ_MEM;
   case UK_STD: return IQ_STD;

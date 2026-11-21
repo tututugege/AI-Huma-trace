@@ -45,7 +45,7 @@ struct FuUnit {
 
 // Execution units. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2iss out.exe2lsu out.exe2prf out.exu2id out.exu2rob out.prf_awake
+//   CONTRACT comb_exec  in: in.dec_bcast in.lsu2exe in.rob_bcast  out: out.exe2iss out.exe2lsu out.exu2id out.exu2rob out.prf_awake
 class Exu {
 public:
   void comb_exec();  // late load wakeup, the FUs, the port readiness for issue
@@ -60,7 +60,6 @@ public:
   struct Out {
     ExeIssIO exe2iss;
     ExeLsuIO exe2lsu;
-    ExePrfIO exe2prf;
     ExuIdIO exu2id;
     ExuRobIO exu2rob;
     PrfAwakeIO prf_awake;
@@ -81,8 +80,7 @@ private:
   void exec();
   void ready();
   void begin_cycle();   // called by load_wake(), the first phase of the cycle
-  // The write-back register (one cycle after exe2prf.entry), kept only for what it is used for: a load completing on a
-  // port that the LSU did not wake early wakes its consumers one cycle later (comb_load_wake -> prf_awake).
+  // The write-back register for loads that the LSU did not wake early: wakes consumers one cycle later (load_wake -> prf_awake).
   struct LoadWake {
     wire<1> valid = false;
     wire<PRF_IDX_WIDTH> preg = 0;
@@ -90,7 +88,7 @@ private:
   };
   // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
   // is still updated in place in comb: not yet under the contract.)
-  struct Regs { LoadWake lwake_r[WB_LANES] = {}; };
+  struct Regs { LoadWake lwake_r[LSU_LOAD_WB_WIDTH] = {}; };
   Regs q_;
   std::vector<FuUnit> units;
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order

@@ -44,7 +44,7 @@ void set_cap(DseCaps &c, const std::string &key, int v, const std::string &line)
       {"rob", &c.rob, ROB_NUM, DECODE_WIDTH},          {"prf", &c.prf, PRF_NUM, ARF_NUM + 2},
       {"fprf", &c.fprf, FPRF_NUM, FP_ARF_NUM + 2},     {"br", &c.br, MAX_BR_NUM, MAX_BR_PER_CYCLE + 1},
       {"ldq", &c.ldq, LDQ_SIZE, 1},                    {"stq", &c.stq, STQ_SIZE, 1},
-      {"mshr", &c.mshr, DCACHE_MSHR_ENTRIES, 1},       {"iq_int", &c.iq_int, CFG_INT_IQ_SIZE, 1},
+      {"mshr", &c.mshr, DCACHE_MSHR_ENTRIES, 1},       {"iq_int", &c.iq_int, IQ_INT_SIZE, 1},
       {"iq_mem", &c.iq_mem, CFG_MEM_IQ_SIZE, 1},       {"iq_std", &c.iq_std, CFG_STD_IQ_SIZE, 1},
       {"iq_br", &c.iq_br, CFG_BR_IQ_SIZE, 1},          {"iq_fp", &c.iq_fp, CFG_FP_IQ_SIZE, 1},
   };

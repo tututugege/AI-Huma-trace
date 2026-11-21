@@ -235,12 +235,8 @@ inline void wb_insert(LsuPipeState &S, const LsuPipeState &C, uint32_t n, const 
     int e = -1;
     if (tail >= 0) {
       const bool reg = C.wb[tail].v;
-      #if CFG_LSU_WBMERGE_REG
       // timing cut: whether the registered tail is sent in this cycle is late; only an entry started in this cycle takes more stores
       const bool waiting = !reg;
-#else
-      const bool waiting = reg ? (C.wb[tail].st == 0 && !issued_now[tail]) : true;
-#endif
       const PWbE &t = S.wb[tail];
       if (mergeable && waiting && t.mergeable && t.line == line && t.cnt < lp_wmax) e = tail;
     }
