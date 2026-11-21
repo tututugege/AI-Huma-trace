@@ -50,8 +50,9 @@ void Idu::decode() {
     u = {};
     u.id = e.uop_id;
     if (e.page_fault_inst) {  // a faulting fetch becomes a NOP that carries the fault
-      u.diag_val = e.inst;
+      u.diag_val = 0;
       u.page_fault_inst = true;
+      u.pf_inst_hi = e.pf_inst_hi;
       u->type = encode_inst_type(NOP);
       u->src1_en = u->src2_en = false;
       u.dest_en = false;

@@ -35,9 +35,6 @@ void Back2Front::seq() {
     const auto &commit_extra = bo.commit_extra[i];
     const auto &ftq_info = bo.commit_ftq[i];
     d.in.train[i].valid = bo.commit_entry[i].valid;
-    for (int j = 0; j < 4; j++) {
-      d.in.train[i].tage_tag[j] = 0;
-    }
 
     if (d.in.train[i].valid) {
       d.in.train[i].pred_dir = ftq_info.pred_taken;
@@ -73,10 +70,6 @@ void Back2Front::seq() {
       d.in.train[i].pcpn = ftq_info.pcpn;
       d.in.train[i].blk_id = ftq_info.blk_id;
       d.in.train[i].ftq_is_last = ftq_info.ftq_is_last;
-      for (int j = 0; j < 4; j++) { // TN_MAX
-        d.in.train[i].tage_idx[j] = ftq_info.tage_idx[j];
-        d.in.train[i].tage_tag[j] = ftq_info.tage_tag[j];
-      }
     }
   }
 

@@ -470,10 +470,13 @@ void RealDcache::stage2() {
         }
         else {
             if(q.s1s2.icache_req==i){
-                // ICache coherent probes are lookup-only: report miss to the
-                // front-end route block without allocating an MSHR.
+                // ICache coherent probes are lookup-only: retry while the line is in flight in MSHR or fill pipeline
+                // so SMC stores merged into MSHR are never bypassed as misses; otherwise report miss without MSHR alloc.
+                const bool fill_same =
+                    (q.s1s2.fill_write.valid && q.s1s2.fill_write.set_idx == f.set_idx && q.s1s2.fill_write.tag == f.tag) ||
+                    (in.mshr2dcache->fill_req.valid && cache_line_match(slot.addr, in.mshr2dcache->fill_req.addr));
                 resp.valid = true;
-                resp.retry = false;
+                resp.retry = in.mshr2dcache->find_resp[i].valid || fill_same;
                 resp.replay = ReplayType::CONFLICT;
                 resp.req_id = slot.req_id;
                 continue;

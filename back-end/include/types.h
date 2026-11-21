@@ -144,6 +144,7 @@ struct Uop {
   wire<ROB_CPLT_MASK_WIDTH> cplt_mask{};
 
   wire<1> page_fault_inst{};
+  wire<1> pf_inst_hi{};
   wire<1> page_fault_load{};
   wire<1> page_fault_store{};
   wire<1> illegal_inst{};

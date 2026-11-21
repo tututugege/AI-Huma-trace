@@ -182,6 +182,7 @@ struct ICacheModuleIn {
   wire<1> dcache_resp_valid = false;
   wire<1> dcache_resp_retry = false;
   wire<1> dcache_resp_miss = true;
+  wire<1> dcache_probe_busy = false;
 };
 
 struct ICacheModuleOut {

@@ -21,6 +21,7 @@ enum class Blocked : uint8_t {
   Ebreak,       // would end the simulation
   MemMisalign,  // refcpu would exit(-1)
   MemOutOfRam,  // MMIO or illegal range: never executed speculatively
+  StaleIcache,  // wrong-path fetch hit stale L1I data array that differs from live RAM
 };
 
 struct Fact {

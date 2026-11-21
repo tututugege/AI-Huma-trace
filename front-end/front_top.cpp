@@ -81,10 +81,11 @@ struct RvcHeadFix {
     r.low = head.raw16[last];
     drop(last);
   }
-  // Carry cross-page 2nd-halfword instruction page-fault offset (+2) in inst->diag_val for ROB stval
-  for (int i = 0; i < FETCH_WIDTH; i++)
-    if (head.inst_valid[i] && head.page_fault_inst[i])
-      head.instructions[i] = (i == 0 && r.carry_used) ? 2u : 0u;
+  // Explicit 1-bit pf_inst_hi for cross-page 2nd-halfword instruction page fault (ROB stval = pc + 2)
+  for (int i = 0; i < FETCH_WIDTH; i++) {
+    head.pf_inst_hi[i] = head.inst_valid[i] && head.page_fault_inst[i] && (i == 0 && r.carry_used);
+    if (head.inst_valid[i] && head.page_fault_inst[i]) head.instructions[i] = INST_NOP;
+  }
   return r;
 }
 
@@ -137,6 +138,7 @@ static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
   for (int i = 0; i < FETCH_WIDTH; i++) {
     fifo_in.wdata.fetch_group[i] = fifo_out.instructions[i];
     fifo_in.wdata.page_fault_inst[i] = fifo_out.page_fault_inst[i];
+    fifo_in.wdata.pf_inst_hi[i] = fifo_out.pf_inst_hi[i];
     fifo_in.wdata.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
     fifo_in.wdata.is_rvc[i] = fifo_out.is_rvc[i];
     fifo_in.wdata.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
@@ -144,6 +146,7 @@ static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
     if (bypass) {
       bypass_out.fetch_group[i] = fifo_out.instructions[i];
       bypass_out.page_fault_inst[i] = fifo_out.page_fault_inst[i];
+      bypass_out.pf_inst_hi[i] = fifo_out.pf_inst_hi[i];
       bypass_out.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
       bypass_out.is_rvc[i] = fifo_out.is_rvc[i];
       bypass_out.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
@@ -171,6 +174,7 @@ static void front_output(const F2bFifoOut &saved, const F2bFifoOut &bypass_out,
   for (int i = 0; i < FETCH_WIDTH; i++) {
     out.instructions[i] = src->fetch_group[i];
     out.page_fault_inst[i] = src->page_fault_inst[i];
+    out.pf_inst_hi[i] = src->pf_inst_hi[i];
     out.predict_dir[i] = src->predict_dir_corrected[i];
     out.pc[i] = src->predict_base_pc[i];
     out.inst_valid[i] = src->inst_valid[i];
@@ -180,6 +184,7 @@ static void front_output(const F2bFifoOut &saved, const F2bFifoOut &bypass_out,
   for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {
     out.instructions[i] = INST_NOP;
     out.page_fault_inst[i] = false;
+    out.pf_inst_hi[i] = false;
     out.inst_valid[i] = false;
   }
   out.predict_next_fetch_address = src->predict_next_fetch_address_corrected;
@@ -632,10 +637,6 @@ void bpuf::BpuPipe::comb_front() {
     bpu_input.in_pcpn[i] = in.in->train[i].pcpn;
     bpu_input.in_blk_id[i] = in.in->train[i].blk_id;
     bpu_input.in_ftq_is_last[i] = in.in->train[i].ftq_is_last;
-    for (int j = 0; j < 4; j++) {
-      bpu_input.in_tage_tags[i][j] = in.in->train[i].tage_tag[j];
-      bpu_input.in_tage_idxs[i][j] = in.in->train[i].tage_idx[j];
-    }
   }
 
   out.bpu_seq_txn.valid = true;

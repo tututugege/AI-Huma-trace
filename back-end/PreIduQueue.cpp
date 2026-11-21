@@ -110,6 +110,7 @@ void PreIduQueue::comb_accept_front() {
     e.pc = in.top_in->pc[i];
     e.is_rvc = in.top_in->is_rvc[i];
     e.page_fault_inst = in.top_in->page_fault_inst[i];
+    e.pf_inst_hi = in.top_in->pf_inst_hi[i];
     e.ftq_idx = ftq_idx;
     e.ftq_offset = i;
     e.ftq_is_last = (i == last);
@@ -195,10 +196,6 @@ void PreIduQueue::comb_commit_info() {
       resp.ps_info = m.ps_info[off];
       resp.blk_id = m.blk_id[off];
       resp.ftq_is_last = commit.uop.ftq_is_last;
-      for (int k = 0; k < 4; k++) {
-        resp.tage_idx[k] = m.tage_idx[off][k];
-        resp.tage_tag[k] = m.tage_tag[off][k];
-      }
     }
 
     if (commit.uop.ftq_is_last && cursor_valid) {

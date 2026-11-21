@@ -45,13 +45,13 @@ public:
   void set_context(SimContext *ctx) { bind_.ctx_set = ctx; }
   // the ITLB's walk port is the I-cache's out.itlb_walk (FrontTop::init, after SimCpu bound it)
   void bind_walk() { itlb.walk_resp = in.itlb_walk; itlb.walk_req = out.itlb_walk; }
-  void set_dc_dirty_snoop(bool (*fn)(const void *, uint32_t), const void *ctx) { dc_dirty_fn_ = fn; dc_dirty_ctx_ = ctx; }
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
   void comb_calc(ICacheIn *ci, ICacheOut *co);              // the fetch step R1 = N(R0)
   void invalidate_step(ICacheOut *co);   // a predecode flush: R2 = K(R1)
   void seq();                                                  // the clock edge
   bool peek_hit(uint32_t index, uint32_t ptag);
+  int peek_way(uint32_t index, uint32_t ptag);
   bool fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, uint32_t *words, int &actual_n);
   bool peek_translate(pc_t v_addr, uint32_t &p_addr);
   void enqueue_fdip(const pc_t *cand, int n, bool clear_all);
@@ -66,30 +66,33 @@ private:
   struct FdipSlot {
     bool active = false, issued = false, canceled = false;
     uint32_t paddr = 0, index = 0, ptag = 0;
+    uint32_t line[ICACHE_WORD_NUM] = {};
   };
   struct FdipState {
     FdipSlot slots[kFdipN]{};
     int sending = -1;
     pc_t q[kFdipQ]{};
     int qh = 0, qn = 0;
+    bool probe_v = false, probe_retry = false, probe_cancel = false;
+    uint32_t probe_pa = 0;
   };
   FdipState fdip_q_{};
   FdipState fdip_d_{};
   bool fdip_d_valid_ = false;
   bool fdip_inst_en_ = false;
   uint32_t fdip_inst_idx_ = 0, fdip_inst_ptag_ = 0;
+  uint32_t fdip_inst_line_[ICACHE_WORD_NUM] = {};
   bool fdip_pair_miss_en_ = false;
   pc_t fdip_pair_miss_va_ = 0;
-  bool resp_popped_q_ = false;
-  bool resp_popped_d_ = false;
-  bool (*dc_dirty_fn_)(const void *, uint32_t) = nullptr;
-  const void *dc_dirty_ctx_ = nullptr;
+  bool fdip_dc_req_v_ = false;
+  uint32_t fdip_dc_req_addr_ = 0;
 
   using TagTable = GenericTable<ICACHE_SET_NUM, ICACHE_WAY_NUM, ICACHE_TAG_BITS>;
   using ValidTable = GenericTable<ICACHE_SET_NUM, ICACHE_WAY_NUM, 1>;
   icache_module_n::ICache mod_;   // the I-cache module (rtl/frontend/icache/icache_ctl.sv)
   TagTable tags_;
   ValidTable valid_;
+  uint32_t data_[ICACHE_SET_NUM][ICACHE_WAY_NUM][ICACHE_WORD_NUM] = {};
   uint8_t prefetch_rot_[ICACHE_SET_NUM] = {};
   uint16_t repl_[ICACHE_SET_NUM] = {};   // ICACHE_REPL=plru / srrip: replacement state per set (written at the edge)
   // The array read of this cycle, as the module sees it.

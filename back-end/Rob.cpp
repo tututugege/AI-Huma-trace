@@ -231,7 +231,7 @@ void Rob::single_actions(const Uop &u) {
     else if (t == SRET) bc.sret = true;
     else if (u.page_fault_store) { bc.page_fault_store = true; bc.trap_val = u.diag_val; }
     else if (u.page_fault_load) { bc.page_fault_load = true; bc.trap_val = u.diag_val; }
-    else if (u.page_fault_inst) { bc.page_fault_inst = true; bc.trap_val = pc + (u.diag_val & 2u); }
+    else if (u.page_fault_inst) { bc.page_fault_inst = true; bc.trap_val = pc + (u.pf_inst_hi ? 2u : 0u); }
     else if (u.illegal_inst) { bc.illegal_inst = true; bc.trap_val = u.diag_val; }
     else if (t == EBREAK && is_semihost_marker(pc)) { bc.breakpoint = true; bc.trap_val = pc; }  // breakpoint exception, cause 3, tval = pc
     else if (t == EBREAK) ctx->exit_reason = ExitReason::EBREAK;

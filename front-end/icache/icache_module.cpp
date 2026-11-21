@@ -489,6 +489,7 @@ void ICache::eval_state_machine() {
     const uint32_t word_idx = io.regs.dcache_probe_word_r;
     if (!io.regs.dcache_probe_done_r &&
         !io.regs.dcache_probe_inflight_r &&
+        !io.in.dcache_probe_busy &&
         word_idx < word_num &&
         io.regs.req_valid_r) {
       io.out.dcache_req_valid = true;

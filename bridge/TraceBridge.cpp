@@ -2,6 +2,7 @@
 #include "trace_win.h"
 #include "InstDecode.h"
 #include "refcpu_api.h"
+#include REFCPU_RVC_H
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -232,7 +233,28 @@ const Fact &Bridge::dispatch(uint64_t uid, xlen_t pc, uint32_t inst, uint32_t le
   if (e->f.is_load || e->f.is_store)
     data_xlate_ok = refcpu_translate_data(ctx_, e->f.vaddr, e->f.is_store ? 2 : 1, &data_pa);
   const bool in_boot = boot_bytes_ && pc >= boot_base_ && (uint64_t)pc + len <= (uint64_t)boot_base_ + boot_bytes_;   // (pc >= 2^32 is never in the boot ROM)
+  bool stale_icache = false;
+  if (pc_xlate_ok && (in_ram(pc_pa, 4) || in_boot)) {
+    uint32_t w0 = 0;
+    if (read_word(pc_pa & ~3u, w0)) {
+      const uint16_t h0 = (pc_pa & 2u) ? static_cast<uint16_t>(w0 >> 16) : static_cast<uint16_t>(w0 & 0xffffu);
+      if ((h0 & 3u) != 3u) {
+        uint32_t ex = 0;
+        const uint32_t ram_inst = rvc::expand(h0, ex) ? ex : 0u;
+        if (len != 2 || ram_inst != inst) stale_icache = true;
+      } else if ((pc_pa & 0xfffu) <= 0xffcu) {
+        uint32_t ram32 = w0;
+        if (pc_pa & 2u) {
+          uint32_t w1 = 0;
+          read_word((pc_pa & ~3u) + 4u, w1);
+          ram32 = static_cast<uint32_t>(h0) | (w1 << 16);
+        }
+        if (len != 4 || ram32 != inst) stale_icache = true;
+      }
+    }
+  }
   if (pc_xlate_ok && !in_ram(pc_pa, 4) && !in_boot) blk = Blocked::PcOutOfRam;
+  else if (stale_icache) blk = Blocked::StaleIcache;
   else if (inst == 0x00100073) blk = Blocked::Ebreak;
   else if (e->f.is_load || e->f.is_store) {
     const xlen_t a = e->f.vaddr;

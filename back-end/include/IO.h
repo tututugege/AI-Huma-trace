@@ -44,6 +44,7 @@ struct FrontPreIO {
   PredMetaT<BACKEND_FETCH_WIDTH> meta = {};
   wire<XLEN> predict_next_fetch_address[BACKEND_FETCH_WIDTH] = {};
   wire<1> page_fault_inst[BACKEND_FETCH_WIDTH] = {};
+  wire<1> pf_inst_hi[BACKEND_FETCH_WIDTH] = {};
 };
 
 struct DecBroadcastIO {
@@ -84,8 +85,6 @@ struct FtqCommitInfoResp {
   wire<1> pred_taken{};
   wire<1> alt_pred{};
   pcpn_t pcpn{};
-  tage_idx_t tage_idx[4]{};
-  tage_tag_t tage_tag[4]{};
   wire<8> ps_info{};  // statistics only (BPA_STATS)
   uint16_t blk_id{};  // FTQ block sequence id (used by BPU_FTB=1 for exact block-based training)
   wire<1> ftq_is_last{};

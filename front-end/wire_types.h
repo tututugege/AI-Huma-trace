@@ -63,8 +63,6 @@ template <int N>
 struct PredMetaT {
   wire<1> alt_pred[N];
   pcpn_t pcpn[N];
-  tage_idx_t tage_idx[N][TN_MAX];
-  tage_tag_t tage_tag[N][TN_MAX];
   wire<16> blk_id[N];  // BPA_REPAIR: sequence number of the fetch block (key of the BPU's checkpoint record)
   wire<8> ps_info[N];  // statistics only (BPA_STATS, docs/BPU_ACC.md): predicted type / target source / use-alt of the slot; no consumer in the pipeline
 
@@ -75,10 +73,6 @@ struct PredMetaT {
     for (int i = 0; i < M; i++) {
       alt_pred[i] = s.alt_pred[i];
       pcpn[i] = s.pcpn[i];
-      for (int j = 0; j < TN_MAX; j++) {
-        tage_idx[i][j] = s.tage_idx[i][j];
-        tage_tag[i][j] = s.tage_tag[i][j];
-      }
       ps_info[i] = s.ps_info[i];
       blk_id[i] = s.blk_id[i];
     }
@@ -87,14 +81,8 @@ struct PredMetaT {
   // Fields are stored at their declared hardware widths.
   void mask() {
     constexpr uint32_t kPcpnMask = (1u << pcpn_t_BITS) - 1u;
-    constexpr uint32_t kTageIdxMask = (1u << tage_idx_t_BITS) - 1u;
-    constexpr uint32_t kTageTagMask = (1u << tage_tag_t_BITS) - 1u;
     for (int i = 0; i < N; i++) {
       pcpn[i] = static_cast<pcpn_t>(pcpn[i] & kPcpnMask);
-      for (int j = 0; j < TN_MAX; j++) {
-        tage_idx[i][j] = static_cast<tage_idx_t>(tage_idx[i][j] & kTageIdxMask);
-        tage_tag[i][j] = static_cast<tage_tag_t>(tage_tag[i][j] & kTageTagMask);
-      }
     }
   }
 };using PredMeta = PredMetaT<FETCH_WIDTH>;

@@ -19,11 +19,23 @@
 #include "icache_top.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 static_assert(ICACHE_LINE_SIZE <= axi_interconnect::MAX_READ_TRANSACTION_BYTES, "ICACHE_LINE_SIZE exceeds the AXI read transaction limit");
 
 namespace {
 constexpr int kLineSlots = ICACHE_LINE_SIZE / SLOT_BYTES;
+inline void snapshot_icache_line(uint32_t paddr, uint32_t *dst) {
+  const uint32_t base = paddr & ~uint32_t(ICACHE_LINE_SIZE - 1u);
+  for (uint32_t w = 0; w < ICACHE_WORD_NUM; ++w) dst[w] = tbhook::mem_read(base + 4u * w);
+}
+inline uint32_t read_line_window(const uint32_t *line, uint32_t byte_off) {
+  const uint32_t w = (byte_off & (ICACHE_LINE_SIZE - 1u)) >> 2;
+  if ((byte_off & 2u) == 0u) return line[w];
+  const uint32_t lo = line[w] >> 16;
+  const uint32_t hi = (w + 1u < ICACHE_WORD_NUM) ? (line[w + 1u] & 0xFFFFu) : 0u;
+  return lo | (hi << 16);
+}
 }  // namespace
 
 template <class TagP, class ValidP>
@@ -53,7 +65,7 @@ bool ICacheTop::read_ready(bool hold_for_recovery, bool reset) const {
   return !hold_for_recovery && r.ifu_req_ready_r && !busy && mod_.io.out.ifu_req_ready;
 }
 
-// Fetch-group output of the module's response: the words come from the functional memory (the I-cache keeps no data array).
+// Fetch-group output of the module's response: words come from the L1I data array (matching RTL icache_arr).
 void ICacheTop::drive_fetch_group(ICacheOut *co) {
   const auto &o = mod_.io.out;
   if (!o.ifu_resp_valid) return;
@@ -74,8 +86,27 @@ void ICacheTop::drive_fetch_group(ICacheOut *co) {
     return;
   }
   const int base = static_cast<int>((o.ifu_resp_pc & (ICACHE_LINE_SIZE - 1u)) / SLOT_BYTES);
+  uint32_t line_buf[ICACHE_WORD_NUM];
+  const uint32_t *line_ptr = nullptr;
+  if (!pf) {
+    if (mod_.io.table_write.we) {
+      snapshot_icache_line(o.ifu_resp_paddr, line_buf);
+      line_ptr = line_buf;
+    } else {
+      const uint32_t idx = (o.ifu_resp_paddr >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
+      const uint32_t ptag = o.ifu_resp_paddr >> 12;
+      const int way = peek_way(idx, ptag);
+      if (way >= 0) line_ptr = data_[idx][way];
+    }
+  }
   for (int i = 0; i < FETCH_WIDTH && base + i < kLineSlots; ++i) {
-    co->fetch_group[i] = pf ? INST_NOP : tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES * i);
+    if (pf) {
+      co->fetch_group[i] = INST_NOP;
+    } else if (line_ptr != nullptr) {
+      co->fetch_group[i] = read_line_window(line_ptr, (o.ifu_resp_paddr + SLOT_BYTES * i) & (ICACHE_LINE_SIZE - 1u));
+    } else {
+      co->fetch_group[i] = tbhook::fetch_window_at(o.ifu_resp_paddr + SLOT_BYTES * i);
+    }
     co->page_fault_inst[i] = pf;
     co->inst_valid[i] = true;
   }
@@ -122,7 +153,7 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
     out.probe_req->req_valid = false; out.probe_req->req_addr = 0;
     itlb.comb(true, false, nullptr, nullptr, 0);
     co->icache_read_ready = true;
-    resp_popped_d_ = false;
+    fdip_dc_req_v_ = false; fdip_dc_req_addr_ = 0;
     return;
   }
   // (a satp write does not flush the ITLB: the architectural shootdown is SFENCE.VMA -> itlb_flush)
@@ -131,10 +162,9 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
 
   const uint8_t axi_acc_id = static_cast<uint8_t>(in.axi_q->req.accepted_id & 0xF);
   const uint8_t axi_rsp_id = static_cast<uint8_t>(in.axi_q->resp.id & 0xF);
-  const bool eff_resp_valid = in.axi_q->resp.valid && !resp_popped_q_;
   const bool fdip_acc = in.axi_q->req.accepted && axi_acc_id >= kFdipTxBase && axi_acc_id < kFdipTxBase + kFdipN;
-  const bool fdip_rsp_raw = eff_resp_valid && axi_rsp_id >= kFdipTxBase && axi_rsp_id < kFdipTxBase + kFdipN;
-  const bool fdip_rsp = fdip_rsp_raw && fdip_q_.slots[axi_rsp_id - kFdipTxBase].active &&
+  const bool fdip_rsp_id = in.axi_q->resp.valid && axi_rsp_id >= kFdipTxBase && axi_rsp_id < kFdipTxBase + kFdipN;
+  const bool fdip_rsp = fdip_rsp_id && fdip_q_.slots[axi_rsp_id - kFdipTxBase].active &&
                         fdip_q_.slots[axi_rsp_id - kFdipTxBase].issued;
   const bool fdip_busy_req = fdip_q_.sending >= 0 && !fdip_acc;
 
@@ -149,11 +179,12 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   hin.mem_req_ready = fdip_busy_req ? false : in.axi_q->req.ready;
   hin.mem_req_accepted = fdip_acc ? false : in.axi_q->req.accepted;
   hin.mem_req_accepted_id = axi_acc_id;
-  hin.mem_resp_valid = fdip_rsp_raw ? false : eff_resp_valid;
+  hin.mem_resp_valid = fdip_rsp_id ? false : in.axi_q->resp.valid;
   hin.mem_resp_id = axi_rsp_id;
   hin.dcache_resp_valid = in.probe_resp->resp_valid;
   hin.dcache_resp_retry = in.probe_resp->resp_retry;
   hin.dcache_resp_miss = in.probe_resp->resp_miss;
+  hin.dcache_probe_busy = fdip_q_.probe_v;
 
   fill_lookup_meta();
   mod_.comb_lookup_meta();
@@ -193,13 +224,17 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   out.probe_req->req_valid = ho.dcache_req_valid;
   out.probe_req->req_addr = ho.dcache_req_addr;
 
-  // Real-AXI/LLC/DRAM S2-confirmed FDIP (2 slots, txid 8..9, 8-entry VA queue, 1-pop/cycle)
+  // Real-AXI/LLC/DRAM S2-confirmed FDIP (2 slots, txid 8..9, 8-entry VA queue, 1-beat DCache probe before AXI)
   if (!edge_.kill_step) {
     fdip_d_ = fdip_q_;
     fdip_d_valid_ = true;
     fdip_inst_en_ = false;
+    fdip_dc_req_v_ = false;
+    fdip_dc_req_addr_ = 0;
     if (ci->fence_i) {
       fdip_d_.qh = fdip_d_.qn = 0;
+      fdip_d_.probe_retry = false;
+      if (fdip_d_.probe_v) fdip_d_.probe_cancel = true;
       for (int s = 0; s < kFdipN; s++) {
         if (fdip_d_.slots[s].active) {
           if (fdip_d_.slots[s].issued || fdip_d_.sending == s) fdip_d_.slots[s].canceled = true;
@@ -214,20 +249,65 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
     }
     if (fdip_rsp) {
       const int s = axi_rsp_id - kFdipTxBase;
-      const bool dc_dirty = dc_dirty_fn_ && dc_dirty_fn_(dc_dirty_ctx_, fdip_d_.slots[s].paddr);
-      if (fdip_d_.slots[s].active && !fdip_d_.slots[s].canceled && !ci->fence_i && !dc_dirty) {
+      if (fdip_d_.slots[s].active && !fdip_d_.slots[s].canceled && !ci->fence_i) {
         fdip_inst_en_ = true;
         fdip_inst_idx_ = fdip_d_.slots[s].index;
         fdip_inst_ptag_ = fdip_d_.slots[s].ptag;
+        std::memcpy(fdip_inst_line_, fdip_d_.slots[s].line, sizeof(fdip_inst_line_));
       }
       fdip_d_.slots[s] = FdipSlot{};
       if (fdip_d_.sending == s) fdip_d_.sending = -1;
     }
-    if (fdip_d_.sending < 0 && !ho.mem_req_valid && !ci->refetch && !ci->fence_i && fdip_d_.qn > 0) {
-      int free_s = -1;
-      for (int s = 0; s < kFdipN; s++) if (!fdip_d_.slots[s].active) { free_s = s; break; }
-      if (free_s >= 0) {
-        // 1-pop/cycle head inspection (hardware-friendly, zero combinational loop)
+    const bool demand_dc_busy =
+        ((mod_.io.regs.state != icache_module_n::IDLE) && !mod_.io.regs.dcache_probe_done_r) ||
+        mod_.io.regs.dcache_probe_inflight_r || ho.dcache_req_valid;
+    auto find_free_slot = [&]() {
+      for (int s = 0; s < kFdipN; s++) if (!fdip_d_.slots[s].active) return s;
+      return -1;
+    };
+    auto is_dup_pa = [&](uint32_t pa) {
+      if (mod_.io.regs.miss_txid_valid_r &&
+          ((mod_.io.regs.ppn_r << 12) | (mod_.io.regs.req_index_r << ICACHE_OFFSET_BITS)) == pa)
+        return true;
+      for (int s = 0; s < kFdipN; s++) if (fdip_d_.slots[s].active && fdip_d_.slots[s].paddr == pa) return true;
+      return false;
+    };
+    // Complete in-flight 1-beat DCache coherency probe (miss in L1D+WB -> safe to issue AXI read)
+    if (fdip_d_.probe_v) {
+      if (ci->refetch || ci->fence_i) fdip_d_.probe_cancel = true;
+      if (in.probe_resp->resp_valid) {
+        fdip_d_.probe_v = false;
+        const bool canc = fdip_d_.probe_cancel || ci->refetch || ci->fence_i;
+        fdip_d_.probe_cancel = false;
+        if (!canc) {
+          if (in.probe_resp->resp_retry) {
+            if (!demand_dc_busy) fdip_d_.probe_retry = true;
+          } else if (in.probe_resp->resp_miss) {
+            const uint32_t pa = fdip_d_.probe_pa;
+            const uint32_t idx = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
+            const uint32_t ptag = pa >> 12;
+            const int free_s = find_free_slot();
+            if (fdip_d_.sending < 0 && !ho.mem_req_valid && free_s >= 0 && !is_dup_pa(pa) && !peek_hit(idx, ptag)) {
+              FdipSlot sl{true, false, false, pa, idx, ptag, {}};
+              snapshot_icache_line(pa, sl.line);
+              fdip_d_.slots[free_s] = sl;
+              fdip_d_.sending = free_s;
+            }
+          }
+        }
+      }
+    }
+    // Launch next 1-beat DCache probe when demand does not need the probe port and no FDIP probe is in flight
+    if (ci->refetch || ci->fence_i || demand_dc_busy) {
+      fdip_d_.probe_retry = false;
+    } else if (!fdip_q_.probe_v) {
+      if (fdip_d_.probe_retry) {
+        fdip_d_.probe_retry = false;
+        fdip_d_.probe_v = true;
+        fdip_d_.probe_cancel = false;
+        fdip_dc_req_v_ = true;
+        fdip_dc_req_addr_ = fdip_d_.probe_pa;
+      } else if (fdip_d_.sending < 0 && !ho.mem_req_valid && find_free_slot() >= 0 && fdip_d_.qn > 0) {
         const pc_t va = fdip_d_.q[fdip_d_.qh];
         fdip_d_.qh = (fdip_d_.qh + 1) % kFdipQ;
         fdip_d_.qn--;
@@ -237,19 +317,22 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
           if (pa >= 0x80000000u) {
             const uint32_t idx = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
             const uint32_t ptag = pa >> 12;
-            bool dup = (mod_.io.regs.miss_txid_valid_r &&
-                        ((mod_.io.regs.ppn_r << 12) | (mod_.io.regs.req_index_r << ICACHE_OFFSET_BITS)) == pa);
-            for (int s = 0; s < kFdipN; s++) if (fdip_d_.slots[s].active && fdip_d_.slots[s].paddr == pa) dup = true;
-            if (!dup && !peek_hit(idx, ptag)) {
-              fdip_d_.slots[free_s] = FdipSlot{true, false, false, pa, idx, ptag};
-              fdip_d_.sending = free_s;
+            if (!is_dup_pa(pa) && !peek_hit(idx, ptag)) {
+              fdip_d_.probe_v = true;
+              fdip_d_.probe_cancel = false;
+              fdip_d_.probe_pa = pa;
+              fdip_dc_req_v_ = true;
+              fdip_dc_req_addr_ = pa;
             }
           }
         }
       }
     }
   }
-  resp_popped_d_ = eff_resp_valid && resp_ready;
+  if (fdip_dc_req_v_) {
+    out.probe_req->req_valid = true;
+    out.probe_req->req_addr = fdip_dc_req_addr_;
+  }
   if (fdip_d_.sending >= 0) {
     const FdipSlot &sl = fdip_d_.slots[fdip_d_.sending];
     out.axi->req.valid = true;
@@ -325,10 +408,9 @@ void ICacheTop::seq() {
     fdip_q_ = FdipState{};
     fdip_d_ = FdipState{};
     fdip_d_valid_ = fdip_inst_en_ = fdip_pair_miss_en_ = false;
-    resp_popped_q_ = resp_popped_d_ = false;
+    fdip_dc_req_v_ = false; fdip_dc_req_addr_ = 0;
   } else {
     mod_.seq();
-    resp_popped_q_ = resp_popped_d_;
   }
   itlb.seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
   bool demand_tw_we = false;
@@ -343,6 +425,8 @@ void ICacheTop::seq() {
       tag_write.payload.chunks[tw.way][0] = tw.tag;
       valid_write.payload.chunks[tw.way][0] = tw.valid;
       tag_write.chunk_enable[tw.way] = valid_write.chunk_enable[tw.way] = true;
+      snapshot_icache_line((static_cast<uint32_t>(tw.tag) << 12) | (static_cast<uint32_t>(tw.index) << ICACHE_OFFSET_BITS),
+                           data_[tw.index][tw.way]);
     }
     if (tw.invalidate_all) { demand_tw_we = true; valid_.reset(); }
     if (tw.touch_we) {
@@ -374,6 +458,7 @@ void ICacheTop::seq() {
         tw.chunk_enable[way] = vw.chunk_enable[way] = true;
         tags_.seq(TagTable::ReadReq{}, tw);
         valid_.seq(ValidTable::ReadReq{}, vw);
+        std::memcpy(data_[idx][way], fdip_inst_line_, sizeof(fdip_inst_line_));
         if (icache_module_n::icache_repl_mode() != 0) {
           repl_[idx] = icache_module_n::icache_repl_update(repl_[idx], static_cast<uint32_t>(way), true);
         }
@@ -386,14 +471,15 @@ void ICacheTop::seq() {
 }
 
 // FE_PAIR / FE_IPF: functional tag peek (no state change): is the line with this physical tag resident in set `index`?
-bool ICacheTop::peek_hit(uint32_t index, uint32_t ptag) {
+int ICacheTop::peek_way(uint32_t index, uint32_t ptag) {
   auto tp = tags_.peek_row(index);
   auto vp = valid_.peek_row(index);
   forward_pending(index, tp, vp);   // (this cycle's table writes, before the edge)
   for (int w = 0; w < ICACHE_WAY_NUM; ++w)
-    if (vp.chunks[w][0] && tp.chunks[w][0] == ptag) return true;
-  return false;
+    if (vp.chunks[w][0] && tp.chunks[w][0] == ptag) return w;
+  return -1;
 }
+bool ICacheTop::peek_hit(uint32_t index, uint32_t ptag) { return peek_way(index, ptag) >= 0; }
 
 // 2-taken second fetch block read in parallel with block A (2-port ITLB + 4-bank 1R1W ICache).
 bool ICacheTop::fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, uint32_t *words, int &actual_n) {
@@ -407,7 +493,8 @@ bool ICacheTop::fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, u
   if (pb < 0x80000000u) return false;
   const uint32_t idx0 = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
   const uint32_t ptag0 = pb >> 12;
-  if (!peek_hit(idx0, ptag0)) {
+  const int way0 = peek_way(idx0, ptag0);
+  if (way0 < 0) {
     if (!edge_.kill_step) {
       fdip_pair_miss_en_ = true;
       fdip_pair_miss_va_ = b_vpc & ~pc_t(ICACHE_LINE_SIZE - 1u);
@@ -418,7 +505,14 @@ bool ICacheTop::fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, u
   int avail = kLineSlots - b_slot0;
   if (avail > nwords) avail = nwords;
   actual_n = avail;
-  for (int i = 0; i < avail; ++i) words[i] = tbhook::fetch_window_at(pb + SLOT_BYTES * i);
+  const bool same_line = (pb >> ICACHE_OFFSET_BITS) == (static_cast<uint32_t>(a_paddr) >> ICACHE_OFFSET_BITS);
+  uint32_t line_buf[ICACHE_WORD_NUM];
+  const uint32_t *line_ptr = data_[idx0][way0];
+  if (same_line && mod_.io.table_write.we) {
+    snapshot_icache_line(pb, line_buf);
+    line_ptr = line_buf;
+  }
+  for (int i = 0; i < avail; ++i) words[i] = read_line_window(line_ptr, (pb + SLOT_BYTES * i) & (ICACHE_LINE_SIZE - 1u));
   return avail > 0;
 }
 
@@ -456,6 +550,7 @@ void ICacheTop::warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM],
       tw.payload.chunks[w][0] = tag[set][w];
       vw.payload.chunks[w][0] = valid[set][w];
       tw.chunk_enable[w] = vw.chunk_enable[w] = true;
+      if (valid[set][w]) snapshot_icache_line((tag[set][w] << 12) | (static_cast<uint32_t>(set) << ICACHE_OFFSET_BITS), data_[set][w]);
     }
     tags_.seq(TagTable::ReadReq{}, tw);
     valid_.seq(ValidTable::ReadReq{}, vw);

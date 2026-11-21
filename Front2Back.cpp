@@ -24,6 +24,7 @@ void Front2Back::comb() {
       o.is_rvc[j] = fo.is_rvc[j];
       o.predict_next_fetch_address[j] = fo.predict_next_fetch_address;
       o.page_fault_inst[j] = fo.page_fault_inst[j];
+      o.pf_inst_hi[j] = fo.pf_inst_hi[j];
       o.inst[j] = fo.instructions[j];
       o.predict_dir[j] = fo.predict_dir[j];
       if (o.valid[j] && fo.predict_dir[j]) no_taken = false;

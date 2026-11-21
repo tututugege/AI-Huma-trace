@@ -42,8 +42,6 @@ struct BpuTrain {             // one committing instruction
   target_addr_t target;
   wire<1> alt_pred;
   pcpn_t pcpn;
-  tage_idx_t tage_idx[TN_MAX];
-  tage_tag_t tage_tag[TN_MAX];
   uint16_t blk_id;
   wire<1> ftq_is_last;
 };
@@ -66,6 +64,7 @@ struct FrontTopOut {
   fetch_addr_t predict_next_fetch_address;
   PredMetaT<BACKEND_FETCH_WIDTH> meta;
   wire<1> page_fault_inst[BACKEND_FETCH_WIDTH];
+  wire<1> pf_inst_hi[BACKEND_FETCH_WIDTH] = {};
   wire<1> inst_valid[BACKEND_FETCH_WIDTH];
 };
 
@@ -112,6 +111,7 @@ struct InstFifoOut {
   inst_word_t instructions[FETCH_WIDTH];
   pc_t pc[FETCH_WIDTH]; // THIS IS ONLY FOR DEBUG!!! 
   wire<1> page_fault_inst[FETCH_WIDTH];
+  wire<1> pf_inst_hi[FETCH_WIDTH] = {};
   wire<1> inst_valid[FETCH_WIDTH];
   predecode_type_t predecode_type[FETCH_WIDTH];
   target_addr_t predecode_target_address[FETCH_WIDTH];
@@ -160,6 +160,7 @@ struct F2bFifoOut {
   wire<1> front2back_FIFO_valid; // same as the previous FIFO_valid
   inst_word_t fetch_group[FETCH_WIDTH];
   wire<1> page_fault_inst[FETCH_WIDTH];
+  wire<1> pf_inst_hi[FETCH_WIDTH] = {};
   wire<1> inst_valid[FETCH_WIDTH];
   wire<1> is_rvc[FETCH_WIDTH];
   wire<1> predict_dir_corrected[FETCH_WIDTH];
@@ -209,6 +210,7 @@ struct PtabEntry {
 struct F2bFifoEntry {
   inst_word_t fetch_group[FETCH_WIDTH];
   wire<1> page_fault_inst[FETCH_WIDTH];
+  wire<1> pf_inst_hi[FETCH_WIDTH] = {};
   wire<1> inst_valid[FETCH_WIDTH];
   wire<1> is_rvc[FETCH_WIDTH];
   wire<1> predict_dir_corrected[FETCH_WIDTH];

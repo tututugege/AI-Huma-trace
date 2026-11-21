@@ -687,10 +687,6 @@ struct BpuFtb {
     for (int i = 0; i < FW; i++) {
       o.meta.pcpn[i] = TN;
       o.meta.alt_pred[i] = false;
-      for (int t = 0; t < TN; t++) {
-        o.meta.tage_idx[i][t] = static_cast<tage_idx_t>(ix.idx[t] & TAGE_IDX_MASK);
-        o.meta.tage_tag[i][t] = static_cast<tage_tag_t>(ix.tag[t] & tcfg().tagmask[t]);
-      }
     }
     if (!r.ftb_hit) return;
 

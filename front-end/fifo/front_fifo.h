@@ -71,7 +71,7 @@ struct F2bFifo {
   static void load(const Entry &src, Entry &e) { e = src; e.meta.mask(); }
   static void store(const Entry &e, Out &o) {
     for (int i = 0; i < FETCH_WIDTH; i++) {
-      o.fetch_group[i] = e.fetch_group[i]; o.page_fault_inst[i] = e.page_fault_inst[i]; o.inst_valid[i] = e.inst_valid[i];
+      o.fetch_group[i] = e.fetch_group[i]; o.page_fault_inst[i] = e.page_fault_inst[i]; o.pf_inst_hi[i] = e.pf_inst_hi[i]; o.inst_valid[i] = e.inst_valid[i];
       o.is_rvc[i] = e.is_rvc[i]; o.predict_dir_corrected[i] = e.predict_dir_corrected[i]; o.predict_base_pc[i] = e.predict_base_pc[i];
     }
     o.meta = e.meta; o.meta.mask();

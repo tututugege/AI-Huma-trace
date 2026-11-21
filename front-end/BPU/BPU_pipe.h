@@ -526,10 +526,6 @@ class BpuPipe {
           out.meta.pcpn[i] = d.out.meta.pcpn[i];
           out.meta.ps_info[i] = d.out.meta.ps_info[i];
           out.meta.blk_id[i] = seq0;
-          for (int k = 0; k < TN; k++) {
-            out.meta.tage_idx[i][k] = d.out.meta.tage_idx[i][k];
-            out.meta.tage_tag[i][k] = d.out.meta.tage_tag[i][k];
-          }
         }
         for (int i = al; i < FW; i++) {
           const int j = i - al;
@@ -539,10 +535,6 @@ class BpuPipe {
           out.meta.pcpn[i] = d.outB.meta.pcpn[j];
           out.meta.ps_info[i] = d.outB.meta.ps_info[j];
           out.meta.blk_id[i] = seq1;
-          for (int k = 0; k < TN; k++) {
-            out.meta.tage_idx[i][k] = d.outB.meta.tage_idx[j][k];
-            out.meta.tage_tag[i][k] = d.outB.meta.tage_tag[j][k];
-          }
         }
         out.predict_next_fetch_address = d.outB.next;
         t.rec_v = true;
