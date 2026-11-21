@@ -2,10 +2,12 @@
 #define REG_S sd
 #define REG_L ld
 #define REG_W .dword
+#define REG_SZ 8
 #else
 #define REG_S sw
 #define REG_L lw
 #define REG_W .word
+#define REG_SZ 4
 #endif
     .equ UART_THR,       0x10000000
     .equ UART_IER,       0x10000001
@@ -99,13 +101,13 @@ external_unexpected_vector:
     j 1b
 
 external_supervisor_vector:
-    addi sp, sp, -32
-    sw t0, 0(sp)
-    sw t1, 4(sp)
-    sw t2, 8(sp)
-    sw t3, 12(sp)
-    sw t4, 16(sp)
-    sw t5, 20(sp)
+    addi sp, sp, -(8 * REG_SZ)
+    REG_S t0, (0 * REG_SZ)(sp)
+    REG_S t1, (1 * REG_SZ)(sp)
+    REG_S t2, (2 * REG_SZ)(sp)
+    REG_S t3, (3 * REG_SZ)(sp)
+    REG_S t4, (4 * REG_SZ)(sp)
+    REG_S t5, (5 * REG_SZ)(sp)
 
     .word 0x142022f3       # csrr t0, scause
     .word 0x14102373       # csrr t1, sepc
@@ -149,13 +151,13 @@ external_supervisor_vector:
     addi t4, t4, 1
     sw t4, 0(t3)
 
-    lw t0, 0(sp)
-    lw t1, 4(sp)
-    lw t2, 8(sp)
-    lw t3, 12(sp)
-    lw t4, 16(sp)
-    lw t5, 20(sp)
-    addi sp, sp, 32
+    REG_L t0, (0 * REG_SZ)(sp)
+    REG_L t1, (1 * REG_SZ)(sp)
+    REG_L t2, (2 * REG_SZ)(sp)
+    REG_L t3, (3 * REG_SZ)(sp)
+    REG_L t4, (4 * REG_SZ)(sp)
+    REG_L t5, (5 * REG_SZ)(sp)
+    addi sp, sp, (8 * REG_SZ)
     .word 0x10200073       # sret
 
     .align 2

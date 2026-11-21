@@ -491,8 +491,11 @@ struct PdInfo {
   wire<1> valid = false, flush = false;
   uint8_t nbits = 0, bits = 0, ras_op = 0;
   target_addr_t ras_val = 0;
+  uint8_t ras_op2 = 0;
+  target_addr_t ras_val2 = 0;
   wire<1> nb_valid = false;   // the checked block had a taken prediction on an instruction that is not a branch: the type predictor entry of nb_pc is stale
   pc_t nb_pc = 0;
+  pc_t nb_base = 0;           // base PC of the segment owning nb_pc (0 -> use pd_rec.base)
 };
 
 struct InputPayload {

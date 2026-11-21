@@ -45,27 +45,53 @@ public:
   void set_context(SimContext *ctx) { bind_.ctx_set = ctx; }
   // the ITLB's walk port is the I-cache's out.itlb_walk (FrontTop::init, after SimCpu bound it)
   void bind_walk() { itlb.walk_resp = in.itlb_walk; itlb.walk_req = out.itlb_walk; }
-  std::function<void(uint32_t index, uint32_t tag)> fill_hook;   // FE_IPF: demand fills are reported to the prefetcher
+  void set_dc_dirty_snoop(bool (*fn)(const void *, uint32_t), const void *ctx) { dc_dirty_fn_ = fn; dc_dirty_ctx_ = ctx; }
 
   bool read_ready(bool hold_for_recovery, bool reset) const;   // from the registers (before the comb of the cycle)
   void comb_calc(ICacheIn *ci, ICacheOut *co);              // the fetch step R1 = N(R0)
   void invalidate_step(ICacheOut *co);   // a predecode flush: R2 = K(R1)
   void seq();                                                  // the clock edge
   bool peek_hit(uint32_t index, uint32_t ptag);
-  bool fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words);
-  bool peek_translate(uint32_t v_addr, uint32_t &p_addr);
-  bool prefetch_install(uint32_t index, uint32_t ptag);
+  bool fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, uint32_t *words, int &actual_n);
+  bool peek_translate(pc_t v_addr, uint32_t &p_addr);
+  void enqueue_fdip(const pc_t *cand, int n, bool clear_all);
   void warm_install(const uint32_t tag[ICACHE_SET_NUM][ICACHE_WAY_NUM], const bool valid[ICACHE_SET_NUM][ICACHE_WAY_NUM]);
   void warm_install_itlb(const void *entries, int count, int repl_ptr);
 
 private:
+  // Real-AXI/LLC/DRAM S2-confirmed FDIP (2 slots, txid 8..9 on MASTER_ICACHE, 8-entry VA queue, 1-pop/cycle)
+  static constexpr int kFdipN = 2;
+  static constexpr uint8_t kFdipTxBase = 8;
+  static constexpr int kFdipQ = 8;
+  struct FdipSlot {
+    bool active = false, issued = false, canceled = false;
+    uint32_t paddr = 0, index = 0, ptag = 0;
+  };
+  struct FdipState {
+    FdipSlot slots[kFdipN]{};
+    int sending = -1;
+    pc_t q[kFdipQ]{};
+    int qh = 0, qn = 0;
+  };
+  FdipState fdip_q_{};
+  FdipState fdip_d_{};
+  bool fdip_d_valid_ = false;
+  bool fdip_inst_en_ = false;
+  uint32_t fdip_inst_idx_ = 0, fdip_inst_ptag_ = 0;
+  bool fdip_pair_miss_en_ = false;
+  pc_t fdip_pair_miss_va_ = 0;
+  bool resp_popped_q_ = false;
+  bool resp_popped_d_ = false;
+  bool (*dc_dirty_fn_)(const void *, uint32_t) = nullptr;
+  const void *dc_dirty_ctx_ = nullptr;
+
   using TagTable = GenericTable<ICACHE_SET_NUM, ICACHE_WAY_NUM, ICACHE_TAG_BITS>;
   using ValidTable = GenericTable<ICACHE_SET_NUM, ICACHE_WAY_NUM, 1>;
   icache_module_n::ICache mod_;   // the I-cache module (rtl/frontend/icache/icache_ctl.sv)
   TagTable tags_;
   ValidTable valid_;
   uint8_t prefetch_rot_[ICACHE_SET_NUM] = {};
-  uint16_t repl_[ICACHE_SET_NUM] = {};   // ICACHE_REPL=plru / srrip: replacement state per set (written at the edge)   // FE_IPF: rotating victim per set
+  uint16_t repl_[ICACHE_SET_NUM] = {};   // ICACHE_REPL=plru / srrip: replacement state per set (written at the edge)
   // The array read of this cycle, as the module sees it.
   struct LookupResp {
     bool meta_valid = false, data_valid = false;

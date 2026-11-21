@@ -10,8 +10,8 @@
 // Each module's first phase of the cycle starts its port state anew (in cleared, read data from the registers, the
 // request's enables cleared).
 
-//   CONTRACT comb_read  in: in.fetch_addr_read_enable in.global_refetch in.global_reset in.pipe_dec in.rd.fetch_addr_fifo_rd_snapshot  out: out.fetch_addr_fifo_req out.fetch_addr_head out.fetch_addr_in out.fetch_addr_rd out.ipf
-//   CONTRACT comb_write  in: in.bpu_can_run in.bpu_output in.global_reset  out: out.fetch_addr_fifo_req out.fetch_addr_in out.fetch_addr_rd out.ipf
+//   CONTRACT comb_read  in: in.fetch_addr_read_enable in.global_refetch in.global_reset in.pipe_dec in.rd.fetch_addr_fifo_rd_snapshot  out: out.fetch_addr_fifo_req out.fetch_addr_head out.fetch_addr_in out.fetch_addr_rd
+//   CONTRACT comb_write  in: in.bpu_can_run in.bpu_output in.global_reset  out: out.fetch_addr_fifo_req out.fetch_addr_in out.fetch_addr_rd
 class FetchAddrPort {
 public:
   struct In {
@@ -25,7 +25,6 @@ public:
     FetchAddrFifoReadData fetch_addr_rd{};
     FetchAddrFifoOut fetch_addr_head{};      // the head popped this cycle (the I-cache takes it)
     FetchAddrCombOut fetch_addr_fifo_req{};  // applied at the edge
-    PendingIpf ipf{};                        // FE_IPF: the fetch addresses pushed this cycle (prefetch candidates)
   } out;
   FetchAddrFifo *fifo = nullptr;
   void comb_read();

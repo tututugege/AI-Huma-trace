@@ -81,6 +81,10 @@ struct RvcHeadFix {
     r.low = head.raw16[last];
     drop(last);
   }
+  // Carry cross-page 2nd-halfword instruction page-fault offset (+2) in inst->diag_val for ROB stval
+  for (int i = 0; i < FETCH_WIDTH; i++)
+    if (head.inst_valid[i] && head.page_fault_inst[i])
+      head.instructions[i] = (i == 0 && r.carry_used) ? 2u : 0u;
   return r;
 }
 
@@ -111,6 +115,7 @@ static void ptab_write_data(const bpuf::OutputPayload &bpu_output, wire<1> globa
   }
   ptab_in.wdata.meta = bpu_output.meta;
   ptab_in.wdata.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
+  ptab_in.wdata.is_pair = bpu_output.ptab_pcs_valid;
 }
 
 static void checker_input(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
@@ -327,7 +332,6 @@ void FetchAddrPort::comb_read() {
   out.fetch_addr_head = {};
   out.fetch_addr_fifo_req.clear_fifo = out.fetch_addr_fifo_req.push_en = out.fetch_addr_fifo_req.pop_en = false;
   out.fetch_addr_fifo_req.drop_tail_n = 0;
-  out.ipf.ncand = 0;
   out.fetch_addr_in.drop_tail_n = pipe_dec.ovr ? pipe_dec.squash_n : 0;
   out.fetch_addr_in.reset = global_reset;
   out.fetch_addr_in.refetch = global_refetch;
@@ -341,9 +345,6 @@ void FetchAddrPort::comb_write() {
 
   if (!(bpu_output.icache_read_valid && bpu_can_run && !global_reset)) return;
   out.fetch_addr_in.fetch_address = bpu_output.fetch_address;
-  out.ipf.ncand = 0;
-  out.ipf.cand[out.ipf.ncand++] = bpu_output.fetch_address;
-  if (bpu_output.pair_valid) out.ipf.cand[out.ipf.ncand++] = bpu_output.pair_addr2;
   out.fetch_addr_in.pair = FetchPair{};
   if (bpu_output.pair_valid) { out.fetch_addr_in.pair.valid = true; out.fetch_addr_in.pair.addr2 = bpu_output.pair_addr2; out.fetch_addr_in.pair.a_len = bpu_output.pair_a_len; out.fetch_addr_in.pair.b_len = bpu_output.pair_b_len; }
   fifo->write(out.fetch_addr_in, out.fetch_addr_rd, out.fetch_addr_fifo_req);
@@ -368,25 +369,41 @@ void InstPort::comb_read() {
   out.fifo_in.read_enable = *in.fifo_read_enable;
   fifo->read(out.fifo_in, out.fifo_rd, out.fifo_head, out.fifo_req);
   if (*in.fifo_read_enable) {
-
-    static const bool pair_on = bpuf::cfg_pair() != 0;
-    if (pair_on) {
-      // FE_PAIR: only the slots whose pc agrees with the PTAB entry are usable (the BPU may have replaced the second block / the first block's end)
-      bool cut = false;
+    // S2-confirmed A/B mux: if S2 overrode A (d.pair=false), restore intact block A instead of cutting A at a_len
+    if (out.fifo_head.has_alt_a && !out.grp_ptab.is_pair) {
       for (int i = 0; i < FETCH_WIDTH; i++) {
-        if (!cut && out.fifo_head.inst_valid[i] && out.fifo_head.pc[i] != out.grp_ptab.predict_base_pc[i]) cut = true;
-        if (cut) { out.fifo_head.inst_valid[i] = false; out.fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; out.fifo_head.predecode_target_address[i] = 0; }
+        out.fifo_head.instructions[i] = out.fifo_head.alt_instructions[i];
+        out.fifo_head.pc[i] = out.fifo_head.alt_pc[i];
+        out.fifo_head.page_fault_inst[i] = out.fifo_head.alt_page_fault_inst[i];
+        out.fifo_head.inst_valid[i] = out.fifo_head.alt_inst_valid[i];
+        out.fifo_head.predecode_type[i] = out.fifo_head.alt_predecode_type[i];
+        out.fifo_head.predecode_target_address[i] = out.fifo_head.alt_predecode_target_address[i];
+        out.fifo_head.is_rvc[i] = out.fifo_head.alt_is_rvc[i];
+        out.fifo_head.start_a[i] = out.fifo_head.alt_start_a[i];
+        out.fifo_head.start_b[i] = out.fifo_head.alt_start_b[i];
+        out.fifo_head.raw16[i] = out.fifo_head.alt_raw16[i];
       }
-      for (int i = 1; i < FETCH_WIDTH; i++) if (out.fifo_head.inst_valid[i] && out.fifo_head.pc[i] != out.fifo_head.pc[i - 1] + SLOT_BYTES) out.multi = true;
-      if (cut) {  // the group lost slots: its sequential continuation is the pc after the last usable slot
-        int last = -1;
-        for (int i = 0; i < FETCH_WIDTH; i++) if (out.fifo_head.inst_valid[i]) last = i;
-        if (last >= 0) out.fifo_head.seq_next_pc = out.fifo_head.pc[last] + SLOT_BYTES;
-      }
-    } else
+      out.fifo_head.up16 = out.fifo_head.alt_up16;
+      out.fifo_head.up_ok = out.fifo_head.alt_up_ok;
+      out.fifo_head.seq_next_pc = out.fifo_head.alt_seq_next_pc;
+    }
+    // Only the slots whose pc agrees with the PTAB entry are usable
+    bool cut = false, dropped_valid = false;
     for (int i = 0; i < FETCH_WIDTH; i++) {
-      if (out.fifo_head.pc[i] != out.grp_ptab.predict_base_pc[i]) {
-        fatal("ERROR: fifo pc[%d]: %llx != ptab pc[%d]: %llx\n", i, (unsigned long long)out.fifo_head.pc[i], i, (unsigned long long)out.grp_ptab.predict_base_pc[i]);
+      if (!cut && out.fifo_head.inst_valid[i] && out.fifo_head.pc[i] != out.grp_ptab.predict_base_pc[i]) cut = true;
+      if (cut) {
+        if (out.fifo_head.inst_valid[i]) dropped_valid = true;
+        out.fifo_head.inst_valid[i] = false; out.fifo_head.predecode_type[i] = PREDECODE_NON_BRANCH; out.fifo_head.predecode_target_address[i] = 0;
+      }
+    }
+    for (int i = 1; i < FETCH_WIDTH; i++) if (out.fifo_head.inst_valid[i] && out.fifo_head.pc[i] != out.fifo_head.pc[i - 1] + SLOT_BYTES) out.multi = true;
+    if (dropped_valid) {  // the group lost valid slots: restore up16 from the unmasked new last slot & fix seq_next_pc
+      int last = -1;
+      for (int i = 0; i < FETCH_WIDTH; i++) if (out.fifo_head.inst_valid[i]) last = i;
+      if (last >= 0) {
+        out.fifo_head.seq_next_pc = out.fifo_head.pc[last] + SLOT_BYTES;
+        out.fifo_head.up16 = uint16_t(out.fifo_head.instructions[last] >> 16);
+        out.fifo_head.up_ok = true;
       }
     }
     for (int i = 0; i < FETCH_WIDTH; i++) {
@@ -407,23 +424,78 @@ void InstPort::comb_write() {
   const FetchAddrFifoOut &fetch_addr_head = *in.fetch_addr_head;
 
   if (in.rd->q.fifo_full || !ic_out.icache_read_complete || global_reset || global_refetch) return;
-  // FE_PAIR: the second block of the request that completes now (if the entry had one and its line can be read in the same cycle)
+  // Second block of the request that completes now (if the entry had one and its line can be read in the same cycle)
   FetchPair pr{};
   if (fetch_addr_head.read_valid && fetch_addr_head.fetch_address == ic_out.fetch_pc) pr = fetch_addr_head.pair;
   else if (in.rd->q.pend_valid && in.rd->q.pend_addr == ic_out.fetch_pc) pr = in.rd->q.pend_pair;
   inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire<1> gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
   for (int i = 0; i < FETCH_WIDTH; i++) { grp[i] = ic_out.fetch_group[i]; gpc[i] = ic_out.fetch_pc + (i * SLOT_BYTES); gv[i] = ic_out.inst_valid[i]; gpf[i] = ic_out.page_fault_inst[i]; }
-  bool fused = false;
-  if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1]) {
+  const bool want_pair = pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && !ic_out.page_fault_inst[0] && !ic_out.fetch_single_word && ic_out.inst_valid[pr.a_len - 1];
+  if (want_pair) {
+    // Save intact block A before fusing B, modelling the S2-confirmed A/B lane mux
+    inst_word_t agrp[FETCH_WIDTH]; pc_t apc[FETCH_WIDTH]; wire<1> agv[FETCH_WIDTH], agpf[FETCH_WIDTH];
+    for (int i = 0; i < FETCH_WIDTH; i++) { agrp[i] = grp[i]; apc[i] = gpc[i]; agv[i] = gv[i]; agpf[i] = gpf[i]; }
+    uint16_t a_up16 = 0; bool a_up_ok = false;
+    if constexpr (kRvc) {
+      int anv = 0;
+      while (anv < FETCH_WIDTH && agv[anv]) anv++;
+      if (anv > 0) {
+        a_up16 = uint16_t(agrp[anv - 1] >> 16);
+        a_up_ok = ((apc[anv - 1] + SLOT_BYTES) & (ICACHE_LINE_SIZE - 1u)) != 0;
+        agrp[anv - 1] &= 0xffffu;
+      }
+    }
+    out.fifo_in.wdata.has_alt_a = true;
+    out.fifo_in.wdata.alt_up16 = a_up16;
+    out.fifo_in.wdata.alt_up_ok = a_up_ok;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      out.fifo_in.wdata.alt_raw16[i] = uint16_t(agrp[i] & 0xffffu);
+      out.fifo_in.wdata.alt_instructions[i] = agrp[i];
+      out.fifo_in.wdata.alt_pc[i] = apc[i];
+      out.fifo_in.wdata.alt_page_fault_inst[i] = agpf[i];
+      out.fifo_in.wdata.alt_inst_valid[i] = agv[i];
+      out.fifo_in.wdata.alt_is_rvc[i] = false;
+      if (agv[i]) {
+        if constexpr (kRvc) {
+          if ((agrp[i] & 3u) != 3u) {
+            uint32_t ex = 0;
+            out.fifo_in.wdata.alt_is_rvc[i] = true;
+            agrp[i] = rvc::expand(agrp[i] & 0xffffu, ex) ? ex : 0u;
+            out.fifo_in.wdata.alt_instructions[i] = agrp[i];
+          }
+        }
+        const PredecodeResult res = predecode(agrp[i], apc[i]);
+        out.fifo_in.wdata.alt_predecode_type[i] = res.type;
+        out.fifo_in.wdata.alt_predecode_target_address[i] = res.target_address;
+      } else {
+        out.fifo_in.wdata.alt_predecode_type[i] = PREDECODE_NON_BRANCH;
+        out.fifo_in.wdata.alt_predecode_target_address[i] = 0;
+      }
+    }
+    if constexpr (kRvc) {
+      int an = 0;
+      while (an < FETCH_WIDTH && agv[an]) an++;
+      for (int pass = 0; pass < 2; pass++) {
+        wire<1> *st = pass ? out.fifo_in.wdata.alt_start_b : out.fifo_in.wdata.alt_start_a;
+        for (int i = 0; i < FETCH_WIDTH; i++) st[i] = false;
+        int pos = pass;
+        while (pos < an) {
+          st[pos] = true;
+          pos += (out.fifo_in.wdata.alt_is_rvc[pos] ? 1 : 2);
+        }
+      }
+    }
+    out.fifo_in.wdata.alt_seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
+
     uint32_t w2[FETCH_WIDTH];
-    const bool ok = icache->fetch_second(ic_out.fetch_pc, ic_out.fetch_paddr, pr.addr2, pr.b_len, w2);
+    int actual_b = 0;
+    const bool ok = icache->fetch_second(ic_out.fetch_pc, ic_out.fetch_paddr, pr.addr2, pr.b_len, w2, actual_b);
     for (int i = pr.a_len; i < FETCH_WIDTH; i++) {
       const int j = i - pr.a_len;
       gpc[i] = pr.addr2 + SLOT_BYTES * j;
-      gv[i] = ok && j < pr.b_len; gpf[i] = false; grp[i] = ok && j < pr.b_len ? w2[j] : INST_NOP;
+      gv[i] = ok && j < actual_b; gpf[i] = false; grp[i] = ok && j < actual_b ? w2[j] : INST_NOP;
     }
-    fused = ok;
-    if (!ok) for (int i = pr.a_len; i < FETCH_WIDTH; i++) gv[i] = false;   // the group stays the first block only; the PTAB entry (with the second block) then fails the check below
+    if (!ok) for (int i = pr.a_len; i < FETCH_WIDTH; i++) gv[i] = false;
   }
   uint16_t rvc_up16 = 0; bool rvc_up_ok = false;
   if constexpr (kRvc) {   // C910-style carry: the window of the last slot of a group has no upper half (a 32-bit instruction starting there is carried to the next group)
@@ -477,11 +549,10 @@ void InstPort::comb_write() {
       }
     }
   }
-  if (pr.valid && pr.a_len > 0 && pr.a_len < FETCH_WIDTH && ic_out.inst_valid[pr.a_len - 1] && !ic_out.fetch_single_word) {   // FE_PAIR: next pc after the last valid slot
+  if (want_pair) {   // 2-taken pair: next pc after the last valid slot
     int last = -1;
     for (int i = 0; i < FETCH_WIDTH; i++) if (out.fifo_in.wdata.inst_valid[i]) last = i;
     out.fifo_in.wdata.seq_next_pc = out.fifo_in.wdata.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
-    (void)fused;
   } else
   out.fifo_in.wdata.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
 
@@ -644,22 +715,33 @@ void FrontChecker::comb() {
     out.pd_next.valid = true;
     out.pd_next.flush = out.predecode_flush;
     if (out.predecode_flush) {
-      for (int i = 0; i < FETCH_WIDTH; i++)   // a taken prediction on an instruction that is not a branch (a dropped slot is not one: the carried instruction may be)
-        if (fifo_head.inst_valid[i] && grp_ptab.predict_dir[i] && fifo_head.predecode_type[i] == PREDECODE_NON_BRANCH) { out.pd_next.nb_valid = true; out.pd_next.nb_pc = fifo_head.pc[i]; break; }
+      pc_t seg_base = grp_ptab.predict_base_pc[0];
+      for (int i = 0; i < FETCH_WIDTH; i++) {   // a taken prediction on an instruction that is not a branch (a dropped slot is not one: the carried instruction may be)
+        if (grp_seg_first[i]) seg_base = grp_ptab.predict_base_pc[i];
+        if (fifo_head.inst_valid[i] && grp_ptab.predict_dir[i] && fifo_head.predecode_type[i] == PREDECODE_NON_BRANCH) {
+          out.pd_next.nb_valid = true; out.pd_next.nb_pc = fifo_head.pc[i]; out.pd_next.nb_base = multi ? seg_base : 0; break;
+        }
+      }
       for (int i = 0; i < FETCH_WIDTH; i++) {
         if (!fifo_head.inst_valid[i]) continue;
         const predecode_type_t ty = fifo_head.predecode_type[i];
         if (ty == PREDECODE_NON_BRANCH) continue;
         const pc_t pc = fifo_head.pc[i]; const uint32_t inst = fifo_head.instructions[i];
         const bool taken = out.checker_out.predict_dir_corrected[i];
-        const pc_t tgt = ty == PREDECODE_JALR ? grp_ptab.predict_next_fetch_address : fifo_head.predecode_target_address[i];   // XLEN wide (rv64: a uint32_t here dropped the sign extension of the history symbol's input)
+        pc_t tgt = fifo_head.predecode_target_address[i];
+        if (ty == PREDECODE_JALR) {
+          tgt = (multi && i + 1 < FETCH_WIDTH && grp_seg_first[i + 1]) ? fifo_head.pc[i + 1] : grp_ptab.predict_next_fetch_address;
+        }
         if (multi && i >= out.checker_out.keep_n) break;
         if (!taken) continue;
         out.pd_next.bits |= uint8_t(bpuf::hist_sym(pc, tgt)) << out.pd_next.nbits; out.pd_next.nbits += bpuf::HSYM_BITS;
         const uint32_t rd_ = (inst >> 7) & 31, rs1 = (inst >> 15) & 31;
-        if (out.pd_next.ras_op == 0) {
-          if (ty == PREDECODE_JAL && rd_ == 1) { out.pd_next.ras_op = 1; out.pd_next.ras_val = pc + ilen_of(fifo_head.is_rvc[i]); }
-          else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) out.pd_next.ras_op = 2;
+        uint8_t rop = 0; target_addr_t rval = 0;
+        if (ty == PREDECODE_JAL && rd_ == 1) { rop = 1; rval = pc + ilen_of(fifo_head.is_rvc[i]); }
+        else if (ty == PREDECODE_JALR && rd_ == 0 && rs1 == 1 && (inst >> 20) == 0) rop = 2;
+        if (rop != 0) {
+          if (out.pd_next.ras_op == 0) { out.pd_next.ras_op = rop; out.pd_next.ras_val = rval; }
+          else if (out.pd_next.ras_op2 == 0) { out.pd_next.ras_op2 = rop; out.pd_next.ras_val2 = rval; }
         }
         if (!multi || i + 1 >= int(out.checker_out.keep_n)) break;
       }
@@ -798,6 +880,11 @@ void FrontCore::seq(const FrontTopIn &inp) {
   inst_fifo.seq(inst_port.out.fifo_req);
   ptab.seq(ptab_port.out.ptab_req);
   f2b_fifo.seq(f2b_port.out.front2back_fifo_req);
-  ipf.tick(icache, ctx ? ctx->perf.cycle : 0, fa_port.out.ipf.cand, ctrl.out.front_state.valid ? fa_port.out.ipf.ncand : 0);
-  if (ctrl.out.front_state.valid) q_ = ctrl.out.front_state.d;
+  if (ctrl.out.front_state.valid) {
+    pc_t s2c[1];
+    int n = 0;
+    if (bpu_pipe.out.bpu_output.PTAB_write_enable) s2c[n++] = bpu_pipe.out.bpu_output.predict_next_fetch_address;
+    icache.enqueue_fdip(s2c, n, ctrl.out.global_refetch || ctrl.out.pipe_dec.ovr);
+    q_ = ctrl.out.front_state.d;
+  }
 }

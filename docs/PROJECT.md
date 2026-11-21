@@ -22,8 +22,8 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 指令/PTE/LLC 读数据来自 pmem。
 
 当前微架构(`include/config.h` 的默认值;RTL 包取相同的值):
-- 前端(`front-end/`):16 槽(32 B, RVC=1)按块取指,块级 1-Ahead FTB + S2 Block-TAGE/ITT 流水 BPU(EXP-050 里程碑 A:`ah1_4k_a2k1k` + 1-branch/cycle `brq[16]` + 512 项 `ftb_rec`,源码在 `front-end/BPU/BpuFtb.h` / `BPU_pipe.h`,RTL 描述 `rtl/docs/modules/bpu.md`),取指地址 FIFO / PTAB / 指令 FIFO 各 16 项,pre-IDU buffer,
-  32 KiB 8 路 I-cache(64 B 行,SRRIP 替换),redirect 快速路径 `CFG_FE_RFAST` 15(EXP-019/023;`CFG_FE_BFAST` 0)。
+- 前端(`front-end/`):16 槽(32 B, RVC=1)按块取指,EXP-051 里程碑 B **2-taken 双块融合**（`NT=1` 严格不截断 + 4-Bank 1R1W ICache + 2 读口只读 ITLB peek）+ **1-Ahead A（`aftb 2K×8 / atage 1K×4×4 / aitt 256×3`）+ 2-Ahead B（`aftb2 1K×8 / atage2 512×4×4 / aitt2 256×3`）+ S2 Block-TAGE/ITT** 流水 BPU（`HistRing 1024b` + 1-branch/cycle `brq[16]` + `ftb_rec[512]` + 内部 `rec_q[256]`，源码在 `front-end/BPU/BpuFtb.h` / `BPU_pipe.h`，RTL 描述 `rtl/docs/modules/bpu.md`）,取指地址 FIFO / PTAB / 指令 FIFO 各 16 项,pre-IDU buffer,
+  32 KiB 8 路 4-Bank I-cache(64 B 行,SRRIP 替换)配 **S2 确认 2-slot 实 AXI FDIP**（`txid 8..9`,8 项 VA 队列,1-pop/cycle,周期初 L1D+WB 脏行窥探）,redirect 快速路径 `CFG_FE_RFAST` 15(EXP-019/023;`CFG_FE_BFAST` 0)。
 - 后端(`back-end/`):8 宽 decode / rename / dispatch / commit,move elimination(见下),`CFG_PRF_NUM` 128,`CFG_ROB_NUM` 128 且为 compact ROB
   (`CFG_ROB_COMPACT` 1,EXP-028),`CFG_MAX_BR_NUM` 32,发射队列 INT 64 / LD 64 / STA 64 / STD 16 / BR 32,入队宽度 7/6/4/4/5(EXP-017)。
 - 发射口:6 个整数 ALU 口(其中 4 个带 MUL/DIV/FP/CSR 能力,`CFG_PLAIN_ALU_PORTS` 2 个为纯 ALU),`CFG_BR_PORTS` 2,`CFG_LD_PORTS` 4,`CFG_STA_PORTS` 3,`CFG_STD_PORTS` 3。
@@ -77,10 +77,9 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
    (2026-11-19 以新默认配置(= RTL 配置:两个 INT 队列、合并访存队列、`FLUSH_REG` 等 13 个 `CFG_*` 默认值,EXP-044)重新生成,62 个程序周期都变了,几何平均 +1.96%;更早:2026-11-11 以 compact ROB(EXP-028)为默认,2026-11-09 带 write buffer(EXP-024);`baseline_nopf.csv` 是同一基线的关预取版本:`PF_ENABLE=0` 可复现,2026-11-19 同时重新生成)。
    全部以 difftest Success 结束,TB_CHECK 不一致数为 0。gate 不需要 `LSU_PIPE_NOWD=1`(基线就是模型自己的周期数);与 RTL 做任何周期比较时才需要。
    **旧设计回归**(旧 LSU + 旧 BPU):两者都已删除(BPU_PIPE 0..2 在 exp/rvc-carry,旧 LSU / `LSU_PIPE=0` 与 `legacy_lsu_baseline*.csv` 于 2026-11-15 删除);要用请查历史。
-4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-12,开启 compact ROB EXP-028;`docs/MAIN_RECORDS.md`):**
-   dhrystone 64 次 116,774;coremark 2 次迭代 284,902;memory-stress 2,308,184;smc-div 10,687;smc-addi 10,176;memory-stress-small 325,458;pf-stress 621,069;itt-dispatch 222,439。
-   行式 ROB(`-DCFG_ROB_COMPACT=0`):dhrystone 114,685;coremark 283,240;memory-stress 2,358,268;smc-div 10,875;smc-addi 10,315;memory-stress-small 329,424;pf-stress 630,916;itt-dispatch 222,445
-   (EXP-028 之前的 baseline.csv;`software-interrupt-vectored` 2254 -> 2356 来自被删除的 uncached 窗口)。
+4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-21,EXP-051 里程碑 B 2-taken + 2-ahead BPU + FDIP;`docs/MAIN_RECORDS.md`):**
+   dhrystone 64 次 96,351 (IPC 2.682);coremark 2 次迭代 231,913 (IPC 2.725);memory-stress-small 326,797 (IPC 3.209)。
+   上一版 EXP-050(2026-11-21):dhrystone 102,229 (2.527);coremark 275,332 (2.295);memory-stress-small 343,584 (3.05)。
    更早的配置列在 `docs/MAIN_RECORDS.md`(每次合并一行);它们的开关(`LSU_PIPE_WBUF=0 LSU_PIPE_DRAIN=3` = EXP-024 之前,`LSU_MEMSPEC=0 FE_RFAST=0` = EXP-019 之前,`LSU_PIPE=0` = 旧 LSU)仍然可用,但数字已不能精确复现。
    这些周期数以 EXP-006 的存储系统为前提:DRAMsim3 DDR4-3200 加 60 ns 固定非核延迟,核频 1 GHz。
 5. 小 LLC 检查(`scripts/llc_small_check.sh $PWD <baseline-sim/src 的绝对路径>`(必须用绝对路径)):默认 4 MiB LLC 在小测试里从不发生替换,所以脚本用 64 KiB LLC 构建两个模拟器,在会发生替换的程序上比较周期。

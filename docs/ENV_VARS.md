@@ -1,8 +1,8 @@
 # trace-model 环境变量
 
-`build/simulator` 运行时读取的全部环境变量，共 16 个（exp/tm-simplify，2026-11-16；之前是 77 个）。写法：`NAME=值 build/simulator prog.bin`。
+`build/simulator` 运行时读取的全部环境变量，共 13 个（EXP-051 采纳 2-taken + FDIP 并删除旧 `FE_PAIR`/`FE_IPF`/`FE_IPF_LAT` 后；2026-11-21）。写法：`NAME=值 build/simulator prog.bin`。
 
-> **模型的默认配置就是 RTL 配置**：和 RTL 比周期不需要设任何环境变量。（2026-11-19 删掉了 RTL 没有的 DCache 响应看门狗和它的开关 `LSU_PIPE_NOWD`；以前忘了设它会让 crc32、memory-stress-small 这类程序差几十周期。）
+> **模型的默认配置就是 RTL 配置**：和 RTL 比周期不需要设任何环境变量。（2026-11-19 删掉了 RTL 没有的 DCache 响应看门狗和它的开关 `LSU_PIPE_NOWD`；2026-11-21 EXP-051 采纳 2-taken + 实 AXI FDIP 为唯一默认实现并删去旧 `FE_PAIR`/`FE_IPF`/`FE_IPF_LAT`。）
 
 | 变量 | 默认 | 作用 | 位置 |
 |---|---|---|---|
@@ -12,9 +12,6 @@
 | `PMU_OUT` | `pmu` | PMU 输出文件名前缀 | 同上 |
 | `PMU_INTERVAL` | 0 | 每隔这么多周期记一行时间序列 | 同上 |
 | `PMU_PCPROF` | 开 | 设 `0` 关掉按 PC 的统计 | 同上 |
-| `FE_PAIR` | 0 | 设 `1`：一拍取两块（实验特性） | `front-end/BPU/BPU_pipe.h` |
-| `FE_IPF` | 0 | 设 `1`：I$ 预取（实验特性） | `front-end/front_top.cpp` |
-| `FE_IPF_LAT` | 12 | I$ 预取的固定延迟（周期） | 同上 |
 | `PF_ENABLE` | 1 | 设 `0` 关掉 L1D 预取器（nopf 门禁 / RTL 的 nopf 表用） | `MemSubSystem/include/DataPrefetcher.h` |
 | `FPR` | 关 | 设 bin 周期数：打印 BPU 的对齐指纹（`FPR PT/UP bin= n= h=`），`rtl/scripts/align_check.py` 和 RTL 的同名输出比对 | `front-end/BPU/fpr.h` |
 | `TB_TRACE_COMMIT` | 关 | 每条提交打印 `[COMMIT] cyc pc inst rd v`；`rtl/scripts/first_diff.sh` 用它和 RTL 的 `SOC_TB_COMMIT` 找第一处分歧 | `bridge/trace_hook.cpp` |
@@ -22,6 +19,10 @@
 | `FPR_DUMP` | 关 | `<from>:<to>`：再逐条打印这段周期里的事件（`FPRRAW`） | 同上 |
 | `DS3_OUT` | `ds3_out` | DRAMsim3 输出目录（并行运行时每个运行一个） | `axi-interconnect-kit/sim_ddr/include/SimDDR_DS3.h` |
 | `DS3_CONFIG` | 编译期默认 `.ini` | DRAMsim3 配置文件路径覆盖（跨机静态二进制在集群运行时使用） | `axi-interconnect-kit/sim_ddr/include/SimDDR_DS3.h` |
+
+## 已删除（2026-11-21，EXP-051 里程碑 B 合入）
+
+- `FE_PAIR`、`FE_IPF`、`FE_IPF_LAT`（连同 `FrontIpf` / `PendingIpf`）：2-taken 双块融合与实 AXI/LLC/DRAM S2 确认 2-slot FDIP 成为唯一默认实现，旧模型专用实验开关及理想预取代码已删除（完整 DSE 开关保留在 `exp/fe-2fetch-2taken` 分支）。
 
 ## 已删除（2026-11-16，exp/tm-simplify）
 

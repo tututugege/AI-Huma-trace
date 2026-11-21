@@ -23,9 +23,9 @@ class SimContext;
 namespace bpuf {
 
 constexpr int MAIN_LAT = 2;
-inline int cfg_pair() { return 0; }
-constexpr int PQ = 64;        // PTAB checkpoint records (BPO_PDCKPT)
-constexpr int HR_BITS = 256;  // circular global-history ring
+inline int cfg_pair() { return 2; }
+constexpr int PQ = 64;          // PTAB checkpoint records (BPO_PDCKPT)
+constexpr int HR_BITS = 1024;   // circular global-history ring (widened for 2-taken fetch rate)
 constexpr uint32_t HR_MASK = HR_BITS - 1u;
 
 struct HistRing {
@@ -89,6 +89,7 @@ struct Ckpt {
 struct S0Guess {
   bool hit = false, taken = false;
   uint8_t slot = 0, type = 0;
+  bool rvc = false, carried = false;
   pc_t next = 0;
   uint8_t nbits = 0, bits = 0;
   uint8_t ras_op = 0;
@@ -101,7 +102,7 @@ struct MainOut {
   bool taken = false;
   uint8_t nbits = 0, bits = 0, ras_op = 0;
   target_addr_t ras_val = 0;
-  bool rvc = false;
+  bool rvc = false, carried = false;
   bool dir[FW] = {};
   PredMeta meta;
 };
@@ -116,6 +117,17 @@ struct Blk {
   bool ah_hit = false;
   pc_t ah_key_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
+  // Optional paired second block B in the same fetch group (2-taken)
+  bool has_b = false;
+  pc_t base_b = 0, bnd_b = 0;
+  uint8_t a_len = 0, b_len = 0;
+  S0Guess g_b;
+  Ckpt ck_b;
+  FtbBlkIdx ftb_ix_b;
+  bool ah_v_b = false;
+  uint8_t ah_kind_b = 2;
+  pc_t ah_key_base_b = 0;
+  uint32_t ah_key_fh_b[FH_N_MAX][TN] = {};
 };
 
 struct Decision {
@@ -163,7 +175,9 @@ class BpuPipe {
     uint8_t epoch = 0;
     Blk R[MAIN_LAT];
     FtbRaw ftb_raw;
+    FtbRaw ftb_raw_b;
     FtbAhPipe ah_pipe[2];
+    FtbAhRaw ah2_pipe[2];
     FtbTrkState ftb_trk;
     HistRing spec, arch;
     RasQ sras;
@@ -171,17 +185,17 @@ class BpuPipe {
   };
 
   struct Txn {
-    bool rec_v = false;
-    RecP rec;
+    bool rec_v = false, rec_b_v = false;
+    RecP rec, rec_b;
     bool pmu_l1_ovr = false, pmu_ptab_stall = false;
-    bool ftb_ev_v = false, ftb_clr_v = false, ftb_rec_v = false;
+    bool ftb_ev_v = false, ftb_clr_v = false, ftb_rec_v = false, ftb_rec_b_v = false;
     FtbTrainEv ftb_ev{};
-    FtbBlkRec ftb_rec{};
+    FtbBlkRec ftb_rec{}, ftb_rec_b{};
     pc_t ftb_clr_base = 0, ftb_clr_pc = 0;
     void clear() {
-      rec_v = false;
+      rec_v = rec_b_v = false;
       pmu_l1_ovr = pmu_ptab_stall = false;
-      ftb_ev_v = ftb_clr_v = ftb_rec_v = false;
+      ftb_ev_v = ftb_clr_v = ftb_rec_v = ftb_rec_b_v = false;
     }
   };
 
@@ -199,6 +213,13 @@ class BpuPipe {
     const pc_t mask = ~static_cast<pc_t>(ICACHE_LINE_SIZE - 1);
     const pc_t plus = base + FW * SLOT_BYTES;
     return (base & mask) != (plus & mask) ? (plus & mask) : plus;
+  }
+
+  // 4-bank 1R1W ICache bank-conflict filter (2-port ITLB allows cross-page pairing)
+  static bool ic_pair_ok(pc_t pcA, pc_t pcB) {
+    const uint64_t lA = pcA >> 6;
+    const uint64_t lB = pcB >> 6;
+    return (lA == lB) || ((lA & 3u) != (lB & 3u));
   }
 
   static Ckpt take_ckpt(const HistRing &h, const RasQ &r) {
@@ -229,10 +250,11 @@ class BpuPipe {
     if (ras_op == 1) r.push(ras_val); else if (ras_op == 2) r.pop();
   }
 
-  static bool disagree(const MainOut &m, const S0Guess &g) {
+  static bool disagree(const MainOut &m, const S0Guess &g, bool check_slot = false) {
     if (m.next != g.next) return true;
     if (m.nbits != g.nbits || m.bits != g.bits) return true;
     if (m.ras_op != g.ras_op || (m.ras_op == 1 && m.ras_val != g.ras_val)) return true;
+    if (check_slot && (m.taken != g.taken || m.slot != g.slot)) return true;
     return false;
   }
 
@@ -342,8 +364,18 @@ class BpuPipe {
     d.valid = true;
     d.blk = &b;
     ftb_.s2_select(b.base, b.bnd, b.ftb_ix, (*stp_).ftb_raw, b.ck.ras_cnt, b.ck.ras_top, d.out);
-    d.ovr = disagree(d.out, b.g);
-    d.ock = b.ck; d.oout = d.out; d.obase = b.base; d.og = b.g;
+    const bool ovr_a = disagree(d.out, b.g, b.has_b);
+    if (!ovr_a && b.has_b) {
+      ftb_.s2_select(b.base_b, b.bnd_b, b.ftb_ix_b, (*stp_).ftb_raw_b, b.ck_b.ras_cnt, b.ck_b.ras_top, d.outB);
+      d.pair = true;
+      d.ovr_b = disagree(d.outB, b.g_b, false);
+    }
+    d.ovr = ovr_a || d.ovr_b;
+    if (ovr_a || !d.pair) {
+      d.ock = b.ck; d.oout = d.out; d.obase = b.base; d.og = b.g;
+    } else {
+      d.ock = b.ck_b; d.oout = d.outB; d.obase = b.base_b; d.og = b.g_b;
+    }
     if (d.ovr) for (int k = 0; k < MAIN_LAT - 1; k++) d.squash_n += (*stp_).R[k].valid;
   }
 
@@ -352,9 +384,11 @@ class BpuPipe {
     const S0Guess g1 = ftb_.s1_predict<S0Guess>(b.base, b.bnd, n.ftb_raw, b.ck.ras_cnt, b.ck.ras_top);
     if (!g1.hit) return false;
     MainOut m; m.next = g1.next; m.nbits = g1.nbits; m.bits = g1.bits; m.ras_op = g1.ras_op; m.ras_val = g1.ras_val;
-    if (!disagree(m, b.g)) return false;
+    m.taken = g1.taken; m.slot = g1.slot;
+    if (!disagree(m, b.g, b.has_b)) return false;
     t.pmu_l1_ovr = true;
     n.R[1].g = g1;
+    n.R[1].has_b = false;
     restore(b.ck, n.spec, n.sras);
     hp("L1OVR", b.base, g1.next, g1.nbits, g1.bits);
     push_bits(g1.nbits, g1.bits, g1.ras_op, g1.ras_val, n.spec, n.sras);
@@ -378,57 +412,169 @@ class BpuPipe {
 
     auto s0_issue = [&](pc_t pc) {
       Blk &b = n.R[0];
+      b = Blk{};
       b.valid = true;
       b.base = pc;
       b.bnd = block_bnd(b.base);
-      const FtbAhPipe &ah_src = n.ah_pipe[0];
+      const FtbAhPipe ah_src = n.ah_pipe[0];
+      const FtbAhRaw ah2_src = n.ah2_pipe[0];
       b.ah_v = ah_src.valid;
       b.ah_key_base = ah_src.key_base;
       std::memcpy(b.ah_key_fh, ah_src.key_fh, sizeof b.ah_key_fh);
       b.ah_hit = ftb_.ahead_select(b.base, b.bnd, ah_src, n.sras.cnt, n.sras.top(), b.g);
       if (!b.ah_hit) b.g = ftb_.s0_lookup<S0Guess>(b.base, b.bnd, n.sras.cnt, n.sras.top());
 
-      // Advance 1-ahead pipeline using registered (b.base, n.spec.fh) BEFORE push_bits
-      n.ah_pipe[1] = n.ah_pipe[0];
-      n.ah_pipe[0].valid = true;
-      n.ah_pipe[0].key_base = b.base;
-      std::memcpy(n.ah_pipe[0].key_fh, n.spec.fh, sizeof n.ah_pipe[0].key_fh);
-      ftb_.ahead_read(b.base, n.spec.fh, n.ah_pipe[0].raw);
-
       b.ck = take_ckpt(n.spec, n.sras);
       b.ck.base = b.base;
       b.ftb_ix = BpuFtb::make_index(b.base, n.spec.fh);
       hp("S0", b.base, b.g.next, b.g.nbits, b.g.bits);
       push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
-      n.pc = b.g.next;
+
+      // 2-taken: optional paired second block B predicted in parallel via 2-ahead B (with uFTB fallback) & strict NT=1
+      bool paired = false;
+      if (b.g.taken) {
+        const uint8_t a_len = static_cast<uint8_t>(b.g.slot + 1);
+        const bool a_upper_ok = b.g.rvc || (b.g.slot == 0 && b.g.carried) ||
+                                (b.base + static_cast<pc_t>(b.g.slot + 1) * SLOT_BYTES < b.bnd);
+        const pc_t pcB = b.g.next;
+        const pc_t a_br_pc = (b.g.slot == 0 && b.g.carried)
+                                 ? (b.base - SLOT_BYTES)
+                                 : (b.base + static_cast<pc_t>(b.g.slot) * SLOT_BYTES);
+        const bool disc_ok = (pcB != b.base + static_cast<pc_t>(a_len) * SLOT_BYTES) &&
+                             (pcB != a_br_pc + ilen_of(b.g.rvc));
+        if (a_len >= 1 && a_len < FW && a_upper_ok && disc_ok && ic_pair_ok(b.base, pcB)) {
+          const pc_t max_b_end = pcB + static_cast<pc_t>(FW - a_len) * SLOT_BYTES;
+          const pc_t full_bnd_b = block_bnd(pcB);
+          const pc_t bndB = full_bnd_b < max_b_end ? full_bnd_b : max_b_end;
+          const bool b_truncated = (full_bnd_b > max_b_end);
+          const uint8_t b_len = static_cast<uint8_t>((bndB - pcB) >> SLOT_SHIFT);
+          if (b_len >= 2) {
+            S0Guess gB{};
+            const bool ah_b_hit = ftb_.ahead2_select(pcB, bndB, ah_src.valid, ah_src.key_base, ah_src.key_fh,
+                                                     ah2_src, n.sras.cnt, n.sras.top(), gB);
+            if (!ah_b_hit) gB = ftb_.s0_lookup<S0Guess>(pcB, bndB, n.sras.cnt, n.sras.top());
+            if (!b_truncated || gB.taken) {
+              paired = true;
+              b.has_b = true;
+              b.base_b = pcB;
+              b.bnd_b = bndB;
+              b.a_len = a_len;
+              b.b_len = b_len;
+              b.g_b = gB;
+              b.ck_b = take_ckpt(n.spec, n.sras);
+              b.ck_b.base = pcB;
+              b.ftb_ix_b = BpuFtb::make_index(pcB, n.spec.fh);
+              b.ah_v_b = ah_src.valid;
+              b.ah_kind_b = 2;
+              b.ah_key_base_b = ah_src.key_base;
+              std::memcpy(b.ah_key_fh_b, ah_src.key_fh, sizeof b.ah_key_fh_b);
+              push_bits(gB.nbits, gB.bits, gB.ras_op, gB.ras_val, n.spec, n.sras);
+            }
+          }
+        }
+      }
+
+      // Advance 1-ahead & 2-ahead pipelines from the LAST block of this cycle (B if paired, else A) BEFORE its push_bits
+      const pc_t next_ah_base = paired ? b.base_b : b.base;
+      const uint32_t (*next_ah_fh)[TN] = paired ? b.ck_b.fh : b.ck.fh;
+      n.ah_pipe[1] = n.ah_pipe[0];
+      n.ah_pipe[0].valid = true;
+      n.ah_pipe[0].key_base = next_ah_base;
+      std::memcpy(n.ah_pipe[0].key_fh, next_ah_fh, sizeof n.ah_pipe[0].key_fh);
+      ftb_.ahead_read(next_ah_base, next_ah_fh, n.ah_pipe[0].raw);
+      n.ah2_pipe[1] = n.ah2_pipe[0];
+      ftb_.ahead2_read(next_ah_base, next_ah_fh, n.ah2_pipe[0]);
+
+      n.pc = paired ? b.g_b.next : b.g.next;
       out.icache_read_valid = true;
       out.fetch_address = b.base;
+      if (paired) {
+        out.pair_valid = true;
+        out.pair_addr2 = b.base_b;
+        out.pair_a_len = b.a_len;
+        out.pair_b_len = b.b_len;
+      }
     };
 
     if (d.valid) {
       if (n.pq_n < PQ) { n.pq[(n.pq_h + n.pq_n) % PQ] = d.blk->ck; n.pq_n++; }
       out.PTAB_write_enable = true;
       out.out_pred_base_pc = d.blk->base;
-      for (int i = 0; i < FW; i++) out.out_pred_dir[i] = d.out.dir[i];
-      out.meta = d.out.meta;
-      out.predict_next_fetch_address = d.out.next;
-      t.rec_v = true;
-      t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
-      t.ftb_rec_v = true;
-      t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
-      std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
-      t.ftb_rec.ah_v = d.blk->ah_v;
-      t.ftb_rec.ah_key_base = d.blk->ah_key_base;
-      std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
-      for (int i = 0; i < FW; i++) out.meta.blk_id[i] = seq0;
-      n.blk_seq = seq0 + 1;
+      if (!d.pair) {
+        for (int i = 0; i < FW; i++) out.out_pred_dir[i] = d.out.dir[i];
+        out.meta = d.out.meta;
+        out.predict_next_fetch_address = d.out.next;
+        t.rec_v = true;
+        t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
+        t.ftb_rec_v = true;
+        t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
+        std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
+        t.ftb_rec.ah_v = d.blk->ah_v;
+        t.ftb_rec.ah_kind = 1;
+        t.ftb_rec.ah_key_base = d.blk->ah_key_base;
+        std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
+        for (int i = 0; i < FW; i++) out.meta.blk_id[i] = seq0;
+        n.blk_seq = seq0 + 1;
+      } else {
+        const int al = d.blk->a_len;
+        const uint16_t seq1 = static_cast<uint16_t>(seq0 + 1);
+        out.ptab_pcs_valid = true;
+        for (int i = 0; i < al; i++) {
+          out.out_pred_pc[i] = d.blk->base + static_cast<pc_t>(i) * SLOT_BYTES;
+          out.out_pred_dir[i] = d.out.dir[i];
+          out.meta.alt_pred[i] = d.out.meta.alt_pred[i];
+          out.meta.pcpn[i] = d.out.meta.pcpn[i];
+          out.meta.ps_info[i] = d.out.meta.ps_info[i];
+          out.meta.blk_id[i] = seq0;
+          for (int k = 0; k < TN; k++) {
+            out.meta.tage_idx[i][k] = d.out.meta.tage_idx[i][k];
+            out.meta.tage_tag[i][k] = d.out.meta.tage_tag[i][k];
+          }
+        }
+        for (int i = al; i < FW; i++) {
+          const int j = i - al;
+          out.out_pred_pc[i] = d.blk->base_b + static_cast<pc_t>(j) * SLOT_BYTES;
+          out.out_pred_dir[i] = d.outB.dir[j];
+          out.meta.alt_pred[i] = d.outB.meta.alt_pred[j];
+          out.meta.pcpn[i] = d.outB.meta.pcpn[j];
+          out.meta.ps_info[i] = d.outB.meta.ps_info[j];
+          out.meta.blk_id[i] = seq1;
+          for (int k = 0; k < TN; k++) {
+            out.meta.tage_idx[i][k] = d.outB.meta.tage_idx[j][k];
+            out.meta.tage_tag[i][k] = d.outB.meta.tage_tag[j][k];
+          }
+        }
+        out.predict_next_fetch_address = d.outB.next;
+        t.rec_v = true;
+        t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
+        t.rec_b_v = true;
+        t.rec_b.ck = d.blk->ck_b; t.rec_b.base = d.blk->base_b; t.rec_b.id = seq1; t.rec_b.epoch = epoch0; t.rec_b.valid = true;
+        t.ftb_rec_v = true;
+        t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
+        std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
+        t.ftb_rec.ah_v = d.blk->ah_v;
+        t.ftb_rec.ah_kind = 1;
+        t.ftb_rec.ah_key_base = d.blk->ah_key_base;
+        std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
+        t.ftb_rec_b_v = true;
+        t.ftb_rec_b.valid = true; t.ftb_rec_b.id = seq1; t.ftb_rec_b.base = d.blk->base_b;
+        std::memcpy(t.ftb_rec_b.fh, d.blk->ck_b.fh, sizeof t.ftb_rec_b.fh);
+        t.ftb_rec_b.ah_v = d.blk->ah_v_b;
+        t.ftb_rec_b.ah_kind = d.blk->ah_kind_b;
+        t.ftb_rec_b.ah_key_base = d.blk->ah_key_base_b;
+        std::memcpy(t.ftb_rec_b.ah_key_fh, d.blk->ah_key_fh_b, sizeof t.ftb_rec_b.ah_key_fh);
+        n.blk_seq = seq0 + 2;
+      }
     }
 
     int inflight = 0;
     for (int k = 0; k < MAIN_LAT; k++) inflight += n.R[k].valid;
     for (int k = MAIN_LAT - 1; k >= 1; k--) n.R[k] = n.R[k - 1];
     n.R[0].valid = false;
-    if (n.R[1].valid) ftb_.s1_read(n.R[1].base, n.R[1].ftb_ix, n.ftb_raw);
+    if (n.R[1].valid) {
+      ftb_.s1_read(n.R[1].base, n.R[1].ftb_ix, n.ftb_raw);
+      if (n.R[1].has_b) ftb_.s1_read(n.R[1].base_b, n.R[1].ftb_ix_b, n.ftb_raw_b);
+    }
 
     auto clear_R = [&] { for (int k = 0; k < MAIN_LAT; k++) n.R[k].valid = false; };
     if (in.refetch) {
@@ -439,6 +585,7 @@ class BpuPipe {
       clear_R();
       if (n.ah_pipe[1].valid && n.ah_pipe[1].key_base == d.obase) {
         n.ah_pipe[0] = n.ah_pipe[1];
+        n.ah2_pipe[0] = n.ah2_pipe[1];
         n.ah_pipe[1].valid = false;
       } else if (!(n.ah_pipe[0].valid && n.ah_pipe[0].key_base == d.obase)) {
         n.ah_pipe[0].valid = false;
@@ -470,6 +617,7 @@ class BpuPipe {
           ev.start = rc.base;
           std::memcpy(ev.fh, rc.fh, sizeof ev.fh);
           ev.ah_v = rc.ah_v;
+          ev.ah_kind = rc.ah_kind;
           ev.ah_key_base = rc.ah_key_base;
           std::memcpy(ev.ah_key_fh, rc.ah_key_fh, sizeof ev.ah_key_fh);
           ev.nbr = 1;
@@ -514,6 +662,8 @@ class BpuPipe {
         restore(pd_rec, n.spec, n.sras);
         hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
         push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
+        if (in.pd.ras_op2 == 1) n.sras.push(in.pd.ras_val2);
+        else if (in.pd.ras_op2 == 2) n.sras.pop();
       } else if (!(in.rf_valid && repair_blk(in, n))) {
         hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
         n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1;
@@ -523,7 +673,7 @@ class BpuPipe {
     }
     if (in.pd.valid && in.pd.nb_valid && pd_have) {
       t.ftb_clr_v = true;
-      t.ftb_clr_base = pd_rec.base;
+      t.ftb_clr_base = in.pd.nb_base ? in.pd.nb_base : pd_rec.base;
       t.ftb_clr_pc = in.pd.nb_pc;
     }
     out.upd_free = 15;
@@ -532,7 +682,9 @@ class BpuPipe {
 
   void commit(const Txn &t) {
     if (t.rec_v) rec_[t.rec.id & 255] = t.rec;
+    if (t.rec_b_v) rec_[t.rec_b.id & 255] = t.rec_b;
     if (t.ftb_rec_v) ftb_rec_[t.ftb_rec.id & (FTB_REC_N - 1)] = t.ftb_rec;
+    if (t.ftb_rec_b_v) ftb_rec_[t.ftb_rec_b.id & (FTB_REC_N - 1)] = t.ftb_rec_b;
     if (t.ftb_ev_v) ftb_.apply_train_ev(t.ftb_ev);
     if (t.ftb_clr_v) ftb_.clear_false_branch(t.ftb_clr_base, t.ftb_clr_pc);
   }

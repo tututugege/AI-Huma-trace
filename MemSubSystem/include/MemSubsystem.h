@@ -66,6 +66,21 @@ public:
   void configure_interrupt_latency(uint64_t seed, uint32_t min_cycles,
                                    uint32_t max_cycles);
   bool dcache_warm_access(uint32_t paddr, bool is_store, uint32_t *wb_line) { return dcache_.arrays.warm_access(paddr, is_store, wb_line); }   // fast-warmup replay
+  // Read-only dirty-line snoop on cycle-start DCache + WriteBuffer registers (ICache FDIP coherency)
+  bool is_line_dirty_q(uint32_t paddr) const {
+    const uint32_t line = paddr & ~uint32_t(DCACHE_LINE_SIZE - 1u);
+    const AddrFields f = decode(line);
+    for (int w = 0; w < DCACHE_WAYS_NUM; ++w)
+      if (dcache_.arrays.valid_array[f.set_idx][w] && dcache_.arrays.dirty_array[f.set_idx][w] &&
+          dcache_.arrays.tag_array[f.set_idx][w] == f.tag)
+        return true;
+    const auto &wq = wb_.q();
+    for (int i = 0; i < int(wq.count); ++i) {
+      const int idx = (int(wq.head) + i) % DCACHE_WB_ENTRIES;
+      if ((wq.write_buffer[idx].addr & ~uint32_t(DCACHE_LINE_SIZE - 1u)) == line) return true;
+    }
+    return false;
+  }
   void sync_mmio_devices_from_backing();
   void set_ptw_coherent_source(RealLsu *lsu) { ptw_coherent_source_ = lsu; }
   void set_llc_config(const axi_interconnect::AXI_LLCConfig &cfg);

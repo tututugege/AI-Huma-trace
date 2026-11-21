@@ -71,6 +71,9 @@ void SimCpu::init() {
   front.core->icache.in.axi_q = &icache_axi_q;
   front.core->icache.out.probe_req = &icache_req;
   front.core->icache.in.probe_resp = &icache_resp_q;
+  front.core->icache.set_dc_dirty_snoop(
+      [](const void *p, uint32_t pa) { return static_cast<const MemSubsystem *>(p)->is_line_dirty_q(pa); },
+      &mem_subsystem);
   // the masters' ports, as the AXI subsystem sees them
   axi.out.read_ports = axi.interconnect.read_ports;
   axi.out.write_ports = axi.interconnect.write_ports;

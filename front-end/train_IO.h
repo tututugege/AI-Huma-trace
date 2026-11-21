@@ -60,11 +60,6 @@ struct PendingFrontState {
   FrontRegs d;
 };
 
-struct PendingIpf {   // FE_IPF: fetch addresses the BPU pushed this cycle (prefetch candidates, started at the edge)
-  int ncand = 0;
-  uint32_t cand[2] = {0, 0};
-};
-
 struct FrontReadData {
   FrontRegs q;
   FetchAddrFifoReadData fetch_addr_fifo_rd_snapshot{};

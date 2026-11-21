@@ -286,8 +286,8 @@ constexpr int MOVE_ELIM_MAX_REFS = CFG_MOVE_ELIM_REFS;
 #endif
 // Value path of the speculative window (EXP-020 / EXP-040, back-end/include/MsData.h): the model follows the stale value a speculative load
 // reads, taints its consumers (branches resolve on it, stores write stale data / to stale addresses) like the RTL does.
-// Front-end fast paths (EXP-019, docs/history/FRONTEND_NOTES.md), all built in: the BPU issues the first block in the redirect cycle, PTAB
-// write-to-read bypass, I-cache ready right after a redirect, pre-IDU buffer bypass.  FE_PAIR / FE_IPF are model-only, env only, default 0.
+// Front-end fast paths (EXP-019 / EXP-051, docs/history/FRONTEND_NOTES.md), all built in: the BPU issues the first block in the redirect cycle, PTAB
+// write-to-read bypass, I-cache ready right after a redirect, pre-IDU buffer bypass, 2-taken fetch pair, and real-AXI S2-confirmed FDIP.
 // Staged LSU, committed-store drain and load replay registers (docs/LSU_PIPE.md 2.5, docs/LSU_PIPE_IPC.md). RTL: lp_pkg NDR / NDC / NRP.
 //   CFG_LSU_PIPE_DRAIN  store ports the write buffer sends on per cycle (<= STA ports)
 //   CFG_LSU_PIPE_DCAND  drain candidates of the pre-write-buffer drain (the model no longer has that drain; kept for the RTL lp_pkg)

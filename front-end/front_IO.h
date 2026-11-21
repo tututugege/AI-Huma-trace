@@ -12,7 +12,7 @@ struct CsrStatusIO;
 // The first block holds a_len instructions (up to and including its taken branch), the second b_len instructions starting at addr2.
 struct FetchPair {
   bool valid = false;
-  uint32_t addr2 = 0;
+  pc_t addr2 = 0;
   uint8_t a_len = 0, b_len = 0;
 };
 
@@ -122,6 +122,21 @@ struct InstFifoOut {
   uint16_t raw16[FETCH_WIDTH] = {};   // RVC=1: the first halfword of the window at each slot, as fetched (before expansion)
   uint16_t up16 = 0;                  // RVC=1: the upper halfword of the window of the group's last slot (before the carry mask) ...
   wire<1> up_ok = 0;                  // ... and whether it is in the same cache line as the slot (the fetch can deliver it with the group)
+  // S2-confirmed A/B mux fallback (intact block A preserved if S2 overrides A so B is cancelled)
+  wire<1> has_alt_a = 0;
+  inst_word_t alt_instructions[FETCH_WIDTH] = {};
+  pc_t alt_pc[FETCH_WIDTH] = {};
+  wire<1> alt_page_fault_inst[FETCH_WIDTH] = {};
+  wire<1> alt_inst_valid[FETCH_WIDTH] = {};
+  predecode_type_t alt_predecode_type[FETCH_WIDTH] = {};
+  target_addr_t alt_predecode_target_address[FETCH_WIDTH] = {};
+  pc_t alt_seq_next_pc = 0;
+  wire<1> alt_is_rvc[FETCH_WIDTH] = {};
+  wire<1> alt_start_a[FETCH_WIDTH] = {};
+  wire<1> alt_start_b[FETCH_WIDTH] = {};
+  uint16_t alt_raw16[FETCH_WIDTH] = {};
+  uint16_t alt_up16 = 0;
+  wire<1> alt_up_ok = 0;
 };
 
 
@@ -132,6 +147,7 @@ struct PtabOut {
   wire<1> predict_dir[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
+  wire<1> is_pair = 0;
   // for TAGE update
   PredMeta meta;
 };
@@ -166,12 +182,27 @@ struct InstFifoEntry {
   uint16_t raw16[FETCH_WIDTH] = {};   // RVC=1: the first halfword of the window at each slot, as fetched (before expansion)
   uint16_t up16 = 0;                  // RVC=1: the upper halfword of the window of the group's last slot (before the carry mask) ...
   wire<1> up_ok = 0;                  // ... and whether it is in the same cache line as the slot (the fetch can deliver it with the group)
+  wire<1> has_alt_a = 0;
+  inst_word_t alt_instructions[FETCH_WIDTH] = {};
+  pc_t alt_pc[FETCH_WIDTH] = {};
+  wire<1> alt_page_fault_inst[FETCH_WIDTH] = {};
+  wire<1> alt_inst_valid[FETCH_WIDTH] = {};
+  predecode_type_t alt_predecode_type[FETCH_WIDTH] = {};
+  target_addr_t alt_predecode_target_address[FETCH_WIDTH] = {};
+  pc_t alt_seq_next_pc = 0;
+  wire<1> alt_is_rvc[FETCH_WIDTH] = {};
+  wire<1> alt_start_a[FETCH_WIDTH] = {};
+  wire<1> alt_start_b[FETCH_WIDTH] = {};
+  uint16_t alt_raw16[FETCH_WIDTH] = {};
+  uint16_t alt_up16 = 0;
+  wire<1> alt_up_ok = 0;
 };
 
 struct PtabEntry {
   wire<1> predict_dir[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
+  wire<1> is_pair = 0;
   PredMeta meta;
 };
 

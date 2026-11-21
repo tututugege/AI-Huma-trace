@@ -29,10 +29,13 @@ constexpr int FTB_S1_W      = 4;
 constexpr int FTB_S1_TAGB   = 14;
 constexpr int FTB_TAGE_N    = 4096;
 constexpr int FTB_ITT_N     = 256;
-constexpr int FTB_AH_N      = 2048;
-constexpr int FTB_AH_W      = 8;
-constexpr int FTB_AH_TAGE_N = 1024;
-constexpr int FTB_BRQ_N     = 16;
+constexpr int FTB_AH_N       = 2048;
+constexpr int FTB_AH_W       = 8;
+constexpr int FTB_AH_TAGE_N  = 1024;
+constexpr int FTB_AH2_N      = 1024;
+constexpr int FTB_AH2_W      = 8;
+constexpr int FTB_AH2_TAGE_N = 512;
+constexpr int FTB_BRQ_N      = 16;
 constexpr int FTB_REC_N     = 512;
 constexpr uint16_t FTB_TAGE_TAG_MASK = 0x3ffu;
 
@@ -69,6 +72,7 @@ struct FtbBlkRec {
   pc_t base = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
   bool ah_v = false;
+  uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
 };
@@ -461,6 +465,7 @@ struct FtbTrainEv {
   pc_t start = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
   bool ah_v = false;
+  uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
   uint8_t nbr = 0;
@@ -498,9 +503,12 @@ struct BpuFtb {
   FtbTab ftb1_;       // S1/S2 Main FTB (4096 x 4, full target)
   BlockTage s2_tage_; // S2 Block-TAGE (4096 x 4 slots x 4 tables + base)
   BlockItt itt_;      // S2 Single Block-ITT (256 x 3 tables)
-  AheadFtbTab aftb_;  // 1-Ahead FTB (2048 x 8)
-  BlockTage atage_;   // 1-Ahead Block-TAGE (1024 x 4 slots x 4 tables, reuses aftb ctr as base)
-  BlockItt aitt_;     // 1-Ahead Block-ITT (256 x 3 tables)
+  AheadFtbTab aftb_;  // 1-Ahead FTB A (2048 x 8)
+  BlockTage atage_;   // 1-Ahead Block-TAGE A (1024 x 4 slots x 4 tables, reuses aftb ctr as base)
+  BlockItt aitt_;     // 1-Ahead Block-ITT A (256 x 3 tables)
+  AheadFtbTab aftb2_; // 2-Ahead FTB B (1024 x 8)
+  BlockTage atage2_;  // 2-Ahead Block-TAGE B (512 x 4 slots x 4 tables)
+  BlockItt aitt2_;    // 2-Ahead Block-ITT B (256 x 3 tables)
 
   void reset() {
     ftb0_.init(FTB_S0_N, FTB_S0_W, FTB_S0_TAGB, FTB_S0_TGTB);
@@ -510,6 +518,9 @@ struct BpuFtb {
     aftb_.init(FTB_AH_N, FTB_AH_W);
     atage_.init(FTB_AH_TAGE_N);
     aitt_.init(FTB_ITT_N);
+    aftb2_.init(FTB_AH2_N, FTB_AH2_W);
+    atage2_.init(FTB_AH2_TAGE_N);
+    aitt2_.init(FTB_ITT_N);
   }
 
   static FtbBlkIdx make_index(pc_t base, const uint32_t fh[FH_N_MAX][TN]) {
@@ -544,26 +555,47 @@ struct BpuFtb {
     aitt_.read(ix, r.itt_raw);
   }
 
-  template <class S0GuessT>
-  bool ahead_select(pc_t base, pc_t bnd, const FtbAhPipe &ah, uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
-    if (!ah.valid) return false;
-    FtbEnt ent;
-    if (!aftb_.select_way(ah.raw.ftb_set, ah.key_base, base, ent)) return false;
+  void ahead2_read(pc_t key_base, const uint32_t key_fh[FH_N_MAX][TN], FtbAhRaw &r) const {
+    const FtbBlkIdx ix = make_ahead_index(key_base, 0, key_fh);
+    aftb2_.read_set(key_base, r.ftb_set);
+    atage2_.read(ix, r.tage_raw);
+    aitt2_.read(ix, r.itt_raw);
+  }
 
-    const FtbBlkIdx ix = make_ahead_index(ah.key_base, base, ah.key_fh);
+  template <class S0GuessT>
+  bool ahead_select_impl(const AheadFtbTab &aftb, const BlockTage &atage, const BlockItt &aitt,
+                         pc_t base, pc_t bnd, bool ah_valid, pc_t key_base,
+                         const uint32_t key_fh[FH_N_MAX][TN], const FtbAhRaw &raw,
+                         uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
+    if (!ah_valid) return false;
+    FtbEnt ent;
+    if (!aftb.select_way(raw.ftb_set, key_base, base, ent)) return false;
+
+    const FtbBlkIdx ix = make_ahead_index(key_base, base, key_fh);
     bool dirs[FTB_SLOTS] = {};
     BlockTage::Pred tp[FTB_SLOTS];
     for (int k = 0; k < FTB_SLOTS; k++) {
-      atage_.select_slot(ix, ah.raw.tage_raw.s[k], tp[k], ent.s[k].valid ? int(ent.s[k].ctr) : -1);
+      atage.select_slot(ix, raw.tage_raw.s[k], tp[k], ent.s[k].valid ? int(ent.s[k].ctr) : -1);
       dirs[k] = tp[k].pred;
     }
     target_addr_t itt_tgt = 0;
-    const bool itt_hit = aitt_.select(ix, ah.raw.itt_raw, itt_tgt);
+    const bool itt_hit = aitt.select(ix, raw.itt_raw, itt_tgt);
 
     g = S0GuessT{};
     g.hit = true;
     eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g);
     return true;
+  }
+
+  template <class S0GuessT>
+  bool ahead_select(pc_t base, pc_t bnd, const FtbAhPipe &ah, uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
+    return ahead_select_impl(aftb_, atage_, aitt_, base, bnd, ah.valid, ah.key_base, ah.key_fh, ah.raw, rcnt, rtop, g);
+  }
+
+  template <class S0GuessT>
+  bool ahead2_select(pc_t base, pc_t bnd, bool valid, pc_t key_base, const uint32_t key_fh[FH_N_MAX][TN],
+                     const FtbAhRaw &raw, uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
+    return ahead_select_impl(aftb2_, atage2_, aitt2_, base, bnd, valid, key_base, key_fh, raw, rcnt, rtop, g);
   }
 
   template <class GuessT>
@@ -607,6 +639,8 @@ struct BpuFtb {
       g.taken = true;
       g.slot = sl.offset;
       g.type = sl.type;
+      g.rvc = sl.is_rvc;
+      g.carried = sl.carried;
       g.next = tgt;
       g.nbits = HSYM_BITS;
       g.bits = hist_sym(bpc, tgt);
@@ -789,29 +823,33 @@ struct BpuFtb {
     }
 
     if (ev.ah_v && ev.nbr > 0) {
-      const uint32_t s = aftb_.index(ev.ah_key_base);
-      const uint32_t t = aftb_.tag(ev.ah_key_base, ev.start);
+      const bool use2 = (ev.ah_kind == 2);
+      AheadFtbTab &atab = use2 ? aftb2_ : aftb_;
+      BlockTage &atg = use2 ? atage2_ : atage_;
+      BlockItt &ait = use2 ? aitt2_ : aitt_;
+      const uint32_t s = atab.index(ev.ah_key_base);
+      const uint32_t t = atab.tag(ev.ah_key_base, ev.start);
       int hit = -1;
-      for (int w = 0; w < aftb_.W; w++) {
-        if (aftb_.e[s * aftb_.W + w].valid && aftb_.e[s * aftb_.W + w].tag32 == t) { hit = w; break; }
+      for (int w = 0; w < atab.W; w++) {
+        if (atab.e[s * atab.W + w].valid && atab.e[s * atab.W + w].tag32 == t) { hit = w; break; }
       }
       if (hit < 0) {
         int vic = -1;
-        for (int w = 0; w < aftb_.W; w++) if (!aftb_.e[s * aftb_.W + w].valid) { vic = w; break; }
+        for (int w = 0; w < atab.W; w++) if (!atab.e[s * atab.W + w].valid) { vic = w; break; }
         if (vic < 0) {
           vic = 0;
-          for (int w = 1; w < aftb_.W; w++) if (aftb_.e[s * aftb_.W + w].lru > aftb_.e[s * aftb_.W + vic].lru) vic = w;
+          for (int w = 1; w < atab.W; w++) if (atab.e[s * atab.W + w].lru > atab.e[s * atab.W + vic].lru) vic = w;
         }
         hit = vic;
-        FtbEnt &en = aftb_.e[s * aftb_.W + hit];
+        FtbEnt &en = atab.e[s * atab.W + hit];
         en = FtbEnt{};
         en.valid = true;
         en.tag32 = t;
-        en.lru = static_cast<uint8_t>(aftb_.W - 1);
+        en.lru = static_cast<uint8_t>(atab.W - 1);
       }
-      FtbEnt &aen = aftb_.e[s * aftb_.W + hit];
+      FtbEnt &aen = atab.e[s * atab.W + hit];
       for (int i = 0; i < ev.nbr; i++) upsert_branch(aen, ev.br[i]);
-      aftb_.touch_lru(s, hit);
+      atab.touch_lru(s, hit);
 
       const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, ev.start, ev.ah_key_fh);
       for (int i = 0; i < ev.nbr; i++) {
@@ -823,11 +861,11 @@ struct BpuFtb {
           }
           if (sl >= 0) {
             BlockTage::Pred ap;
-            atage_.predict_slot(aix, sl, ap, int(aen.s[sl].ctr));
-            atage_.update_slot(aix, sl, b.actual_dir, ap.pred, ap.alt, ap.pcpn);
+            atg.predict_slot(aix, sl, ap, int(aen.s[sl].ctr));
+            atg.update_slot(aix, sl, b.actual_dir, ap.pred, ap.alt, ap.pcpn);
           }
         }
-        if (br_ind(b.type) && b.actual_dir) aitt_.update(aix, b.target);
+        if (br_ind(b.type) && b.actual_dir) ait.update(aix, b.target);
       }
     }
   }

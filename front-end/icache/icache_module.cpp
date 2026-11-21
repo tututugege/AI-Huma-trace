@@ -86,7 +86,8 @@ inline bool icache_req_slot_idle(const ICacheRegs &regs) {
 }
 
 inline int alloc_free_txid(const ICacheRegs &regs) {
-  for (int id = 0; id < 16; ++id) {
+  // txids 0..7 for demand ICache misses; txids 8..9 reserved for 2-slot FDIP
+  for (int id = 0; id < 8; ++id) {
     if (!regs.txid_inflight_r[id]) {
       return id;
     }
@@ -827,7 +828,7 @@ void ICache::eval_state_machine() {
 
   case CANCEL_WAIT_ACCEPT:
     io.out.mem_req_valid = false;
-    io.out.mem_resp_ready = true;
+    // Do not force mem_resp_ready when no demand response is visible (would pop unseen FDIP responses from AXI/LLC)
     if (io.in.mem_req_accepted && io.regs.miss_txid_valid_r &&
         ((io.in.mem_req_accepted_id & 0xF) == (io.regs.miss_txid_r & 0xF))) {
       uint8_t txid = io.regs.miss_txid_r & 0xF;

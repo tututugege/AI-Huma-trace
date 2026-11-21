@@ -16,10 +16,6 @@ struct SimEnv {
   std::string pmu_out = "pmu";       // PMU_OUT: output file prefix
   unsigned long long pmu_interval = 0;   // PMU_INTERVAL: a time-series row every n cycles
   bool pmu_pcprof = true;            // PMU_PCPROF=0: no per-PC profile
-  // front end (experimental)
-  int fe_pair = 0;                   // FE_PAIR: two fetch blocks per cycle
-  int fe_ipf = 0;                    // FE_IPF: I-cache prefetch
-  int fe_ipf_lat = 12;               // FE_IPF_LAT: its latency (cycles)
   // L1D prefetcher
   const char *pf_enable = nullptr;   // PF_ENABLE (raw; the prefetcher has the default)
   // RTL comparison and alignment prints
@@ -38,9 +34,6 @@ struct SimEnv {
     if (const char *v = std::getenv("PMU_OUT")) pmu_out = v;
     if (const char *v = std::getenv("PMU_INTERVAL")) pmu_interval = std::strtoull(v, nullptr, 0);
     if (const char *v = std::getenv("PMU_PCPROF")) pmu_pcprof = std::strcmp(v, "0") != 0;
-    if (const char *v = std::getenv("FE_PAIR")) fe_pair = std::atoi(v);
-    if (const char *v = std::getenv("FE_IPF")) fe_ipf = std::atoi(v);
-    if (const char *v = std::getenv("FE_IPF_LAT")) fe_ipf_lat = std::atoi(v);
     pf_enable = std::getenv("PF_ENABLE");
     lsu_pipe_evt = std::getenv("LSU_PIPE_EVT") != nullptr;
     lsu_pipe_stq = std::getenv("LSU_PIPE_STQ");

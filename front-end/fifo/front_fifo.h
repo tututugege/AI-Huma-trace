@@ -35,6 +35,17 @@ struct InstFifo {
       o.start_a[i] = e.start_a[i]; o.start_b[i] = e.start_b[i]; o.raw16[i] = e.raw16[i];
     }
     o.up16 = e.up16; o.up_ok = e.up_ok; o.seq_next_pc = e.seq_next_pc;
+    o.has_alt_a = e.has_alt_a;
+    if (e.has_alt_a) {
+      for (int i = 0; i < FETCH_WIDTH; i++) {
+        o.alt_instructions[i] = e.alt_instructions[i]; o.alt_pc[i] = e.alt_pc[i];
+        o.alt_page_fault_inst[i] = e.alt_page_fault_inst[i]; o.alt_inst_valid[i] = e.alt_inst_valid[i];
+        o.alt_predecode_type[i] = e.alt_predecode_type[i]; o.alt_predecode_target_address[i] = e.alt_predecode_target_address[i];
+        o.alt_is_rvc[i] = e.alt_is_rvc[i]; o.alt_start_a[i] = e.alt_start_a[i];
+        o.alt_start_b[i] = e.alt_start_b[i]; o.alt_raw16[i] = e.alt_raw16[i];
+      }
+      o.alt_up16 = e.alt_up16; o.alt_up_ok = e.alt_up_ok; o.alt_seq_next_pc = e.alt_seq_next_pc;
+    }
     o.FIFO_valid = true;
   }
 };
@@ -48,6 +59,7 @@ struct Ptab {
     for (int i = 0; i < FETCH_WIDTH; i++) { o.predict_dir[i] = e.predict_dir[i]; o.predict_base_pc[i] = e.predict_base_pc[i]; }
     o.meta = e.meta; o.meta.mask();
     o.predict_next_fetch_address = e.predict_next_fetch_address;
+    o.is_pair = e.is_pair;
   }
 };
 

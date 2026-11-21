@@ -49,13 +49,13 @@ void predecode_check(const PredecodeCheckerIn &in, PredecodeCheckerOut &output) 
       } else {
         corrected = last ? in.seq_next_pc : (lv >= 0 ? in.pc[lv] + (in.is_rvc[lv] ? 2 : 4) : in.pc[e] + SLOT_BYTES);
       }
-      if (corrected != claimed) {
+      if (corrected != claimed || (!last && (ft != e || !in.inst_valid[e + 1]))) {
         output.predict_next_fetch_address_corrected = corrected;
         output.predecode_flush_enable = true;
         output.keep_n = keep;
         return;
       }
-      if (last) { output.predict_next_fetch_address_corrected = corrected; return; }
+      if (last) { output.predict_next_fetch_address_corrected = corrected; output.keep_n = keep; return; }
       i = e + 1;
     }
     output.predict_next_fetch_address_corrected = in.predict_next_fetch_address;

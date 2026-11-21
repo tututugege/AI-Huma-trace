@@ -122,11 +122,21 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
     out.probe_req->req_valid = false; out.probe_req->req_addr = 0;
     itlb.comb(true, false, nullptr, nullptr, 0);
     co->icache_read_ready = true;
+    resp_popped_d_ = false;
     return;
   }
   // (a satp write does not flush the ITLB: the architectural shootdown is SFENCE.VMA -> itlb_flush)
   const bool hold_for_recovery = ci->itlb_flush || ci->fence_i || ci->invalidate_req;
   const bool req_valid = ci->icache_read_valid;
+
+  const uint8_t axi_acc_id = static_cast<uint8_t>(in.axi_q->req.accepted_id & 0xF);
+  const uint8_t axi_rsp_id = static_cast<uint8_t>(in.axi_q->resp.id & 0xF);
+  const bool eff_resp_valid = in.axi_q->resp.valid && !resp_popped_q_;
+  const bool fdip_acc = in.axi_q->req.accepted && axi_acc_id >= kFdipTxBase && axi_acc_id < kFdipTxBase + kFdipN;
+  const bool fdip_rsp_raw = eff_resp_valid && axi_rsp_id >= kFdipTxBase && axi_rsp_id < kFdipTxBase + kFdipN;
+  const bool fdip_rsp = fdip_rsp_raw && fdip_q_.slots[axi_rsp_id - kFdipTxBase].active &&
+                        fdip_q_.slots[axi_rsp_id - kFdipTxBase].issued;
+  const bool fdip_busy_req = fdip_q_.sending >= 0 && !fdip_acc;
 
   auto &hin = mod_.io.in;
   hin.refetch = ci->refetch || ci->invalidate_req || ci->fence_i;
@@ -136,11 +146,11 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   hin.ppn = 0;
   hin.ppn_valid = false;
   hin.page_fault = false;
-  hin.mem_req_ready = in.axi_q->req.ready;
-  hin.mem_req_accepted = in.axi_q->req.accepted;
-  hin.mem_req_accepted_id = static_cast<uint8_t>(in.axi_q->req.accepted_id & 0xF);
-  hin.mem_resp_valid = in.axi_q->resp.valid;
-  hin.mem_resp_id = static_cast<uint8_t>(in.axi_q->resp.id & 0xF);
+  hin.mem_req_ready = fdip_busy_req ? false : in.axi_q->req.ready;
+  hin.mem_req_accepted = fdip_acc ? false : in.axi_q->req.accepted;
+  hin.mem_req_accepted_id = axi_acc_id;
+  hin.mem_resp_valid = fdip_rsp_raw ? false : eff_resp_valid;
+  hin.mem_resp_id = axi_rsp_id;
   hin.dcache_resp_valid = in.probe_resp->resp_valid;
   hin.dcache_resp_retry = in.probe_resp->resp_retry;
   hin.dcache_resp_miss = in.probe_resp->resp_miss;
@@ -178,9 +188,76 @@ void ICacheTop::comb(ICacheIn *ci, ICacheOut *co) {
   out.axi->req.total_size = static_cast<uint8_t>(ho.mem_req_total_size);
   out.axi->req.id = static_cast<uint8_t>(ho.mem_req_id & 0xF);
   out.axi->req.bypass = ho.mem_req_bypass;
-  out.axi->resp.ready = ho.mem_resp_ready;
+  const bool resp_ready = ho.mem_resp_ready || fdip_rsp;
+  out.axi->resp.ready = resp_ready;
   out.probe_req->req_valid = ho.dcache_req_valid;
   out.probe_req->req_addr = ho.dcache_req_addr;
+
+  // Real-AXI/LLC/DRAM S2-confirmed FDIP (2 slots, txid 8..9, 8-entry VA queue, 1-pop/cycle)
+  if (!edge_.kill_step) {
+    fdip_d_ = fdip_q_;
+    fdip_d_valid_ = true;
+    fdip_inst_en_ = false;
+    if (ci->fence_i) {
+      fdip_d_.qh = fdip_d_.qn = 0;
+      for (int s = 0; s < kFdipN; s++) {
+        if (fdip_d_.slots[s].active) {
+          if (fdip_d_.slots[s].issued || fdip_d_.sending == s) fdip_d_.slots[s].canceled = true;
+          else fdip_d_.slots[s].active = false;
+        }
+      }
+    }
+    if (fdip_acc) {
+      const int s = axi_acc_id - kFdipTxBase;
+      fdip_d_.slots[s].issued = true;
+      if (fdip_d_.sending == s) fdip_d_.sending = -1;
+    }
+    if (fdip_rsp) {
+      const int s = axi_rsp_id - kFdipTxBase;
+      const bool dc_dirty = dc_dirty_fn_ && dc_dirty_fn_(dc_dirty_ctx_, fdip_d_.slots[s].paddr);
+      if (fdip_d_.slots[s].active && !fdip_d_.slots[s].canceled && !ci->fence_i && !dc_dirty) {
+        fdip_inst_en_ = true;
+        fdip_inst_idx_ = fdip_d_.slots[s].index;
+        fdip_inst_ptag_ = fdip_d_.slots[s].ptag;
+      }
+      fdip_d_.slots[s] = FdipSlot{};
+      if (fdip_d_.sending == s) fdip_d_.sending = -1;
+    }
+    if (fdip_d_.sending < 0 && !ho.mem_req_valid && !ci->refetch && !ci->fence_i && fdip_d_.qn > 0) {
+      int free_s = -1;
+      for (int s = 0; s < kFdipN; s++) if (!fdip_d_.slots[s].active) { free_s = s; break; }
+      if (free_s >= 0) {
+        // 1-pop/cycle head inspection (hardware-friendly, zero combinational loop)
+        const pc_t va = fdip_d_.q[fdip_d_.qh];
+        fdip_d_.qh = (fdip_d_.qh + 1) % kFdipQ;
+        fdip_d_.qn--;
+        uint32_t pa = 0;
+        if (peek_translate(va, pa)) {
+          pa &= ~uint32_t(ICACHE_LINE_SIZE - 1u);
+          if (pa >= 0x80000000u) {
+            const uint32_t idx = (pa >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
+            const uint32_t ptag = pa >> 12;
+            bool dup = (mod_.io.regs.miss_txid_valid_r &&
+                        ((mod_.io.regs.ppn_r << 12) | (mod_.io.regs.req_index_r << ICACHE_OFFSET_BITS)) == pa);
+            for (int s = 0; s < kFdipN; s++) if (fdip_d_.slots[s].active && fdip_d_.slots[s].paddr == pa) dup = true;
+            if (!dup && !peek_hit(idx, ptag)) {
+              fdip_d_.slots[free_s] = FdipSlot{true, false, false, pa, idx, ptag};
+              fdip_d_.sending = free_s;
+            }
+          }
+        }
+      }
+    }
+  }
+  resp_popped_d_ = eff_resp_valid && resp_ready;
+  if (fdip_d_.sending >= 0) {
+    const FdipSlot &sl = fdip_d_.slots[fdip_d_.sending];
+    out.axi->req.valid = true;
+    out.axi->req.addr = sl.paddr;
+    out.axi->req.total_size = ICACHE_LINE_SIZE - 1u;
+    out.axi->req.id = static_cast<uint8_t>(kFdipTxBase + fdip_d_.sending);
+    out.axi->req.bypass = false;
+  }
 
   co->icache_read_ready = read_ready(hold_for_recovery, false);
   drive_fetch_group(co);
@@ -243,22 +320,31 @@ void ICacheTop::invalidate_step(ICacheOut *co) {
 // The clock edge: module registers (R1 or R2, or the reset state), the ITLB, the table writes of the steps in order.
 void ICacheTop::seq() {
   if (edge_.n == 0) return;   // (no I-cache step this cycle)
-  if (edge_.reset) { tags_.reset(); valid_.reset(); mod_.reset(); for (auto &r : repl_) r = 0; }
-  else mod_.seq();
+  if (edge_.reset) {
+    tags_.reset(); valid_.reset(); mod_.reset(); for (auto &r : repl_) r = 0;
+    fdip_q_ = FdipState{};
+    fdip_d_ = FdipState{};
+    fdip_d_valid_ = fdip_inst_en_ = fdip_pair_miss_en_ = false;
+    resp_popped_q_ = resp_popped_d_ = false;
+  } else {
+    mod_.seq();
+    resp_popped_q_ = resp_popped_d_;
+  }
   itlb.seq();   // (the kill step does not use the ITLB: a second seq would be a no-op)
+  bool demand_tw_we = false;
   for (int s = 0; s < edge_.n; ++s) {
     const auto &tw = edge_.tw[s];
     TagTable::WriteReq tag_write{};
     ValidTable::WriteReq valid_write{};
     if (tw.we) {
-      if (fill_hook && tw.valid) fill_hook(tw.index, tw.tag);
+      demand_tw_we = true;
       tag_write.enable = valid_write.enable = true;
       tag_write.address = valid_write.address = tw.index;
       tag_write.payload.chunks[tw.way][0] = tw.tag;
       valid_write.payload.chunks[tw.way][0] = tw.valid;
       tag_write.chunk_enable[tw.way] = valid_write.chunk_enable[tw.way] = true;
     }
-    if (tw.invalidate_all) valid_.reset();
+    if (tw.invalidate_all) { demand_tw_we = true; valid_.reset(); }
     if (tw.touch_we) {
       uint16_t &st = repl_[static_cast<uint32_t>(tw.touch_index) & (ICACHE_SET_NUM - 1u)];
       st = icache_module_n::icache_repl_update(st, static_cast<uint32_t>(tw.touch_way), tw.touch_fill);
@@ -266,6 +352,36 @@ void ICacheTop::seq() {
     tags_.seq(TagTable::ReadReq{}, tag_write);
     valid_.seq(ValidTable::ReadReq{}, valid_write);
   }
+  if (!edge_.reset) {
+    if (fdip_d_valid_) fdip_q_ = fdip_d_;
+    if (fdip_inst_en_ && !demand_tw_we) {
+      const uint32_t idx = fdip_inst_idx_ & (ICACHE_SET_NUM - 1u);
+      if (!peek_hit(idx, fdip_inst_ptag_)) {
+        const auto &vp = valid_.peek_row(idx);
+        int way = -1;
+        for (int w = 0; w < ICACHE_WAY_NUM; ++w) if (!vp.chunks[w][0]) { way = w; break; }
+        if (way < 0) {
+          way = (icache_module_n::icache_repl_mode() != 0)
+                    ? static_cast<int>(icache_module_n::icache_repl_victim(repl_[idx]))
+                    : static_cast<int>(prefetch_rot_[idx]++ % ICACHE_WAY_NUM);
+        }
+        TagTable::WriteReq tw{};
+        ValidTable::WriteReq vw{};
+        tw.enable = vw.enable = true;
+        tw.address = vw.address = idx;
+        tw.payload.chunks[way][0] = fdip_inst_ptag_;
+        vw.payload.chunks[way][0] = 1;
+        tw.chunk_enable[way] = vw.chunk_enable[way] = true;
+        tags_.seq(TagTable::ReadReq{}, tw);
+        valid_.seq(ValidTable::ReadReq{}, vw);
+        if (icache_module_n::icache_repl_mode() != 0) {
+          repl_[idx] = icache_module_n::icache_repl_update(repl_[idx], static_cast<uint32_t>(way), true);
+        }
+      }
+    }
+    if (fdip_pair_miss_en_) enqueue_fdip(&fdip_pair_miss_va_, 1, false);
+  }
+  fdip_d_valid_ = fdip_inst_en_ = fdip_pair_miss_en_ = false;
   edge_ = {};
 }
 
@@ -279,39 +395,54 @@ bool ICacheTop::peek_hit(uint32_t index, uint32_t ptag) {
   return false;
 }
 
-// FE_PAIR: second fetch block of a fetch group read in the same cycle as the first one. Only if it lies in the same 4 KiB page as the
-// first block (same translation) and its line is resident; no state is changed. Returns false when it cannot be served.
-bool ICacheTop::fetch_second(uint32_t a_vpc, uint32_t a_paddr, uint32_t b_vpc, int nwords, uint32_t *words) {
-  if ((a_vpc >> 12) != (b_vpc >> 12)) return false;
-  const uint32_t pb = (a_paddr & ~0xFFFu) | (b_vpc & 0xFFFu);
-  const uint32_t index = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
-  if (!peek_hit(index, pb >> 12)) return false;
-  for (int i = 0; i < nwords; ++i) words[i] = tbhook::fetch_window_at(pb + SLOT_BYTES * i);
-  return true;
+// 2-taken second fetch block read in parallel with block A (2-port ITLB + 4-bank 1R1W ICache).
+bool ICacheTop::fetch_second(pc_t a_vpc, pc_t a_paddr, pc_t b_vpc, int nwords, uint32_t *words, int &actual_n) {
+  actual_n = 0;
+  uint32_t pb = 0;
+  if ((a_vpc >> 12) == (b_vpc >> 12)) {
+    pb = (static_cast<uint32_t>(a_paddr) & ~0xFFFu) | static_cast<uint32_t>(b_vpc & 0xFFFu);
+  } else {
+    if (!peek_translate(b_vpc, pb)) return false;
+  }
+  if (pb < 0x80000000u) return false;
+  const uint32_t idx0 = (pb >> ICACHE_OFFSET_BITS) & (ICACHE_SET_NUM - 1u);
+  const uint32_t ptag0 = pb >> 12;
+  if (!peek_hit(idx0, ptag0)) {
+    if (!edge_.kill_step) {
+      fdip_pair_miss_en_ = true;
+      fdip_pair_miss_va_ = b_vpc & ~pc_t(ICACHE_LINE_SIZE - 1u);
+    }
+    return false;
+  }
+  const int b_slot0 = static_cast<int>((b_vpc & (ICACHE_LINE_SIZE - 1u)) / SLOT_BYTES);
+  int avail = kLineSlots - b_slot0;
+  if (avail > nwords) avail = nwords;
+  actual_n = avail;
+  for (int i = 0; i < avail; ++i) words[i] = tbhook::fetch_window_at(pb + SLOT_BYTES * i);
+  return avail > 0;
 }
 
-// FE_IPF: ITLB lookup without side effects.
-bool ICacheTop::peek_translate(uint32_t v_addr, uint32_t &p_addr) {
+void ICacheTop::enqueue_fdip(const pc_t *cand, int n, bool clear_all) {
+  if (clear_all) { fdip_q_.qh = fdip_q_.qn = 0; }
+  for (int i = 0; i < n; i++) {
+    const pc_t lva = cand[i] & ~pc_t(ICACHE_LINE_SIZE - 1u);
+    bool dup = false;
+    for (int k = 0; k < fdip_q_.qn; k++) {
+      if (fdip_q_.q[(fdip_q_.qh + k) % kFdipQ] == lva) { dup = true; break; }
+    }
+    if (dup) continue;
+    if (fdip_q_.qn >= kFdipQ) {
+      fdip_q_.qh = (fdip_q_.qh + 1) % kFdipQ;
+      fdip_q_.qn--;
+    }
+    fdip_q_.q[(fdip_q_.qh + fdip_q_.qn) % kFdipQ] = lva;
+    fdip_q_.qn++;
+  }
+}
+
+// ITLB lookup without side effects (read-only CAM peek).
+bool ICacheTop::peek_translate(pc_t v_addr, uint32_t &p_addr) {
   return itlb.peek_translate(p_addr, v_addr, 0);
-}
-
-// FE_IPF: install a prefetched line (tag + valid only). An invalid way is used first, else a rotating victim.
-bool ICacheTop::prefetch_install(uint32_t index, uint32_t ptag) {
-  if (peek_hit(index, ptag)) return false;
-  const auto &vp = valid_.peek_row(index);
-  int way = -1;
-  for (int w = 0; w < ICACHE_WAY_NUM; ++w) if (!vp.chunks[w][0]) { way = w; break; }
-  if (way < 0) way = prefetch_rot_[index]++ % ICACHE_WAY_NUM;
-  TagTable::WriteReq tw{};
-  ValidTable::WriteReq vw{};
-  tw.enable = vw.enable = true;
-  tw.address = vw.address = index;
-  tw.payload.chunks[way][0] = ptag;
-  vw.payload.chunks[way][0] = 1;
-  tw.chunk_enable[way] = vw.chunk_enable[way] = true;
-  tags_.seq(TagTable::ReadReq{}, tw);
-  valid_.seq(ValidTable::ReadReq{}, vw);
-  return true;
 }
 
 // Fast-warmup replay (EXP-011): a ready-made L1I tag / valid state and ITLB state.
