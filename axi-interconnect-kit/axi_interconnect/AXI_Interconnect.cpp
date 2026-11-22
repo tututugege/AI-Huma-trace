@@ -336,6 +336,7 @@ AXI_LLC_ReadReqIn_t to_llc_read_req(const LlcUpstreamReqLatch &r) {
   o.total_size = r.total_size;
   o.id = r.id;
   o.bypass = r.bypass;
+  o.pc_hash = r.pc_hash;
   return o;
 }
 
@@ -1228,7 +1229,8 @@ void AXI_Interconnect::read_route_masters_llc() {
       llc_upstream_accept_c[master] = true;
       llc_upstream_capture_c[master] = LlcUpstreamReqLatch{
           true, req_addr, req_total_size, uint8_t(read_ports[master].req.id),
-          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(read_ports[master].req.bypass))};
+          effective_llc_bypass(req_addr, req_total_size, static_cast<bool>(read_ports[master].req.bypass)),
+          (master == MASTER_DCACHE_R) ? read_ports[master].req.pc_hash : uint16_t(0)};
       continue;
     }
     req_ready_r[master] = true;

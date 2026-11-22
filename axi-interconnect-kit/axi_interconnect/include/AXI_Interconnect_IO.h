@@ -186,6 +186,7 @@ struct ReadMasterReq_t {
   wire<8> total_size;  // 0=1B ... 255=256B
   wire<4> id;          // Transaction ID (for out-of-order)
   wire<1> bypass;      // Skip LLC / cacheable path and force memory/MMIO routing
+  uint16_t pc_hash = 0; // EXP-058: 12-bit load PC hash (MASTER_DCACHE_R ARUSER -> LLC Bingo)
 };
 
 // Read Response: Interleaver → Master

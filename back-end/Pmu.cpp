@@ -1,4 +1,5 @@
 #include "Bop.h"
+#include "BingoHw.h"
 #include "DseCap.h"
 #include "DataPrefetcher.h"
 #include <vector>
@@ -214,6 +215,7 @@ void Pmu::report(uint64_t instructions) {
                 (unsigned long long)g_pf_walk.walk, (unsigned long long)g_pf_walk.fault);
   if (g_bop_l1) g_bop_l1->print("L1D");   // EXP-048
   if (g_bop_llc) g_bop_llc->print("LLC");
+  if (g_bingo_llc) g_bingo_llc->print();
 
   // ---- CSV ----
   if (FILE *f = std::fopen((out_prefix + "_events.csv").c_str(), "w")) {

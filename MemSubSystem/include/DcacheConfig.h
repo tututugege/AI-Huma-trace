@@ -31,6 +31,7 @@ struct MSHRReq{
     wire<1> lsu_origin;
     wire<1> is_prefetch; // allocated by the L1D prefetcher (lowest priority towards AXI)
     wire<1> no_fill;     // prefetch into the LLC only: the response is dropped, the line is not filled into the L1D
+    uint16_t pc_hash = 0; // EXP-058: 12-bit load PC hash -> AXI ARUSER -> LLC Bingo
 };
 
 struct MSHRFillReq{

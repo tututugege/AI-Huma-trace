@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include "RealDcache.h"
+#include "BingoHw.h"
 #include "types.h"
 #include <cassert>
 #include <cstring>
@@ -500,7 +501,8 @@ void RealDcache::stage2() {
 
                 }
                 else { // The only free MSHR entry is being allocated by the other load port in the same cycle, so can't accept this new miss
-                    out.dcache2mshr->mshr_req[i] = MSHRReq{.valid = true, .addr = slot.addr, .lsu_origin = l1d_perf_is_lsu_req(slot.req_id)};
+                    const bool is_lsu = l1d_perf_is_lsu_req(slot.req_id);
+                    out.dcache2mshr->mshr_req[i] = MSHRReq{.valid = true, .addr = slot.addr, .lsu_origin = is_lsu, .pc_hash = is_lsu ? BingoHw::hash_pc(slot.pc) : uint16_t(0)};
 
                     resp.valid = true;
                     resp.replay = ReplayType::MSHR_HIT;

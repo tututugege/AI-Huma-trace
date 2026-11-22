@@ -40,6 +40,7 @@ struct AXI_LLC_ReadReqIn_t {
   wire<8> total_size = 0;
   wire<4> id = 0;
   wire<1> bypass = false;
+  uint16_t pc_hash = 0;
 };
 
 struct AXI_LLC_ReadReqOut_t {
@@ -270,6 +271,7 @@ struct AXI_LLC_Regs_t {
   uint8_t lookup_size_r = 0;
   uint8_t lookup_master_r = 0;
   uint8_t lookup_id_r = 0;
+  uint16_t lookup_pc_hash_r = 0;
   bool lookup_is_prefetch_r = false;
   bool lookup_is_invalidate_r = false;
   bool lookup_is_write_r = false;
@@ -421,7 +423,7 @@ private:
 
   // --- lookup pipeline ---
   void start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t id, bool prefetch, bool invalidate, bool write,
-                    bool bypass);
+                    bool bypass, uint16_t pc_hash = 0);
   void end_lookup(AXI_LLCState next);
   void retry_lookup(AXI_LLCState next);
   void drop_prefetch_slot(uint8_t slot);
@@ -471,7 +473,12 @@ private:
   bool quiet_ = false;
   // EXP-048 Best-Offset prefetcher in the LLC (LLC_BOP=1): model-side state outside the registers. comb only records the
   // events of the cycle (idempotent: comb can run several times), seq feeds them to the BOP and keeps the candidate queue.
-  struct BopEv { bool trig = false, trig_pf = false, fill = false, fill_pf = false, launched = false, sent = false; uint32_t trig_line = 0, fill_line = 0; };
+  struct BopEv {
+    bool trig = false, trig_pf = false, fill = false, fill_pf = false, launched = false, sent = false;
+    bool launched_bingo = false, evict = false;
+    uint32_t trig_line = 0, fill_line = 0, evict_line = 0;
+    uint16_t trig_pch = 0;
+  };
   BopEv bop_ev_;
   std::vector<uint32_t> bop_q_;   // candidate line addresses (bytes), oldest first
   void bop_seq();

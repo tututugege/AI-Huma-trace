@@ -20,6 +20,7 @@ struct MSHREntry {
     bool lsu_origin;
     bool is_prefetch;
     bool no_fill;
+    uint16_t pc_hash;
 };
 
 
@@ -46,7 +47,7 @@ struct MSHROut{
 };
 // Comb phases in this block's own ports (MemSubsystem::init binds them; scripts/comb/modules.py checks them):
 //   CONTRACT comb_axi_to_dcache  in: in.axi.req.accepted in.axi.req.accepted_id in.axi.resp.id in.axi.resp.valid in.s1_q  out: out.mshr2dcache
-//   CONTRACT comb_dcache_to_axi  in: in.axi.resp.valid in.dcache2mshr.fill_resp in.dcache2mshr.mshr_req out.axi.req.valid  out: out.axi.req.addr out.axi.req.id out.axi.req.total_size out.axi.req.valid out.axi.resp.ready
+//   CONTRACT comb_dcache_to_axi  in: in.axi.resp.valid in.dcache2mshr.fill_resp in.dcache2mshr.mshr_req out.axi.req.valid  out: out.axi.req.addr out.axi.req.id out.axi.req.pc_hash out.axi.req.total_size out.axi.req.valid out.axi.resp.ready
 class MSHR {
 public:
     void comb_axi_to_dcache();  // AXI responses in, this cycle's lookups / free count out to the DCache (before the DCache stage 2)

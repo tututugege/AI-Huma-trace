@@ -100,6 +100,7 @@ struct LlcUpstreamReqLatch {
   uint8_t total_size = 0;
   uint8_t id = 0;
   bool bypass = false;
+  uint16_t pc_hash = 0;
 };
 
 struct ReadReqHoldLatch {

@@ -14,7 +14,7 @@ class MemSubsystem;
 // comb_outputs reads the I-cache's request of this cycle and the other masters' before they drive them (cleared).
 //   CONTRACT comb_begin  default: out.read_ports.req.valid out.write_ports.req.valid
 //   CONTRACT comb_outputs  in: out.read_ports[MASTER_ICACHE].req out.read_ports.resp.valid  pre: out.read_ports.req out.write_ports.req  out: out.read_ports.req.accepted out.read_ports.req.accepted_id out.read_ports.req.ready out.read_ports.resp.data out.read_ports.resp.id out.read_ports.resp.valid out.write_ports.req.accepted out.write_ports.req.ready out.write_ports.resp.id out.write_ports.resp.resp out.write_ports.resp.valid
-//   CONTRACT comb_inputs  in: out.read_ports.req.addr out.read_ports.req.bypass out.read_ports.req.id out.read_ports.req.total_size out.read_ports.req.valid out.write_ports.req.addr out.write_ports.req.bypass out.write_ports.req.id out.write_ports.req.ready out.write_ports.req.total_size out.write_ports.req.valid out.write_ports.req.wdata out.write_ports.req.wstrb  out: out.read_ports.req.ready out.write_ports.req.ready
+//   CONTRACT comb_inputs  in: out.read_ports.req.addr out.read_ports.req.bypass out.read_ports.req.id out.read_ports.req.pc_hash out.read_ports.req.total_size out.read_ports.req.valid out.write_ports.req.addr out.write_ports.req.bypass out.write_ports.req.id out.write_ports.req.ready out.write_ports.req.total_size out.write_ports.req.valid out.write_ports.req.wdata out.write_ports.req.wstrb  out: out.read_ports.req.ready out.write_ports.req.ready
 class AxiSubsystem {
 public:
   axi_interconnect::AXI_Interconnect interconnect;

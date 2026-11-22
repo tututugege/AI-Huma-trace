@@ -104,6 +104,7 @@ void MSHR::comb_outputs_axi()
                 out.axi->req.addr = ce.addr;
                 out.axi->req.total_size = DCACHE_LINE_SIZE - 1;
                 out.axi->req.id = i;
+                out.axi->req.pc_hash = ce.pc_hash;
                 break;
             }
         }
@@ -163,6 +164,7 @@ void MSHR::comb_inputs_dcache()
                         d.mshr_entries[j].is_prefetch =
                             in.dcache2mshr->mshr_req[i].is_prefetch;
                         d.mshr_entries[j].no_fill = in.dcache2mshr->mshr_req[i].no_fill;
+                        d.mshr_entries[j].pc_hash = in.dcache2mshr->mshr_req[i].pc_hash;
                         if (in.dcache2mshr->mshr_req[i].is_prefetch) g_pf_stats.issued++;
                         d.mshr_count = d.mshr_count + 1;
                         break;

@@ -1,4 +1,5 @@
 #include "AXI_LLC.h"
+#include "BingoHw.h"
 #include "Bop.h"
 #include <algorithm>
 #include <cstdio>
@@ -20,14 +21,24 @@ bool allow_parallel_demand_mshr(uint8_t master) { return master == MASTER_DCACHE
 // misses, LLC_BOP_INF prefetch MSHRs in flight at most)
 struct LlcBopCfg {
   bool on = false;
+  bool bingo_on = false;
   int res = 2, inf = 4;
   Bop *bop = nullptr;
+  BingoHw *bingo = nullptr;
   LlcBopCfg() {
     auto g = [](const char *n, int d) { const char *v = std::getenv(n); return v ? std::atoi(v) : d; };
     on = g("LLC_BOP", 1) != 0;
+    bingo_on = g("LLC_BINGO", 1) != 0;
     res = g("LLC_BOP_RES", res);
-    inf = g("LLC_BOP_INF", inf);
-    if (on) { bop = new Bop("LLC_BOP"); g_bop_llc = bop; }
+    inf = g("LLC_BOP_INF", bingo_on ? 8 : 4);
+    if (on) {
+      bop = new Bop("LLC_BOP");
+      g_bop_llc = bop;
+      if (bingo_on) {
+        bingo = new BingoHw();
+        g_bingo_llc = bingo;
+      }
+    }
   }
 };
 LlcBopCfg &llc_bop() { static LlcBopCfg c; return c; }
@@ -781,9 +792,12 @@ void AXI_LLC::try_schedule_prefetch(const AXI_LLCMissEntry_t &entry) {
 void AXI_LLC::try_launch_prefetch_lookup() {
   const auto &regs = io.reg_write;
   if (llc_bop().on) {
-    if (bop_q_.empty() || regs.lookup_valid_r || !io.ext_in.mem.prefetch_allow || !can_allocate_prefetch_mshr(regs)) return;
-    bop_ev_.launched = true;   // seq pops the head (launched or dropped as already in flight)
-    const uint32_t a = bop_q_.front();
+    BingoHw *bg = llc_bop().bingo;
+    const bool has_bop = !bop_q_.empty();
+    const bool has_bingo = (bg != nullptr) && !bg->q_empty();
+    if ((!has_bop && !has_bingo) || regs.lookup_valid_r || !io.ext_in.mem.prefetch_allow || !can_allocate_prefetch_mshr(regs)) return;
+    if (has_bop) bop_ev_.launched = true; else bop_ev_.launched_bingo = true;
+    const uint32_t a = has_bop ? bop_q_.front() : (bg->q_head_line() * config_.line_bytes);
     if (find_mshr_by_line_addr(regs, a) >= 0) return;
     bop_ev_.sent = true;
     start_lookup(a, uint8_t(config_.line_bytes - 1), kInvalidReadMaster, uint8_t(AXI_LLC_MAX_PREFETCH_QUEUE), true, false, false,
@@ -805,7 +819,7 @@ void AXI_LLC::try_launch_prefetch_lookup() {
 // ---------------------------------------------------------------------------------------------
 
 void AXI_LLC::start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t id, bool prefetch, bool invalidate,
-                           bool write, bool bypass) {
+                           bool write, bool bypass, uint16_t pc_hash) {
   auto &w = io.reg_write;
   w.lookup_valid_r = true;
   w.lookup_issued_r = false;
@@ -813,6 +827,7 @@ void AXI_LLC::start_lookup(uint32_t addr, uint8_t size, uint8_t master, uint8_t 
   w.lookup_size_r = size;
   w.lookup_master_r = master;
   w.lookup_id_r = id;
+  w.lookup_pc_hash_r = (master == MASTER_DCACHE_R) ? pc_hash : uint16_t(0);
   w.lookup_is_prefetch_r = prefetch;
   w.lookup_is_invalidate_r = invalidate;
   w.lookup_is_write_r = write;
@@ -966,6 +981,7 @@ bool AXI_LLC::complete_hit_lookup(bool table_busy, uint32_t set, uint32_t tag, u
         bop_ev_.trig = true;   // EXP-048 trigger: the first demand use of a prefetched line
         bop_ev_.trig_pf = true;
         bop_ev_.trig_line = line_addr(config_, r.lookup_addr_r);
+        bop_ev_.trig_pch = r.lookup_pc_hash_r;
       }
       AXI_LLCMetaEntry_t meta = hit_meta;
       meta.flags = uint8_t(meta.flags & ~AXI_LLC_META_PREFETCH);
@@ -991,7 +1007,8 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
   }
   const uint8_t way = uint8_t(way_idx);
   const auto victim_meta = decode_meta(io.lookup_in.meta, way);
-  const bool victim_dirty = decode_valid_bit(io.lookup_in.valid, way, false) && (victim_meta.flags & AXI_LLC_META_DIRTY);
+  const bool victim_valid = decode_valid_bit(io.lookup_in.valid, way, false);
+  const bool victim_dirty = victim_valid && (victim_meta.flags & AXI_LLC_META_DIRTY);
   const uint32_t victim_addr = build_line_addr_from_tag_set(config_, victim_meta.tag, set);
   const uint32_t repl_next = uint32_t((way + 1) % config_.ways);
 
@@ -1024,6 +1041,7 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
     ctx.repl_next_way = repl_next;
     ctx.tag = tag;
     touch_repl_at_lookup(set, way, true, false);
+    if (victim_valid) { bop_ev_.evict = true; bop_ev_.evict_line = victim_addr; }
     end_lookup(AXI_LLCState::kMiss);
     return true;
   }
@@ -1043,6 +1061,7 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
     ctx.repl_next_way = repl_next;
     ctx.tag = tag;
     touch_repl_at_lookup(set, way, true, false);
+    if (victim_valid) { bop_ev_.evict = true; bop_ev_.evict_line = victim_addr; }
   } else {
     if (table_busy) {
       retry_lookup(AXI_LLCState::kLookup);
@@ -1050,6 +1069,7 @@ bool AXI_LLC::complete_write_miss(bool table_busy, uint32_t set, uint32_t tag, u
     }
     write_line_tables(set, way, AXI_LLCMetaEntry_t{tag, uint8_t(AXI_LLC_META_VALID | AXI_LLC_META_DIRTY)}, repl_next);
     touch_repl_at_lookup(set, way, true, false);
+    if (victim_valid) { bop_ev_.evict = true; bop_ev_.evict_line = victim_addr; }
     io.reg_write.dirty_line_count_r = update_dirty_line_count(r.dirty_line_count_r, false, true);
     ctx.cache_done = true;
   }
@@ -1074,6 +1094,7 @@ bool AXI_LLC::complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int 
   if (llc_bop().on && !prefetch && !r.lookup_is_bypass_r && r.lookup_master_r == MASTER_DCACHE_R) {
     bop_ev_.trig = true;   // EXP-048 trigger: an L1D read missing in the LLC (recorded at every attempt; the same line)
     bop_ev_.trig_line = line;
+    bop_ev_.trig_pch = r.lookup_pc_hash_r;
   }
   if (find_mshr_by_line_addr(r, line) >= 0) return give_up();
   const int free_slot = find_free_mshr(r);
@@ -1117,10 +1138,15 @@ bool AXI_LLC::complete_read_miss(uint32_t set, uint32_t tag, uint32_t line, int 
   e.master = r.lookup_master_r;
   e.id = prefetch ? 0 : r.lookup_id_r;
   e.epoch = r.invalidate_epoch_r;
-  e.victim_dirty = decode_valid_bit(io.lookup_in.valid, way, false) && (victim_meta.flags & AXI_LLC_META_DIRTY);
+  const bool victim_valid = decode_valid_bit(io.lookup_in.valid, way, false);
+  e.victim_dirty = victim_valid && (victim_meta.flags & AXI_LLC_META_DIRTY);
   e.victim_writeback_done = !e.victim_dirty;
-  e.victim_addr = e.victim_dirty ? build_line_addr_from_tag_set(config_, victim_meta.tag, set) : 0;
-  if (!e.bypass) touch_repl_at_lookup(set, way, true, prefetch);
+  const uint32_t victim_addr = build_line_addr_from_tag_set(config_, victim_meta.tag, set);
+  e.victim_addr = e.victim_dirty ? victim_addr : 0;
+  if (!e.bypass) {
+    touch_repl_at_lookup(set, way, true, prefetch);
+    if (victim_valid) { bop_ev_.evict = true; bop_ev_.evict_line = victim_addr; }
+  }
   end_lookup(AXI_LLCState::kMiss);
   if (prefetch) drop_prefetch_slot(r.lookup_id_r);
   return true;
@@ -1493,7 +1519,7 @@ void AXI_LLC::accept_new_requests() {
   io.ext_out.upstream.read_req[master].ready = true;
   io.reg_write.rr_read_master_r = uint8_t((master + 1) % NUM_READ_MASTERS);
   if (!llc_bop().on) for (auto &p : io.reg_write.prefetch_q) p = {};  // a demand request invalidates the pending stream
-  start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass);
+  start_lookup(req.addr, req.total_size, uint8_t(master), req.id, false, false, false, req.bypass, req.pc_hash);
 }
 
 void AXI_LLC::comb_full() {
@@ -1685,6 +1711,7 @@ void AXI_LLC::comb() {
 
 void AXI_LLC::bop_seq() {
   Bop *b = llc_bop().bop;
+  BingoHw *bg = llc_bop().bingo;
   const uint32_t lb = config_.line_bytes;
   if (bop_ev_.launched && !bop_q_.empty()) bop_q_.erase(bop_q_.begin());
   b->stats_sent += bop_ev_.sent;
@@ -1700,8 +1727,13 @@ void AXI_LLC::bop_seq() {
       bop_q_.push_back(a);
     }
   }
+  if (bg) {
+    bg->tick(bop_ev_.launched_bingo, bop_ev_.sent,
+             bop_ev_.trig, bop_ev_.trig_pf, bop_ev_.trig_line / lb, bop_ev_.trig_pch,
+             bop_ev_.evict, bop_ev_.evict_line / lb);
+  }
   bop_ev_ = {};
-  if (!bop_q_.empty()) memo_drop();   // the launch depends on the queue, which the memoised comb does not see
+  if (!bop_q_.empty() || (bg && !bg->is_idle())) memo_drop();
 }
 
 void AXI_LLC::seq() {

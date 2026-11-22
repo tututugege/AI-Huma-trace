@@ -30,7 +30,7 @@ load-store-aligned.bin,0,0,2002
 matrix-mul.bin,0,0,2800
 max.bin,0,0,1969
 memory-boundary.bin,0,0,1509
-memory-stress-small.bin,0,0,308847
+memory-stress-small.bin,0,0,309168
 mersenne.bin,0,0,2675
 min3.bin,0,0,2581
 mov-c.bin,0,0,1185
