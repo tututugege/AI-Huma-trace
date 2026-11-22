@@ -117,6 +117,16 @@ bool Bridge::read_word(uint32_t paddr, uint32_t &word) const {
   return false;
 }
 
+bool Bridge::read_committed_word(uint32_t paddr, uint32_t &word) const {
+  const uint32_t a = paddr & ~3u;
+  for (const Entry *e : chain_) {
+    if (!e->has_undo) continue;
+    if (e->undo_addr == a) { word = e->undo_old; return true; }
+    if (e->undo_words == 2 && e->undo_addr + 4u == a) { word = e->undo_old_hi; return true; }
+  }
+  return read_word(paddr, word);
+}
+
 // The chain is in dispatch order, which is ascending uid (a uid is dispatched once): binary search.
 const Fact *Bridge::find_slow(uint64_t uid) const {
   size_t lo = 0, hi = chain_.size();

@@ -9,6 +9,7 @@ struct PtwWalkPortCombIn {
   PtwWalkReq req = {};
   bool resp_consumed = false;  // the walk response was taken
   bool flush = false;          // the TLB dropped its walk (flush / cancel)
+  bool sfence_flush = false;   // sfence.vma: also invalidate shared L2 TLB + PWC
 };
 // walker -> TLB (registered: the walker's outputs at the last clock edge):
 struct PtwWalkPortCombOut {

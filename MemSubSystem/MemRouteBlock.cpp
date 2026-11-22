@@ -41,10 +41,10 @@ void MemRouteBlock::comb_response() {
       } else {
         out.ptw_events->valid = true;
         out.ptw_events->owner = owner;
-        // Page table entries are functional memory too.
-        out.ptw_events->data = tbhook::mem_read(q.issued_tags.req_addr);
+        // Page table entries are architectural (committed) memory: uncommitted ROB stores have not reached DCache yet.
+        out.ptw_events->data = tbhook::mem_read_committed(q.issued_tags.req_addr);
         // an Sv39 PTE is 8 bytes (aligned): the second word is in the same line
-        out.ptw_events->data |= static_cast<uint64_t>(tbhook::mem_read(q.issued_tags.req_addr + 4)) << 32;
+        out.ptw_events->data |= static_cast<uint64_t>(tbhook::mem_read_committed(q.issued_tags.req_addr + 4)) << 32;
         out.ptw_events->replay = 0;
         out.ptw_events->req_addr = q.issued_tags.req_addr;
         out.ptw_events->req_id = q.issued_tags.req_id;

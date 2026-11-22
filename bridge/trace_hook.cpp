@@ -56,6 +56,13 @@ uint32_t mem_read(uint32_t paddr) {
   return io_read(paddr);
 }
 
+uint32_t mem_read_committed(uint32_t paddr) {
+  ensure();
+  uint32_t w;
+  if (g_bridge->read_committed_word(paddr, w)) return w;
+  return io_read(paddr);
+}
+
 const tb::Fact *fact_by_rob(uint32_t rob_idx) {
   if (!g_bridge) return nullptr;
   return g_bridge->find(g_rob_uid[rob_idx & 4095]);

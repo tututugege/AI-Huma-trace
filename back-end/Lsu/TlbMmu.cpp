@@ -272,6 +272,7 @@ void TlbMmu::comb(bool flush, bool cancel, const Req *req, Resp *resp, int n) {
     walk_next_valid_ = true;
     refill_ = {};
     drop_walk();
+    if (kind_ == Kind::DTLB) walk_req->sfence_flush = true;
   }
   if (cancel) {
     take_completed_walk(true);

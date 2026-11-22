@@ -453,6 +453,7 @@ void MemPtwBlock::comb_feedback() {
 
   ptw_feedback.walk_client_flush[static_cast<size_t>(Client::DTLB)] = in.dtlb_walk->flush;
   ptw_feedback.walk_client_flush[static_cast<size_t>(Client::ITLB)] = in.itlb_walk->flush;
+  ptw_feedback.sfence_flush = in.dtlb_walk->sfence_flush;
   comb_finish(ptw_feedback);
   *out.dtlb_walk = {};
   *out.itlb_walk = {};

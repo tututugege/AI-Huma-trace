@@ -78,6 +78,8 @@ public:
   const Fact *find(uint64_t uid) const;
   // Functional word at a physical address as the core sees it now (RAM or boot ROM).
   bool read_word(uint32_t paddr, uint32_t &word) const;
+  // Architectural (committed) word at paddr: undoes any uncommitted in-flight stores in chain_.
+  bool read_committed_word(uint32_t paddr, uint32_t &word) const;
 
 private:
   struct Entry;

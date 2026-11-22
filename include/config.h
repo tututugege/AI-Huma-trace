@@ -590,6 +590,10 @@ constexpr int LSU_SDU_COUNT = count_ports_with_mask(OP_MASK_STD);
 constexpr int LSU_LOAD_WB_WIDTH = LSU_LDU_COUNT;
 constexpr int ITLB_ENTRIES = 64;
 constexpr int DTLB_ENTRIES = 64;
+constexpr int L2TLB_ENTRIES = 1024;
+constexpr int L2TLB_WAYS = 4;
+constexpr int L2TLB_SP_ENTRIES = 8;
+constexpr int L2TLB_PWC_ENTRIES = 16;
 
 // F/D: wake-up channels of the delayed FP wake-ups (one result per FP unit and cycle at most: 3 FP ports (FMA/MISC or DIV each
 // completing one uop per cycle in the worst case counted per unit) + 2 integer ports with I2F; 8 is a safe bound)

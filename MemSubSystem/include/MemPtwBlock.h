@@ -68,6 +68,7 @@ public:
     bool wakeup_walk = false;
     // a TLB dropped its walk this cycle (flush / cancel): the client's walk state is cleared at the edge
     std::array<bool, static_cast<size_t>(Client::NUM_CLIENTS)> walk_client_flush{};
+    bool sfence_flush = false;
   };
 
   struct CombOut {
@@ -83,6 +84,7 @@ public:
   void init() {
     reset_state(q_);
     reset_state(d);
+    reset_l2tlb();
     reset_outputs(comb_);
     refresh_outputs();
     latch_client_outputs();
@@ -90,6 +92,7 @@ public:
 
   void comb_begin(const PortIn &in) {
     d = q_;
+    d.l2_op = {};
     reset_outputs(comb_);
     apply_port_inputs(in);
     select_walk_owner();
@@ -97,6 +100,7 @@ public:
   }
 
   void comb_finish(const FeedbackIn &in) {
+    apply_stlb_lookup();
     apply_grant(in);
     apply_events(in);
     apply_wakeups(in);
@@ -104,9 +108,12 @@ public:
     // (after the outputs: the flush shows only from the next cycle on)
     for (size_t i = 0; i < kClientCount; i++)
       if (in.walk_client_flush[i]) flush_walk_client_state(d, static_cast<Client>(i));
+    if (in.sfence_flush) d.l2_op.flush_all = true;
   }
 
   void seq() {
+    apply_l2tlb_seq(d.l2_op);
+    d.l2_op = {};
     q_ = d;
     refresh_outputs();
     latch_client_outputs();
@@ -136,10 +143,61 @@ private:
     L1_WAIT_RESP,
     L2_REQ,
     L2_WAIT_RESP,
+    STLB_LK,
   };
 
   static constexpr size_t kClientCount =
       static_cast<size_t>(Client::NUM_CLIENTS);
+
+  static constexpr size_t kStlbWays   = L2TLB_WAYS;
+  static constexpr size_t kStlbSets   = L2TLB_ENTRIES / L2TLB_WAYS;
+  static constexpr size_t kSpEntries  = L2TLB_SP_ENTRIES;
+  static constexpr size_t kPwcEntries = L2TLB_PWC_ENTRIES;
+
+  struct StlbEntry {
+    bool valid = false;
+    bool global = false;
+    uint32_t root = 0;   // satp.ppn[19:0]
+    uint32_t vpn = 0;    // vaddr[38:12] (27b)
+    uint32_t ppn = 0;    // pte[29:10] (20b)
+    uint8_t perm = 0;    // pte[7:0]
+  };
+
+  struct SpEntry {
+    bool valid = false;
+    bool global = false;
+    uint8_t level = 0;   // 1 (2MB) or 2 (1GB)
+    uint32_t root = 0;   // 20b
+    uint16_t vpn2 = 0;   // 9b
+    uint16_t vpn1 = 0;   // 9b
+    uint32_t ppn = 0;    // 20b
+    uint8_t perm = 0;    // 8b
+  };
+
+  struct PwcEntry {
+    bool valid = false;
+    bool is_l1 = false;  // false = L2 (top level), true = L1 (mid level)
+    uint32_t root = 0;   // 20b
+    uint16_t vpn2 = 0;   // 9b
+    uint16_t vpn1 = 0;   // 9b (0 for L2)
+    uint32_t ppn = 0;    // 20b
+  };
+
+  struct L2TlbOp {
+    bool flush_all = false;
+    bool touch_plru = false;
+    uint16_t touch_set = 0;
+    uint8_t touch_way = 0;
+    bool wr_stlb = false;
+    bool wr_sp = false;
+    bool wr_pwc = false;
+    bool wr_global = false;
+    uint8_t wr_level = 0;
+    uint32_t wr_root = 0;
+    uint32_t wr_vpn = 0;
+    uint32_t wr_ppn = 0;
+    uint8_t wr_perm = 0;
+  };
 
   struct State {
     std::array<WalkClientState, kClientCount> walk_clients{};
@@ -152,6 +210,7 @@ private:
     uint32_t walk_drop_resp_credit = 0;
     bool walk_req_id_valid = false;
     size_t walk_req_id = 0;
+    L2TlbOp l2_op{};
   };
 
   static size_t client_idx(Client c) { return static_cast<size_t>(c); }
@@ -189,7 +248,7 @@ private:
       wc.req_inflight = true;
       d.walk_owner = owner;
       d.walk_active = true;
-      d.walk_state = WalkState::L1_REQ;
+      d.walk_state = WalkState::STLB_LK;
       d.walk_l1_pte = 0;
       d.walk_level = 2;   // Sv39: three levels
       d.walk_rr_next = (owner == Client::DTLB) ? Client::ITLB
@@ -343,11 +402,28 @@ private:
         if (misaligned) {
           publish_fault();
         } else {
+          const uint32_t own_vpn = static_cast<uint32_t>((wc.req.vaddr >> 12) & 0x7FFFFFFu);
+          const uint32_t own_root = static_cast<uint32_t>(wc.req.satp & 0xFFFFFu);
+          d.l2_op.wr_stlb = (level == 0);
+          d.l2_op.wr_sp = (level > 0);
+          d.l2_op.wr_global = (pte & PTE_G) != 0;
+          d.l2_op.wr_level = level;
+          d.l2_op.wr_root = own_root;
+          d.l2_op.wr_vpn = own_vpn;
+          d.l2_op.wr_ppn = static_cast<uint32_t>(ppn & 0xFFFFFu);
+          d.l2_op.wr_perm = static_cast<uint8_t>(pte & 0xFFu);
           publish_leaf(level);
         }
       } else if (level == 0) {
         publish_fault();   // a pointer where a leaf is required
       } else {
+        const uint32_t own_vpn = static_cast<uint32_t>((wc.req.vaddr >> 12) & 0x7FFFFFFu);
+        const uint32_t own_root = static_cast<uint32_t>(wc.req.satp & 0xFFFFFu);
+        d.l2_op.wr_pwc = true;
+        d.l2_op.wr_level = level;
+        d.l2_op.wr_root = own_root;
+        d.l2_op.wr_vpn = own_vpn;
+        d.l2_op.wr_ppn = static_cast<uint32_t>(ppn & 0xFFFFFu);
         d.walk_l1_pte = pte;
         d.walk_level = level - 1;
         d.walk_state = WalkState::L2_REQ;
@@ -425,9 +501,207 @@ private:
     }
   }
 
+  static uint16_t stlb_index(uint32_t vpn) {
+    return static_cast<uint16_t>(((vpn & 0xFFu) ^ ((vpn >> 9) & 0xFFu)) & (kStlbSets - 1));
+  }
+
+  static uint8_t plru_update(uint8_t p, uint8_t way) {
+    uint8_t n = p & 0x7u;
+    const uint8_t w1 = (way >> 1) & 1u;
+    const uint8_t w0 = way & 1u;
+    n = static_cast<uint8_t>((n & ~1u) | (w1 ^ 1u));
+    if (w1 == 0) n = static_cast<uint8_t>((n & ~2u) | ((w0 ^ 1u) << 1));
+    else         n = static_cast<uint8_t>((n & ~4u) | ((w0 ^ 1u) << 2));
+    return n;
+  }
+
+  static uint8_t plru_victim(uint8_t p) {
+    const uint8_t root = p & 1u;
+    const uint8_t leaf = root ? ((p >> 2) & 1u) : ((p >> 1) & 1u);
+    return static_cast<uint8_t>((root << 1) | leaf);
+  }
+
+  void reset_l2tlb() {
+    for (auto &set : stlb_) for (auto &e : set) e = {};
+    stlb_plru_.fill(0);
+    for (auto &e : sp_cam_) e = {};
+    sp_rr_ = 0;
+    for (auto &e : pwc_) e = {};
+    pwc_rr_ = 0;
+  }
+
+  void apply_stlb_lookup() {
+    if (q_.walk_state != WalkState::STLB_LK) return;
+    auto &wc = d.walk_clients[client_idx(q_.walk_owner)];
+    const uint32_t own_vpn = static_cast<uint32_t>((wc.req.vaddr >> 12) & 0x7FFFFFFu);
+    const uint32_t own_root = static_cast<uint32_t>(wc.req.satp & 0xFFFFFu);
+    const uint16_t vpn2 = static_cast<uint16_t>((own_vpn >> 18) & 0x1FFu);
+    const uint16_t vpn1 = static_cast<uint16_t>((own_vpn >> 9) & 0x1FFu);
+    const uint16_t idx = stlb_index(own_vpn);
+
+    // 1. 4KB STLB lookup (lowest matching way)
+    for (size_t w = 0; w < kStlbWays; ++w) {
+      const auto &e = stlb_[idx][w];
+      if (e.valid && e.vpn == own_vpn && (e.global || e.root == own_root)) {
+        d.l2_op.touch_plru = true;
+        d.l2_op.touch_set = idx;
+        d.l2_op.touch_way = static_cast<uint8_t>(w);
+        wc.req_inflight = false;
+        wc.resp_valid = true;
+        wc.resp = {};
+        wc.resp.fault = false;
+        wc.resp.vaddr = wc.req.vaddr;
+        wc.resp.leaf_pte = (static_cast<uint64_t>(e.ppn) << 10) | static_cast<uint64_t>(e.perm);
+        wc.resp.leaf_level = 0;
+        d.walk_active = false;
+        d.walk_state = WalkState::IDLE;
+        d.walk_req_id_valid = false;
+        d.walk_req_id = 0;
+        return;
+      }
+    }
+
+    // 2. Superpage CAM lookup (lowest matching entry)
+    for (size_t i = 0; i < kSpEntries; ++i) {
+      const auto &e = sp_cam_[i];
+      if (e.valid && (e.global || e.root == own_root) && e.vpn2 == vpn2 &&
+          (e.level == 2 || e.vpn1 == vpn1)) {
+        wc.req_inflight = false;
+        wc.resp_valid = true;
+        wc.resp = {};
+        wc.resp.fault = false;
+        wc.resp.vaddr = wc.req.vaddr;
+        wc.resp.leaf_pte = (static_cast<uint64_t>(e.ppn) << 10) | static_cast<uint64_t>(e.perm);
+        wc.resp.leaf_level = e.level;
+        d.walk_active = false;
+        d.walk_state = WalkState::IDLE;
+        d.walk_req_id_valid = false;
+        d.walk_req_id = 0;
+        return;
+      }
+    }
+
+    // 3. PWC lookup: L1 (level 1 -> next level 0) first, then L2 (level 2 -> next level 1)
+    for (size_t i = 0; i < kPwcEntries; ++i) {
+      const auto &e = pwc_[i];
+      if (e.valid && e.is_l1 && e.root == own_root && e.vpn2 == vpn2 && e.vpn1 == vpn1) {
+        d.walk_l1_pte = static_cast<uint64_t>(e.ppn) << 10;
+        d.walk_level = 0;
+        d.walk_state = WalkState::L2_REQ;
+        return;
+      }
+    }
+    for (size_t i = 0; i < kPwcEntries; ++i) {
+      const auto &e = pwc_[i];
+      if (e.valid && !e.is_l1 && e.root == own_root && e.vpn2 == vpn2) {
+        d.walk_l1_pte = static_cast<uint64_t>(e.ppn) << 10;
+        d.walk_level = 1;
+        d.walk_state = WalkState::L2_REQ;
+        return;
+      }
+    }
+
+    // 4. Full miss: start 3-level walk from L2
+    d.walk_level = 2;
+    d.walk_state = WalkState::L1_REQ;
+  }
+
+  void apply_l2tlb_seq(const L2TlbOp &op) {
+    if (op.flush_all) {
+      reset_l2tlb();
+      return;
+    }
+    if (op.touch_plru) {
+      stlb_plru_[op.touch_set] = plru_update(stlb_plru_[op.touch_set], op.touch_way);
+    }
+    if (op.wr_stlb) {
+      const uint16_t idx = stlb_index(op.wr_vpn);
+      size_t way = kStlbWays;
+      for (size_t w = 0; w < kStlbWays; ++w) {
+        if (!stlb_[idx][w].valid) { way = w; break; }
+      }
+      if (way == kStlbWays) way = plru_victim(stlb_plru_[idx]);
+      auto &dst = stlb_[idx][way];
+      dst.valid = true;
+      dst.global = op.wr_global;
+      dst.root = op.wr_root;
+      dst.vpn = op.wr_vpn;
+      dst.ppn = op.wr_ppn;
+      dst.perm = op.wr_perm;
+      stlb_plru_[idx] = plru_update(stlb_plru_[idx], static_cast<uint8_t>(way));
+    }
+    if (op.wr_sp) {
+      const uint16_t vpn2 = static_cast<uint16_t>((op.wr_vpn >> 18) & 0x1FFu);
+      const uint16_t vpn1 = static_cast<uint16_t>((op.wr_vpn >> 9) & 0x1FFu);
+      size_t slot = kSpEntries;
+      for (size_t i = 0; i < kSpEntries; ++i) {
+        const auto &e = sp_cam_[i];
+        if (e.valid && e.level == op.wr_level && (e.global || e.root == op.wr_root) &&
+            e.vpn2 == vpn2 && (op.wr_level == 2 || e.vpn1 == vpn1)) {
+          slot = i;
+          break;
+        }
+      }
+      if (slot == kSpEntries) {
+        for (size_t i = 0; i < kSpEntries; ++i) {
+          if (!sp_cam_[i].valid) { slot = i; break; }
+        }
+      }
+      if (slot == kSpEntries) {
+        slot = sp_rr_;
+        sp_rr_ = static_cast<uint8_t>((sp_rr_ + 1) & (kSpEntries - 1));
+      }
+      auto &dst = sp_cam_[slot];
+      dst.valid = true;
+      dst.global = op.wr_global;
+      dst.level = op.wr_level;
+      dst.root = op.wr_root;
+      dst.vpn2 = vpn2;
+      dst.vpn1 = vpn1;
+      dst.ppn = op.wr_ppn;
+      dst.perm = op.wr_perm;
+    }
+    if (op.wr_pwc) {
+      const bool is_l1 = (op.wr_level == 1);
+      const uint16_t vpn2 = static_cast<uint16_t>((op.wr_vpn >> 18) & 0x1FFu);
+      const uint16_t vpn1 = is_l1 ? static_cast<uint16_t>((op.wr_vpn >> 9) & 0x1FFu) : 0u;
+      size_t slot = kPwcEntries;
+      for (size_t i = 0; i < kPwcEntries; ++i) {
+        const auto &e = pwc_[i];
+        if (e.valid && e.is_l1 == is_l1 && e.root == op.wr_root && e.vpn2 == vpn2 &&
+            (!is_l1 || e.vpn1 == vpn1)) {
+          slot = i;
+          break;
+        }
+      }
+      if (slot == kPwcEntries) {
+        for (size_t i = 0; i < kPwcEntries; ++i) {
+          if (!pwc_[i].valid) { slot = i; break; }
+        }
+      }
+      if (slot == kPwcEntries) {
+        slot = pwc_rr_;
+        pwc_rr_ = static_cast<uint8_t>((pwc_rr_ + 1) & (kPwcEntries - 1));
+      }
+      auto &dst = pwc_[slot];
+      dst.valid = true;
+      dst.is_l1 = is_l1;
+      dst.root = op.wr_root;
+      dst.vpn2 = vpn2;
+      dst.vpn1 = vpn1;
+      dst.ppn = op.wr_ppn;
+    }
+  }
+
   // registers: q (read in comb only by comb_begin, written only by seq / init) and d (comb writes it; comb_begin starts it from q)
   using Regs = State;
   Regs q_{};
   Regs d{};
   CombOut comb_{};
+  std::array<std::array<StlbEntry, kStlbWays>, kStlbSets> stlb_{};
+  std::array<uint8_t, kStlbSets> stlb_plru_{};
+  std::array<SpEntry, kSpEntries> sp_cam_{};
+  uint8_t sp_rr_ = 0;
+  std::array<PwcEntry, kPwcEntries> pwc_{};
+  uint8_t pwc_rr_ = 0;
 };

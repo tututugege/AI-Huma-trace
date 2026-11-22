@@ -12,6 +12,8 @@ const tb::Fact *fact_by_rob(uint32_t rob_idx);
 bool fs_dirty_at_commit(uint64_t uid);
 // Functional memory read (instruction words, page-table entries): the core's memory in trace mode.
 uint32_t mem_read(uint32_t paddr);
+// Architectural (committed) memory read for PTW: excludes uncommitted stores still in the ROB.
+uint32_t mem_read_committed(uint32_t paddr);
 xlen_t arch_gpr(int idx);   // the function model's integer register (the program's exit code: a0 at EBREAK)
 // the 32-bit window that starts at a 2-byte aligned address (RVC=1 fetch); the same as mem_read for a 4-byte aligned address
 inline uint32_t fetch_window_at(uint32_t paddr) {
