@@ -24,7 +24,7 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 当前微架构(`include/config.h` 的默认值;RTL 包取相同的值):
 - 前端(`front-end/`):16 槽(32 B, RVC=1)按块取指,EXP-051 里程碑 B **2-taken 双块融合**（`NT=1` 严格不截断 + 4-Bank 1R1W ICache + 2 读口只读 ITLB peek）+ **1-Ahead A（`aftb 2K×8 / atage 1K×4×4 / aitt 256×3`）+ 2-Ahead B（`aftb2 1K×8 / atage2 512×4×4 / aitt2 256×3`）+ S2 Block-TAGE/ITT** 流水 BPU（`HistRing 1024b` + 1-branch/cycle `brq[16]` + `ftb_rec[512]` + 内部 `rec_q[256]`，源码在 `front-end/BPU/BpuFtb.h` / `BPU_pipe.h`，RTL 描述 `rtl/docs/modules/bpu.md`）,取指地址 FIFO / PTAB / 指令 FIFO 各 16 项,pre-IDU buffer,
   32 KiB 8 路 4-Bank I-cache(64 B 行,SRRIP 替换)配 **S2 确认 2-slot 实 AXI FDIP**（`txid 8..9`,8 项 VA 队列,1-pop/cycle,周期初 L1D+WB 脏行窥探）,redirect 快速路径 `CFG_FE_RFAST` 15(EXP-019/023;`CFG_FE_BFAST` 0)。
-- 后端(`back-end/`):8 宽 decode / rename / dispatch / commit,move elimination(见下),`CFG_PRF_NUM` 128,`CFG_ROB_NUM` 128 且为 compact ROB
+- 后端(`back-end/`):8 宽 decode / rename / dispatch / commit,move elimination(见下),`CFG_PRF_NUM` 256,`CFG_ROB_NUM` 256 且为 compact ROB
   (`CFG_ROB_COMPACT` 1,EXP-028),`CFG_MAX_BR_NUM` 32,发射队列 INT 64 / LD 64 / STA 64 / STD 16 / BR 32,入队宽度 7/6/4/4/5(EXP-017)。
 - 发射口:6 个整数 ALU 口(其中 4 个带 MUL/DIV/FP/CSR 能力,`CFG_PLAIN_ALU_PORTS` 2 个为纯 ALU),`CFG_BR_PORTS` 2,`CFG_LD_PORTS` 4,`CFG_STA_PORTS` 3,`CFG_STD_PORTS` 3。
   乘法器 2 周期(XLEN=64 为 3),除法器 16(32)。
@@ -38,7 +38,7 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
 ## 配置开关(include/config.h)
 尺寸是 `CFG_*` 宏,可用 `-D` 覆盖(`gmake EXTRA_CXXFLAGS="-D..." BUILD_DIR=build_area/<name>`);RTL 包生成器
 (`rtl/scripts/gen_cfg.sh`)用相同的默认值并接受相同的覆盖。多数开关还有运行期环境变量覆盖,见 [ENV_VARS.md](ENV_VARS.md)。`XLEN` 由 Makefile 设置(默认 64:`gmake XLEN=64`)并导出为 `XLEN_BITS`。
-- 宽度与窗口:`CFG_BACKEND_FETCH_WIDTH`(8)、`CFG_MAX_BR_NUM`(32)、`CFG_ROB_NUM`(128)、`CFG_PRF_NUM`(128)、`CFG_IBUF_SIZE`(64);
+- 宽度与窗口:`CFG_BACKEND_FETCH_WIDTH`(8)、`CFG_MAX_BR_NUM`(32)、`CFG_ROB_NUM`(256)、`CFG_PRF_NUM`(256)、`CFG_IBUF_SIZE`(64);
 - ROB 组织:`CFG_ROB_COMPACT`(1;仅编译期)——0:每个 8 项 ROB 行放一个 dispatch 组,整行一起提交;1:compact ROB(EXP-028):在同样的 8 bank x 16 行上顺序分配,
   从队头起最长的已完成前缀可提交(最多 8 条),并受已寄存的 BPU commit credit 限制
   (BPU update-queue / uBTB train-queue 占用减去上一拍的提交数);flush、fence、WFI 和中断在队头单独提交;

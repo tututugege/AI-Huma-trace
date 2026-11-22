@@ -244,7 +244,7 @@ constexpr int DCACHE_BANK_BITS = clog2(DCACHE_BANK_NUM);
 
 constexpr int ARF_NUM = 32;
 #ifndef CFG_PRF_NUM
-#define CFG_PRF_NUM 128
+#define CFG_PRF_NUM 256
 #endif
 constexpr int PRF_NUM = CFG_PRF_NUM;
 // F/D (FP=1): a separate FP physical register file.  In the model the physical-register tags are one number space: integer tags
@@ -319,7 +319,7 @@ constexpr int CSR_NUM = 22;   // F/D: + the fcsr register (fflags / frm / fcsr)
 
 constexpr int ROB_BANK_NUM = DECODE_WIDTH;
 #ifndef CFG_ROB_NUM
-#define CFG_ROB_NUM 128
+#define CFG_ROB_NUM 256
 #endif
 constexpr int ROB_NUM = CFG_ROB_NUM;
 constexpr int ROB_LINE_NUM = ROB_NUM / ROB_BANK_NUM;
