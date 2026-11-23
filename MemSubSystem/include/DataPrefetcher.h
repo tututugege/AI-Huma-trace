@@ -361,8 +361,17 @@ class BertiHw {
 
   struct TrnEv { uint32_t pc = 0, vline = 0, pline = 0; bool vaneg = false, miss = false; };
   struct SrchEv { uint32_t pc = 0, line = 0, t_dem = 0; uint16_t lat = 0; };
+  struct SrchRes { bool v = false; uint32_t pc = 0; uint16_t uniq = 0; int8_t d[HWAYS] = {}; };
   struct H { bool v = false; uint32_t pc = 0, line = 0, t = 0; };
   struct Dl { bool v = false; int8_t d = 0; uint8_t cov = 0, last_cov = 0, st = 0; };
+  struct TabStage1 {
+    bool v = false, hit_pc = false, unm0_any = false, unm1_any = false;
+    uint32_t pc = 0;
+    int upd_idx = 0;
+    uint8_t old_lru = 0, cnt = 0;
+    int8_t unm0_d = 0, unm1_d = 0;
+    Dl hit_dl[DDELTAS] = {};
+  };
   struct P { bool v = false; uint32_t pc = 0; uint8_t cnt = 0, lru = 0; Dl dl[DDELTAS]; };
   struct F { bool v = false; uint32_t pline = 0, vline = 0, pc = 0, t = 0; };
   struct PfI { bool v = false; uint32_t pline = 0, t = 0; };
@@ -391,6 +400,8 @@ class BertiHw {
   int trnq_n = 0;
   SrchEv srchq[SRCHQ_N];
   int srchq_n = 0;
+  SrchRes srch_pipe;
+  TabStage1 tab_pipe;
   Gen gen;
   int alloc_per_srch = 2;
 
@@ -445,7 +456,10 @@ class BertiHw {
     hptr[s] = (hptr[s] + 1) & (HWAYS - 1);
   }
 
-  void run_search(const SrchEv &ev) {
+  SrchRes eval_hist(const SrchEv &ev) const {
+    SrchRes res;
+    res.v = true;
+    res.pc = ev.pc;
     const int s = hset(ev.pc);
     bool ok[HWAYS] = {};
     int8_t dw[HWAYS] = {};
@@ -459,17 +473,23 @@ class BertiHw {
       ok[w] = true;
       dw[w] = int8_t(d);
     }
-    bool uniq[HWAYS] = {};
-    bool any_u = false;
     for (int w = 0; w < HWAYS; w++) {
+      res.d[w] = dw[w];
       if (!ok[w]) continue;
       bool dup = false;
       for (int j = 0; j < w; j++) if (ok[j] && dw[j] == dw[w]) dup = true;
-      if (!dup) { uniq[w] = true; any_u = true; }
+      if (!dup) res.uniq |= uint16_t(1u << w);
     }
+    return res;
+  }
+
+  TabStage1 eval_tab_s1(const SrchRes &res) const {
+    TabStage1 s1;
+    if (!res.v) return s1;
+    const bool any_u = (res.uniq != 0);
     int e = -1;
-    for (int i = 0; i < DPCS; i++) if (tab[i].v && tab[i].pc == ev.pc) { e = i; break; }
-    if (e < 0 && !any_u) return;
+    for (int i = 0; i < DPCS; i++) if (tab[i].v && tab[i].pc == res.pc) { e = i; break; }
+    if (e < 0 && !any_u) return s1;
     bool hit_pc = (e >= 0);
     if (e < 0) {
       for (int i = 0; i < DPCS; i++) if (!tab[i].v) { e = i; break; }
@@ -477,43 +497,62 @@ class BertiHw {
         e = 0;
         for (int i = 0; i < DPCS; i++) if (tab[i].lru == DPCS - 1) { e = i; break; }
       }
-      tab[e] = P{};
-      tab[e].v = true;
-      tab[e].pc = ev.pc;
     }
-    const uint8_t old_lru = hit_pc ? tab[e].lru : uint8_t(DPCS - 1);
-    for (int i = 0; i < DPCS; i++) {
-      if (tab[i].v && i != e && tab[i].lru < old_lru) tab[i].lru++;
-    }
-    tab[e].lru = 0;
+    s1.v = true;
+    s1.hit_pc = hit_pc;
+    s1.pc = res.pc;
+    s1.upd_idx = e;
+    s1.old_lru = hit_pc ? tab[e].lru : uint8_t(DPCS - 1);
+    s1.cnt = hit_pc ? tab[e].cnt : uint8_t(0);
 
-    P &p = tab[e];
-    // 1. Parallel hit increment on existing delta slots
     bool matched_w[HWAYS] = {};
     for (int m = 0; m < DDELTAS; m++) {
-      if (!p.dl[m].v) continue;
+      s1.hit_dl[m] = hit_pc ? tab[e].dl[m] : Dl{};
+      if (!s1.hit_dl[m].v) continue;
       bool hit_m = false;
       for (int w = 0; w < HWAYS; w++) {
-        if (uniq[w] && dw[w] == p.dl[m].d) { hit_m = true; matched_w[w] = true; }
+        if (((res.uniq >> w) & 1u) && res.d[w] == s1.hit_dl[m].d) { hit_m = true; matched_w[w] = true; }
       }
-      if (hit_m) p.dl[m].cov++;
+      if (hit_m) s1.hit_dl[m].cov++;
     }
-    // 2. Allocate up to alloc_per_srch unmatched unique deltas into free or lowest-cov non-status slots
-    int ins = 0;
-    for (int w = 0; w < HWAYS && ins < alloc_per_srch; w++) {
-      if (!uniq[w] || matched_w[w]) continue;
+    int found = 0;
+    for (int w = 0; w < HWAYS && found < alloc_per_srch; w++) {
+      if (!((res.uniq >> w) & 1u) || matched_w[w]) continue;
+      if (found == 0) { s1.unm0_any = true; s1.unm0_d = res.d[w]; }
+      else            { s1.unm1_any = true; s1.unm1_d = res.d[w]; }
+      found++;
+    }
+    return s1;
+  }
+
+  void commit_tab_s2(const TabStage1 &s1) {
+    if (!s1.v) return;
+    int e = s1.upd_idx;
+    for (int i = 0; i < DPCS; i++) {
+      if (tab[i].v && i != e && tab[i].lru < s1.old_lru) tab[i].lru++;
+    }
+    tab[e].v = true;
+    tab[e].pc = s1.pc;
+    tab[e].lru = 0;
+    P &p = tab[e];
+    for (int m = 0; m < DDELTAS; m++) p.dl[m] = s1.hit_dl[m];
+
+    auto ins_one = [&](int8_t dv) -> bool {
       int slot = -1;
       for (int m = 0; m < DDELTAS; m++) if (!p.dl[m].v) { slot = m; break; }
       if (slot < 0) {
         for (int m = 0; m < DDELTAS; m++)
           if (p.dl[m].st == 0 && (slot < 0 || p.dl[m].cov < p.dl[slot].cov)) slot = m;
       }
-      if (slot < 0) break;
-      p.dl[slot] = Dl{true, dw[w], 1, 0, 0};
-      ins++;
+      if (slot < 0) return false;
+      p.dl[slot] = Dl{true, dv, 1, 0, 0};
+      return true;
+    };
+    if (s1.unm0_any) {
+      if (ins_one(s1.unm0_d) && s1.unm1_any) ins_one(s1.unm1_d);
     }
-    p.cnt++;
-    if (p.cnt >= ROUND) {
+    uint8_t next_cnt = uint8_t(s1.cnt + 1);
+    if (next_cnt >= ROUND) {
       for (int m = 0; m < DDELTAS; m++) {
         if (!p.dl[m].v) continue;
         p.dl[m].st = p.dl[m].cov >= HI_COV ? 1 : p.dl[m].cov >= LO_COV ? 2 : 0;
@@ -521,6 +560,8 @@ class BertiHw {
         p.dl[m].cov = 0;
       }
       p.cnt = 0;
+    } else {
+      p.cnt = next_cnt;
     }
   }
 
@@ -615,9 +656,11 @@ class DataPrefetcher {
   // end of cycle: consume the inputs, update the state
   void seq() {
     bxlate_used_ = 0;
+    bool berti_hw_pfi_en = false;
+    uint32_t berti_hw_pfi_pline = 0;
     if (head_taken) {
       if ((kind_ == 2 || kind_ == 3) && !reqq.front().llc) berti_.pf_issued(reqq.front().line, sim_time);
-      if (kind_ == 4 && !reqq.front().llc) bertihw_.pf_issued(reqq.front().line);   // Berti: prefetch latency from here
+      if (kind_ == 4 && !reqq.front().llc) { berti_hw_pfi_en = true; berti_hw_pfi_pline = reqq.front().line; }
       reqq.pop();
     }
     head_taken = false;
@@ -630,7 +673,7 @@ class DataPrefetcher {
       }
     if (kind_ == 1) { seq_bop(); return; }
     if (kind_ == 2) { seq_berti(); return; }
-    if (kind_ == 4) { seq_berti_hw(); return; }
+    if (kind_ == 4) { seq_berti_hw(berti_hw_pfi_en, berti_hw_pfi_pline); return; }
 
     // EXP-048 PF_KIND=3: h1 and Berti together (one FIFO push per cycle: h1 stride burst > Berti > h1 LLC next-line)
     if (kind_ == 3 && fill_in.valid) berti_.fill((fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS), fill_in.is_prefetch, sim_time);
@@ -723,15 +766,19 @@ class DataPrefetcher {
 
   // EXP-048 Berti in place of h1 (PF_KIND=2): fills measure latencies, the registered triggers train and produce candidates
   // (a new trigger with candidates replaces the pending ones), one candidate per cycle into the request FIFO
-  // EXP-048 M3: hardware-faithful Berti (PF_KIND=4)
-  void seq_berti_hw() {
-    // 1. Pop 1 pending search from srchq (registered from previous cycle) and run it
-    if (bertihw_.srchq_n > 0) {
+  // EXP-048 M3: hardware-faithful Berti (PF_KIND=4), 3-stage pipelined hist -> srch_pipe -> tab_s1 -> tab_pipe -> tab_s2
+  // Pop srchq only when !srch_pipe.v (max 1 search in tab_s1/tab_s2, zero hazard/forwarding needed).
+  void seq_berti_hw(bool pfi_en, uint32_t pfi_pline) {
+    // 1. Pop 1 pending search from srchq when !srch_pipe.v and run hist lookup -> next_srch
+    BertiHw::SrchRes next_srch;
+    if (!bertihw_.srch_pipe.v && bertihw_.srchq_n > 0) {
       BertiHw::SrchEv ev = bertihw_.srchq[0];
       for (int i = 1; i < bertihw_.srchq_n; i++) bertihw_.srchq[i - 1] = bertihw_.srchq[i];
       bertihw_.srchq_n--;
-      bertihw_.run_search(ev);
+      next_srch = bertihw_.eval_hist(ev);
     }
+    // 1b. Tab stage 1 reads pre-update tab (guaranteed hazard-free since srch_pipe.v && tab_pipe.v never both 1)
+    BertiHw::TabStage1 next_tab = bertihw_.eval_tab_s1(bertihw_.srch_pipe);
     // 2. Push 1 candidate to reqq (xans_q takes priority; gen steps same-page if free, or cross-page into g_pf_xq)
     bool reqq_used = false;
     if (g_pf_xans_n > 0) {
@@ -742,9 +789,40 @@ class DataPrefetcher {
     }
     uint32_t gline = 0; bool gllc = false;
     if (bertihw_.step_gen(reqq_used, gline, gllc) == 1) push_candidate(gline, gllc);
-    // 3. Process fill_in (latency measurement -> pf_lat or demand search enqueue)
-    if (fill_in.valid) bertihw_.on_fill((fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS), fill_in.is_prefetch);
-    // 4. Pop 1 training event from trnq -> miss/pf_hit + history record + start_gen
+    // 3. Decoupled pfi/pfl/infl CAM lookups (matches dcache_pf_berti_hist.sv: no same-cycle pfi_en->fill->pf_hit bypass)
+    const uint32_t fill_pline = (fill_in.paddr >> 6) & pf::wmask(PF_LINE_BITS);
+    int pfi_fill_idx = -1;
+    uint16_t pf_fill_lat = 0;
+    if (fill_in.valid && fill_in.is_prefetch) {
+      for (int i = 0; i < BertiHw::PFI_N; i++) {
+        if (bertihw_.pfi[i].v && bertihw_.pfi[i].pline == fill_pline) {
+          pfi_fill_idx = i;
+          uint32_t diff = (bertihw_.cyc - bertihw_.pfi[i].t) & BertiHw::CYC_MASK;
+          pf_fill_lat = uint16_t(diff > 4095u ? 4095u : diff);
+          break;
+        }
+      }
+    }
+    int pfl_wr_idx = -1;
+    if (pfi_fill_idx >= 0) {
+      for (int k = 0; k < BertiHw::PFL_N; k++) {
+        if (bertihw_.pfl[k].v && bertihw_.pfl[k].pline == fill_pline) { pfl_wr_idx = k; break; }
+      }
+    }
+    // Demand fill lookup in infl
+    if (fill_in.valid && !fill_in.is_prefetch) {
+      for (int i = 0; i < BertiHw::INFL; i++) {
+        if (bertihw_.infl[i].v && bertihw_.infl[i].pline == fill_pline) {
+          uint32_t diff = (bertihw_.cyc - bertihw_.infl[i].t) & BertiHw::CYC_MASK;
+          uint16_t lat12 = uint16_t(diff > 4095u ? 4095u : diff);
+          bertihw_.push_srch({bertihw_.infl[i].pc, bertihw_.infl[i].vline, bertihw_.infl[i].t, lat12});
+          bertihw_.infl[i].v = false;
+          break;
+        }
+      }
+    }
+    // 4. Pop 1 training event from trnq -> miss/pf_hit (pfl read from pre-update pfl!) + history record + start_gen
+    int pfl_rd_idx = -1;
     if (bertihw_.trnq_n > 0) {
       BertiHw::TrnEv a = bertihw_.trnq[0];
       for (int i = 1; i < bertihw_.trnq_n; i++) bertihw_.trnq[i - 1] = bertihw_.trnq[i];
@@ -760,7 +838,7 @@ class DataPrefetcher {
         for (int i = 0; i < BertiHw::PFL_N; i++) {
           if (bertihw_.pfl[i].v && bertihw_.pfl[i].pline == a.pline) {
             bertihw_.push_srch({a.pc, a.vline, bertihw_.cyc, bertihw_.pfl[i].lat});
-            bertihw_.pfl[i].v = false;
+            pfl_rd_idx = i;
             break;
           }
         }
@@ -768,6 +846,22 @@ class DataPrefetcher {
       bertihw_.record(a.pc, a.vline);
       bertihw_.start_gen(a);
     }
+    // Commit pfi and pfl updates (matching dcache_pf_berti_hist.sv non-blocking assignment order)
+    if (pfi_en) bertihw_.pf_issued(pfi_pline);
+    if (pfi_fill_idx >= 0) bertihw_.pfi[pfi_fill_idx].v = false;
+    if (pfi_fill_idx >= 0) {
+      if (pfl_wr_idx >= 0) {
+        bertihw_.pfl[pfl_wr_idx].lat = pf_fill_lat;
+      } else {
+        bertihw_.pfl[bertihw_.pfl_ptr] = {true, fill_pline, pf_fill_lat};
+        bertihw_.pfl_ptr = (bertihw_.pfl_ptr + 1) & (BertiHw::PFL_N - 1);
+      }
+    }
+    if (pfl_rd_idx >= 0) bertihw_.pfl[pfl_rd_idx].v = false;
+    // 4b. Commit tab_pipe (stage 2) to tab, then advance tab_pipe and srch_pipe
+    bertihw_.commit_tab_s2(bertihw_.tab_pipe);
+    bertihw_.tab_pipe = next_tab;
+    bertihw_.srch_pipe = next_srch;
     // 5. Enqueue up to PF_TRAIN_PORTS new load miss/pf_hit events into trnq
     int taken = 0;
     for (int i = 0; i < LSU_LDU_COUNT && taken < PF_TRAIN_PORTS; i++) {
