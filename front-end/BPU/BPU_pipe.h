@@ -451,8 +451,8 @@ class BpuPipe {
           if (b_len >= 2) {
             S0Guess gB{};
             const bool ah_b_hit = ftb_.ahead2_select(pcB, bndB, ah_src.valid, ah_src.key_base, ah_src.key_fh,
-                                                     ah2_src, n.sras.cnt, n.sras.top(), gB);
-            if (!ah_b_hit) gB = ftb_.s0_lookup<S0Guess>(pcB, bndB, n.sras.cnt, n.sras.top());
+                                                     ah2_src, n.sras.cnt, n.sras.top(), gB, b.base);
+            if (!ah_b_hit) gB.next = bndB;
             if (!b_truncated || gB.taken) {
               paired = true;
               b.has_b = true;
@@ -553,6 +553,7 @@ class BpuPipe {
         std::memcpy(t.ftb_rec_b.fh, d.blk->ck_b.fh, sizeof t.ftb_rec_b.fh);
         t.ftb_rec_b.ah_v = d.blk->ah_v_b;
         t.ftb_rec_b.ah_kind = d.blk->ah_kind_b;
+        t.ftb_rec_b.ah_a_base = d.blk->base;
         t.ftb_rec_b.ah_key_base = d.blk->ah_key_base_b;
         std::memcpy(t.ftb_rec_b.ah_key_fh, d.blk->ah_key_fh_b, sizeof t.ftb_rec_b.ah_key_fh);
         n.blk_seq = seq0 + 2;
@@ -610,6 +611,7 @@ class BpuPipe {
           std::memcpy(ev.fh, rc.fh, sizeof ev.fh);
           ev.ah_v = rc.ah_v;
           ev.ah_kind = rc.ah_kind;
+          ev.ah_a_base = rc.ah_a_base;
           ev.ah_key_base = rc.ah_key_base;
           std::memcpy(ev.ah_key_fh, rc.ah_key_fh, sizeof ev.ah_key_fh);
           ev.nbr = 1;
@@ -630,6 +632,8 @@ class BpuPipe {
         }
       }
     }
+    const auto arch_q = n.arch;
+    const auto aras_q = n.aras;
     for (int i = 0; i < CW; i++) {
       if (!in.in_upd_valid[i]) continue;
       const pc_t pc = in.in_update_base_pc[i];
@@ -658,7 +662,8 @@ class BpuPipe {
         else if (in.pd.ras_op2 == 2) n.sras.pop();
       } else if (!(in.rf_valid && repair_blk(in, n))) {
         hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
-        n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.epoch = epoch0 + 1;
+        // Match bpu_spec.sv: M_ARCH restores from registered arch_q / aras_q (breaks commit->spec critical path)
+        n.spec = arch_q; n.sras = RasQ::from_commit(aras_q); n.epoch = epoch0 + 1;
       }
       n.pq_n = 0;
       if (in.icache_read_ready) s0_issue(in.refetch_address);

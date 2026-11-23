@@ -53,6 +53,7 @@ struct FtbEnt {
   bool valid = false;
   uint16_t tag = 0;         // up to 16b tag (normal FTB)
   uint32_t tag32 = 0;       // 22b combined (key_base, cur_base) tag (ahead FTB)
+  pc_t b_base = 0;          // expected Block B base PC (used when AH2_PAR!=0)
   uint8_t lru = 0;          // replacement recency (0 = MRU, W-1 = LRU)
   FtbSlot s[FTB_SLOTS];
 };
@@ -74,6 +75,7 @@ struct FtbBlkRec {
   bool ah_v = false;
   uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
+  pc_t ah_a_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
 };
 
@@ -467,6 +469,7 @@ struct FtbTrainEv {
   bool ah_v = false;
   uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
+  pc_t ah_a_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
   uint8_t nbr = 0;
   FtbTrkBr br[FW];
@@ -594,8 +597,25 @@ struct BpuFtb {
 
   template <class S0GuessT>
   bool ahead2_select(pc_t base, pc_t bnd, bool valid, pc_t key_base, const uint32_t key_fh[FH_N_MAX][TN],
-                     const FtbAhRaw &raw, uint8_t rcnt, target_addr_t rtop, S0GuessT &g) const {
-    return ahead_select_impl(aftb2_, atage2_, aitt2_, base, bnd, valid, key_base, key_fh, raw, rcnt, rtop, g);
+                     const FtbAhRaw &raw, uint8_t rcnt, target_addr_t rtop, S0GuessT &g, pc_t a_base = 0) const {
+    if (!valid) return false;
+    FtbEnt ent;
+    // Keyed by (key_base, a_base) so ah2 runs 100% in parallel with Block A; verify ent.b_base == base at the end.
+    if (!aftb2_.select_way(raw.ftb_set, key_base, a_base, ent)) return false;
+    if (ent.b_base != base) return false;
+    const FtbBlkIdx ix = make_ahead_index(key_base, a_base, key_fh);
+    bool dirs[FTB_SLOTS] = {};
+    BlockTage::Pred tp[FTB_SLOTS];
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      atage2_.select_slot(ix, raw.tage_raw.s[k], tp[k], ent.s[k].valid ? int(ent.s[k].ctr) : -1);
+      dirs[k] = tp[k].pred;
+    }
+    target_addr_t itt_tgt = 0;
+    const bool itt_hit = aitt2_.select(ix, raw.itt_raw, itt_tgt);
+    g = S0GuessT{};
+    g.hit = true;
+    eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g);
+    return true;
   }
 
   template <class GuessT>
@@ -820,11 +840,12 @@ struct BpuFtb {
 
     if (ev.ah_v && ev.nbr > 0) {
       const bool use2 = (ev.ah_kind == 2);
+      const pc_t cur_key = use2 ? ev.ah_a_base : ev.start;
       AheadFtbTab &atab = use2 ? aftb2_ : aftb_;
       BlockTage &atg = use2 ? atage2_ : atage_;
       BlockItt &ait = use2 ? aitt2_ : aitt_;
       const uint32_t s = atab.index(ev.ah_key_base);
-      const uint32_t t = atab.tag(ev.ah_key_base, ev.start);
+      const uint32_t t = atab.tag(ev.ah_key_base, cur_key);
       int hit = -1;
       for (int w = 0; w < atab.W; w++) {
         if (atab.e[s * atab.W + w].valid && atab.e[s * atab.W + w].tag32 == t) { hit = w; break; }
@@ -841,13 +862,22 @@ struct BpuFtb {
         en = FtbEnt{};
         en.valid = true;
         en.tag32 = t;
+        en.b_base = ev.start;
         en.lru = static_cast<uint8_t>(atab.W - 1);
+      } else if (use2 && atab.e[s * atab.W + hit].b_base != ev.start) {
+        FtbEnt &en = atab.e[s * atab.W + hit];
+        const uint8_t keep_lru = en.lru;
+        en = FtbEnt{};
+        en.valid = true;
+        en.tag32 = t;
+        en.b_base = ev.start;
+        en.lru = keep_lru;
       }
       FtbEnt &aen = atab.e[s * atab.W + hit];
       for (int i = 0; i < ev.nbr; i++) upsert_branch(aen, ev.br[i]);
       atab.touch_lru(s, hit);
 
-      const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, ev.start, ev.ah_key_fh);
+      const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, cur_key, ev.ah_key_fh);
       for (int i = 0; i < ev.nbr; i++) {
         const FtbTrkBr &b = ev.br[i];
         if (b.type == BR_DIRECT) {
