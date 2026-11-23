@@ -40,7 +40,6 @@ public:
   // Registers (the delayed wake-up slots): read by comb_issue, updated only by seq.
   struct Regs {
     MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
-    IterWakeEntry div_wake_slots[ISU_DIV_WAKE_SLOT_NUM];
     IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
   };
   const Regs &q() const { return q_; }
@@ -104,7 +103,6 @@ private:
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
   template <class F> void for_each_wake_slot(F f) {   // the wake slots (registers)
     for (auto &stage : q_.mul_wake_pipe) for (auto &e : stage) f(e);
-    for (auto &e : q_.div_wake_slots) f(e);
     for (auto &e : q_.fp_wake_slots) f(e);
   }
 

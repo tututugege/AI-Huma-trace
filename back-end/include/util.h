@@ -36,7 +36,7 @@ inline uint8_t rob_cplt_popcount(wire<ROB_CPLT_MASK_WIDTH> mask) {
 // integer uops split across IQ_INT / IQ_INT1 (CSR -> IQ_INT, I2F -> IQ_INT1, others by rob_idx parity).
 inline int route_iq(int kind, int op = 0, uint32_t rob_idx = 0) {
   switch (kind) {
-  case UK_INT: return op == UOP_CSR ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
+  case UK_INT: return (op == UOP_CSR || op == UOP_DIV) ? IQ_INT : op == UOP_I2F ? IQ_INT1 : (rob_idx & 1 ? IQ_INT1 : IQ_INT);
   case UK_LD:
   case UK_STA: return IQ_MEM;
   case UK_STD: return IQ_STD;

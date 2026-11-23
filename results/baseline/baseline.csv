@@ -9,7 +9,7 @@ crc32.bin,0,0,4253
 csr-alias-boundary.bin,0,0,1896
 dcache-conflict-writeback.bin,0,0,4632
 dcache-mshr-pressure.bin,0,0,1457
-div.bin,0,0,2552
+div.bin,0,0,2319
 dummy.bin,0,0,841
 fact.bin,0,0,1418
 fd-basic.bin,0,0,1172
@@ -20,7 +20,7 @@ fd-fsqrt.bin,0,0,1756
 fd-matmul.bin,0,0,27431
 fence-i-self-modify.bin,0,0,1635
 fib.bin,0,0,1448
-goldbach.bin,0,0,3771
+goldbach.bin,0,0,2287
 if-else.bin,0,0,1394
 illegal-instruction-trap.bin,0,0,1508
 interrupt-vectored.bin,0,0,3623
@@ -31,14 +31,14 @@ matrix-mul.bin,0,0,2826
 max.bin,0,0,1945
 memory-boundary.bin,0,0,1580
 memory-stress-small.bin,0,0,310468
-mersenne.bin,0,0,2675
+mersenne.bin,0,0,1781
 min3.bin,0,0,2560
 mov-c.bin,0,0,1186
 movsx.bin,0,0,1393
 mul-longlong.bin,0,0,1848
 pascal.bin,0,0,1985
 pf-stress.bin,0,0,487049
-prime.bin,0,0,13438
+prime.bin,0,0,5933
 quick-sort.bin,0,0,4836
 recursion.bin,0,0,3228
 select-sort.bin,0,0,4764
@@ -59,5 +59,5 @@ to-lower-case.bin,0,0,1451
 trap-boundary.bin,0,0,2223
 trap-precise-store.bin,0,0,1693
 unalign.bin,0,0,1619
-wanshu.bin,0,0,5979
+wanshu.bin,0,0,2625
 wfi-boundary.bin,0,0,1229

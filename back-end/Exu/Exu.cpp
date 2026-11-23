@@ -61,6 +61,8 @@ void Exu::begin_cycle() {
     out.exu2rob.entry[i].valid = false;
     out.exe2iss.fu_ready_mask[i] = 0;
   }
+  out.exe2iss.div_wake_valid = false;
+  out.exe2iss.div_wake_preg = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = out.exe2lsu.agu_req[i].raw = false;
   for (int i = 0; i < LSU_SDU_COUNT; i++) out.exe2lsu.sdu_req[i].valid = false;
   out.exu2id.clear_mask = 0;
@@ -76,11 +78,25 @@ void Exu::begin_cycle() {
 // Which operation classes each issue port can accept. After the collect phase an input slot is occupied only if its unit
 // could not take the uop, so a free slot is what makes a unit ready. Nothing is accepted during a flush.
 void Exu::ready() {
+  out.exe2iss.div_wake_valid = false;
+  out.exe2iss.div_wake_preg = 0;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     uint64_t mask = 0;
-    if (!in.rob_bcast->flush)
-      for (int fu : port_fus[i])
-        if (!units[fu].slot_valid) mask |= units[fu].support_mask;
+    bool div_wb_next = false;
+    if (!in.rob_bcast->flush) {
+      for (int fu : port_fus[i]) {
+        const FuUnit &f = units[fu];
+        if (!f.slot_valid) mask |= f.support_mask;
+        if (f.kind == FuKind::DIV && f.busy && f.done == sim_time + 1) {
+          div_wb_next = true;
+          if (f.cur.dest_en) {
+            out.exe2iss.div_wake_valid = true;
+            out.exe2iss.div_wake_preg = f.cur->dest_preg;
+          }
+        }
+      }
+      if (div_wb_next) mask &= ~OP_MASK_ALU;  // reserve port 1 write-back for completing DIV next cycle
+    }
     out.exe2iss.fu_ready_mask[i] = mask;
   }
 }

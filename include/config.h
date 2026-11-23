@@ -452,10 +452,10 @@ enum { ISSUE_PORT_COUNTER_BASE = __COUNTER__ };
 // CSR is currently hard-bound to Port 0, so Port 0 must include OP_MASK_CSR.
 constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL |
-             OP_MASK_CSR), // Port 0: ALU + MUL/DIV + CSR
-    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV
+             OP_MASK_CSR), // Port 0: ALU + MUL + CSR
+    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV), // Port 1: ALU + DIV (single Radix-16 early-out divider)
     PORT_CFG(OP_MASK_ALU | OP_MASK_MUL | OP_MASK_I2F), // Port 2: ALU + MUL + integer -> FP
-    PORT_CFG(OP_MASK_ALU | OP_MASK_DIV | OP_MASK_I2F), // Port 3: ALU + DIV + integer -> FP
+    PORT_CFG(OP_MASK_ALU | OP_MASK_I2F), // Port 3: ALU + integer -> FP
 #if CFG_PLAIN_ALU_PORTS >= 1
     PORT_CFG(OP_MASK_ALU ), // plain ALU
 #endif
@@ -580,13 +580,12 @@ constexpr int LDQ_SIZE = CFG_LDQ_SIZE;  // backend DSE (EXP-016) knob
 #define CONFIG_MUL_LATENCY 3
 #endif
 #ifndef CONFIG_DIV_LATENCY
-#define CONFIG_DIV_LATENCY 32
+#define CONFIG_DIV_LATENCY 17
 #endif
 constexpr int MUL_MAX_LATENCY = CONFIG_MUL_LATENCY;
 constexpr int DIV_MAX_LATENCY = CONFIG_DIV_LATENCY;
-// A *W divide (divw/divuw/remw/remuw) only has 32 significant bits: it starts at the low half of the dividend and needs half the
-// iterations (rv32: no such instructions).
-constexpr int div_latency(bool word) { return (word) ? DIV_MAX_LATENCY / 2 : DIV_MAX_LATENCY; }
+// Radix-16 (dual Radix-4, 4 bits/cycle) early-out divider: latency is 2..17 cycles (1 accept + 1..16 run cycles).
+constexpr int div_latency(bool word) { return (word) ? 9 : DIV_MAX_LATENCY; }
 
 // LSU / TLB config derived from issue port layout.
 constexpr int LSU_STA_COUNT = count_ports_with_mask(OP_MASK_STA);
@@ -670,7 +669,7 @@ constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
      count_ports_with_mask(OP_MASK_BR)},
     {IQ_FP, CFG_FP_IQ_SIZE, CFG_FP_IQ_ENQ_WIDTH, OP_MASK_FPQ, IQ_FP_PORT_BASE, count_ports_with_mask(OP_MASK_FPQ)},
     {IQ_INT1, IQ_INT_SIZE, IQ_INT_ENQ_WIDTH,
-     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_I2F, IQ_ALU_PORT_BASE, 3, 0x2c}    // ports 2, 3, 5
+     OP_MASK_ALU | OP_MASK_MUL | OP_MASK_I2F, IQ_ALU_PORT_BASE, 3, 0x2c}    // ports 2, 3, 5
 };
 
 // per-queue enqueue widths (dispatch write ports per cycle), exported for the RTL config package

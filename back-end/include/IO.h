@@ -239,6 +239,8 @@ struct IssPrfIO {
 struct ExeIssIO {
 
   wire<MAX_UOP_TYPE> fu_ready_mask[ISSUE_WIDTH] = {};
+  wire<1> div_wake_valid = 0;
+  wire<PRF_IDX_WIDTH> div_wake_preg = 0;
 };
 
 struct ExuRobIO {

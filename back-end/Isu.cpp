@@ -66,8 +66,9 @@ void Isu::init() {
     q.in.gate_probe = [this](const Uop &u, int port) { return grant_gate(u, port, false); };
     q.in.presel_ok = [this](const Uop &u, int port) {
       const UopType t = decode_uop_type(u.op);
+      if (t == UOP_DIV) return true;  // variable-latency DIV reserves port 1 wb via exe2iss.div_wb_next
       const int lat = get_latency(t, u->func7, u->is_word);
-      return wb_busy_.free(port, (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat);
+      return wb_busy_.free(port, (t == UOP_FDIV) ? lat + 1 : lat);
     };
     q.in.on_refuse = [](int why, bool lost) {
       g_pmu_back.iss_ref[why - 1]++;
@@ -129,12 +130,12 @@ int Isu::grant_gate(const Uop &u, int port, bool reserve) {
   if (agu_port >= 0 && (agu_ports_used_ >> agu_port & 1)) return GATE_REF_AGU;
   const UopType t = decode_uop_type(u.op);
   const int lat = get_latency(t, u->func7, u->is_word);
-  const int off = (t == UOP_DIV || t == UOP_FDIV) ? lat + 1 : lat;   // iterative units finish one cycle later than their wake-up latency
-  if (!wb_busy_.free(port, off)) return GATE_REF_WB;   // another uop of the port completes in that cycle
+  const int off = (t == UOP_FDIV) ? lat + 1 : lat;   // iterative FP units finish one cycle later than their wake-up latency
+  if (t != UOP_DIV && !wb_busy_.free(port, off)) return GATE_REF_WB;   // another uop of the port completes in that cycle
   const bool fpw = u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F);
   if (!reserve) return fpw && fp_wb_busy_.full(lat) ? GATE_REF_FPWB : GATE_OK;
   if (fpw && !fp_wb_busy_.try_reserve(lat)) return GATE_REF_FPWB;
-  wb_busy_.reserve(port, off);
+  if (t != UOP_DIV) wb_busy_.reserve(port, off);
   if (agu_port >= 0) agu_ports_used_ |= 1u << agu_port;
   return GATE_OK;
 }
@@ -185,7 +186,6 @@ void Isu::calc_latency_next(const Regs &q) {
       }
     }
   };
-  age(q.div_wake_slots, d.div_wake_slots);
   age(q.fp_wake_slots, d.fp_wake_slots);
 
   for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) e = {};
@@ -212,7 +212,7 @@ void Isu::calc_latency_next(const Regs &q) {
     };
     bool ok = true;  // the placement must not sit inside Assert (it has to run in every build)
     if (op == UOP_MUL) ok = MUL_MAX_LATENCY > 1 && free_slot(d.mul_wake_pipe[0], 0);
-    else if (op == UOP_DIV) ok = free_slot(d.div_wake_slots, lat - 1);
+    else if (op == UOP_DIV) ok = true;   // woken dynamically by Exu::ready() one cycle before completion
     else if (op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F) ok = free_slot(d.fp_wake_slots, lat - 1);
     Assert(ok && "delayed-wakeup slots full");
   }
@@ -249,8 +249,7 @@ void Isu::awake() {
       bus[lsu_base + i].valid = true;
       bus[lsu_base + i].preg = in.prf_awake->wake[i].preg;
     }
-  for (int i = 0; i < ISU_DIV_WAKE_SLOT_NUM; i++)
-    if (q.div_wake_slots[i].valid && q.div_wake_slots[i].countdown == 0) drive(div_base + i, q.div_wake_slots[i].dest_preg, "Delayed writeback collision");
+  if (in.exe2iss->div_wake_valid) drive(div_base, in.exe2iss->div_wake_preg, "Delayed writeback collision");
   {  // the FP slots fire on the FPW_CH channels after the fast ones, in slot order
     int ch = fast_base + ALU_NUM;
     for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)

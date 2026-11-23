@@ -9,7 +9,7 @@ crc32.bin,0,0,4293
 csr-alias-boundary.bin,0,0,1961
 dcache-conflict-writeback.bin,0,0,4523
 dcache-mshr-pressure.bin,0,0,1462
-div.bin,0,0,1989
+div.bin,0,0,1829
 dummy.bin,0,0,841
 fact.bin,0,0,1417
 fd-basic.bin,0,0,1274
@@ -21,7 +21,7 @@ fd-matmul.bin,0,0,27437
 fdoff.bin,0,0,7431
 fence-i-self-modify.bin,0,0,1624
 fib.bin,0,0,1435
-goldbach.bin,0,0,4678
+goldbach.bin,0,0,2221
 if-else.bin,0,0,1327
 illegal-instruction-trap.bin,0,0,1339
 interrupt-vectored.bin,0,0,3638
@@ -32,14 +32,14 @@ matrix-mul.bin,0,0,2817
 max.bin,0,0,1712
 memory-boundary.bin,0,0,1494
 memory-stress-small.bin,0,0,297198
-mersenne.bin,0,0,2595
+mersenne.bin,0,0,1625
 min3.bin,0,0,2456
 mov-c.bin,0,0,1126
 movsx.bin,0,0,1254
 mul-longlong.bin,0,0,1580
 pascal.bin,0,0,1950
 pf-stress.bin,0,0,486162
-prime.bin,0,0,12525
+prime.bin,0,0,5830
 quick-sort.bin,0,0,3914
 recursion.bin,0,0,2859
 rvc-fencei.bin,0,0,115031
@@ -51,7 +51,7 @@ select-sort.bin,0,0,4549
 shift.bin,0,0,1548
 shuixianhua.bin,0,0,3884
 software-interrupt-vectored.bin,0,0,2235
-stlf-overlap-boundary.bin,0,0,1207
+stlf-overlap-boundary.bin,0,0,1178
 sub-longlong.bin,0,0,1500
 sum.bin,0,0,1381
 supervisor-external-interrupt-vectored.bin,0,0,2397
@@ -65,5 +65,5 @@ to-lower-case.bin,0,0,1448
 trap-boundary.bin,0,0,2065
 trap-precise-store.bin,0,0,1496
 unalign.bin,0,0,1432
-wanshu.bin,0,0,6715
+wanshu.bin,0,0,2715
 wfi-boundary.bin,0,0,1072
