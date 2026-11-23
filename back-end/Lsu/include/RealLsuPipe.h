@@ -154,6 +154,11 @@ struct PL12 {
 struct PL3 {
   wire<1> v = 0;
   wire<LDQ_IDX_WIDTH> ldq = 0;
+  wire<1> sw = 0;   // speculatively woken at L2 (LP_L2[3])
+};
+struct PCn {
+  wire<1> v = 0;
+  wire<PRF_IDX_WIDTH> preg = 0;
 };
 // replay register: entry picked by a replay port, re-enters at L1
 struct PRp {
@@ -186,6 +191,7 @@ struct LsuPipeState {
   wire<STQ_IDX_WIDTH> stq_commit = 0;      // head + ccount
   PL12 l12[LD];
   PL3 l3[LD];
+  PCn cn[LD];
   PRp rp[RP_MAX];
   PRp srp;                                  // STA replay register (stq index)
   wire<STQ_IDX_WIDTH> srp_ptr = 0;          // round-robin start of the STA replay register pick (fairness: no starvation of walk owners)
@@ -217,6 +223,9 @@ struct PCycle {
   PSta s1[STA];
   bool wbd_v[LD] = {};           // L2 direct completion on load port p
   uint8_t wbd_ldq[LD] = {};
+  bool spec_w[LD] = {};          // L2 speculative wake-up issued this cycle
+  uint8_t spec_ldq[LD] = {};
+  uint16_t spec_preg[LD] = {};
   stq_mask_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); cut G
   uint8_t st_rwpre[STQ_SIZE] = {};     // their replay wait before the wake
   stq_mask_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)

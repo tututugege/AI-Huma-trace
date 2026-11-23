@@ -80,6 +80,19 @@ void RealLsu::l2_decide() {
     if (!sl.v) continue;
     PLdq &e = pnxt.ldq[sl.ldq];
     if (!(e.st == L_PIPE && e.epoch == sl.epoch)) continue;  // killed after L1
+    {  // L2 speculative wake-up (LP_L2[3]): L1D hit or STLF (store data ready); cancelled next cycle if not direct-completed
+      const bool cand_ok = !sl.cand_v || (pcur.stq[sl.cand].data_v && !pcur.stq[sl.cand].suppress);
+      const bool spec_w = sl.tlb == 0 && !sl.mmio && cand_ok && !sl.dcblk &&
+          !e.second && e.uop().dest_preg != 0 &&
+          !in.rob_bcast->flush && !(in.dec_bcast->mispred && (e.br_mask & in.dec_bcast->br_mask) != 0);
+      if (spec_w) {
+        out.lsu_awake.wake[i].valid = true;
+        out.lsu_awake.wake[i].preg = e.uop().dest_preg;
+        pw.spec_w[i] = true;
+        pw.spec_ldq[i] = sl.ldq;
+        pw.spec_preg[i] = e.uop().dest_preg;
+      }
+    }
     if (sl.tlb == 2) {  // page fault: reported through the load write-back
       pw.wbd_v[i] = true;
       pw.wbd_ldq[i] = sl.ldq;
@@ -148,9 +161,15 @@ void RealLsu::dcache_load_responses() {
 void RealLsu::l3_register() {
   // a: the direct completions go through the L3 register (written back in the next cycle)
   for (int i = 0; i < LD; i++) {
+    const bool hit_direct = pw.wbd_v[i] && pw.wbd_ldq[i] == pw.spec_ldq[i];
+    if (pw.spec_w[i] && !hit_direct) {
+      pnxt.cn[i].v = 1;
+      pnxt.cn[i].preg = pw.spec_preg[i];
+    }
     if (!pw.wbd_v[i]) continue;
     pnxt.l3[i].v = 1;
     pnxt.l3[i].ldq = pw.wbd_ldq[i];
+    pnxt.l3[i].sw = pw.spec_w[i] && hit_direct;
     pnxt.ldq[pw.wbd_ldq[i]].st = L_WB3;
     pw.wbd_v[i] = false;
   }
@@ -214,7 +233,7 @@ void RealLsu::dcache2lsu_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // Write-back ports
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
+void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) {
   PLdq &l = pnxt.ldq[idx];
   MicroOp wb;
   wb.id = l.id;
@@ -228,11 +247,11 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3) {
   wb.is_mmio = l.mmio;
   const bool second = l.second;
   const bool defer = !second && l.spec && !l.pf && !l.mmio && !l.lrsc;
-  bool early = second;
+  bool early = second || spec_woken;
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
-  if (!early && from_l3 && !l.pf && l.uop().dest_preg != 0 && !in.rob_bcast->flush &&
-      !(in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask) != 0)) {  // a2: wake from the L3 register
+  if (!early && !l.pf && l.uop().dest_preg != 0 && !in.rob_bcast->flush &&
+      !(in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask) != 0)) {  // a2 + WBP: wake at write-back request
     out.lsu_awake.wake[LD + port].valid = true;
     out.lsu_awake.wake[LD + port].preg = l.uop().dest_preg;
     early = true;
@@ -267,7 +286,7 @@ void RealLsu::lsu2exe() {
   for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
     if (pcur.l3[p].v && pnxt.ldq[pcur.l3[p].ldq].st == L_WB3) {
       busy[p] = true;
-      lp_emit_load_wb(p, pcur.l3[p].ldq, true);
+      lp_emit_load_wb(p, pcur.l3[p].ldq, true, pcur.l3[p].sw);
     }
   }
 

@@ -13,7 +13,7 @@ struct UopPacket {
 // Dispatch. Contract (checked by scripts/comb/comb_graph.py against the code): the signals each phase reads (in)
 // and writes (out), and the outputs only this module drives.
 //   CONTRACT comb_alloc  in: in.dec_bcast in.lsu2dis in.rob2dis  out: out.dis2rob
-//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
+//   CONTRACT comb_dispatch  in: in.dec_bcast in.iss2dis in.iss_awake in.lsu_awake in.rob2dis in.rob_bcast  out: out.dis2iss out.dis2lsu out.dis2ren out.dis2rob
 class Dispatch {
 private:
   void wake(int i);   // the busy bits of slot i (comb_dispatch)
@@ -59,6 +59,7 @@ public:
     const DecBroadcastIO *dec_bcast = nullptr;
     const IssDisIO *iss2dis = nullptr;
     const IssAwakeIO *iss_awake = nullptr;
+    const LsuAwakeIO *lsu_awake = nullptr;
     const LsuDisIO *lsu2dis = nullptr;
     const RenDisIO *ren2dis = nullptr;
     const RobDisIO *rob2dis = nullptr;

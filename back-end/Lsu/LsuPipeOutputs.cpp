@@ -14,7 +14,12 @@ void RealLsu::cal() {
   }
   for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
+  for (int k = 0; k < LD; k++) pnxt.cn[k] = {};
   for (auto &w : out.lsu_awake.wake) w = {};
+  for (int k = 0; k < LD; k++) {
+    out.lsu_awake.cancel[k].valid = pcur.cn[k].v;
+    out.lsu_awake.cancel[k].preg = pcur.cn[k].preg;
+  }
   ms_capture_stores();
 }
 

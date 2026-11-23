@@ -37,10 +37,11 @@ struct TV {
 };
 inline TV taint[TAG_NUM];
 inline bool prev_on() { static const bool on = std::getenv("MSD_NOPREV") == nullptr; return on; }   // MSD_NOPREV=1: A/B switch, a replaced stale value is not kept for one more cycle
-// the true value reaches the register file one cycle after the write-back bus: a consumer executing in the next cycle still has the stale operand (RTL, found at the Linux cycle 1129708)
+// With L2 speculative load wake-up (HAS_LSU_BYP=1), the true value on the load write-back bus is bypassed to consumers issued in this cycle (executing at sim_time+1);
+// only consumers already executing in sim_time (issued at sim_time-1) still hold the stale operand.
 inline void release(uint32_t preg) {
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
-  if (taint[preg].t) taint[preg].until = (long long)sim_time + 1;
+  if (taint[preg].t) taint[preg].until = (long long)sim_time;
   else taint[preg] = TV{};
 }
 // what a consumer executing now reads from the register: the previous stale value in the cycle after its replacement
@@ -293,8 +294,8 @@ inline void set_taint(uint32_t preg, bool t, X v, uint8_t depth, bool keep_clean
   if (preg == 0 || preg >= (uint32_t)TAG_NUM) return;
   if (trace_on() && trace_win::ok() && t) std::fprintf(stderr, "[MSD] cyc=%lld taint p%u v=%llx depth=%u\n", (long long)sim_time, preg, (unsigned long long)v, depth);
   TV &c = taint[preg];
-  if (t && c.t && prev_on()) { c.pt = true; c.pclean = false; c.pv = c.v; c.pdepth = c.depth; c.pwhen = (long long)sim_time + 1; }   // a stale value replaced by another one: the old one stays visible one more cycle
-  else if (t && keep_clean && prev_on()) { c.pt = true; c.pclean = true; c.pwhen = (long long)sim_time + 1; }   // the final write-back of a load replaces the clean value its early write-back put there: the clean value stays visible one more cycle
+  if (t && c.t && prev_on()) { c.pt = true; c.pclean = false; c.pv = c.v; c.pdepth = c.depth; c.pwhen = (long long)sim_time; }   // a stale value replaced by another one: visible to consumers executing in sim_time; consumers issued in sim_time see the new one via lsu_byp
+  else if (t && keep_clean && prev_on()) { c.pt = true; c.pclean = true; c.pwhen = (long long)sim_time; }   // final write-back replaces clean value: visible to consumers executing in sim_time; consumers issued in sim_time see the new one via lsu_byp
   else c.pt = false;
   c.t = t;
   c.v = v;

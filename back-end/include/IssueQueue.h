@@ -154,8 +154,35 @@ public:
 
   // The registers woken this cycle (the valid channels of the wake-up bus, in channel order); applied at seq.
   void set_wakeup(const uint32_t *pregs, int n) { wake_pregs_.assign(pregs, pregs + n); }
+  void set_cancel(const uint32_t *pregs, int n) { cancel_pregs_.assign(pregs, pregs + n); }
 
 private:
+  std::vector<uint32_t> cancel_pregs_;
+  bool in_cancel(uint32_t preg) const {
+    for (uint32_t p : cancel_pregs_) if (p == preg) return true;
+    return false;
+  }
+  bool is_cancelled(const Uop &u) const {
+    if (cancel_pregs_.empty()) return false;
+    return (u->src1_en && in_cancel(u->src1_preg)) ||
+           (u->src2_en && in_cancel(u->src2_preg)) ||
+           (u->src3_en && in_cancel(u->src3_preg));
+  }
+  void apply_cancel() {
+    for (size_t w = 0; w < d_vmask.size(); w++)
+      for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
+        const int idx = int(w * 64) + __builtin_ctzll(m);
+        auto &ent = q_.entry[idx];
+        bool chg = false;
+        if (ent.uop->src1_en && !ent.uop.src1_busy && in_cancel(ent.uop->src1_preg)) { ent.uop.src1_busy = true; chg = true; }
+        if (ent.uop->src2_en && !ent.uop.src2_busy && in_cancel(ent.uop->src2_preg)) { ent.uop.src2_busy = true; chg = true; }
+        if (ent.uop->src3_en && !ent.uop.src3_busy && in_cancel(ent.uop->src3_preg)) { ent.uop.src3_busy = true; chg = true; }
+        if (chg) {
+          set_dep_bits_for_slot(ent, idx);
+          mark_slot(idx);
+        }
+      }
+  }
   void wakeup(const uint32_t *pregs, int n) {
     for (int i = 0; i < n; i++) {
       uint32_t preg = pregs[i];
@@ -326,6 +353,7 @@ public:
     alloc_mask_ = d_vmask;
     commit_issue(committed_indices);
     committed_indices.clear();
+    if (!cancel_pregs_.empty()) apply_cancel();
     if (!wake_pregs_.empty()) wakeup(wake_pregs_.data(), int(wake_pregs_.size()));
     for (const auto &req : in.enq_reqs) {
       if (!req.valid) continue;
@@ -378,7 +406,10 @@ private:
     // 1. Gather all ready instructions
     ready_indices.clear();
     for (size_t w = 0; w < ready_bits.size(); w++)
-      for (uint64_t m = ready_bits[w]; m; m &= m - 1) ready_indices.push_back(int(w * 64) + __builtin_ctzll(m));
+      for (uint64_t m = ready_bits[w]; m; m &= m - 1) {
+        const int idx = int(w * 64) + __builtin_ctzll(m);
+        if (!is_cancelled(q_.entry[idx].uop)) ready_indices.push_back(idx);
+      }
 
     // 2. Port-centric scheduling: ready_indices is already sorted by slot index (lowest first).
     // For IQ_MEM, the first port of each capability takes the oldest ready uop it can serve; other ports take lowest slot.

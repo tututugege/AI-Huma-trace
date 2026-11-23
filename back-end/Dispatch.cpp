@@ -77,9 +77,14 @@ void Dispatch::comb_alloc() {
 void Dispatch::wake(int i) {
   const Regs &q = q_;
   Uop &u = out.dis2rob.uop[i];
-  u.src1_busy = u->src1_en ? q.busy_table[u->src1_preg] : false;
-  u.src2_busy = u->src2_en ? q.busy_table[u->src2_preg] : false;
-  u.src3_busy = u->src3_en ? q.busy_table[u->src3_preg] : false;
+  auto is_cn = [&](uint32_t preg) {
+    for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
+      if (in.lsu_awake->cancel[p].valid && in.lsu_awake->cancel[p].preg == preg) return true;
+    return false;
+  };
+  u.src1_busy = u->src1_en ? (q.busy_table[u->src1_preg] || is_cn(u->src1_preg)) : false;
+  u.src2_busy = u->src2_en ? (q.busy_table[u->src2_preg] || is_cn(u->src2_preg)) : false;
+  u.src3_busy = u->src3_en ? (q.busy_table[u->src3_preg] || is_cn(u->src3_preg)) : false;
   apply_wakeup_to_uop(u);
   for (int j = 0; j < i; j++) {
     const Uop &o = out.dis2rob.uop[j];
@@ -175,6 +180,8 @@ static bool distr_on() {
 }
 void Dispatch::seq() {
   Regs &d = q_;   // updated in place (each slot reads only its own old value first)
+  for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
+    if (in.lsu_awake->cancel[p].valid) d.busy_table[in.lsu_awake->cancel[p].preg] = true;
   for (int k = 0; k < WAKE_CH_ALL; k++) {
     if (in.iss_awake->wake[k].valid) d.busy_table[in.iss_awake->wake[k].preg] = false;
     if (distr_on() && in.iss_awake->wake[k].valid && in.iss_awake->wake[k].preg == 123) std::fprintf(stderr, "DISTR %llu WAKE123 ch=%d\n", (unsigned long long)g_dbg_cycle, k);

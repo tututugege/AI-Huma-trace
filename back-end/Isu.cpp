@@ -148,8 +148,13 @@ void Isu::issue() {
   for (int k = 0; k < 4; k++) g_pmu_back.iss_ref[k] = g_pmu_back.iss_lost[k] = 0;
   // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
   static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_MEM, IQ_STD, IQ_BR, IQ_FP};
+  uint32_t cn_pregs[LSU_LOAD_WB_WIDTH];
+  int n_cn = 0;
+  for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
+    if (in.lsu_awake->cancel[p].valid) cn_pregs[n_cn++] = in.lsu_awake->cancel[p].preg;
   for (int qi : ORDER) {
     auto &q = iqs[qi];
+    q.set_cancel(cn_pregs, n_cn);
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
     for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];
     q.comb_issue();

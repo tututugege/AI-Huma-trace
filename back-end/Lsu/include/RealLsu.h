@@ -121,7 +121,7 @@ private:
   void check();
   void ms_capture_stores();   // LSU_MS_DATA: the trace's store data, the cycle after allocation
   void ms_load_written_back(int ldq_idx, bool defer);   // LSU_MS_DATA: the destination's (stale?) value at a load write-back
-  void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false);
+  void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false, bool spec_woken = false);
   void tlb_out();
   void tlb_in_ldq();
   void tlb_in_stq();

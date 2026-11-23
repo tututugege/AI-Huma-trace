@@ -167,6 +167,7 @@ constexpr int WAKE_CH_ALL = MAX_WAKEUP_PORTS + LSU_EARLY_WAKE_PORTS;
 // and stay empty; the wake-up bus keeps its channel layout)
 struct LsuAwakeIO {
   WakeInfo wake[2 * LSU_LOAD_WB_WIDTH] = {};
+  WakeInfo cancel[LSU_LOAD_WB_WIDTH] = {};
 };
 
 struct DisIssIO {
