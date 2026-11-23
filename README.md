@@ -1,9 +1,7 @@
 # trace-model
 
 AI-Huma 项目(function-model + trace-model + rtl)的时序模型与架构探索平台。
-它是 cycle-accurate、RTL 风格的乱序 RISC-V core 模型(8 宽前端 / decode / commit,128 项 ROB,分级 LSU,
-流水 BPU,L1I/L1D,共享 LLC,DRAMsim3 DDR)。想法先在这里测量(周期、IPC、队列/端口使用、经 PMU 的 TMA),
-再搬到 RTL;合入 `main` 时 RTL 必须逐程序复现本模型的周期数。
+它是 cycle-accurate、RTL 风格的乱序 RISC-V core 模型（`rv64gc` + `Sv39`，8 宽译码/提交、256 项 ROB / 256 项 INT PRF、块级 2-taken FTB+TAGE BPU、分级 LSU + L2 推测唤醒、L1I/L1D + 统一 L2 TLB/PWC、共享 SRRIP LLC + BOP/Bingo、DRAMsim3 DDR4-3200）。想法先在这里测量（周期、IPC、SPEC06 386 点、经 PMU 的 TMA），再搬到 RTL；合入 `main` 时 RTL 必须逐程序复现本模型的周期数。
 
 模型不计算值。分支方向/目标、地址、store 数据和 CSR 写数据来自 trace bridge(`bridge/TraceBridge.*`)提供的 fact;
 bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(同级的 `function-model` 仓库,编成 `librefcpu`;
@@ -14,8 +12,7 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(同级�
 每次改动都必须保持 gate 的周期数(`results/baseline/baseline.csv`),除非是合入 main 的有意配置变更。全项目规则(分支、合并流程、`MAIN_RECORDS.md`、`EXPLORATION.md`、TODO)
 在包含这三部分的 AI-Huma 仓库(`docs/WORKFLOW.md`、`docs/GUIDE.md`)。
 
-ISA:rv64imafd(F/D 自 2026-11-12,EXP-030;Zfinx 已删除;`RVC=1` 加入 C,EXP-038);`FP=0` 构建无浮点的 core。rv32 已从 main 移除(分支 `rv32-legacy`);源码里残留的 `XLEN==32` 条件是死代码。未做:C,SPEC rv64 流程,
-FastWarm 重放里的 Sv39。
+ISA：`rv64gc`（`XLEN=64`、`FP=1`、`RVC=1` 默认开启，与 RTL 一致）。rv32 已从 `main` 移除（归档于 `rv32-legacy` 分支）。
 
 ## 建模方式
 
@@ -52,11 +49,9 @@ FastWarm 重放里的 Sv39。
 | [docs/PROJECT.md](docs/PROJECT.md) | 架构、配置开关(`include/config.h`)、gate、验证手段、常见坑 |
 | [docs/SCHEDULING.md](docs/SCHEDULING.md) | 一拍的调度：模块契约、自动生成的 `SimCpu::cycle()`、改了模块之后怎么做、工具看不见的共享状态 |
 | [docs/STYLE.md](docs/STYLE.md) | 代码风格的完整规则 |
-| [docs/NEXT_STATE.md](docs/NEXT_STATE.md), [docs/MODULE_CLEANUP.md](docs/MODULE_CLEANUP.md), [docs/UNIFIED_MODULES.md](docs/UNIFIED_MODULES.md) | 现行模块结构的由来：统一写法、下一状态放到 seq、各模块的整理 |
-| [docs/ENV_VARS.md](docs/ENV_VARS.md) | 全部运行期环境变量及默认值(默认配置 = RTL 配置,与 RTL 比周期不需要任何环境变量) |
-| [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | 分级 LSU:规格、近似、结果、IPC 研究 |
-| [docs/history/](docs/history/) | 历史记录:2026-11-04 的蒸馏(P0-P3)、FRONTEND_NOTES / INTEG_NOTES / MS_DATA_NOTES(前端快速路径、memspec 集成、memspec 值通路);可能已过时 |
-| [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/) | 前端编码规范,vendored 的 AXI/LLC/DDR kit |
+| [docs/ENV_VARS.md](docs/ENV_VARS.md) | 全部运行期环境变量及默认值（默认配置 = RTL 配置，与 RTL 比周期不需要任何环境变量） |
+| [docs/LSU_PIPE.md](docs/LSU_PIPE.md), [docs/LSU_PIPE_IPC.md](docs/LSU_PIPE_IPC.md) | 分级 LSU：规格、近似、结果、IPC 研究 |
+| [front-end/](front-end/), [axi-interconnect-kit/](axi-interconnect-kit/) | 前端编码规范，vendored 的 AXI/LLC/DDR kit |
 
 ## 构建
 
