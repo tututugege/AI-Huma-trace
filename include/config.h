@@ -263,6 +263,16 @@ static_assert(FPRF_NUM > FP_ARF_NUM + 1, "CFG_FPRF_NUM too small");
 #endif
 constexpr int MAX_BR_NUM = CFG_MAX_BR_NUM;
 constexpr int MAX_BR_PER_CYCLE = DECODE_WIDTH;
+// Sparse rename checkpoints + ROB-indexed local rename log + 8-wide forward walk:
+// REN_CKPT_NUM single-write-port FIFO checkpoints allocated on branches spaced by at least REN_CKPT_INTERVAL instructions.
+#ifndef CFG_REN_CKPT_NUM
+#define CFG_REN_CKPT_NUM 4
+#endif
+#ifndef CFG_REN_CKPT_INTERVAL
+#define CFG_REN_CKPT_INTERVAL 32
+#endif
+constexpr int REN_CKPT_NUM = CFG_REN_CKPT_NUM;
+constexpr int REN_CKPT_INTERVAL = CFG_REN_CKPT_INTERVAL;
 // Move elimination (EXP-012): `addi rd, rs, 0` is renamed away (rd shares rs's physical register, no uop, no free-list
 // slot, ROB entry complete at dispatch); a register is freed when no architectural RAT entry names it.
 // Upper bound of architectural RAT entries naming one physical register (the reference counters are

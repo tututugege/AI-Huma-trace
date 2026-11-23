@@ -71,6 +71,7 @@ void BackTop::init() {
   rob->in.pre2front = &pre->out.pre2front;
   rob->in.ftq_commit_info = &pre->out.ftq_commit_info;
   rob->in.idu_br_latch = &idu->q().br_latch;
+  rob->in.ren2rob = &rename->out.ren2rob;
   rob->out.top_out = &out;
   lsu->in.dec_bcast = &idu->out.dec_bcast;
   lsu->in.dis2lsu = &dis->out.dis2lsu;

@@ -4,6 +4,7 @@
 #include "MsData.h"
 #include "config.h"
 #include "DseCap.h"
+#include <algorithm>
 #include <cstring>
 
 #include "util.h"
@@ -50,20 +51,27 @@ bool Ren::elim_refs_ok(int i) const {
 }
 
 // Destination tags from the free lists, in order (each domain from its own; the first instruction that finds its list
-// empty stalls itself and everything behind it: ren2dis.valid = 0), then the source / old-destination lookup in the
-// speculative RAT, where an older instruction of the same group that writes the same architectural register (x0
-// excluded) takes precedence, the youngest such writer winning.
+// or local RenLog empty stalls itself and everything behind it: ren2dis.valid = 0), then the source / old-destination
+// lookup in the speculative RAT, where an older instruction of the same group that writes the same architectural
+// register (x0 excluded) takes precedence, the youngest such writer winning.
 void Ren::comb_rename() {
   const Regs &q = q_;
   fp_freelist_sanity(q.f);
+  out.ren2rob.walking = q.walk_active;
   int left[2] = {dse_free(q.x.free_count() - (PRF_NUM - g_dse.prf), 0), dse_free(q.f.free_count() - (FPRF_NUM - g_dse.fprf), 0)};
   int next[2] = {q.x.head, q.f.head};
-  bool stall = false;
+  int log_left = ROB_NUM - q.ren_log_used;
+  bool stall = q.walk_active;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     alloc_reg_[i] = 0;
     elim_[i] = false;
     out.ren2dis.valid[i] = false;
     if (!q.inst_valid[i]) continue;
+    if (!stall && log_left > 0) {
+      log_left--;
+    } else {
+      stall = true;
+    }
     const Uop &u = q.inst_r[i];
     if (is_move_shape(u) && elim_refs_ok(i)) {
       elim_[i] = true;
@@ -82,7 +90,7 @@ void Ren::comb_rename() {
       }
     }
   }
-  g_pmu_back.ren_no_preg = stall;
+  g_pmu_back.ren_no_preg = stall && !q.walk_active;
 
   wire<PRF_IDX_WIDTH> dest_of[DECODE_WIDTH];  // final destination tag of each slot (an eliminated move: its source)
   for (int i = 0; i < DECODE_WIDTH; i++) {
@@ -115,81 +123,181 @@ void Ren::comb_rename() {
 void Ren::comb_fire() {
   const Regs &q = q_;
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
-  out.ren2dec.ready = !flush && !mispred;
+  const bool walking = q.walk_active;
+  out.ren2dec.ready = !flush && !mispred && !walking;
   for (int i = 0; i < DECODE_WIDTH; i++) {
-    fire_[i] = out.ren2dis.valid[i] && in.dis2ren->ready;
+    fire_[i] = !walking && out.ren2dis.valid[i] && in.dis2ren->ready;
     out.ren2dec.ready &= fire_[i] || !q.inst_valid[i];
   }
 }
 
-// The clock edge. Fired instructions take their tag and checkpoint the speculative RAT at branches, commits free old
-// tags and update the architectural RAT, then flush (restore from the architectural RAT) or mispredict (restore a
-// checkpoint) override the speculative state. The pipeline register: emptied by flush / mispredict, reloaded from decode
-// when ready, else keeps the unfired instructions; bits of branches resolved this cycle are cleared from every mask that
-// stays.
+// The clock edge. Sparse REN_CKPT_NUM-entry FIFO checkpoints (branch spacing >= REN_CKPT_INTERVAL) +
+// local ROB-indexed RenLog (1R1W: commit paused during walk) + 8-wide forward walk on mispredict.
 void Ren::seq() {
   Regs &d = q_;   // updated in place
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
-  // a mispredict restores the branch's checkpoint as registered and the registered tails (this cycle's reclaims are dropped)
-  const int br = mispred ? int(in.dec_bcast->br_id) : 0;
-  Assert((!mispred || (br < MAX_BR_NUM && br != 0)) && "Ren: mispred br_id out of range");
-  decltype(d.x.spec) mis_x;
-  decltype(d.f.spec) mis_f;
-  const int x_head = d.x.ckpt_head[br], f_head = d.f.ckpt_head[br], x_tail = d.x.tail, f_tail = d.f.tail;
-  if (mispred) {
-    std::memcpy(mis_x, d.x.ckpt[br], sizeof(mis_x));
-    std::memcpy(mis_f, d.f.ckpt[br], sizeof(mis_f));
-  }
+  constexpr int K = REN_CKPT_NUM;
+  const int old_rob_head = d.ren_rob_head;
+  const int old_ckpt_count = d.ckpt_count;
+  const int old_last_ckpt_idx = old_ckpt_count > 0 ? d.ckpt[(d.ckpt_tail + K - 1) % K].rob_idx : old_rob_head;
+  auto age_of = [&](int idx) { return (idx - old_rob_head + ROB_NUM) % ROB_NUM; };
 
-  for (int i = 0; i < DECODE_WIDTH; i++) {
-    if (!fire_[i]) continue;
-    const Uop &r = out.ren2dis.uop[i];
-    if (r.dest_en) {
-      if (r->dest_fp) {
-        d.f.spec[r->dest_areg] = r->dest_preg;
-        d.f.take();
-      } else {
-        d.x.spec[r->dest_areg] = r->dest_preg;
-        if (!elim_[i]) d.x.take();
-      }
-    }
-    if (is_branch(r->type)) {  // the checkpoint includes this instruction's own rename, not younger ones
-      Assert(r->br_id < MAX_BR_NUM && "Ren: branch id out of range");
-      d.x.checkpoint(r->br_id);
-      d.f.checkpoint(r->br_id);
-    }
-  }
-
-  // An instruction that raised an exception (or retires with an interrupt) does not free its old destination: it looks
-  // as if it never committed.
+  // 1. Commit: read from local RenLog (assert lockstep with ROB), advance ren_rob_head, retire old checkpoints
   const bool interrupt = in.rob_bcast->interrupt;
+  int commit_cnt = 0;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     const auto &c = in.rob_commit->commit_entry[i];
-    if (!c.valid || interrupt || !c.uop.dest_en || is_exception(c.uop)) continue;
-    const Uop &u = c.uop;
-    if (u->dest_fp) {   // FP: no move elimination
+    if (!c.valid) break;
+    const int ridx = (old_rob_head + commit_cnt) % ROB_NUM;
+    const RenLogEntry &e = d.ren_log[ridx];
+    commit_cnt++;
+    if (interrupt || is_exception(c.uop)) continue;
+    Assert(bool(e.dest_en) == bool(c.uop.dest_en) && "RenLog: dest_en mismatch at commit");
+    if (!e.dest_en) continue;
+    Assert(bool(e.dest_fp) == bool(c.uop->dest_fp) && "RenLog: dest_fp mismatch at commit");
+    Assert(int(e.dest_areg) == int(c.uop->dest_areg) && "RenLog: dest_areg mismatch at commit");
+    Assert(int(e.dest_preg) == int(c.uop->dest_preg) && "RenLog: dest_preg mismatch at commit");
+    Assert(int(e.old_dest_preg) == int(c.uop->old_dest_preg) && "RenLog: old_dest_preg mismatch at commit");
+    Assert(bool(e.me_elim) == is_eliminated_move(c.uop) && "RenLog: me_elim mismatch at commit");
+    if (e.dest_fp) {
       d.f.commit_alloc();
-      d.f.reclaim(u->old_dest_preg);
-      d.f.arch[u->dest_areg] = u->dest_preg;
-      continue;
+      d.f.reclaim(e.old_dest_preg);
+      d.f.arch[e.dest_areg] = e.dest_preg;
+    } else {
+      Assert(!mispred && "Ren(ME): commit together with mispredict");
+      if (!e.me_elim) d.x.commit_alloc();
+      d.arch_cnt[e.dest_preg]++;
+      if (--d.arch_cnt[e.old_dest_preg] == 0) d.x.reclaim(e.old_dest_preg);
+      d.x.arch[e.dest_areg] = e.dest_preg;
     }
-    // move elimination: the old tag is freed when no architectural register names it any more; an eliminated move
-    // allocated nothing, so it does not advance the commit head
-    Assert(!mispred && "Ren(ME): commit together with mispredict");
-    if (!is_eliminated_move(u)) d.x.commit_alloc();
-    d.arch_cnt[u->dest_preg]++;
-    if (--d.arch_cnt[u->old_dest_preg] == 0) d.x.reclaim(u->old_dest_preg);
-    d.x.arch[u->dest_areg] = u->dest_preg;
+  }
+  if (commit_cnt > 0) {
+    d.ren_rob_head = (old_rob_head + commit_cnt) % ROB_NUM;
+    d.ren_log_used -= commit_cnt;
+    Assert(d.ren_log_used >= 0 && "RenLog: underflow at commit");
+    while (d.ckpt_count > 0 && age_of(d.ckpt[d.ckpt_head].rob_idx) < commit_cnt) {
+      d.ckpt[d.ckpt_head].valid = false;
+      d.ckpt_head = (d.ckpt_head + 1) % K;
+      d.ckpt_count--;
+    }
   }
 
+  // 2. Speculative state transition: flush > mispred > walk > normal rename fire
   if (flush) {
     d.x.restore_arch();
     d.f.restore_arch();
-  } else if (mispred) {  // never together with flush
-    std::memcpy(d.x.spec, mis_x, sizeof(mis_x));
-    std::memcpy(d.f.spec, mis_f, sizeof(mis_f));
-    d.x.head = x_head; d.x.tail = x_tail;
-    d.f.head = f_head; d.f.tail = f_tail;
+    d.ren_rob_head = 0;
+    d.ren_rob_tail = 0;
+    d.ren_log_used = 0;
+    for (int i = 0; i < K; i++) d.ckpt[i].valid = false;
+    d.ckpt_head = d.ckpt_tail = d.ckpt_count = 0;
+    d.walk_active = false;
+    d.walk_ptr = 0;
+    d.walk_rem = 0;
+  } else if (mispred) {
+    Assert(commit_cnt == 0 && "Ren: commit during mispredict");
+    const int br_idx = static_cast<int>(in.dec_bcast->redirect_rob_idx);
+    const int br_age = age_of(br_idx);
+    Assert(br_age < d.ren_log_used && "RenLog: mispredicted branch outside valid range");
+
+    int best_k = -1;
+    for (int k = 0; k < d.ckpt_count; k++) {
+      const int slot = (d.ckpt_head + k) % K;
+      if (d.ckpt[slot].valid && age_of(d.ckpt[slot].rob_idx) <= br_age) best_k = k;
+    }
+    if (best_k >= 0) {
+      const int best_slot = (d.ckpt_head + best_k) % K;
+      const RenCkptEntry &ck = d.ckpt[best_slot];
+      std::memcpy(d.x.spec, ck.x_spec, sizeof(d.x.spec));
+      std::memcpy(d.f.spec, ck.f_spec, sizeof(d.f.spec));
+      d.x.head = ck.x_head;
+      d.f.head = ck.f_head;
+      for (int k = best_k + 1; k < d.ckpt_count; k++) d.ckpt[(d.ckpt_head + k) % K].valid = false;
+      d.ckpt_count = best_k + 1;
+      d.ckpt_tail = (d.ckpt_head + d.ckpt_count) % K;
+      const int best_age = age_of(ck.rob_idx);
+      if (best_age == br_age) {
+        d.walk_active = false;
+        d.walk_rem = 0;
+      } else {
+        d.walk_active = true;
+        d.walk_ptr = (ck.rob_idx + 1) % ROB_NUM;
+        d.walk_rem = br_age - best_age;
+      }
+    } else {
+      d.x.restore_arch();
+      d.f.restore_arch();
+      for (int i = 0; i < K; i++) d.ckpt[i].valid = false;
+      d.ckpt_head = d.ckpt_tail = d.ckpt_count = 0;
+      d.walk_active = true;
+      d.walk_ptr = d.ren_rob_head;
+      d.walk_rem = br_age + 1;
+    }
+    d.ren_rob_tail = (br_idx + 1) % ROB_NUM;
+    d.ren_log_used = br_age + 1;
+  } else if (d.walk_active) {
+    const int step = std::min(d.walk_rem, DECODE_WIDTH);
+    for (int k = 0; k < step; k++) {
+      const RenLogEntry &e = d.ren_log[(d.walk_ptr + k) % ROB_NUM];
+      if (!e.dest_en) continue;
+      if (e.dest_fp) {
+        d.f.spec[e.dest_areg] = e.dest_preg;
+        d.f.take();
+      } else {
+        d.x.spec[e.dest_areg] = e.dest_preg;
+        if (!e.me_elim) d.x.take();
+      }
+    }
+    d.walk_ptr = (d.walk_ptr + step) % ROB_NUM;
+    d.walk_rem -= step;
+    if (d.walk_rem == 0) d.walk_active = false;
+  } else {
+    const bool can_alloc = (old_ckpt_count < K);
+    const int anchor = old_last_ckpt_idx;
+    bool ckpt_done = false;
+    int fired_n = 0;
+    for (int i = 0; i < DECODE_WIDTH; i++) {
+      if (!fire_[i]) continue;
+      const Uop &r = out.ren2dis.uop[i];
+      const int ridx = (d.ren_rob_tail + fired_n) % ROB_NUM;
+      RenLogEntry &e = d.ren_log[ridx];
+      e.dest_en = r.dest_en;
+      e.dest_fp = r->dest_fp;
+      e.dest_areg = r->dest_areg;
+      e.dest_preg = r->dest_preg;
+      e.old_dest_preg = r->old_dest_preg;
+      e.me_elim = elim_[i];
+
+      if (r.dest_en) {
+        if (r->dest_fp) {
+          d.f.spec[r->dest_areg] = r->dest_preg;
+          d.f.take();
+        } else {
+          d.x.spec[r->dest_areg] = r->dest_preg;
+          if (!elim_[i]) d.x.take();
+        }
+      }
+
+      if (can_alloc && !ckpt_done) {
+        const int dist = (ridx - anchor + ROB_NUM) % ROB_NUM;
+        if (is_branch(r->type) && (dist >= REN_CKPT_INTERVAL)) {
+          RenCkptEntry &ck = d.ckpt[d.ckpt_tail];
+          ck.valid = true;
+          ck.rob_idx = ridx;
+          std::memcpy(ck.x_spec, d.x.spec, sizeof(d.x.spec));
+          std::memcpy(ck.f_spec, d.f.spec, sizeof(d.f.spec));
+          ck.x_head = d.x.head;
+          ck.f_head = d.f.head;
+          d.ckpt_tail = (d.ckpt_tail + 1) % K;
+          d.ckpt_count++;
+          ckpt_done = true;
+        }
+      }
+      fired_n++;
+    }
+    d.ren_rob_tail = (d.ren_rob_tail + fired_n) % ROB_NUM;
+    d.ren_log_used += fired_n;
+    Assert(d.ren_log_used <= ROB_NUM && "RenLog: overflow at fire");
   }
   fp_freelist_sanity(d.f);
 

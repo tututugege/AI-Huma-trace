@@ -141,10 +141,11 @@ void Rob::commit() {
 
   const bool front_stall = static_cast<bool>(in.top_in->front_stall);
   const bool mispred = in.dec_bcast->mispred;
+  const bool ren_walking = static_cast<bool>(in.ren2rob->walking);
   const bool intr = csr_state().interrupt_req();
   int n = 0;
   bool single = false;
-  if (q.c_count > 0 && !mispred) {
+  if (q.c_count > 0 && !mispred && !ren_walking) {
     const Uop &h = q.cent(q.c_head).uop;
     const bool h_alone = rob_is_flush_inst(h) || rob_is_fence(h) || rob_is_wfi(h);
     if (intr) {

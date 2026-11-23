@@ -19,7 +19,7 @@ struct BackIn;
 
 // Reorder buffer (compact, line-organized). Contract (checked by scripts/comb/comb_graph.py against the code): the signals
 // each phase reads (in) and writes (out), and the outputs only this module drives.
-//   CONTRACT comb_commit  in: in.dec_bcast in.lsu2rob in.top_in.front_stall in.top_in.front_tq_free in.top_in.front_upd_free  out: out.rob2csr out.rob2dis out.rob_bcast out.rob_bcast_d out.rob_commit
+//   CONTRACT comb_commit  in: in.dec_bcast in.lsu2rob in.ren2rob in.top_in.front_stall in.top_in.front_tq_free in.top_in.front_upd_free  out: out.rob2csr out.rob2dis out.rob_bcast out.rob_bcast_d out.rob_commit
 //   CONTRACT comb_redirect  in: in.dec_bcast in.ftq_commit_info in.idu_br_latch in.pre2front out.top_out.flush out.top_out.mispred out.top_out.redirect_pc out.top_out.rf_slot out.top_out.rf_valid  out: out.rob2csr out.top_out
 class Rob {
 public:
@@ -53,6 +53,7 @@ public:
     const PreFrontIO *pre2front = nullptr;
     const FtqCommitInfoIO *ftq_commit_info = nullptr;
     const ExuIdIO *idu_br_latch = nullptr;   // the IDU's branch latch (its register): the mispredict target
+    const RenRobIO *ren2rob = nullptr;       // Ren walking state (stalls commit in 1R1W RenLog mode)
   } in;
   const class PreIduQueue *ftq = nullptr;
 

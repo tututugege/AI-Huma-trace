@@ -20,6 +20,11 @@ struct RenDecIO {
   wire<1> ready = {};
 };
 
+struct RenRobIO {
+
+  wire<1> walking = {};
+};
+
 // IDU -> PreIduQueue consume handshake (only what PreIduQueue needs).
 struct IduConsumeIO {
   wire<1> fire[DECODE_WIDTH] = {};
