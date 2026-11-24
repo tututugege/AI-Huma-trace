@@ -77,7 +77,9 @@ public:
   using IntDomain = RenDomain<ARF_NUM + 1, PRF_NUM>;
   using FpDomain = RenDomain<FP_ARF_NUM, FPRF_NUM>;
   struct Regs {
-    Uop inst_r[DECODE_WIDTH];   // the group waiting for dispatch
+    Uop s1_inst[DECODE_WIDTH];  // Stage 1 pre-rename register (IDU -> S1 -> S2)
+    reg<1> s1_valid[DECODE_WIDTH];
+    Uop inst_r[DECODE_WIDTH];   // Stage 2 group waiting for dispatch
     reg<1> inst_valid[DECODE_WIDTH];
     IntDomain x;
     FpDomain f;
@@ -102,5 +104,6 @@ private:
   wire<PRF_IDX_WIDTH> alloc_reg_[DECODE_WIDTH];   // the destination tag taken from the free list (0: none)
   bool elim_[DECODE_WIDTH];                       // move elimination: renamed away, takes no free tag
   bool fire_[DECODE_WIDTH];                       // the slot went to dispatch
+  bool s2_ready_ = false;                         // Stage 2 ready to accept next group from Stage 1
   bool elim_refs_ok(int i) const;
 };

@@ -119,16 +119,20 @@ void Ren::comb_rename() {
   }
 }
 
-// The dispatch handshake: the fired slots and ren2dec.ready.
+// The dispatch handshake: the fired slots, S2 advance, and ren2dec.ready (2-stage Ren: IDU -> S1 -> S2 -> DIS).
 void Ren::comb_fire() {
   const Regs &q = q_;
   const bool flush = in.rob_bcast->flush, mispred = in.dec_bcast->mispred;
   const bool walking = q.walk_active;
-  out.ren2dec.ready = !flush && !mispred && !walking;
+  bool s2_ready = !flush && !mispred && !walking;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     fire_[i] = !walking && out.ren2dis.valid[i] && in.dis2ren->ready;
-    out.ren2dec.ready &= fire_[i] || !q.inst_valid[i];
+    s2_ready &= fire_[i] || !q.inst_valid[i];
   }
+  s2_ready_ = s2_ready;
+  bool s1_empty = true;
+  for (int i = 0; i < DECODE_WIDTH; i++) if (q.s1_valid[i]) s1_empty = false;
+  out.ren2dec.ready = !flush && !mispred && (s1_empty || s2_ready);
 }
 
 // The clock edge. Sparse REN_CKPT_NUM-entry FIFO checkpoints (branch spacing >= REN_CKPT_INTERVAL) +
@@ -302,16 +306,33 @@ void Ren::seq() {
   fp_freelist_sanity(d.f);
 
   const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
+  const bool s2_take = s2_ready_;
+  const bool s1_take = out.ren2dec.ready;
+  // Advance S2 from S1 before overwriting S1
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (flush || mispred) {
       d.inst_valid[i] = false;
-    } else if (out.ren2dec.ready) {
-      d.inst_valid[i] = in.dec2ren->valid[i];
-      d.inst_r[i] = in.dec2ren->uop[i];
-      d.inst_r[i].br_mask &= ~clear;
+    } else if (s2_take) {
+      d.inst_valid[i] = d.s1_valid[i];
+      d.inst_r[i] = d.s1_inst[i];
+      if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
     } else {
       d.inst_valid[i] = d.inst_valid[i] && !fire_[i];
       if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
+    }
+  }
+  // Advance S1 from IDU
+  for (int i = 0; i < DECODE_WIDTH; i++) {
+    if (flush || mispred) {
+      d.s1_valid[i] = false;
+    } else if (s1_take) {
+      d.s1_valid[i] = in.dec2ren->valid[i];
+      d.s1_inst[i] = in.dec2ren->uop[i];
+      if (d.s1_valid[i]) d.s1_inst[i].br_mask &= ~clear;
+    } else if (s2_take) {
+      d.s1_valid[i] = false;
+    } else {
+      if (d.s1_valid[i]) d.s1_inst[i].br_mask &= ~clear;
     }
   }
 }

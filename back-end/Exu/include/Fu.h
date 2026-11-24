@@ -45,23 +45,27 @@ inline void resolve_branch(ExuInst &inst);
 // Variable latency of the Radix-16 (dual Radix-4, 4 bits/cycle) early-out integer divider:
 //   - divisor == 0 or |dividend| < |divisor|: 2 cycles (accept computes special result, next cycle wakes & blocks port 1 ALU, then wb)
 //   - otherwise: diff = clz(|divisor|) - clz(|dividend|) in 0..63 (0..31 for *W), iters = (diff >> 2) + 1 in 1..16, latency = 1 + iters (2..17).
-inline int div_radix16_latency(uint32_t rob_idx, uint32_t func3, bool word) {
-  const tb::Fact *f = tbhook::fact_by_rob(rob_idx);
+inline int div_radix16_latency(const ExuInst &inst) {
+  const tb::Fact *f = tbhook::fact_by_rob(inst->rob_idx);
   if (!f) return 2;
-  const bool is_signed = !(func3 & 1u);
+  const uint64_t r1 = (inst->src1_en && inst->src1_preg < TAG_NUM && msd::live(inst->src1_preg))
+                        ? static_cast<uint64_t>(msd::view(inst->src1_preg).v) : static_cast<uint64_t>(f->rs1_value);
+  const uint64_t r2 = (inst->src2_en && inst->src2_preg < TAG_NUM && msd::live(inst->src2_preg))
+                        ? static_cast<uint64_t>(msd::view(inst->src2_preg).v) : static_cast<uint64_t>(f->rs2_value);
+  const bool is_signed = !(inst->func3 & 1u);
   uint64_t a_mag, b_mag;
-  if (word) {
-    const int32_t as = static_cast<int32_t>(f->rs1_value);
-    const int32_t bs = static_cast<int32_t>(f->rs2_value);
-    const uint32_t au = static_cast<uint32_t>(f->rs1_value);
-    const uint32_t bu = static_cast<uint32_t>(f->rs2_value);
+  if (inst->is_word) {
+    const int32_t as = static_cast<int32_t>(r1);
+    const int32_t bs = static_cast<int32_t>(r2);
+    const uint32_t au = static_cast<uint32_t>(r1);
+    const uint32_t bu = static_cast<uint32_t>(r2);
     a_mag = is_signed ? static_cast<uint64_t>(as < 0 ? (0u - au) : au) : static_cast<uint64_t>(au);
     b_mag = is_signed ? static_cast<uint64_t>(bs < 0 ? (0u - bu) : bu) : static_cast<uint64_t>(bu);
   } else {
-    const int64_t as = static_cast<int64_t>(f->rs1_value);
-    const int64_t bs = static_cast<int64_t>(f->rs2_value);
-    const uint64_t au = static_cast<uint64_t>(f->rs1_value);
-    const uint64_t bu = static_cast<uint64_t>(f->rs2_value);
+    const int64_t as = static_cast<int64_t>(r1);
+    const int64_t bs = static_cast<int64_t>(r2);
+    const uint64_t au = r1;
+    const uint64_t bu = r2;
     a_mag = is_signed ? (as < 0 ? (0ull - au) : au) : au;
     b_mag = is_signed ? (bs < 0 ? (0ull - bu) : bu) : bu;
   }
@@ -72,7 +76,7 @@ inline int div_radix16_latency(uint32_t rob_idx, uint32_t func3, bool word) {
 
 // Latency of an iterative unit: Radix-16 early-out divider (2..17 cycles), FP divide / square root unit its S / D latency.
 inline int iter_latency(FuKind kind, const ExuInst &inst) {
-  if (kind == FuKind::DIV) return div_radix16_latency(inst->rob_idx, inst->func3, inst->is_word);
+  if (kind == FuKind::DIV) return div_radix16_latency(inst);
   if (kind == FuKind::FDIV) {   // F/D divide / square root: funct7[1:0] = fmt (1 = D), funct5 0x0b = fsqrt
     const bool d = inst->func7 & 1, sq = (inst->func7 >> 2) == 0x0b;
     return sq ? (d ? FP_FSQRT_D_LAT : FP_FSQRT_S_LAT) : (d ? FP_FDIV_D_LAT : FP_FDIV_S_LAT);
