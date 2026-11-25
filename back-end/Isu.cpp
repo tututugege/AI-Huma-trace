@@ -133,8 +133,8 @@ int Isu::grant_gate(const Uop &u, int port, bool reserve) {
   const int off = (t == UOP_FDIV) ? lat + 1 : lat;   // iterative FP units finish one cycle later than their wake-up latency
   if (t != UOP_DIV && !wb_busy_.free(port, off)) return GATE_REF_WB;   // another uop of the port completes in that cycle
   const bool fpw = u.dest_en && u->dest_fp && (t == UOP_FMA || t == UOP_FMISC || t == UOP_FDIV || t == UOP_I2F);
-  if (!reserve) return fpw && fp_wb_busy_.full(lat) ? GATE_REF_FPWB : GATE_OK;
-  if (fpw && !fp_wb_busy_.try_reserve(lat)) return GATE_REF_FPWB;
+  if (!reserve) return fpw && fp_wb_busy_.full(off) ? GATE_REF_FPWB : GATE_OK;
+  if (fpw && !fp_wb_busy_.try_reserve(off)) return GATE_REF_FPWB;
   if (t != UOP_DIV) wb_busy_.reserve(port, off);
   if (agu_port >= 0) agu_ports_used_ |= 1u << agu_port;
   return GATE_OK;

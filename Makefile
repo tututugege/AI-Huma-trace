@@ -36,9 +36,10 @@ FM_REV ?= 55affa0
 FM_DIR := $(BUILD_DIR)/fm-$(FM_REV)-x$(XLEN)c$(RVC)
 REFCPU_LIB ?= $(FM_DIR)/librefcpu.a
 REFCPU_INC ?= $(FM_DIR)/include/api/
+SOFTFLOAT_LIB ?= $(FM_DIR)/lib/softfloat/softfloat.a
 # the function model's RVC expansion table (front-end/front_top.cpp), from the same tree as the API header
 CXXFLAGS += -DREFCPU_RVC_H='"$(abspath $(REFCPU_INC))/../rvc.h"'
-LIBS := $(REFCPU_LIB) ./libs/softfloat.a
+LIBS := $(REFCPU_LIB) $(SOFTFLOAT_LIB)
 LDFLAGS := -lz -lstdc++fs
 ifneq ($(ZLIB_LIBDIR),)
 LDFLAGS := -L$(ZLIB_LIBDIR) $(LDFLAGS)
@@ -142,6 +143,8 @@ all: $(SIM_EXE)
 $(SIM_EXE): $(OBJS) $(LIBS)
 	@echo "Linking $@"
 	@$(CXX) $(OBJS) $(LIBS) $(LDFLAGS) -o $@ $(CXXFLAGS)
+
+$(FM_DIR)/lib/softfloat/softfloat.a: $(FM_DIR)/librefcpu.a
 
 $(FM_DIR)/librefcpu.a:
 	@echo "Building the function model $(FM_REV) (XLEN=$(XLEN) RVC=$(RVC) FP=1) in $(FM_DIR)"

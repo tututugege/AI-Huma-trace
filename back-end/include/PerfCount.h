@@ -20,6 +20,7 @@ public:
 
   void perf_reset() {
     cycle = 0;
+    cycle_base = 0;
     commit_num = 0;
     commit_load_num = 0;
     commit_store_num = 0;
