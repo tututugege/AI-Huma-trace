@@ -109,6 +109,4 @@ python3 scripts/comb/gen_top_order.py --write  # 写回 SimCpu.cpp / front_top.c
 
 ## 相关文档
 
-* [UNIFIED_MODULES.md](UNIFIED_MODULES.md)：统一模块写法的由来（u2–u5）。
-* [NEXT_STATE.md](NEXT_STATE.md)、[MODULE_CLEANUP.md](MODULE_CLEANUP.md)：下一状态放到 seq、各模块的整理。
-* [MODULE_CONTRACT.md](MODULE_CONTRACT.md)、[REG_WIRE.md](REG_WIRE.md)、[FRONT_MODULES.md](FRONT_MODULES.md)：过程记录，里面提到的 `gen_comb_order.py`、`gen_mem_order.py`、`gen_front_order.py`、q/d 双份寄存器等已经不是现行做法。
+* 历史过程记录（[archive/FRONT_MODULES.md](archive/FRONT_MODULES.md) 及已入 git 历史的 `UNIFIED_MODULES.md`、`NEXT_STATE.md`、`MODULE_CLEANUP.md`、`MODULE_CONTRACT.md`、`REG_WIRE.md`）仅作备查，不再维护。
