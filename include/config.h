@@ -399,7 +399,7 @@ constexpr int LSU_AGU_SHARED = 2;
 // Dispatch steers a uop by position: CSR to IQ_INT, I2F to IQ_INT1, the others by the parity of the ROB index.
 constexpr int IQ_INT_SIZE = 32;
 #ifndef CFG_BR_IQ_SIZE
-#define CFG_BR_IQ_SIZE 32
+#define CFG_BR_IQ_SIZE 64
 #endif
 // Per-IQ enqueue (dispatch write-port) width per cycle; default = about the IQ issue-port count (EXP-014).
 constexpr int IQ_INT_ENQ_WIDTH = 4;

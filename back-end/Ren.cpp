@@ -303,7 +303,6 @@ void Ren::seq() {
   }
   fp_freelist_sanity(d.f);
 
-  const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
   const bool s2_take = s2_ready_;
   const bool s1_take = out.ren2dec.ready;
   // Advance S2 from S1 before overwriting S1
@@ -313,10 +312,8 @@ void Ren::seq() {
     } else if (s2_take) {
       d.inst_valid[i] = d.s1_valid[i];
       d.inst_r[i] = d.s1_inst[i];
-      if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
     } else {
       d.inst_valid[i] = d.inst_valid[i] && !fire_[i];
-      if (d.inst_valid[i]) d.inst_r[i].br_mask &= ~clear;
     }
   }
   // Advance S1 from IDU
@@ -326,11 +323,8 @@ void Ren::seq() {
     } else if (s1_take) {
       d.s1_valid[i] = in.dec2ren->valid[i];
       d.s1_inst[i] = in.dec2ren->uop[i];
-      if (d.s1_valid[i]) d.s1_inst[i].br_mask &= ~clear;
     } else if (s2_take) {
       d.s1_valid[i] = false;
-    } else {
-      if (d.s1_valid[i]) d.s1_inst[i].br_mask &= ~clear;
     }
   }
 }

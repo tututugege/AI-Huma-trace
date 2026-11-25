@@ -84,7 +84,8 @@ private:
   struct LoadWake {
     wire<1> valid = false;
     wire<PRF_IDX_WIDTH> preg = 0;
-    wire<BR_MASK_WIDTH> br_mask = 0;
+    wire<ROB_IDX_WIDTH> rob_idx = 0;
+    wire<1> rob_flag = 0;
   };
   // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
   // is still updated in place in comb: not yet under the contract.)

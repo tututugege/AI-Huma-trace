@@ -52,21 +52,21 @@ struct FrontPreIO {
   wire<1> pf_inst_hi[BACKEND_FETCH_WIDTH] = {};
 };
 
+// Circular ROB-pointer age comparison: returns true iff (a_flag, a_idx) is strictly younger than (b_flag, b_idx).
+inline bool is_younger_rob(uint32_t a_idx, uint32_t a_flag, uint32_t b_idx, uint32_t b_flag) {
+  return (a_flag == b_flag) ? (a_idx > b_idx) : (a_idx < b_idx);
+}
+
 struct DecBroadcastIO {
 
   wire<1> mispred;
-  wire<BR_MASK_WIDTH> br_mask;
-  wire<BR_TAG_WIDTH> br_id;
   wire<ROB_IDX_WIDTH> redirect_rob_idx;
-  wire<BR_MASK_WIDTH> clear_mask; // Bits to clear from all in-flight br_masks
-                                  // (resolved branches)
+  wire<1> redirect_rob_flag;
 
   DecBroadcastIO() {
     mispred = {};
-    br_mask = {};
-    br_id = {};
     redirect_rob_idx = {};
-    clear_mask = 0;
+    redirect_rob_flag = {};
   }
 };
 
@@ -258,11 +258,9 @@ struct ExuIdIO {
   wire<1> mispred;
   wire<XLEN> redirect_pc;
   wire<ROB_IDX_WIDTH> redirect_rob_idx;
-  wire<BR_TAG_WIDTH> br_id;
+  wire<1> redirect_rob_flag;
   wire<FTQ_IDX_WIDTH>
       ftq_idx; // FTQ index of mispredicting branch, for tail recovery
-  wire<BR_MASK_WIDTH>
-      clear_mask; // OR of all resolved branches' (1 << br_id) this cycle
   wire<4> ftq_off;  // BPA_REPAIR: slot of the mispredicting branch in its fetch block
   wire<3> br_type;  // BPA_REPAIR: its type (BR_* encoding of the BPU)
 
@@ -272,9 +270,8 @@ struct ExuIdIO {
     mispred = {};
     redirect_pc = {};
     redirect_rob_idx = {};
-    br_id = {};
+    redirect_rob_flag = {};
     ftq_idx = 0;
-    clear_mask = 0;
   }
 };
 
@@ -399,11 +396,6 @@ struct StqEntry {
   wire<1> is_mmio = false;
   wire<1> sc_pass = false; // For SC: whether the store-conditional succeeded
   wire<PRF_IDX_WIDTH> dest_preg = 0; // SC returns 0/1 through STA writeback
-
-
-
-
-  wire<BR_MASK_WIDTH> br_mask = {};
   wire<ROB_IDX_WIDTH> rob_idx = 0;
   wire<1> rob_flag = 0;
   wire<1> stq_flag = 0;
@@ -550,10 +542,8 @@ struct LsuExeIO {
 struct DisLsuIO {
   wire<1> alloc_req[MAX_STQ_DISPATCH_WIDTH] = {};
   uint16_t id[MAX_STQ_DISPATCH_WIDTH] = {};
-  wire<BR_MASK_WIDTH> br_mask[MAX_STQ_DISPATCH_WIDTH] = {};
   wire<1> ldq_alloc_req[MAX_LDQ_DISPATCH_WIDTH] = {};
   uint16_t ldq_id[MAX_LDQ_DISPATCH_WIDTH] = {};
-  wire<BR_MASK_WIDTH> ldq_br_mask[MAX_LDQ_DISPATCH_WIDTH] = {};
 };
 
 struct ExeLsuIO {

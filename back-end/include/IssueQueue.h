@@ -47,8 +47,8 @@ struct IssueQueueIn {
   wire<1> issue_block = 0;
   wire<1> flush_all = 0;
   wire<1> flush_br = 0;
-  wire<BR_MASK_WIDTH> flush_br_mask = 0;
-  wire<BR_MASK_WIDTH> clear_mask = 0;
+  wire<ROB_IDX_WIDTH> flush_rob_idx = 0;
+  wire<1> flush_rob_flag = 0;
   wire<MAX_UOP_TYPE> port_fu_ready_mask[ISSUE_WIDTH] = {};
   // extra grant condition (completion-cycle reservation of the port, FP write-port reservation, shared AGU): 0 = granted (the reservations
   // are made), otherwise the GateRefuse reason; called only for a grant about to be made
@@ -148,8 +148,8 @@ public:
     in.issue_block = 0;
     in.flush_all = 0;
     in.flush_br = 0;
-    in.flush_br_mask = 0;
-    in.clear_mask = 0;
+    in.flush_rob_idx = 0;
+    in.flush_rob_flag = 0;
   }
 
   // The registers woken this cycle (the valid channels of the wake-up bus, in channel order); applied at seq.
@@ -294,28 +294,16 @@ private:
   }
 
   // Flush
-  void flush_br(wire<BR_MASK_WIDTH> br_mask) {
+  void flush_br() {
     for (size_t w = 0; w < d_vmask.size(); w++)
       for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int i = int(w * 64) + __builtin_ctzll(m);
-        if ((q_.entry[i].uop.br_mask & br_mask) == 0) continue;
+        if (!is_younger_rob(q_.entry[i].uop->rob_idx, q_.entry[i].uop->rob_flag, in.flush_rob_idx, in.flush_rob_flag)) continue;
         clear_dep_bits_for_slot(q_.entry[i], i);
         q_.entry[i].valid = false;
         d_vmask[w] &= ~(1ull << (i & 63));
         mark_slot(i);
         q_.count--;
-      }
-  }
-
-  // Clear resolved branch bits from surviving entries
-  void clear_br(wire<BR_MASK_WIDTH> clear_mask) {
-    if (clear_mask == 0) return;
-    for (size_t w = 0; w < d_vmask.size(); w++)
-      for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
-        const int i = int(w * 64) + __builtin_ctzll(m);
-        if ((q_.entry[i].uop.br_mask & clear_mask) == 0) continue;   // unchanged entries need no copy at seq()
-        q_.entry[i].uop.br_mask &= ~clear_mask;
-        mark_slot(i);
       }
   }
 
@@ -361,8 +349,7 @@ public:
       Assert(success && "issue queue overflow: dispatch logic error");
     }
     if (in.flush_all) flush_all();
-    else if (in.flush_br) flush_br(in.flush_br_mask);
-    if (in.clear_mask) clear_br(in.clear_mask);
+    else if (in.flush_br) flush_br();
     if (entry_dirty) {
       if (entry_all_dirty) {
         for (int i = 0; i < size; i++) refresh_ready(i);

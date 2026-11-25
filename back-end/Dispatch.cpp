@@ -28,7 +28,6 @@ void Dispatch::init() {
 // see (the stores before it); a load or store that finds no entry or port is not valid for the ROB.
 void Dispatch::comb_alloc() {
   const Regs &q = q_;
-  const auto clear_mask = in.dec_bcast->clear_mask;
   const LsuDisIO &lsu = *in.lsu2dis;
   int stores = 0, loads = 0, rob_k = 0;   // rob_k: position among the valid slots (the ROB entry is the tail + rob_k)
   for (int &o : stq_port_owner) o = -1;
@@ -43,7 +42,6 @@ void Dispatch::comb_alloc() {
     iq_blk_width[i] = false;
     Uop &u = out.dis2rob.uop[i];
     u = q.inst_r[i];
-    u.br_mask &= ~clear_mask;  // branches resolved this cycle must not enter the back-end buffers
     u.cplt_mask = 0;
     out.dis2rob.valid[i] = q.inst_valid[i];
     if (!q.inst_valid[i]) continue;   // (an invalid slot's handle names an instruction that has left: its pool entry is not written)
@@ -152,20 +150,17 @@ void Dispatch::comb_dispatch() {
   out.dis2ren.ready = !stalled;
 
   // the LSQ allocation requests of the fired loads and stores (the LSU reads the rest from the pool by id)
-  const auto clear_mask = in.dec_bcast->clear_mask;
   for (int k = 0; k < MAX_STQ_DISPATCH_WIDTH; k++) {
     const int i = stq_port_owner[k];
     out.dis2lsu.alloc_req[k] = i >= 0 && out.dis2rob.dis_fire[i];
     if (!out.dis2lsu.alloc_req[k]) continue;
     out.dis2lsu.id[k] = out.dis2rob.uop[i].id;
-    out.dis2lsu.br_mask[k] = out.dis2rob.uop[i].br_mask & ~clear_mask;
   }
   for (int k = 0; k < MAX_LDQ_DISPATCH_WIDTH; k++) {
     const int i = ldq_port_owner[k];
     out.dis2lsu.ldq_alloc_req[k] = i >= 0 && out.dis2rob.dis_fire[i];
     if (!out.dis2lsu.ldq_alloc_req[k]) continue;
     out.dis2lsu.ldq_id[k] = out.dis2rob.uop[i].id;
-    out.dis2lsu.ldq_br_mask[k] = out.dis2rob.uop[i].br_mask & ~clear_mask;
   }
 }
 
@@ -193,14 +188,12 @@ void Dispatch::seq() {
       std::fprintf(stderr, "DISTR %llu SET123 lane=%d rob=%d pc=%llx elim=%d\n", (unsigned long long)g_dbg_cycle, i, (int)d.inst_r[i]->rob_idx, (unsigned long long)d.inst_r[i]->dbg.pc, (int)is_eliminated_move(d.inst_r[i]));
   }
   const Regs &q = q_;
-  const auto clear_mask = in.dec_bcast->clear_mask;
   const bool kill = in.rob_bcast->flush || in.dec_bcast->mispred;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     if (kill) { d.inst_valid[i] = false; continue; }
     if (out.dis2ren.ready) {
       d.inst_valid[i] = in.ren2dis->valid[i];
       d.inst_r[i] = in.ren2dis->uop[i];
-      d.inst_r[i].br_mask &= ~clear_mask;
       continue;
     }
     d.inst_valid[i] = q.inst_valid[i] && !out.dis2rob.dis_fire[i];
@@ -209,7 +202,6 @@ void Dispatch::seq() {
       d.inst_r[i].src2_busy = out.dis2rob.uop[i].src2_busy;
       d.inst_r[i].src3_busy = out.dis2rob.uop[i].src3_busy;
       apply_wakeup_to_uop(d.inst_r[i]);
-      d.inst_r[i].br_mask &= ~clear_mask;
     }
   }
 }
@@ -225,7 +217,6 @@ Uop Dispatch::make_dis_iss_uop(const Uop &inst, int k) const {
   uop.src1_busy = inst.src1_busy;
   uop.src2_busy = inst.src2_busy;
   uop.src3_busy = inst.src3_busy;
-  uop.br_mask = inst.br_mask;
   return uop;
 }
 

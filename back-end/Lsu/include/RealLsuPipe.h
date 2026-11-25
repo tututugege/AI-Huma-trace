@@ -69,7 +69,6 @@ struct PLdq {
   const UopS &uop() const { return uop_pool[id]; }
   uint32_t pc() const { return static_cast<uint32_t>(uop().dbg.pc); }   // (32 bits: the memory-dependence predictor's index)
   wire<4> st = L_EMPTY;
-  wire<BR_MASK_WIDTH> br_mask = 0;
   wire<XLEN> vaddr = 0;
   wire<1> pa_v = 0;           // paddr valid (translated once; replays skip the DTLB)
   wire<32> paddr = 0;
@@ -117,7 +116,6 @@ struct PStq {
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<ROB_IDX_WIDTH> rob_idx = 0;
   wire<1> rob_flag = 0;
-  wire<BR_MASK_WIDTH> br_mask = 0;
   wire<2> rtype = 0;
   wire<RWAIT_W> rwait = 0;
 };

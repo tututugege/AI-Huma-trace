@@ -11,6 +11,7 @@
 //   Commit side     16-entry 1-branch/cycle queue (brq[16], never backpressures ROB) + 1R1W ftb_rec_[512] -> single-branch RMW
 //                   update to all 7 arrays.
 #include "BPU.h"
+#include "BpuSc.h"
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -72,6 +73,9 @@ struct FtbBlkRec {
   uint16_t id = 0;
   pc_t base = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
+  uint16_t ex_fh[EX_FH_K][EX_TN] = {};
+  uint16_t sc_fh[SC_GEHL_N] = {};
+  uint8_t imli = 0;
   bool ah_v = false;
   uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
@@ -447,7 +451,8 @@ struct FtbAhPipe {
 struct FtbRaw {
   bool ftb_hit = false;
   FtbEnt ent{};
-  BlockTage::Raw s2_tage_raw{};
+  ExBlockTage::Raw s2_tage_raw{};
+  StatCorrector::Raw s2_sc_raw{};
   BlockItt::Raw itt_raw{};
 };
 
@@ -466,6 +471,9 @@ struct FtbTrkBr {
 struct FtbTrainEv {
   pc_t start = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
+  uint16_t ex_fh[EX_FH_K][EX_TN] = {};
+  uint16_t sc_fh[SC_GEHL_N] = {};
+  uint8_t imli = 0;
   bool ah_v = false;
   uint8_t ah_kind = 1; // 1 = 1-ahead A (aftb_), 2 = 2-ahead B (aftb2_)
   pc_t ah_key_base = 0;
@@ -494,6 +502,9 @@ struct FtbTrkState {
   pc_t start = 0;
   pc_t expect = 0;
   uint32_t fh[FH_N_MAX][TN] = {};
+  uint16_t ex_fh[EX_FH_K][EX_TN] = {};
+  uint16_t sc_fh[SC_GEHL_N] = {};
+  uint8_t imli = 0;
   uint8_t nbr = 0;
   FtbTrkBr br[FW];
   // Commit-side 1-branch/cycle queue
@@ -502,21 +513,23 @@ struct FtbTrkState {
 };
 
 struct BpuFtb {
-  FtbTab ftb0_;       // S0 uFTB (256 x 4, 20b compressed target)
-  FtbTab ftb1_;       // S1/S2 Main FTB (4096 x 4, full target)
-  BlockTage s2_tage_; // S2 Block-TAGE (4096 x 4 slots x 4 tables + base)
-  BlockItt itt_;      // S2 Single Block-ITT (256 x 3 tables)
-  AheadFtbTab aftb_;  // 1-Ahead FTB A (2048 x 8)
-  BlockTage atage_;   // 1-Ahead Block-TAGE A (1024 x 4 slots x 4 tables, reuses aftb ctr as base)
-  BlockItt aitt_;     // 1-Ahead Block-ITT A (256 x 3 tables)
-  AheadFtbTab aftb2_; // 2-Ahead FTB B (1024 x 8)
-  BlockTage atage2_;  // 2-Ahead Block-TAGE B (512 x 4 slots x 4 tables)
-  BlockItt aitt2_;    // 2-Ahead Block-ITT B (256 x 3 tables)
+  FtbTab ftb0_;         // S0 uFTB (256 x 4, 20b compressed target)
+  FtbTab ftb1_;         // S1/S2 Main FTB (4096 x 4, full target)
+  ExBlockTage s2_tage_; // S2 8-table Block-TAGE (4096 x 4 slots x 8 tables + base)
+  StatCorrector sc_;    // S2 Statistical Corrector (Bias 64x4 + 4 GEHL + IMLI + Local)
+  BlockItt itt_;        // S2 Single Block-ITT (256 x 3 tables)
+  AheadFtbTab aftb_;    // 1-Ahead FTB A (2048 x 8)
+  BlockTage atage_;     // 1-Ahead Block-TAGE A (1024 x 4 slots x 4 tables, reuses aftb ctr as base)
+  BlockItt aitt_;       // 1-Ahead Block-ITT A (256 x 3 tables)
+  AheadFtbTab aftb2_;   // 2-Ahead FTB B (1024 x 8)
+  BlockTage atage2_;    // 2-Ahead Block-TAGE B (512 x 4 slots x 4 tables)
+  BlockItt aitt2_;      // 2-Ahead Block-ITT B (256 x 3 tables)
 
   void reset() {
     ftb0_.init(FTB_S0_N, FTB_S0_W, FTB_S0_TAGB, FTB_S0_TGTB);
     ftb1_.init(FTB_S1_N, FTB_S1_W, FTB_S1_TAGB, 0);
-    s2_tage_.init(FTB_TAGE_N);
+    s2_tage_.init();
+    sc_.init();
     itt_.init(FTB_ITT_N);
     aftb_.init(FTB_AH_N, FTB_AH_W);
     atage_.init(FTB_AH_TAGE_N);
@@ -681,10 +694,11 @@ struct BpuFtb {
     return g;
   }
 
-  void s1_read(pc_t base, const FtbBlkIdx &ix, FtbRaw &r) const {
+  void s1_read(pc_t base, const FtbBlkIdx &ix, const ExTageIdx &ex_ix, const ScIdx &sc_ix, FtbRaw &r) const {
     r = FtbRaw{};
     r.ftb_hit = ftb1_.lookup(base, r.ent);
-    s2_tage_.read(ix, r.s2_tage_raw);
+    s2_tage_.read(ex_ix, r.s2_tage_raw);
+    sc_.read(sc_ix, r.s2_sc_raw);
     itt_.read(ix, r.itt_raw);
   }
 
@@ -700,7 +714,7 @@ struct BpuFtb {
   }
 
   template <class MainOutT>
-  void s2_select(pc_t base, pc_t bnd, const FtbBlkIdx &ix, const FtbRaw &r,
+  void s2_select(pc_t base, pc_t bnd, const FtbBlkIdx &ix, const ExTageIdx &ex_ix, const FtbRaw &r,
                  uint8_t rcnt, target_addr_t rtop, MainOutT &o) const {
     o = MainOutT{};
     o.next = bnd;
@@ -711,10 +725,10 @@ struct BpuFtb {
     if (!r.ftb_hit) return;
 
     bool dirs[FTB_SLOTS] = {};
-    BlockTage::Pred tp[FTB_SLOTS];
+    ExBlockTage::Pred tp[FTB_SLOTS];
     for (int k = 0; k < FTB_SLOTS; k++) {
-      s2_tage_.select_slot(ix, r.s2_tage_raw.s[k], tp[k]);
-      dirs[k] = tp[k].pred;
+      s2_tage_.select_slot(ex_ix, r.s2_tage_raw.s[k], tp[k]);
+      dirs[k] = sc_.select_slot(ex_ix.w, r.s2_sc_raw.s[k], tp[k].pred, tp[k].pcpn < EX_TN, tp[k].prov_cnt, tp[k].base_cnt);
     }
     target_addr_t itt_tgt = 0;
     const bool itt_hit = itt_.select(ix, r.itt_raw, itt_tgt);
@@ -733,7 +747,7 @@ struct BpuFtb {
       const int off = sl.offset;
       o.dir[off] = slot_tk[k];
       o.meta.alt_pred[off] = tp[k].alt;
-      o.meta.pcpn[off] = tp[k].pcpn;
+      o.meta.pcpn[off] = (tp[k].pcpn < EX_TN) ? static_cast<uint8_t>(std::min<int>(tp[k].pcpn, TN - 1)) : static_cast<uint8_t>(TN);
       o.meta.ps_info[off] = ps_pack(sl.type, (br_ind(sl.type) && itt_hit) ? 4 : (sl.type == BR_RET && rcnt > 0 ? 7 : 1), tp[k].used_alt);
     }
   }
@@ -826,6 +840,9 @@ struct BpuFtb {
     if (!main_ent) return;
 
     const FtbBlkIdx ix = make_index(ev.start, ev.fh);
+    const uint32_t w = static_cast<uint32_t>(ev.start >> SLOT_SHIFT);
+    const ExTageIdx ex_ix = make_ex_tage_index(w, ev.ex_fh);
+    const ScIdx sc_ix = make_sc_index(w, ev.sc_fh, ev.imli);
     for (int i = 0; i < ev.nbr; i++) {
       const FtbTrkBr &b = ev.br[i];
       if (b.type == BR_DIRECT) {
@@ -833,7 +850,11 @@ struct BpuFtb {
         for (int k = 0; k < FTB_SLOTS; k++) {
           if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
         }
-        if (sl >= 0) s2_tage_.update_slot(ix, sl, b.actual_dir, b.pred_dir, b.alt_pred, b.pcpn);
+        if (sl >= 0) {
+          ExBlockTage::Pred ep;
+          s2_tage_.update_slot(ex_ix, sl, b.actual_dir, &ep);
+          sc_.update(sc_ix, sl, b.actual_dir, ep.pred, ep.pcpn < EX_TN, ep.prov_cnt, ep.base_cnt);
+        }
       }
       if (br_ind(b.type) && b.actual_dir) itt_.update(ix, b.target);
     }

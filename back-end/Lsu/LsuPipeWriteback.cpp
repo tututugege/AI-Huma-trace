@@ -107,7 +107,7 @@ void RealLsu::l2_decide() {
     {  // L2 speculative wake-up (LP_L2[3]): predicted L1D hit from registered L1/L2 state (independent of STQ CAM)
       const bool spec_w = sl.tlb == 0 && !sl.mmio && !sl.dcblk && !sl.bloom &&
           !e.second && e.uop().dest_preg != 0 &&
-          !in.rob_bcast->flush && !(in.dec_bcast->mispred && (e.br_mask & in.dec_bcast->br_mask) != 0);
+          !in.rob_bcast->flush && !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag));
       if (spec_w) {
         out.lsu_awake.wake[i].valid = true;
         out.lsu_awake.wake[i].preg = e.uop().dest_preg;
@@ -269,7 +269,6 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) 
   MicroOp wb;
   wb.id = l.id;
   wb.op = UOP_LOAD;
-  wb.br_mask = l.br_mask;
   wb.diag_val = l.vaddr;
   wb.result = l.pf ? l.vaddr : l.result;
   wb.page_fault_load = l.pf;
@@ -282,7 +281,7 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) 
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
   if (!early && !l.pf && l.uop().dest_preg != 0 && !in.rob_bcast->flush &&
-      !(in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask) != 0)) {  // a2 + WBP: wake at write-back request
+      !(in.dec_bcast->mispred && is_younger_rob(l.uop().rob_idx, l.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {  // a2 + WBP: wake at write-back request
     out.lsu_awake.wake[LD + port].valid = true;
     out.lsu_awake.wake[LD + port].preg = l.uop().dest_preg;
     early = true;
@@ -294,7 +293,9 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) 
     LrScUnit &r = nxt.lrsc_unit;
     r.reserve_valid = true;
     r.reserve_addr = l.paddr;
-    r.reserve_br_mask = l.br_mask;
+    r.reserve_rob_idx = l.uop().rob_idx;
+    r.reserve_rob_flag = l.uop().rob_flag;
+    r.reserve_spec = true;
   }
   ms_load_written_back(idx, defer);
   if (defer) {  // keep the entry until the older store addresses are known (then the completion write-back, or a re-execution)
@@ -329,7 +330,6 @@ void RealLsu::lsu2exe() {
     if (!s.wbp) continue;
     MicroOp wb;
     wb.id = s.id;
-    wb.br_mask = s.br_mask;
     wb.diag_val = s.vaddr;
     wb.page_fault_store = s.pf;
     wb.dest_en = false;

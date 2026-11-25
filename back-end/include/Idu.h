@@ -12,9 +12,6 @@ class Idu {
 public:
   // Registers: read by the comb phases, updated only by seq (from the registers and this cycle's wires).
   struct Regs {
-    reg<BR_MASK_WIDTH> now_br_mask;
-    reg<BR_MASK_WIDTH> br_mask_cp[MAX_BR_NUM];
-    reg<1> tag_vec[MAX_BR_NUM];
     ExuIdIO br_latch;
   };
   const Regs &q() const { return q_; }
@@ -55,6 +52,5 @@ private:
   void decode();
 
 private:
-  wire<BR_TAG_WIDTH> alloc_tag[DECODE_WIDTH] = {};   // branch tags picked in comb_decode, committed in comb_fire
   Regs q_;
 };

@@ -84,7 +84,6 @@ struct UopS {
   wire<AREG_IDX_WIDTH> src2_areg;
   wire<FTQ_IDX_WIDTH> ftq_idx;
   wire<FTQ_OFFSET_WIDTH> ftq_offset;
-  wire<BR_TAG_WIDTH> br_id;
   wire<CSR_IDX_WIDTH> csr_idx;
   InstType type;
   wire<32> imm;
@@ -139,7 +138,6 @@ struct Uop {
   wire<1> mispred{};
   wire<1> br_taken{};
   wire<1> src1_busy{}, src2_busy{}, src3_busy{};
-  wire<BR_MASK_WIDTH> br_mask{};
 
   wire<ROB_CPLT_MASK_WIDTH> cplt_mask{};
 

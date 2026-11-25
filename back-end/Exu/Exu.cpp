@@ -9,7 +9,9 @@
 
 namespace {
 // A uop whose branch was squashed by this cycle's mispredict is dead.
-inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO &db) { return db.mispred && (uop.br_mask & db.br_mask) != 0; }
+inline bool is_br_killed(const ExuInst &uop, const DecBroadcastIO &db) {
+  return db.mispred && is_younger_rob(uop->rob_idx, uop->rob_flag, db.redirect_rob_idx, db.redirect_rob_flag);
+}
 
 // The issue ports whose uop needs the instruction PC from the FTQ: an ALU port with a pc operand (auipc, jal), a BRU port.
 inline bool needs_ftq_pc(int p, const Uop &uop) {
@@ -65,11 +67,10 @@ void Exu::begin_cycle() {
   out.exe2iss.div_wake_preg = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = out.exe2lsu.agu_req[i].raw = false;
   for (int i = 0; i < LSU_SDU_COUNT; i++) out.exe2lsu.sdu_req[i].valid = false;
-  out.exu2id.clear_mask = 0;
   out.exu2id.mispred = false;
   out.exu2id.redirect_pc = 0;
   out.exu2id.redirect_rob_idx = 0;
-  out.exu2id.br_id = 0;
+  out.exu2id.redirect_rob_flag = 0;
   out.exu2id.ftq_idx = 0;
   out.exu2id.ftq_off = 0;
   out.exu2id.br_type = 0;
@@ -113,17 +114,16 @@ void Exu::seq() {
               !e.uop.early_woken;
     if (!l.valid) continue;
     l.preg = e.uop->dest_preg;
-    l.br_mask = e.uop.br_mask & ~in.dec_bcast->clear_mask;
+    l.rob_idx = e.uop->rob_idx;
+    l.rob_flag = e.uop->rob_flag;
   }
   if (in.rob_bcast->flush) {
     for (auto &f : units) f.slot_valid = false;
     return;
   }
-  const auto clear = in.dec_bcast->clear_mask;
   for (auto &f : units) {
     if (!f.slot_valid) continue;
     if (is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
-    else if (clear) f.slot.br_mask &= ~clear;
   }
   for (int p = 0; p < ISSUE_WIDTH; p++) {
     if (!in.iss2prf->iss_entry[p].valid) continue;
@@ -140,7 +140,6 @@ void Exu::seq() {
     }
     ExuInst uop = iu;
     if (is_br_killed(uop, (*in.dec_bcast))) continue;
-    if (clear) uop.br_mask &= ~clear;
     const uint64_t bit = 1ULL << uop.op;
     int target = -1;  // first FU of the port that supports the op and has a free input slot
     for (int fu : port_fus[p])
@@ -157,10 +156,7 @@ void Exu::seq() {
 // redirects). LSU write-backs come in on their own ports.
 void Exu::exec() {
   const bool flush_all = in.rob_bcast->flush, flush_br = !flush_all && in.dec_bcast->mispred;
-  const bool flush_any = flush_all || flush_br, flush = flush_all;  // (results are dead only on a global flush or when killed by the branch mask)
-  const wire<BR_MASK_WIDTH> all = ~wire<BR_MASK_WIDTH>(0);
-  const wire<BR_MASK_WIDTH> flush_mask = flush_all ? all : flush_br ? in.dec_bcast->br_mask : wire<BR_MASK_WIDTH>(0);
-  const wire<BR_MASK_WIDTH> clear = in.dec_bcast->clear_mask;
+  const bool flush_any = flush_all || flush_br, flush = flush_all;
   const int64_t now = sim_time;
 
   uint64_t cmask = 0;  // completing units
@@ -169,30 +165,27 @@ void Exu::exec() {
     FuUnit &f = units[i];
     if (!f.slot_valid && f.idle()) continue;
 
-    // flush / branch-mask clear applied to the instructions held in the unit
+    // flush applied to the instructions held in the unit
     if (f.mode == FuMode::PIPE) {
       if (flush_any && f.count) {
-        if (flush_mask == all) {
+        if (flush_all) {
           f.count = 0;
         } else {
           int m = 0;
           for (int k = 0; k < f.count; k++) {
             const int s = f.head + k >= f.depth ? f.head + k - f.depth : f.head + k;
-            if (f.ring[s].uop.br_mask & flush_mask) continue;
+            if (is_br_killed(f.ring[s].uop, (*in.dec_bcast))) continue;
             if (m != k) f.ring[f.head + m >= f.depth ? f.head + m - f.depth : f.head + m] = f.ring[s];
             m++;
           }
           f.count = m;
         }
       }
-      if (clear)
-        for (int k = 0; k < f.count; k++) f.ring[f.head + k >= f.depth ? f.head + k - f.depth : f.head + k].uop.br_mask &= ~clear;
     } else if (f.mode == FuMode::ITER) {
-      if (flush_any && f.busy && (flush_mask == all || (f.cur.br_mask & flush_mask) != 0)) {
+      if (flush_any && f.busy && (flush_all || is_br_killed(f.cur, (*in.dec_bcast)))) {
         f.busy = false;
         f.done = 0;
       }
-      if (clear && f.busy) f.cur.br_mask &= ~clear;
     }
 
     // the input slot goes to the unit unless flushed or killed (that frees it)
@@ -210,7 +203,6 @@ void Exu::exec() {
     case FuMode::SINGLE:
       if (en) {
         f.out = f.slot;
-        if (clear) f.out.br_mask &= ~clear;
         fu::compute(f.kind, f.out);
         cinst[i] = &f.out;
         cmask |= 1ULL << i;
@@ -220,7 +212,6 @@ void Exu::exec() {
       if (en && f.count < f.depth) {
         FuUnit::PipeEntry e;
         e.uop = f.slot;
-        if (clear) e.uop.br_mask &= ~clear;
         fu::compute(f.kind, e.uop);
         e.done_cycle = now + f.depth - 1;
         f.push_back(e);
@@ -233,7 +224,6 @@ void Exu::exec() {
     case FuMode::ITER:
       if (en && !f.busy) {
         f.cur = f.slot;
-        if (clear) f.cur.br_mask &= ~clear;
         fu::compute(f.kind, f.cur);
         f.done = now + fu::iter_latency(f.kind, f.cur);
         f.busy = true;
@@ -313,10 +303,8 @@ void Exu::exec() {
   // branch resolution: every resolved branch frees its mask bit, the oldest mispredict redirects
   bool mispred = false;
   const ExuInst *oldest = nullptr;
-  wire<BR_MASK_WIDTH> clear_mask = 0;
   for (int i = 0; i < BRU_NUM; i++) {
     if (!br_res[i].valid) continue;
-    clear_mask |= wire<BR_MASK_WIDTH>(1) << br_res[i].uop->br_id;
     if (br_res[i].uop.mispred && (!mispred || cmp_inst_age(*oldest, br_res[i].uop))) {
       mispred = true;
       oldest = &br_res[i].uop;
@@ -332,11 +320,10 @@ void Exu::exec() {
     tbhook::on_exec({(uint32_t)u->rob_idx, op, (xlen_t)u.result, (bool)(u.page_fault_inst || u.page_fault_load || u.page_fault_store)});
   }
 
-  out.exu2id.clear_mask = clear_mask;  // broadcast to the other modules by the IDU, not applied locally
   out.exu2id.mispred = mispred;
   out.exu2id.redirect_pc = mispred ? oldest->diag_val : 0;
   out.exu2id.redirect_rob_idx = mispred ? (*oldest)->rob_idx : 0;
-  out.exu2id.br_id = mispred ? (*oldest)->br_id : 0;
+  out.exu2id.redirect_rob_flag = mispred ? (*oldest)->rob_flag : 0;
   out.exu2id.ftq_idx = mispred ? (*oldest)->ftq_idx : 0;
   out.exu2id.ftq_off = mispred ? (*oldest)->ftq_offset : 0;
   if (mispred) {   // type of the mispredicted branch in the BPU's encoding (0 cond, 1 call, 2 ret, 3 indirect, 5 jal, 6 indirect call)
@@ -358,7 +345,7 @@ void Exu::load_wake() {
   int n = 0;
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
     const LoadWake &l = q.lwake_r[i];
-    if (!l.valid || (in.dec_bcast->mispred && (l.br_mask & in.dec_bcast->br_mask))) continue;
+    if (!l.valid || (in.dec_bcast->mispred && is_younger_rob(l.rob_idx, l.rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) continue;
     out.prf_awake.wake[n].valid = true;
     out.prf_awake.wake[n].preg = l.preg;
     n++;

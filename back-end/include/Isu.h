@@ -10,7 +10,8 @@
 struct MulWakeEntry {
   wire<1> valid = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
-  wire<BR_MASK_WIDTH> br_mask;
+  wire<ROB_IDX_WIDTH> rob_idx = 0;
+  wire<1> rob_flag = 0;
 };
 
 // DIV / FP iterative wakeup entry (countdown slot)
@@ -18,7 +19,8 @@ struct IterWakeEntry {
   wire<1> valid = 0;
   int countdown = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
-  wire<BR_MASK_WIDTH> br_mask;
+  wire<ROB_IDX_WIDTH> rob_idx = 0;
+  wire<1> rob_flag = 0;
 };
 
 constexpr int ISU_MUL_WAKE_UNIT_NUM = count_ports_with_mask(OP_MASK_MUL);

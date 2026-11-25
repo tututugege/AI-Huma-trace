@@ -32,7 +32,6 @@ void RealLsu::dis2lsu() {
     ms_ldq_[u.ldq_idx] = {};
     e.epoch = ep;
     e.id = d.ldq_id[i];
-    e.br_mask = d.ldq_br_mask[i];
     {
       if (MemDepPred::kClr && (long long)sim_time >= mdp_.next_clear) {
         std::fill(mdp_.table.begin(), mdp_.table.end(), false);
@@ -52,7 +51,6 @@ void RealLsu::dis2lsu() {
     ms_stq_[(pnxt.stq_head + pnxt.stq_count) % STQ_SIZE] = {};
     e.rob_idx = u.rob_idx;
     e.rob_flag = u.rob_flag;
-    e.br_mask = d.br_mask[i];
     e.pc = u.dbg.pc;
     e.func3 = u.func3;
     pnxt.stq_count++;
@@ -78,27 +76,37 @@ void RealLsu::flush() {
     if (!keep_store) nxt.uncached_unit.valid = false;
   }
 
+  if (nxt.lrsc_unit.reserve_valid && nxt.lrsc_unit.reserve_spec) {
+    for (int i = 0; i < COMMIT_WIDTH; i++) {
+      const auto &ce = in.rob_commit->commit_entry[i];
+      if (ce.valid && ce.uop->rob_idx == nxt.lrsc_unit.reserve_rob_idx &&
+          ce.uop->rob_flag == nxt.lrsc_unit.reserve_rob_flag) {
+        nxt.lrsc_unit.reserve_spec = false;
+      }
+    }
+  }
+
   const DecBroadcastIO &dec = (*in.dec_bcast);
   if (dec.mispred) {
     for (PLdq &l : pnxt.ldq)
-      if (l.st != L_EMPTY && (l.br_mask & dec.br_mask) != 0) {
+      if (l.st != L_EMPTY && is_younger_rob(l.uop().rob_idx, l.uop().rob_flag, dec.redirect_rob_idx, dec.redirect_rob_flag)) {
         l.st = L_EMPTY;
       }
     uint32_t keep = pnxt.stq_count;
-    for (uint32_t i = 0; i < pnxt.stq_count; i++)
-      if ((pnxt.stq[(pnxt.stq_head + i) % STQ_SIZE].br_mask & dec.br_mask) != 0) {
+    for (uint32_t i = pnxt.stq_ccount; i < pnxt.stq_count; i++) {
+      const PStq &st = pnxt.stq[(pnxt.stq_head + i) % STQ_SIZE];
+      if (is_younger_rob(st.rob_idx, st.rob_flag, dec.redirect_rob_idx, dec.redirect_rob_flag)) {
         keep = i;
         break;
       }
-    if (keep < pnxt.stq_ccount) {  // invariant used by the RTL (LP_CUT bit 7): a mispredict never cuts a committed store
-      std::fprintf(stderr, "[LSU_PIPE] invariant violated: mispredict cut %u below ccount %u\n", keep, pnxt.stq_ccount);
-      std::abort();
     }
     pnxt.stq_count = keep;
     UncachedUnit &u = nxt.uncached_unit;
     if (u.valid && (u.is_load ? pnxt.ldq[u.idx].st == L_EMPTY : !stq_idx_alive_after_flush(u.idx, pnxt.stq_head, pnxt.stq_count)))
       u.valid = false;
-    if (nxt.lrsc_unit.reserve_valid && (nxt.lrsc_unit.reserve_br_mask & dec.br_mask) != 0) nxt.lrsc_unit.reserve_valid = false;
+    if (nxt.lrsc_unit.reserve_valid && nxt.lrsc_unit.reserve_spec &&
+        is_younger_rob(nxt.lrsc_unit.reserve_rob_idx, nxt.lrsc_unit.reserve_rob_flag, dec.redirect_rob_idx, dec.redirect_rob_flag))
+      nxt.lrsc_unit.reserve_valid = false;
     pnxt.stq_ccount = std::min<uint32_t>(pnxt.stq_ccount, pnxt.stq_count);
     pnxt.stq_commit = stq_idx_after(pnxt.stq_head, pnxt.stq_ccount);
   }
@@ -106,13 +114,6 @@ void RealLsu::flush() {
     for (int r = 0; r < RP_MAX; r++)
       if (pnxt.rp[r].v && pnxt.ldq[pnxt.rp[r].ldq].st == L_EMPTY) pnxt.rp[r].v = 0;
     if (pnxt.srp.v && stq_rank(pnxt.srp.ldq, pnxt.stq_head) >= pnxt.stq_count) pnxt.srp.v = 0;
-  }
-
-  if (dec.clear_mask) {  // a branch resolved correctly: its mask bit is free again
-    for (int i = 0; i < LDQ_SIZE; i++)
-      if (pcur.ldq[i].st != L_EMPTY) pnxt.ldq[i].br_mask &= ~dec.clear_mask;
-    for (uint32_t i = 0; i < pcur.stq_count; i++) pnxt.stq[(pcur.stq_head + i) % STQ_SIZE].br_mask &= ~dec.clear_mask;
-    if (nxt.lrsc_unit.reserve_valid) nxt.lrsc_unit.reserve_br_mask &= ~dec.clear_mask;
   }
 }
 
@@ -301,13 +302,13 @@ void RealLsu::print_events() {
   if (sim_env().lsu_pipe_evt) {  // debug aid: per-cycle LSU boundary events (matches the RTL tb print)
     std::fprintf(stderr, "E t=%lld wb:", (long long)sim_time);
     for (int p = 0; p < LD; p++)
-      if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d/b%llx", p, (int)out.lsu2exe.wb_req[p].uop->rob_idx, (int)out.lsu2exe.wb_req[p].uop->dest_preg,
-                                                       (int)out.lsu2exe.wb_req[p].uop.dest_en, (unsigned long long)out.lsu2exe.wb_req[p].uop.br_mask),
+      if (out.lsu2exe.wb_req[p].valid) std::fprintf(stderr, " %d=r%d/p%d/e%d", p, (int)out.lsu2exe.wb_req[p].uop->rob_idx, (int)out.lsu2exe.wb_req[p].uop->dest_preg,
+                                                       (int)out.lsu2exe.wb_req[p].uop.dest_en),
         std::fprintf(stderr, "/v%x/d%x/f%d%d", (unsigned)out.lsu2exe.wb_req[p].uop.result, (unsigned)out.lsu2exe.wb_req[p].uop.diag_val,
                      (int)out.lsu2exe.wb_req[p].uop.page_fault_load, (int)out.lsu2exe.wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " sta:");
     for (int p = 0; p < STA; p++)
-      if (out.lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d/b%llx", p, (int)out.lsu2exe.sta_wb_req[p].uop->rob_idx, (unsigned long long)out.lsu2exe.sta_wb_req[p].uop.br_mask),
+      if (out.lsu2exe.sta_wb_req[p].valid) std::fprintf(stderr, " %d=r%d", p, (int)out.lsu2exe.sta_wb_req[p].uop->rob_idx),
         std::fprintf(stderr, "/v%x/d%x/f%d", (unsigned)out.lsu2exe.sta_wb_req[p].uop.result, (unsigned)out.lsu2exe.sta_wb_req[p].uop.diag_val,
                      (int)out.lsu2exe.sta_wb_req[p].uop.page_fault_store);
     std::fprintf(stderr, " dl:");
@@ -332,8 +333,8 @@ void RealLsu::print_events() {
       for (int i = 0; i < MAX_STQ_DISPATCH_WIDTH; i++) dsa |= (unsigned)in.dis2lsu->alloc_req[i] << i;
       for (int i = 0; i < MAX_LDQ_DISPATCH_WIDTH; i++) dla |= (unsigned)in.dis2lsu->ldq_alloc_req[i] << i;
       for (int i = 0; i < COMMIT_WIDTH; i++) cm |= (unsigned)in.rob_commit->commit_entry[i].valid << i;
-      std::fprintf(stderr, " b: mp=%d fl=%d cl=%llx dsa=%x dla=%x cm=%x", (int)in.dec_bcast->mispred, (int)in.rob_bcast->flush,
-                   (unsigned long long)in.dec_bcast->clear_mask, dsa, dla, cm);
+      std::fprintf(stderr, " b: mp=%d fl=%d dsa=%x dla=%x cm=%x", (int)in.dec_bcast->mispred, (int)in.rob_bcast->flush,
+                   dsa, dla, cm);
     }
     std::fprintf(stderr, " in:");
     for (int p = 0; p < LD; p++)

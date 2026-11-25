@@ -202,7 +202,8 @@ void Isu::calc_latency_next(const Regs &q) {
     auto put = [&](auto &e, int countdown) {
       e.valid = true;
       e.dest_preg = inst.uop->dest_preg;
-      e.br_mask = inst.uop.br_mask;
+      e.rob_idx = inst.uop->rob_idx;
+      e.rob_flag = inst.uop->rob_flag;
       if constexpr (requires { e.countdown; }) e.countdown = countdown;
     };
     auto free_slot = [&](auto &slots, int countdown) {
@@ -295,20 +296,22 @@ void Isu::awake() {
 void Isu::flush() {
   const bool flush_all = in.rob_bcast->flush;
   const bool flush_br = !flush_all && in.dec_bcast->mispred;
-  const wire<BR_MASK_WIDTH> br_mask = in.dec_bcast->br_mask, clear = in.dec_bcast->clear_mask;
+  const auto r_idx = in.dec_bcast->redirect_rob_idx;
+  const auto r_flag = in.dec_bcast->redirect_rob_flag;
 
   for (auto &q : iqs) {
     q.in.flush_all = flush_all;
     q.in.flush_br = flush_br;
-    q.in.flush_br_mask = br_mask;
-    q.in.clear_mask = clear;
+    q.in.flush_rob_idx = r_idx;
+    q.in.flush_rob_flag = r_flag;
   }
   if (flush_all) {
     clear_wake_state();
   } else if (in.dec_bcast->mispred) {
-    for_each_wake_slot([&](auto &e) { if (e.valid && (e.br_mask & br_mask) != 0) e = {}; });
+    for_each_wake_slot([&](auto &e) {
+      if (e.valid && is_younger_rob(e.rob_idx, e.rob_flag, r_idx, r_flag)) e = {};
+    });
   }
-  if (clear) for_each_wake_slot([&](auto &e) { if (e.valid) e.br_mask &= ~clear; });
 }
 
 // The clock edge: the delayed wakeups, the dispatch requests into the queues (with this cycle's wake-ups applied), the

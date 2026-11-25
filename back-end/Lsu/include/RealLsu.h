@@ -24,7 +24,9 @@ struct UncachedUnit {
 struct LrScUnit {
   wire<1> reserve_valid;
   wire<32> reserve_addr;
-  wire<BR_MASK_WIDTH> reserve_br_mask;
+  wire<ROB_IDX_WIDTH> reserve_rob_idx;
+  wire<1> reserve_rob_flag;
+  wire<1> reserve_spec;
 };
 
 // Units the LSU shares with the checkpoint restore; the queues live in the staged LSU state (lp::LsuPipeState, RealLsuPipe.h).
