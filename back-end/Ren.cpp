@@ -24,30 +24,17 @@ void Ren::init() {
   fp_freelist_sanity(r.f);
 }
 
-// Move elimination bound. The architectural state after a move commits equals the speculative RAT right after its
-// rename, so the architectural reference count of the source register never exceeds the speculative one. A move is
-// eliminated only when its source comes straight from the speculative RAT (no older instruction of the group writes
-// it) and  (RAT entries naming it) + (older instructions of the group with a destination) + 1  <= MOVE_ELIM_MAX_REFS;
-// older writers can add at most one reference each, so the bound holds without looking at what they write.
+// Move elimination rule (1-hop intra-group bypass; unbounded arch_cnt up to RAT_NUM=33 fits in 6 bits):
+// a move-shaped instruction is eliminated unless its source is produced by an older eliminated move in the same group.
 bool Ren::elim_refs_ok(int i) const {
   const Regs &q = q_;
   const int s1 = q.inst_r[i]->src1_areg;
-  int older = 0;
   int producer = -1;
   for (int j = 0; j < i; j++) {
     if (!q.inst_valid[j] || !q.inst_r[j].dest_en) continue;
     if (q.inst_r[j]->dest_areg != 0 && !q.inst_r[j]->dest_fp && q.inst_r[j]->dest_areg == s1) producer = j;
-    older++;
   }
-  if (producer >= 0) {
-    // 1-hop intra-group bypass from a non-eliminated producer (fresh preg: 0 prior RAT refs,
-    // at most (i - producer + 1) group refs, bounded by MOVE_ELIM_MAX_REFS).
-    return !elim_[producer] && (i - producer) < MOVE_ELIM_MAX_REFS;
-  }
-  int refs = 0;
-  for (int e = 0; e < ARF_NUM + 1; e++)
-    if (q.x.spec[e] == q.x.spec[s1]) refs++;
-  return refs + older + 1 <= MOVE_ELIM_MAX_REFS;
+  return producer < 0 || !elim_[producer];
 }
 
 // Destination tags from the free lists, in order (each domain from its own; the first instruction that finds its list
@@ -146,6 +133,14 @@ void Ren::seq() {
   const int old_last_ckpt_idx = old_ckpt_count > 0 ? d.ckpt[(d.ckpt_tail + K - 1) % K].rob_idx : old_rob_head;
   auto age_of = [&](int idx) { return (idx - old_rob_head + ROB_NUM) % ROB_NUM; };
 
+  // 0. Drain 1-cycle pipelined INT free-list reclaims from previous cycle's commit
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    if (d.reclaim_q_valid[i]) {
+      d.x.reclaim(d.reclaim_q_preg[i]);
+      d.reclaim_q_valid[i] = 0;
+    }
+  }
+
   // 1. Commit: read from local RenLog (assert lockstep with ROB), advance ren_rob_head, retire old checkpoints
   const bool interrupt = in.rob_bcast->interrupt;
   int commit_cnt = 0;
@@ -171,7 +166,10 @@ void Ren::seq() {
       Assert(!mispred && "Ren(ME): commit together with mispredict");
       if (!e.me_elim) d.x.commit_alloc();
       d.arch_cnt[e.dest_preg]++;
-      if (--d.arch_cnt[e.old_dest_preg] == 0) d.x.reclaim(e.old_dest_preg);
+      if (--d.arch_cnt[e.old_dest_preg] == 0) {
+        d.reclaim_q_valid[i] = 1;
+        d.reclaim_q_preg[i] = e.old_dest_preg;
+      }
       d.x.arch[e.dest_areg] = e.dest_preg;
     }
   }

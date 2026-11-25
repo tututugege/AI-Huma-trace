@@ -139,16 +139,22 @@ struct MsStq {                // what the trace says the store writes (captured 
   uint8_t off = 0, sz = 0;    // byte lane inside the unit
 };
 
-// L1 -> L2 pipeline register (one per load port)
+// L1 -> L2a pipeline register (one per load port)
 struct PL12 {
   wire<1> v = 0;
   wire<LDQ_IDX_WIDTH> ldq = 0;
   wire<EPOCH_W> epoch = 0;
   wire<2> tlb = 0;            // 0 hit, 1 miss / no response, 2 page fault
   wire<1> mmio = 0;
-  wire<1> cand_v = 0;         // partial CAM: youngest older store that may conflict
-  wire<STQ_IDX_WIDTH> cand = 0;
   wire<1> dcblk = 0;          // DCache request not launched: the port has a pending hidden retry -> short replay
+  wire<1> bloom = 0;          // DCache request suppressed by 256-bit STQ word bloom filter (first pass only)
+};
+// L2a -> L2b pipeline register (STLF-only: decouples 64-entry STQ CAM from stlf_confirm + lp_wk)
+struct PL2B {
+  wire<1> v = 0;
+  wire<LDQ_IDX_WIDTH> ldq = 0;
+  wire<EPOCH_W> epoch = 0;
+  wire<STQ_IDX_WIDTH> cand = 0;
 };
 // L2/L3 register (cut a): the direct completion decided at L2 of load port p
 struct PL3 {
@@ -190,12 +196,14 @@ struct LsuPipeState {
   wire<STQ_IDX_WIDTH + 1> stq_ccount = 0;  // committed, not yet retired
   wire<STQ_IDX_WIDTH> stq_commit = 0;      // head + ccount
   PL12 l12[LD];
+  PL2B l2b[LD];
   PL3 l3[LD];
   PCn cn[LD];
   PRp rp[RP_MAX];
   PRp srp;                                  // STA replay register (stq index)
   wire<STQ_IDX_WIDTH> srp_ptr = 0;          // round-robin start of the STA replay register pick (fairness: no starvation of walk owners)
   wire<LDQ_IDX_WIDTH> rp_ptr = 0;           // round-robin start of the RDY find-first (fairness: no starvation of walk owners)
+  uint64_t stq_bloom[4] = {};               // 256-bit registered bloom filter of STQ vaddr[10:3] (suppresses useless STLF DCache launches)
 };
 
 // per-cycle combinational values that travel between the LSU comb phases (not registers)

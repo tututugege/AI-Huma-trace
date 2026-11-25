@@ -84,6 +84,8 @@ public:
     IntDomain x;
     FpDomain f;
     int arch_cnt[PRF_NUM];      // move elimination: number of x.arch entries that name each integer tag (freed at 0)
+    reg<1> reclaim_q_valid[COMMIT_WIDTH];           // 1-cycle pipelined INT free-list reclaim (after ren_arch_cnt)
+    reg<PRF_IDX_WIDTH> reclaim_q_preg[COMMIT_WIDTH];
     // Sparse checkpoint + local ROB-indexed rename log + 8-wide forward walk
     RenLogEntry ren_log[ROB_NUM];
     int ren_rob_head = 0;

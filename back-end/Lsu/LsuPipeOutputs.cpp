@@ -12,7 +12,8 @@ void RealLsu::cal() {
     for (int i = 0; i < LDQ_SIZE && mdp_.trn; i++)
       if (mdp_.trn >> i & 1) { mdp_.trn &= ~(1ULL << i); mdp_.pend.push_back(MemDepPred::idx(pcur.ldq[i].pc())); break; }
   }
-  for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2 registers are rewritten every cycle
+  for (int k = 0; k < LD; k++) pnxt.l12[k] = {};  // L1/L2a/L2b/L3 registers are rewritten every cycle
+  for (int k = 0; k < LD; k++) pnxt.l2b[k] = {};
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.cn[k] = {};
   for (auto &w : out.lsu_awake.wake) w = {};

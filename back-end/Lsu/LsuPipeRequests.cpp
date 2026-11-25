@@ -5,9 +5,12 @@
 void RealLsu::mmio_out() {
   out.peripheral_req->is_mmio = false;
   if (!mmio_resp_q_.ready) return;
-  const UncachedUnit &u = nxt.uncached_unit;
-  out.peripheral_req->is_mmio = u.valid;
-  if (u.valid) {
+  const UncachedUnit &u = cur_.uncached_unit;
+  const bool valid_post_resp = u.valid && !mmio_resp_q_.is_mmio;
+  const bool kill_ld = u.is_load && (in.rob_bcast->flush || in.dec_bcast->mispred);
+  const bool send = valid_post_resp && !kill_ld;
+  out.peripheral_req->is_mmio = send;
+  if (send) {
     out.peripheral_req->wen = !u.is_load;
     out.peripheral_req->mmio_addr = u.addr;
     out.peripheral_req->mmio_wdata = u.wdata;
@@ -134,14 +137,16 @@ void RealLsu::lsu2dcache_ldq() {
     sl.ldq = l.ldq;
     sl.tlb = l.tlb;
     sl.mmio = l.mmio;
-    sl.cand_v = l.cand_v;
-    sl.cand = l.cand;
     sl.dcblk = 0;
-    // the DCache is read in parallel with the partial CAM; the read enable is qualified by "no conflicting older store"
-    // (12-bit compare, ready with the DTLB result); a port with a pending DCache hidden retry does not launch.
-    if (l.hit && !l.mmio && !l.cand_v && in.top_in->dcache2lsu.load_retry_busy[k]) {
+    sl.bloom = 0;
+    const uint32_t bidx = (uint32_t(e.vaddr) >> 3) & 0xFFu;
+    const bool bloom_hit = !l.replay && ((pcur_.stq_bloom[bidx >> 6] >> (bidx & 63u)) & 1u);
+    // Launch DCache in L1 unless port is retry-busy or 256-bit STQ word bloom filter predicts STLF hit (first pass only).
+    if (l.hit && !l.mmio && in.top_in->dcache2lsu.load_retry_busy[k]) {
       sl.dcblk = 1;  // the port belongs to the DCache hidden retry this cycle
-    } else if (l.hit && !l.mmio && !l.cand_v) {
+    } else if (l.hit && !l.mmio && bloom_hit) {
+      sl.bloom = 1;  // likely STLF: skip speculative DCache launch to avoid bank conflicts / STQ drain starvation
+    } else if (l.hit && !l.mmio) {
       e.epoch = (e.epoch + 1) & ((1u << EPOCH_W) - 1);
       ports[k].valid = true;
       ports[k].addr = l.paddr;

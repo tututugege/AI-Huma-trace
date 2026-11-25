@@ -303,33 +303,10 @@ void RealLsu::tlb_in_stq() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// L1: partial CAM over the STQ (parallel with the DCache read), MMIO issue
+// L1: MMIO load issue (STQ CAM runs in L2 in parallel with DCache response)
 // ---------------------------------------------------------------------------------------------------------------
 void RealLsu::stlf() {
   const lp::LsuPipeState &pcur = pcur_;
-  for (int k = 0; k < LD; k++) {
-    PL1 &l = pw.l1[k];
-    if (!l.v || !l.hit || l.mmio) continue;
-    const PLdq &e = pnxt.ldq[l.ldq];
-    PLdq tmp = e;
-    tmp.paddr = l.paddr;
-    stq_mask_t ov = 0;
-    for (int q = 0; q < STA; q++)
-      if (pw.s1[q].v && !pw.s1[q].replay) ov |= (stq_mask_t)1 << pw.s1[q].stq;
-    const CamRes c = stq_cam(pcur, pnxt, ov, tmp, /*full=*/!l.need_tlb, /*spec_ok=*/!e.second && !e.lrsc && !e.wait);
-    pnxt.ldq[l.ldq].spec = c.unk;
-    ms_ldq_[l.ldq].skip = c.skip;
-    {   // the stale value is what the DCache array holds in this cycle (the read is parallel with the CAM), not what it holds at the later write-back;
-        // only valid when no STLF candidate was matched (STLF candidates forward stq.data at L2/WBP, which may not have arrived at L1 yet)
-      PLdq t2 = tmp; t2.pa_v = 1;
-      xlen_t sv = 0;
-      ms_ldq_[l.ldq].cam_ok = !c.v && ms_load_value(pnxt, ms_stq_, t2, ms_ldq_[l.ldq], /*apply_skip=*/true, sv);
-      ms_ldq_[l.ldq].cam_val = sv;
-    }
-    l.cand_v = c.v;
-    l.cand = c.idx;
-  }
-
   // MMIO loads: only the oldest instruction, with no older store left in the STQ, one on the bus at a time
   for (int i = 0; i < LDQ_SIZE; i++) {
     PLdq &e = pnxt.ldq[i];

@@ -72,17 +72,40 @@ void RealLsu::dcache2lsu_ldq() {
   l3_register();
 }
 
-// L2 of each load port: page fault, DTLB miss, MMIO, a port taken by a hidden retry, the DCache read, or the STLF confirm against the candidate store
+// L2 of each load port, split into L2a (fast path + STQ CAM) and L2b (registered STLF confirm + forward):
+//   - L2b runs first on registered pcur.l2b[i] (STLF candidate from previous cycle's L2a CAM).
+//   - L2a runs on pcur.l12[i]: 93% non-STLF loads complete in 0 extra cycles (L_DCW -> same-cycle DCache hit);
+//     7% STLF hits latch into pnxt.l2b[i] for next cycle's L2b confirm (decoupling lp_cam from stlf_confirm + lp_wk).
 void RealLsu::l2_decide() {
   const lp::LsuPipeState &pcur = pcur_;
+  // 1. L2b: registered STLF confirm (zero CAM on this path)
+  for (int i = 0; i < LD; i++) {
+    const PL2B &sb = pcur.l2b[i];
+    if (!sb.v) continue;
+    PLdq &e = pnxt.ldq[sb.ldq];
+    if (!(e.st == L_PIPE && e.epoch == sb.epoch)) continue;  // killed after L2a
+    const uint32_t j = sb.cand;
+    const PStq &s = pcur.stq[j];
+    const uint32_t rank = stq_rank(j, pcur.stq_head);
+    switch (stlf_confirm(e, s, rank < pcur.stq_count)) {
+    case CF_REPLAY: e.st = L_RDY; break;
+    case CF_NOADDR: park(e, RC_ADDR, j, 0); break;
+    case CF_HOLD: park(e, RC_HOLD, j, 0); break;
+    case CF_DATA: park(e, RC_DATA, j, 0); break;
+    case CF_FWD:
+      pw.wbd_v[i] = true;
+      pw.wbd_ldq[i] = sb.ldq;
+      break;
+    }
+  }
+  // 2. L2a: page fault, DTLB miss, MMIO, STQ CAM -> fast-path DCache or latch into L2b
   for (int i = 0; i < LD; i++) {
     const PL12 &sl = pcur.l12[i];
     if (!sl.v) continue;
     PLdq &e = pnxt.ldq[sl.ldq];
     if (!(e.st == L_PIPE && e.epoch == sl.epoch)) continue;  // killed after L1
-    {  // L2 speculative wake-up (LP_L2[3]): L1D hit or STLF (store data ready); cancelled next cycle if not direct-completed
-      const bool cand_ok = !sl.cand_v || (pcur.stq[sl.cand].data_v && !pcur.stq[sl.cand].suppress);
-      const bool spec_w = sl.tlb == 0 && !sl.mmio && cand_ok && !sl.dcblk &&
+    {  // L2 speculative wake-up (LP_L2[3]): predicted L1D hit from registered L1/L2 state (independent of STQ CAM)
+      const bool spec_w = sl.tlb == 0 && !sl.mmio && !sl.dcblk && !sl.bloom &&
           !e.second && e.uop().dest_preg != 0 &&
           !in.rob_bcast->flush && !(in.dec_bcast->mispred && (e.br_mask & in.dec_bcast->br_mask) != 0);
       if (spec_w) {
@@ -94,8 +117,12 @@ void RealLsu::l2_decide() {
       }
     }
     if (sl.tlb == 2) {  // page fault: reported through the load write-back
-      pw.wbd_v[i] = true;
-      pw.wbd_ldq[i] = sl.ldq;
+      if (pw.wbd_v[i]) {
+        e.st = L_WBP;
+      } else {
+        pw.wbd_v[i] = true;
+        pw.wbd_ldq[i] = sl.ldq;
+      }
       continue;
     }
     if (sl.tlb == 1) {
@@ -106,28 +133,32 @@ void RealLsu::l2_decide() {
       e.st = L_MMW;
       continue;
     }
-    if (!sl.cand_v && sl.dcblk) {  // not launched (hidden retry owns the port): replay like a bank conflict
+    // L2a STQ CAM (registered STQ + registered paddr, parallel with DCache response)
+    const CamRes c = stq_cam(pcur, pcur, /*ov=*/0, e, /*full=*/true, /*spec_ok=*/!e.second && !e.lrsc && !e.wait);
+    e.spec = c.unk;
+    ms_ldq_[sl.ldq].skip = c.skip;
+    {
+      xlen_t sv = 0;
+      ms_ldq_[sl.ldq].cam_ok = !c.v && ms_load_value(pcur, ms_stq_, e, ms_ldq_[sl.ldq], /*apply_skip=*/true, sv);
+      ms_ldq_[sl.ldq].cam_val = sv;
+    }
+    if (!c.v && sl.dcblk) {  // not launched (hidden retry owns the port): replay like a bank conflict
       park(e, RC_DC, 0, replay_wait(ReplayType::CONFLICT));
       continue;
     }
-    if (!sl.cand_v) {  // no conflicting older store: the DCache read of L1 decides
+    if (!c.v && sl.bloom) {  // rare bloom false positive: immediate replay (next pass has replay=1 and launches DCache)
+      e.st = L_RDY;
+      continue;
+    }
+    if (!c.v) {  // no conflicting older store: the DCache read of L1 decides in this same cycle (0 extra cycles)
       e.st = L_DCW;
       continue;
     }
-    // STLF confirm against the registered STQ entry (full physical address check)
-    const uint32_t j = sl.cand;
-    const PStq &s = pcur.stq[j];
-    const uint32_t rank = stq_rank(j, pcur.stq_head);
-    switch (stlf_confirm(e, s, rank < pcur.stq_count)) {
-    case CF_REPLAY: e.st = L_RDY; break;  // false partial match / candidate gone: replay with the full compare
-    case CF_NOADDR: park(e, RC_ADDR, j, 0); break;
-    case CF_HOLD: park(e, RC_HOLD, j, 0); break;
-    case CF_DATA: park(e, RC_DATA, j, 0); break;
-    case CF_FWD:  // hit/forward select picks the STQ data
-      pw.wbd_v[i] = true;
-      pw.wbd_ldq[i] = sl.ldq;
-      break;
-    }
+    // STLF candidate found: latch into L2b register for next cycle's confirm (leaves e.st == L_PIPE)
+    pnxt.l2b[i].v = 1;
+    pnxt.l2b[i].ldq = sl.ldq;
+    pnxt.l2b[i].epoch = sl.epoch;
+    pnxt.l2b[i].cand = c.idx;
   }
 }
 

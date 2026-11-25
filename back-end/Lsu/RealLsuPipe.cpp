@@ -48,6 +48,21 @@ void RealLsu::seq_pipe() {
   for (uint32_t k = 0; k < c.stq_count; k++) { const uint32_t i = (c.stq_head + k) % STQ_SIZE; c.stq[i] = n.stq[i]; }
   for (uint32_t k = 0; k < n.stq_count; k++) { const uint32_t i = (n.stq_head + k) % STQ_SIZE; c.stq[i] = n.stq[i]; }
 #endif
+  // Update 256-bit registered STQ word bloom filter from cycle-start live STQ entries + accepted STAs (vaddr[10:3])
+  pnxt.stq_bloom[0] = pnxt.stq_bloom[1] = pnxt.stq_bloom[2] = pnxt.stq_bloom[3] = 0;
+  for (uint32_t k = 0; k < c.stq_count; k++) {
+    const PStq &st = c.stq[(c.stq_head + k) % STQ_SIZE];
+    if (st.va_v && !st.suppress) {
+      const uint32_t b = (uint32_t(st.vaddr) >> 3) & 0xFFu;
+      pnxt.stq_bloom[b >> 6] |= 1ULL << (b & 63u);
+    }
+  }
+  for (int k = 0; k < STA; k++) {
+    if (pw.s1[k].v && !pw.s1[k].replay) {
+      const uint32_t b = (uint32_t(n.stq[pw.s1[k].stq].vaddr) >> 3) & 0xFFu;
+      pnxt.stq_bloom[b >> 6] |= 1ULL << (b & 63u);
+    }
+  }
   // everything after the two big arrays (write-back buffer, L1/L2/L3 registers, replay registers, pointers)
   char *dp = reinterpret_cast<char *>(&c);
   const char *sp = reinterpret_cast<const char *>(&n);
