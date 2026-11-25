@@ -115,7 +115,7 @@ ifeq ($(wildcard $(DS3_DIR)/src/dramsim3.h),)
 $(error DRAMsim3 not found in $(DS3_DIR): run 'git submodule update --init third_party/DRAMsim3')
 endif
 INCLUDES += -I$(DS3_DIR)/src
-CXXFLAGS += -DDS3_DEFAULT_CONFIG='"$(abspath $(DS3_DIR))/configs/DDR4_8Gb_x16_3200.ini"'
+CXXFLAGS += -DDS3_DEFAULT_CONFIG='"$(abspath $(DS3_DIR))/configs/DDR4_8Gb_x8_3200.ini"'
 LIBS += $(DS3_LIB)
 $(dir $(DS3_LIB))%.o: $(DS3_DIR)/src/%.cc
 	@mkdir -p $(dir $(DS3_LIB))
