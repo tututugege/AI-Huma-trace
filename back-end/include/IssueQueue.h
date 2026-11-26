@@ -429,8 +429,14 @@ private:
         
         uint32_t op_type = q_.entry[idx].uop.op;
         uint64_t op_bit = (1ULL << op_type);
-        
+        const bool port_no_pc =
+            (ports[p].port_idx >= IQ_ALU_PORT_BASE &&
+             ports[p].port_idx < IQ_ALU_PORT_BASE + ALU_NUM &&
+             ports[p].port_idx != IQ_ALU_PORT_BASE &&
+             ports[p].port_idx != IQ_ALU_PORT_BASE + 2);
+
         if ((ports[p].capability_mask & op_bit) &&
+            !(port_no_pc && q_.entry[idx].uop->src1_is_pc) &&
             (!in.presel_ok || in.presel_ok(q_.entry[idx].uop, ports[p].port_idx))) {
           result.push_back({idx, ports[p].port_idx});
           inst_issued[idx] = 1;

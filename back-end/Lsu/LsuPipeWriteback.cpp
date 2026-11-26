@@ -434,9 +434,12 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
     std::fprintf(stderr, "[MSL] cyc=%lld rob=%d p%u pc=%llx defer=%d atnt=%d stale_calc=%d v=%llx true=%llx\n", (long long)sim_time, (int)l.uop().rob_idx, (unsigned)dst,
                  (unsigned long long)f->pc, (int)defer, (int)ml.atnt, (int)got, (unsigned long long)sv, (unsigned long long)f->rd_value);
   }
-  // A load the function model did not execute (its true address faults or is blocked: wrong path) but whose stale base register gave it a valid
-  // address executes in the RTL and writes the memory value there into its destination: the register is stale (its true value is "unchanged").
-  const bool ghost = f && f->is_load && !f->rd_valid && (f->inst & 0x7f) == 0x03 && ((f->inst >> 7) & 31) != 0 && ml.atnt;
+  // A load the function model did not execute (its true address faults or is blocked: wrong path) but that still executes in the RTL
+  // (either because its stale base register gave it a valid address, or because a speculative store overwrote its PC in refcpu RAM so
+  // TraceBridge blocked it as StaleIcache) writes the memory value there into its destination: the register is stale (its true value is "unchanged").
+  const bool ghost_base = f && f->is_load && !f->rd_valid && (f->inst & 0x7f) == 0x03 && ((f->inst >> 7) & 31) != 0;
+  const bool ghost = ghost_base && ml.atnt;
+  const bool ghost_ic = ghost_base && f->blocked == tb::Blocked::StaleIcache;
   if (ml.atnt) {
     msd::taint[dst] = msd::TV{};
     if (ghost) { if (ms_load_value(pnxt, ms_stq_, l, ml, defer, v)) msd::set_taint(dst, true, v, 1); }
@@ -445,11 +448,15 @@ void RealLsu::ms_load_written_back(int idx, bool defer) {
     msd::taint[dst] = msd::TV{};
     // (the value of the DCache read: the one the L1 CAM pass recorded; the memory image of the write-back cycle may already hold stores the read did not see)
     const bool have = ml.cam_ok ? (v = (xlen_t)ml.cam_val, true) : ms_load_value(pnxt, ms_stq_, l, ml, true, v);
-    if (plain && have && v != f->rd_value) msd::set_taint(dst, true, v, 0);
-    ms_ldq_[idx].early_clean = !(plain && have && v != f->rd_value);
+    if (ghost_ic && have) { msd::set_taint(dst, true, v, 0); ms_ldq_[idx].early_clean = false; }
+    else {
+      if (plain && have && v != f->rd_value) msd::set_taint(dst, true, v, 0);
+      ms_ldq_[idx].early_clean = !(plain && have && v != f->rd_value);
+    }
   } else {
     const bool keep = ml.early_clean && !msd::taint[dst].t;   // (before release: the register holds the clean value of this load's early write-back)
     msd::release(dst);
-    if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1, keep);
+    if (ghost_ic && ms_load_value(pnxt, ms_stq_, l, ml, false, v)) msd::set_taint(dst, true, v, 1, keep);
+    else if (plain && ms_load_value(pnxt, ms_stq_, l, ml, false, v) && v != f->rd_value) msd::set_taint(dst, true, v, 1, keep);
   }
 }

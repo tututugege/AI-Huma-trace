@@ -241,6 +241,12 @@ struct BlockTage {
 
   void update_slot(const FtbBlkIdx &ix, int sl, bool real_dir, bool pred_dir, bool alt_pred, int pcpn) {
     if (sl < 0 || sl >= FTB_SLOTS) return;
+    const uint32_t next_rc = reset_cnt + 1;
+    const bool do_rst = ((next_rc & ((1u << TageCfg::urst) - 1u)) == 0);
+    auto set_u = [&](uint8_t &u, uint8_t nu) {
+      // Single-write-port u_uhi SRAM: periodic reset takes priority on bit 1 on 1-in-2048 reset cycles
+      u = do_rst ? static_cast<uint8_t>((u & 2u) | (nu & 1u)) : nu;
+    };
     const uint32_t bi = ix.base_idx & mask;
     if (pcpn == TN) {
       uint8_t &bc = base[sl][bi];
@@ -258,8 +264,8 @@ struct BlockTage {
       c = real_dir ? (c < 7 ? c + 1 : 7) : (c > 0 ? c - 1 : 0);
       if (pdir != alt_pred) {
         uint8_t &u = useful[pcpn][sl][ti];
-        if (pdir == real_dir) { if (u < 3) u++; }
-        else { if (u > 0) u--; }
+        const uint8_t nu = (pdir == real_dir) ? (u < 3 ? uint8_t(u + 1) : 3) : (u > 0 ? uint8_t(u - 1) : 0);
+        set_u(u, nu);
       }
     }
 
@@ -275,11 +281,11 @@ struct BlockTage {
         const uint32_t ti = ix.idx[chosen] & mask;
         tag[chosen][sl][ti] = ix.tag[chosen];
         cnt[chosen][sl][ti] = real_dir ? 4 : 3;
-        useful[chosen][sl][ti] = 0;
+        set_u(useful[chosen][sl][ti], 0);
       } else {
         for (int t = start_t; t < TN; t++) {
           uint8_t &u = useful[t][sl][ix.idx[t] & mask];
-          if (u > 0) u--;
+          if (u > 0) set_u(u, uint8_t(u - 1));
         }
       }
     }
@@ -287,8 +293,8 @@ struct BlockTage {
     const uint8_t fb = ((lsfr >> 3) ^ (lsfr >> 2)) & 1u;
     lsfr = static_cast<uint8_t>(((lsfr << 1) | fb) & 0xfu);
     if (lsfr == 0) lsfr = 1;
-    reset_cnt++;
-    if ((reset_cnt & ((1u << TageCfg::urst) - 1u)) == 0) {
+    reset_cnt = next_rc;
+    if (do_rst) {
       const uint32_t row = (reset_cnt >> TageCfg::urst) & mask;
       for (int t = 0; t < TN; t++) useful[t][sl][row] &= 1u;
     }

@@ -453,8 +453,9 @@ void Rob::report_commit() {
   out.rob2csr.fs_dirty = false;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     const auto &c = out.rob_commit.commit_entry[i];
-    o.commit_entry[i].valid = c.valid;
-    if (!c.valid) continue;
+    // An instruction retiring with an interrupt never executed/committed; do not feed it to BPU training.
+    o.commit_entry[i].valid = c.valid && !interrupt;
+    if (!c.valid || interrupt) continue;
     o.commit_entry[i].uop = c.uop;
     o.commit_extra[i] = out.rob_commit.commit_extra[i];
     o.commit_ftq[i] = in.ftq_commit_info->resp[i];

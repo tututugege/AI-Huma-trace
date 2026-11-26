@@ -561,8 +561,9 @@ constexpr int MAX_UOPS_PER_INST = 3;
 // ============================================================
 
 constexpr int ALU_NUM = count_ports_with_mask(OP_MASK_ALU);
+constexpr int PC_ALU_NUM = 2;  // Port 0 (IQ_INT) and Port 2 (IQ_INT1) handle src1_is_pc ALU uops
 constexpr int BRU_NUM = count_ports_with_mask(OP_MASK_BR);
-constexpr int FTQ_PRF_PC_PORT_NUM = ALU_NUM + BRU_NUM;
+constexpr int FTQ_PRF_PC_PORT_NUM = PC_ALU_NUM + BRU_NUM;
 constexpr int FTQ_ROB_PC_PORT_NUM = 1;
 #ifndef CONFIG_STQ_SIZE
 #define CONFIG_STQ_SIZE 64

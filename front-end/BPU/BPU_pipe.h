@@ -214,6 +214,13 @@ class BpuPipe {
     RasQ sras;
     RasC aras;
     uint8_t spec_imli = 0, arch_imli = 0;
+    // 2-stage sync SRAM training RMW pipeline (T0 -> T1) + 1-entry clr pending buffer
+    bool t1_ev_v = false;
+    FtbTrainEv t1_ev{};
+    bool t1_clr_v = false;
+    pc_t t1_clr_base = 0, t1_clr_pc = 0;
+    bool clr_pend_v = false;
+    pc_t clr_pend_base = 0, clr_pend_pc = 0;
   };
 
   struct Txn {
@@ -761,8 +768,35 @@ class BpuPipe {
     if (t.rec_b_v) rec_[t.rec_b.id & 255] = t.rec_b;
     if (t.ftb_rec_v) ftb_rec_[t.ftb_rec.id & (FTB_REC_N - 1)] = t.ftb_rec;
     if (t.ftb_rec_b_v) ftb_rec_[t.ftb_rec_b.id & (FTB_REC_N - 1)] = t.ftb_rec_b;
-    if (t.ftb_ev_v) ftb_.apply_train_ev(t.ftb_ev);
-    if (t.ftb_clr_v) ftb_.clear_false_branch(t.ftb_clr_base, t.ftb_clr_pc);
+    // Execute previous cycle's T1 write (strict 2-stage sync SRAM RMW: T0 read -> T1 modify & write)
+    if (st_.t1_ev_v) ftb_.apply_train_ev(st_.t1_ev);
+    else if (st_.t1_clr_v) ftb_.clear_false_branch(st_.t1_clr_base, st_.t1_clr_pc);
+    // Advance T0 -> T1 (upd has priority over clr on the single FTB1 write port; clr queues in 1-entry buffer)
+    st_.t1_ev_v = t.ftb_ev_v;
+    if (t.ftb_ev_v) st_.t1_ev = t.ftb_ev;
+    st_.t1_clr_v = false;
+    if (t.ftb_ev_v) {
+      if (t.ftb_clr_v) {
+        st_.clr_pend_v = true;
+        st_.clr_pend_base = t.ftb_clr_base;
+        st_.clr_pend_pc = t.ftb_clr_pc;
+      }
+    } else if (st_.clr_pend_v) {
+      st_.t1_clr_v = true;
+      st_.t1_clr_base = st_.clr_pend_base;
+      st_.t1_clr_pc = st_.clr_pend_pc;
+      if (t.ftb_clr_v) {
+        st_.clr_pend_v = true;
+        st_.clr_pend_base = t.ftb_clr_base;
+        st_.clr_pend_pc = t.ftb_clr_pc;
+      } else {
+        st_.clr_pend_v = false;
+      }
+    } else if (t.ftb_clr_v) {
+      st_.t1_clr_v = true;
+      st_.t1_clr_base = t.ftb_clr_base;
+      st_.t1_clr_pc = t.ftb_clr_pc;
+    }
   }
 };
 

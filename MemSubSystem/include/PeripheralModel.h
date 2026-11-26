@@ -80,12 +80,14 @@ public:
            in_range(paddr, OPENSBI_TIMER_BASE, OPENSBI_TIMER_MMIO_SIZE);
   }
 
-  // 64-bit value of a load (rv64 ld reads two aligned words; everything else is read_load())
+  // 64-bit value of a load (rv64 ld reads two aligned words; lb/lh/lw sign-extend to 64b; lbu/lhu/lwu zero-extend)
   uint64_t read_load64(uint32_t paddr, uint8_t func3) const {
     if ((func3 & 0x3u) == 0x3u) {
       return static_cast<uint64_t>(read_load(paddr, 2)) | (static_cast<uint64_t>(read_load(paddr + 4u, 2)) << 32);
     }
-    return read_load(paddr, func3);
+    const uint32_t v = read_load(paddr, func3);
+    return ((func3 & 0x4u) == 0) ? static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(v)))
+                                 : static_cast<uint64_t>(v);
   }
 
   uint32_t read_load(uint32_t paddr, uint8_t func3) const {
@@ -93,20 +95,16 @@ public:
       return 0;
     }
 
-    if (paddr == OPENSBI_TIMER_LOW_ADDR) {
-      return static_cast<uint32_t>(effective_timer_value());
-    }
-    if (paddr == OPENSBI_TIMER_HIGH_ADDR) {
-      return static_cast<uint32_t>(effective_timer_value() >> 32);
-    }
-    if (paddr == OPENSBI_TIMERCMP_LOW_ADDR) {
-      return static_cast<uint32_t>(timer_cmp_);
-    }
-    if (paddr == OPENSBI_TIMERCMP_HIGH_ADDR) {
-      return static_cast<uint32_t>(timer_cmp_ >> 32);
-    }
     uint32_t data = 0;
-    if (paddr >= XPS_INTC_ADDR_BASE &&
+    if (paddr == OPENSBI_TIMER_LOW_ADDR) {
+      data = static_cast<uint32_t>(effective_timer_value());
+    } else if (paddr == OPENSBI_TIMER_HIGH_ADDR) {
+      data = static_cast<uint32_t>(effective_timer_value() >> 32);
+    } else if (paddr == OPENSBI_TIMERCMP_LOW_ADDR) {
+      data = static_cast<uint32_t>(timer_cmp_);
+    } else if (paddr == OPENSBI_TIMERCMP_HIGH_ADDR) {
+      data = static_cast<uint32_t>(timer_cmp_ >> 32);
+    } else if (paddr >= XPS_INTC_ADDR_BASE &&
                paddr < (XPS_INTC_ADDR_BASE + XPS_INTC_MMIO_SIZE)) {
       data = xps_intc_read_reg(paddr - XPS_INTC_ADDR_BASE);
     } else {

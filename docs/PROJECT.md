@@ -77,11 +77,11 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
    (2026-11-19 以新默认配置(= RTL 配置:两个 INT 队列、合并访存队列、`FLUSH_REG` 等 13 个 `CFG_*` 默认值,EXP-044)重新生成,62 个程序周期都变了,几何平均 +1.96%;更早:2026-11-11 以 compact ROB(EXP-028)为默认,2026-11-09 带 write buffer(EXP-024);`baseline_nopf.csv` 是同一基线的关预取版本:`PF_ENABLE=0` 可复现,2026-11-19 同时重新生成)。
    全部以 difftest Success 结束,TB_CHECK 不一致数为 0。默认配置即等于 RTL 配置,与 RTL 比周期无需任何环境变量。
    **旧设计回归**(旧 LSU + 旧 BPU):两者都已删除(BPU_PIPE 0..2 在 exp/rvc-carry,旧 LSU / `LSU_PIPE=0` 与 `legacy_lsu_baseline*.csv` 于 2026-11-15 删除);要用请查历史。
-4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-21,EXP-051 里程碑 B 2-taken + 2-ahead BPU + FDIP;`docs/MAIN_RECORDS.md`):**
-   dhrystone 64 次 96,351 (IPC 2.682);coremark 2 次迭代 231,913 (IPC 2.725);memory-stress-small 326,797 (IPC 3.209)。
-   上一版 EXP-050(2026-11-21):dhrystone 102,229 (2.527);coremark 275,332 (2.295);memory-stress-small 343,584 (3.05)。
-   更早的配置列在 `docs/MAIN_RECORDS.md`(每次合并一行);它们的开关(`LSU_PIPE_WBUF=0 LSU_PIPE_DRAIN=3` = EXP-024 之前,`LSU_MEMSPEC=0 FE_RFAST=0` = EXP-019 之前,`LSU_PIPE=0` = 旧 LSU)仍然可用,但数字已不能精确复现。
-   这些周期数以 EXP-006 的存储系统为前提:DRAMsim3 DDR4-3200 加 60 ns 固定非核延迟,核频 1 GHz。
+4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-26,EXP-069 全显式严格同步 SRAM 化 + 面积/代码精简;`docs/MAIN_RECORDS.md`):**
+   dhrystone 64 次 88,338 (IPC 2.925);coremark 2 次迭代 206,578 (IPC 3.059);memory-stress-small 312,146 (IPC 3.360)。
+   上一版 EXP-068(2026-11-25):dhrystone 86,839 (2.98);coremark 208,597 (3.03);memory-stress-small 312,143 (3.36)。
+   更早的配置列在 `docs/MAIN_RECORDS.md`(每次合并一行)。
+   这些周期数以 EXP-066 的存储系统为前提:DRAMsim3 `DDR4_8Gb_x8_3200` 加 32 ns 固定非核延迟,核频 2 GHz。
 5. 小 LLC 检查(`scripts/llc_small_check.sh $PWD <baseline-sim/src 的绝对路径>`(必须用绝对路径)):默认 4 MiB LLC 在小测试里从不发生替换,所以脚本用 64 KiB LLC 构建两个模拟器,在会发生替换的程序上比较周期。
    (它与原模型比较,因此只有在 trace-model 运行的配置与原模型一致时才吻合;把它当作 DDR 写 / victim 写回路径的检查工具,而不是 gate。)
    `load-store` 显示 "base= FAIL",因为原模型因 "Misaligned Load" 中止(历史遗留);gate 里用 `load-store-aligned`(tests/extra,用对齐的字节 load 取代未对齐的 `lw`)代替它。

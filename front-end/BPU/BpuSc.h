@@ -153,6 +153,12 @@ struct ExBlockTage {
 
   void update_slot(const ExTageIdx &ix, int sl, bool real_dir, Pred *pred_out = nullptr) {
     if (sl < 0 || sl >= SLOTS) return;
+    const uint32_t next_rc = reset_cnt + 1;
+    const bool do_rst = ((next_rc & ((1u << EX_TAGE_URST) - 1u)) == 0);
+    auto set_u = [&](uint8_t &u, uint8_t nu) {
+      // Single-write-port u_uhi SRAM: periodic reset takes priority on bit 1 on 1-in-2048 reset cycles
+      u = do_rst ? static_cast<uint8_t>((u & 2u) | (nu & 1u)) : nu;
+    };
     Pred p;
     predict_slot(ix, sl, p);
     if (pred_out) *pred_out = p;
@@ -173,8 +179,8 @@ struct ExBlockTage {
       c = real_dir ? (c < 7 ? c + 1 : 7) : (c > 0 ? c - 1 : 0);
       if (pdir != p.alt) {
         uint8_t &u = useful[pcpn][sl][ix.idx[pcpn]];
-        if (pdir == real_dir) { if (u < 3) u++; }
-        else { if (u > 0) u--; }
+        const uint8_t nu = (pdir == real_dir) ? (u < 3 ? uint8_t(u + 1) : 3) : (u > 0 ? uint8_t(u - 1) : 0);
+        set_u(u, nu);
       }
     }
 
@@ -190,11 +196,11 @@ struct ExBlockTage {
         if (nf > 1 && ((lsfr & 3u) == 0)) chosen = free_t[1];
         tag[chosen][sl][ix.idx[chosen]] = ix.tag[chosen];
         cnt[chosen][sl][ix.idx[chosen]] = real_dir ? 4 : 3;
-        useful[chosen][sl][ix.idx[chosen]] = 0;
+        set_u(useful[chosen][sl][ix.idx[chosen]], 0);
       } else {
         for (int t = start_t; t < EX_TN; t++) {
           uint8_t &u = useful[t][sl][ix.idx[t]];
-          if (u > 0) u--;
+          if (u > 0) set_u(u, uint8_t(u - 1));
         }
       }
     }
@@ -202,8 +208,8 @@ struct ExBlockTage {
     const uint8_t fb = ((lsfr >> 3) ^ (lsfr >> 2)) & 1u;
     lsfr = static_cast<uint8_t>(((lsfr << 1) | fb) & 0xfu);
     if (lsfr == 0) lsfr = 1;
-    reset_cnt++;
-    if ((reset_cnt & ((1u << EX_TAGE_URST) - 1u)) == 0) {
+    reset_cnt = next_rc;
+    if (do_rst) {
       const uint32_t row = (reset_cnt >> EX_TAGE_URST) & (EX_TAGE_N - 1);
       for (int t = 0; t < EX_TN; t++) useful[t][sl][row] &= 1u;
     }
