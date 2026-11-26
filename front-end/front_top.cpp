@@ -124,10 +124,10 @@ void FrontControl::control() {
   out.pipe_dec = {};
   out.global_reset = in.in->ctrl.reset;
   out.global_refetch = in.in->redirect.valid || in.rd->q.predecode_refetch;
-  // BPU_PIPE: the pipeline's last stage may override an older block this cycle. The youngest squash_n fetch addresses are
-  // dropped, and an entry is popped only when it is at least 1 cycle old (EXP-044: !fa_head_fresh()).
+  // BPU_PIPE (S2->S3 split): drop youngest squash_n (0..2) fetch addresses on S3 override;
+  // ICache may pop ifu_ptr whenever fa_count() > bpu_pipe->hold_n() (0 extra refetch wait on post-refetch head!).
   bpu_pipe->decide(out.global_refetch, out.pipe_dec);
-  out.pipe_head_ok = ftq ? !ftq->fa_head_fresh() : true;
+  out.pipe_head_ok = ftq ? (ftq->fa_count() > bpu_pipe->hold_n()) : true;
 }
 
 // The read enables of the Unified FTQ / inst_fifo and the S2 write enable (no ptab_bypass, no front2back_fifo).

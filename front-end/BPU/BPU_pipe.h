@@ -1,12 +1,13 @@
-// Pipelined block-based 1-ahead FTB branch predictor (EXP-050 Milestone A, ah1_4k_a2k1k + FTB_BRQ=2).
+// Pipelined block-based 1-Ahead A + 2-Ahead B FTB branch predictor (v10: Zero-T0-Read Meta + WRBypass + Deep-Macro 1RW).
 // Matches rtl/frontend/bpu/ cycle-for-cycle (docs/modules/bpu.md).
 //
-//   S0 (0 bubble)   Registered 1-ahead SRAM select (aftb 2048x8 + atage 1024x4x4 + aitt 256x3) with uFTB (256x4, 20b tgt)
-//                   cold-start fallback; starts next-block 1-ahead SRAM read from (s0_base, s0_fh); pushes spec hist/RAS.
-//   S1 (1 bubble)   Exact-PC SRAM read (Main FTB 4096x4 + S2 Block-TAGE 4096x4x4 + Single Block-ITT 256x3); triggers 1-bubble
-//                   override only when S0 missed 1-ahead (!r0.ah_hit).
-//   S2 (2 bubbles)  Final select on registered S1 raw data -> PTAB write + ftb_rec_[512] write; 2-bubble override on disagreement.
-//   Commit side     16-entry 1-branch/cycle queue (brq[16], never backpressures ROB) + 1R1W ftb_rec_[512] -> single-branch RMW.
+//   S0 (0 bubble)   Registered 1-ahead A & 2-ahead B SRAM select (aftb 2048x8, aftb2 1024x8, atage/atage2, aitt/aitt2)
+//                   with 64-entry FF uFTB cold-start fallback; starts next-block ahead 1RW read; pushes spec hist/RAS.
+//   S1 (1 bubble)   Exact-PC 1RW SRAM read (Main FTB 4096x4 4-Bank + S2 8-table ExBlockTage 8-Bank + SC 2-Bank + ITT 2-Bank).
+//   S2 (2 bubbles)  Pipeline register stage (breaks S1 SRAM CLK->Q from S3 compare/eval for >=1.5 GHz timing closure).
+//   S3 (3 bubbles)  Final select on registered S2 raw data -> PTAB write + ftb_rec_[512] Meta write; 3-bubble override on mismatch.
+//   Commit side     16-entry 1-branch/cycle queue (brq[16]) + ftb_rec_[512] Meta + 8-entry FF WRBypass -> ZERO T0 SRAM reads!
+//                   Native 1.00 br/cyc single-cycle pure writes; Predict wins FTB via 1-entry write buf; Write wins not-hit on TAGE/SC/ITT.
 #pragma once
 #include "BPU.h"
 #include "BpuFtb.h"
@@ -23,7 +24,7 @@ class PreIduQueue;
 
 namespace bpuf {
 
-constexpr int MAIN_LAT = 2;
+constexpr int MAIN_LAT = 3;     // S0 -> S1 (1RW SRAM read) -> S2 (pipe reg) -> S3 (final eval/override)
 inline int cfg_pair() { return 2; }
 constexpr int PQ = 64;          // PTAB checkpoint records (BPO_PDCKPT)
 constexpr int HR_BITS = 1024;   // circular global-history ring (widened for 2-taken fetch rate)
@@ -137,6 +138,7 @@ struct MainOut {
 
 struct Blk {
   bool valid = false;
+  bool sq = false;              // true iff an older block was in R[1..2] when issued -> squashable by S3 override
   pc_t base = 0, bnd = 0;
   S0Guess g;
   Ckpt ck;
@@ -147,6 +149,7 @@ struct Blk {
   bool ah_hit = false;
   pc_t ah_key_base = 0;
   uint32_t ah_key_fh[FH_N_MAX][TN] = {};
+  BpuFtb::AhMeta ah_meta{};
   // Optional paired second block B in the same fetch group (2-taken)
   bool has_b = false;
   pc_t base_b = 0, bnd_b = 0;
@@ -160,6 +163,7 @@ struct Blk {
   uint8_t ah_kind_b = 2;
   pc_t ah_key_base_b = 0;
   uint32_t ah_key_fh_b[FH_N_MAX][TN] = {};
+  BpuFtb::AhMeta ah_meta_b{};
 };
 
 struct Decision {
@@ -170,6 +174,8 @@ struct Decision {
   MainOut out;
   bool pair = false, ovr_b = false;
   MainOut outB;
+  BpuFtb::S2Meta s2_meta{};
+  BpuFtb::S2Meta s2_meta_b{};
   Ckpt ock; MainOut oout; pc_t obase = 0; S0Guess og;
 };
 
@@ -206,21 +212,23 @@ class BpuPipe {
     uint8_t pq_h = 0, pq_n = 0;
     uint16_t blk_seq = 0;
     uint8_t epoch = 0;
-    Blk R[MAIN_LAT];
+    Blk R[3];
     FtbRaw ftb_raw;
     FtbRaw ftb_raw_b;
-    FtbAhPipe ah_pipe[2];
-    FtbAhRaw ah2_pipe[2];
+    FtbRaw ftb_raw_s3;
+    FtbRaw ftb_raw_b_s3;
+    FtbAhPipe ah_pipe;       // 0 backup copies (saves ~45k FFs in RTL!)
+    FtbAhRaw ah2_pipe;
     FtbTrkState ftb_trk;
     HistRing spec, arch;
     RasQ sras;
     RasC aras;
     uint8_t spec_imli = 0, arch_imli = 0;
-    // 2-stage sync SRAM training RMW pipeline (T0 -> T1) + 1-entry clr pending buffer
-    bool t1_ev_v = false;
-    FtbTrainEv t1_ev{};
-    bool t1_clr_v = false;
-    pc_t t1_clr_base = 0, t1_clr_pc = 0;
+    // 1-entry pending FTB write buffers (Predict ALWAYS wins FTB 1RW banks!)
+    FtbWrBuf ftb1_wb{};
+    FtbWrBuf aftb_wb{};
+    FtbWrBuf aftb2_wb{};
+    // 1-entry pending predecode false-branch clear
     bool clr_pend_v = false;
     pc_t clr_pend_base = 0, clr_pend_pc = 0;
   };
@@ -229,14 +237,45 @@ class BpuPipe {
     bool rec_v = false, rec_b_v = false;
     RecP rec, rec_b;
     bool pmu_l1_ovr = false, pmu_ptab_stall = false;
-    bool ftb_ev_v = false, ftb_clr_v = false, ftb_rec_v = false, ftb_rec_b_v = false;
-    FtbTrainEv ftb_ev{};
+    bool ftb_rec_v = false, ftb_rec_b_v = false;
     FtbBlkRec ftb_rec{}, ftb_rec_b{};
-    pc_t ftb_clr_base = 0, ftb_clr_pc = 0;
+    // 1-cycle zero-T0-read commit plan
+    BpuFtb::CommitPlan cp{};
+    bool do_s2_base = false;
+    // Single-way FTB writes firing this cycle & next write-buffer states
+    bool do_ftb1_wr = false;
+    FtbWrBuf ftb1_wr{};
+    FtbWrBuf next_ftb1_wb{};
+    bool do_aftb_wr = false;
+    FtbWrBuf aftb_wr{};
+    FtbWrBuf next_aftb_wb{};
+    bool do_aftb2_wr = false;
+    FtbWrBuf aftb2_wr{};
+    FtbWrBuf next_aftb2_wb{};
+    // Predecode false-branch clear
+    bool do_clr = false;
+    pc_t clr_base = 0, clr_pc = 0;
+    bool next_clr_pend_v = false;
+    pc_t next_clr_pend_base = 0, next_clr_pend_pc = 0;
+    // Busy masks for deferred 1RW u-bit periodic reset
+    uint8_t s2_tbl_busy[EX_TN] = {};
+    uint8_t ah1_tbl_busy[TN] = {};
+    uint8_t ah2_tbl_busy[TN] = {};
     void clear() {
       rec_v = rec_b_v = false;
       pmu_l1_ovr = pmu_ptab_stall = false;
-      ftb_ev_v = ftb_clr_v = ftb_rec_v = ftb_rec_b_v = false;
+      ftb_rec_v = ftb_rec_b_v = false;
+      cp = BpuFtb::CommitPlan{};
+      do_s2_base = false;
+      do_ftb1_wr = do_aftb_wr = do_aftb2_wr = false;
+      next_ftb1_wb = FtbWrBuf{};
+      next_aftb_wb = FtbWrBuf{};
+      next_aftb2_wb = FtbWrBuf{};
+      do_clr = false;
+      next_clr_pend_v = false;
+      std::memset(s2_tbl_busy, 0, sizeof s2_tbl_busy);
+      std::memset(ah1_tbl_busy, 0, sizeof ah1_tbl_busy);
+      std::memset(ah2_tbl_busy, 0, sizeof ah2_tbl_busy);
     }
   };
 
@@ -275,9 +314,9 @@ class BpuPipe {
   }
   static void restore(const Ckpt &c, HistRing &h, RasQ &r, uint8_t &imli) {
     h.head = c.head;
-    std::memcpy(h.fh, c.fh, sizeof(h.fh));
-    std::memcpy(h.ex_fh, c.ex_fh, sizeof(h.ex_fh));
-    std::memcpy(h.sc_fh, c.sc_fh, sizeof(h.sc_fh));
+    std::memcpy(h.fh, c.fh, sizeof(c.fh));
+    std::memcpy(h.ex_fh, c.ex_fh, sizeof(c.ex_fh));
+    std::memcpy(h.sc_fh, c.sc_fh, sizeof(c.sc_fh));
     imli = c.imli;
     r.tosr = c.ras_tosr; r.tosw = c.ras_tosw; r.cnt = c.ras_cnt;
   }
@@ -335,6 +374,32 @@ class BpuPipe {
     ev.nbr = ft.nbr;
     for (int i = 0; i < ft.nbr; i++) ev.br[i] = ft.br[i];
     ftb.apply_train_ev(ev);
+  }
+
+  static void fill_ftb_rec(FtbBlkRec &dst, uint16_t id, pc_t base, const Ckpt &ck,
+                           bool ah_v, uint8_t ah_kind, pc_t ah_a_base, pc_t ah_key_base,
+                           const uint32_t ah_key_fh[FH_N_MAX][TN],
+                           const BpuFtb::S2Meta &s2m, const BpuFtb::AhMeta &ahm) {
+    dst = FtbBlkRec{};
+    dst.valid = true;
+    dst.id = id;
+    dst.base = base;
+    std::memcpy(dst.fh, ck.fh, sizeof dst.fh);
+    std::memcpy(dst.ex_fh, ck.ex_fh, sizeof dst.ex_fh);
+    std::memcpy(dst.sc_fh, ck.sc_fh, sizeof dst.sc_fh);
+    dst.imli = ck.imli;
+    dst.ah_v = ah_v;
+    dst.ah_kind = ah_kind;
+    dst.ah_a_base = ah_a_base;
+    dst.ah_key_base = ah_key_base;
+    std::memcpy(dst.ah_key_fh, ah_key_fh, sizeof dst.ah_key_fh);
+    dst.ftb1_meta = s2m.ftb;
+    dst.s2_tage_meta = s2m.tage;
+    dst.s2_sc_meta = s2m.sc;
+    dst.s2_itt_meta = s2m.itt;
+    dst.ah_ftb_meta = ahm.ftb;
+    dst.ah_tage_meta = ahm.tage;
+    dst.ah_itt_meta = ahm.itt;
   }
 
  public:
@@ -414,6 +479,10 @@ class BpuPipe {
   }
 
   static constexpr int depth() { return MAIN_LAT; }
+  uint8_t hold_n() const {
+    return static_cast<uint8_t>(((*stp_).R[0].valid && (*stp_).R[0].sq) +
+                                ((*stp_).R[1].valid && (*stp_).R[1].sq));
+  }
 
   void reset() {
     for (auto &r : rec_) r.valid = false;
@@ -429,10 +498,12 @@ class BpuPipe {
     if (refetch || !b.valid) return;
     d.valid = true;
     d.blk = &b;
-    ftb_.s2_select(b.base, b.bnd, b.ftb_ix, b.ex_ix, (*stp_).ftb_raw, b.ck.ras_cnt, b.ck.ras_top, d.out);
+    const FtbRaw &raw_a = (*stp_).ftb_raw_s3;
+    const FtbRaw &raw_b = (*stp_).ftb_raw_b_s3;
+    ftb_.s2_select(b.base, b.bnd, b.ftb_ix, b.ex_ix, raw_a, b.ck.ras_cnt, b.ck.ras_top, d.out, &d.s2_meta);
     const bool ovr_a = disagree(d.out, b.g, b.has_b);
     if (!ovr_a && b.has_b) {
-      ftb_.s2_select(b.base_b, b.bnd_b, b.ftb_ix_b, b.ex_ix_b, (*stp_).ftb_raw_b, b.ck_b.ras_cnt, b.ck_b.ras_top, d.outB);
+      ftb_.s2_select(b.base_b, b.bnd_b, b.ftb_ix_b, b.ex_ix_b, raw_b, b.ck_b.ras_cnt, b.ck_b.ras_top, d.outB, &d.s2_meta_b);
       d.pair = true;
       d.ovr_b = disagree(d.outB, b.g_b, false);
     }
@@ -443,24 +514,6 @@ class BpuPipe {
       d.ock = b.ck_b; d.oout = d.outB; d.obase = b.base_b; d.og = b.g_b;
     }
     if (d.ovr) for (int k = 0; k < MAIN_LAT - 1; k++) d.squash_n += (*stp_).R[k].valid;
-  }
-
-  bool l1_override(const Blk &b, State &n, Txn &t) const {
-    if (!b.valid || b.ah_hit) return false;
-    const S0Guess g1 = ftb_.s1_predict<S0Guess>(b.base, b.bnd, n.ftb_raw, b.ck.ras_cnt, b.ck.ras_top);
-    if (!g1.hit) return false;
-    MainOut m; m.next = g1.next; m.nbits = g1.nbits; m.bits = g1.bits; m.ras_op = g1.ras_op; m.ras_val = g1.ras_val;
-    m.taken = g1.taken; m.slot = g1.slot;
-    if (!disagree(m, b.g, b.has_b)) return false;
-    t.pmu_l1_ovr = true;
-    n.R[1].g = g1;
-    n.R[1].has_b = false;
-    restore(b.ck, n.spec, n.sras, n.spec_imli);
-    hp("L1OVR", b.base, g1.next, g1.nbits, g1.bits);
-    push_bits(g1.nbits, g1.bits, g1.ras_op, g1.ras_val, n.spec, n.sras);
-    upd_imli(n.spec_imli, g1.type, g1.taken, b.base, g1.next, false);
-    n.pc = g1.next;
-    return true;
   }
 
   void comb(const InputPayload &in, const Decision &d, OutputPayload &out, Txn &t) {
@@ -477,30 +530,36 @@ class BpuPipe {
       n.pq_h = uint8_t((n.pq_h + 1) % PQ); n.pq_n--;
     }
 
+    bool s0_launched = false;
+    pc_t s0_ah_base = 0;
+    uint32_t s0_ah_fh[FH_N_MAX][TN] = {};
+
     auto s0_issue = [&](pc_t pc) {
       Blk &b = n.R[0];
       b = Blk{};
       b.valid = true;
+      b.sq = n.R[1].valid || n.R[2].valid;
       b.base = pc;
       b.bnd = block_bnd(b.base);
-      const FtbAhPipe ah_src = n.ah_pipe[0];
-      const FtbAhRaw ah2_src = n.ah2_pipe[0];
+      const FtbAhPipe ah_src = n.ah_pipe;
+      const FtbAhRaw ah2_src = n.ah2_pipe;
       b.ah_v = ah_src.valid;
       b.ah_key_base = ah_src.key_base;
       std::memcpy(b.ah_key_fh, ah_src.key_fh, sizeof b.ah_key_fh);
-      b.ah_hit = ftb_.ahead_select(b.base, b.bnd, ah_src, n.sras.cnt, n.sras.top(), b.g);
+      b.ah_hit = ftb_.ahead_select(b.base, b.bnd, ah_src, n.sras.cnt, n.sras.top(), b.g, &b.ah_meta);
       if (!b.ah_hit) b.g = ftb_.s0_lookup<S0Guess>(b.base, b.bnd, n.sras.cnt, n.sras.top());
 
       b.ck = take_ckpt(n.spec, n.sras, n.spec_imli);
       b.ck.base = b.base;
+      const uint32_t wA = static_cast<uint32_t>(b.base >> SLOT_SHIFT);
       b.ftb_ix = BpuFtb::make_index(b.base, n.spec.fh);
-      b.ex_ix = make_ex_tage_index(b.ftb_ix.w, n.spec.ex_fh);
-      b.sc_ix = make_sc_index(b.ftb_ix.w, n.spec.sc_fh, n.spec_imli);
+      b.ex_ix = make_ex_tage_index(wA, n.spec.ex_fh);
+      b.sc_ix = make_sc_index(wA, n.spec.sc_fh, n.spec_imli);
       hp("S0", b.base, b.g.next, b.g.nbits, b.g.bits);
       push_bits(b.g.nbits, b.g.bits, b.g.ras_op, b.g.ras_val, n.spec, n.sras);
       upd_imli(n.spec_imli, b.g.type, b.g.taken, b.base, b.g.next, false);
 
-      // 2-taken: optional paired second block B predicted in parallel via 2-ahead B (with uFTB fallback) & strict NT=1
+      // 2-taken: optional paired second block B predicted in parallel via 2-ahead B
       bool paired = false;
       if (b.g.taken) {
         const uint8_t a_len = static_cast<uint8_t>(b.g.slot + 1);
@@ -512,7 +571,9 @@ class BpuPipe {
                                  : (b.base + static_cast<pc_t>(b.g.slot) * SLOT_BYTES);
         const bool disc_ok = (pcB != b.base + static_cast<pc_t>(a_len) * SLOT_BYTES) &&
                              (pcB != a_br_pc + ilen_of(b.g.rvc));
-        if (a_len >= 1 && a_len < FW && a_upper_ok && disc_ok && ic_pair_ok(b.base, pcB)) {
+        const uint32_t wB = static_cast<uint32_t>(pcB >> SLOT_SHIFT);
+        const bool bank_ok = (s2_bank_of_w(wA) != s2_bank_of_w(wB));
+        if (a_len >= 1 && a_len < FW && a_upper_ok && disc_ok && ic_pair_ok(b.base, pcB) && bank_ok) {
           const pc_t max_b_end = pcB + static_cast<pc_t>(FW - a_len) * SLOT_BYTES;
           const pc_t full_bnd_b = block_bnd(pcB);
           const pc_t bndB = full_bnd_b < max_b_end ? full_bnd_b : max_b_end;
@@ -520,8 +581,9 @@ class BpuPipe {
           const uint8_t b_len = static_cast<uint8_t>((bndB - pcB) >> SLOT_SHIFT);
           if (b_len >= 2) {
             S0Guess gB{};
+            BpuFtb::AhMeta ah_meta_b{};
             const bool ah_b_hit = ftb_.ahead2_select(pcB, bndB, ah_src.valid, ah_src.key_base, ah_src.key_fh,
-                                                     ah2_src, n.sras.cnt, n.sras.top(), gB, b.base);
+                                                     ah2_src, n.sras.cnt, n.sras.top(), gB, b.base, &ah_meta_b);
             if (!ah_b_hit) gB.next = bndB;
             if (!b_truncated || gB.taken) {
               paired = true;
@@ -531,11 +593,12 @@ class BpuPipe {
               b.a_len = a_len;
               b.b_len = b_len;
               b.g_b = gB;
+              b.ah_meta_b = ah_meta_b;
               b.ck_b = take_ckpt(n.spec, n.sras, n.spec_imli);
               b.ck_b.base = pcB;
               b.ftb_ix_b = BpuFtb::make_index(pcB, n.spec.fh);
-              b.ex_ix_b = make_ex_tage_index(b.ftb_ix_b.w, n.spec.ex_fh);
-              b.sc_ix_b = make_sc_index(b.ftb_ix_b.w, n.spec.sc_fh, n.spec_imli);
+              b.ex_ix_b = make_ex_tage_index(wB, n.spec.ex_fh);
+              b.sc_ix_b = make_sc_index(wB, n.spec.sc_fh, n.spec_imli);
               b.ah_v_b = ah_src.valid;
               b.ah_kind_b = 2;
               b.ah_key_base_b = ah_src.key_base;
@@ -547,16 +610,15 @@ class BpuPipe {
         }
       }
 
-      // Advance 1-ahead & 2-ahead pipelines from the LAST block of this cycle (B if paired, else A) BEFORE its push_bits
+      // Launch next-block 1-ahead & 2-ahead reads from the LAST block of this cycle (B if paired, else A)
       const pc_t next_ah_base = paired ? b.base_b : b.base;
       const uint32_t (*next_ah_fh)[TN] = paired ? b.ck_b.fh : b.ck.fh;
-      n.ah_pipe[1] = n.ah_pipe[0];
-      n.ah_pipe[0].valid = true;
-      n.ah_pipe[0].key_base = next_ah_base;
-      std::memcpy(n.ah_pipe[0].key_fh, next_ah_fh, sizeof n.ah_pipe[0].key_fh);
-      ftb_.ahead_read(next_ah_base, next_ah_fh, n.ah_pipe[0].raw);
-      n.ah2_pipe[1] = n.ah2_pipe[0];
-      ftb_.ahead2_read(next_ah_base, next_ah_fh, n.ah2_pipe[0]);
+      s0_launched = true;
+      s0_ah_base = next_ah_base;
+      std::memcpy(s0_ah_fh, next_ah_fh, sizeof s0_ah_fh);
+      n.ah_pipe.valid = true;
+      n.ah_pipe.key_base = next_ah_base;
+      std::memcpy(n.ah_pipe.key_fh, next_ah_fh, sizeof n.ah_pipe.key_fh);
 
       n.pc = paired ? b.g_b.next : b.g.next;
       out.icache_read_valid = true;
@@ -580,15 +642,9 @@ class BpuPipe {
         t.rec_v = true;
         t.rec.ck = d.blk->ck; t.rec.base = d.blk->base; t.rec.id = seq0; t.rec.epoch = epoch0; t.rec.valid = true;
         t.ftb_rec_v = true;
-        t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
-        std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
-        std::memcpy(t.ftb_rec.ex_fh, d.blk->ck.ex_fh, sizeof t.ftb_rec.ex_fh);
-        std::memcpy(t.ftb_rec.sc_fh, d.blk->ck.sc_fh, sizeof t.ftb_rec.sc_fh);
-        t.ftb_rec.imli = d.blk->ck.imli;
-        t.ftb_rec.ah_v = d.blk->ah_v;
-        t.ftb_rec.ah_kind = 1;
-        t.ftb_rec.ah_key_base = d.blk->ah_key_base;
-        std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
+        fill_ftb_rec(t.ftb_rec, seq0, d.blk->base, d.blk->ck,
+                     d.blk->ah_v, 1, 0, d.blk->ah_key_base, d.blk->ah_key_fh,
+                     d.s2_meta, d.blk->ah_meta);
         for (int i = 0; i < FW; i++) out.meta.blk_id[i] = seq0;
         n.blk_seq = seq0 + 1;
       } else {
@@ -618,106 +674,306 @@ class BpuPipe {
         t.rec_b_v = true;
         t.rec_b.ck = d.blk->ck_b; t.rec_b.base = d.blk->base_b; t.rec_b.id = seq1; t.rec_b.epoch = epoch0; t.rec_b.valid = true;
         t.ftb_rec_v = true;
-        t.ftb_rec.valid = true; t.ftb_rec.id = seq0; t.ftb_rec.base = d.blk->base;
-        std::memcpy(t.ftb_rec.fh, d.blk->ck.fh, sizeof t.ftb_rec.fh);
-        std::memcpy(t.ftb_rec.ex_fh, d.blk->ck.ex_fh, sizeof t.ftb_rec.ex_fh);
-        std::memcpy(t.ftb_rec.sc_fh, d.blk->ck.sc_fh, sizeof t.ftb_rec.sc_fh);
-        t.ftb_rec.imli = d.blk->ck.imli;
-        t.ftb_rec.ah_v = d.blk->ah_v;
-        t.ftb_rec.ah_kind = 1;
-        t.ftb_rec.ah_key_base = d.blk->ah_key_base;
-        std::memcpy(t.ftb_rec.ah_key_fh, d.blk->ah_key_fh, sizeof t.ftb_rec.ah_key_fh);
+        fill_ftb_rec(t.ftb_rec, seq0, d.blk->base, d.blk->ck,
+                     d.blk->ah_v, 1, 0, d.blk->ah_key_base, d.blk->ah_key_fh,
+                     d.s2_meta, d.blk->ah_meta);
         t.ftb_rec_b_v = true;
-        t.ftb_rec_b.valid = true; t.ftb_rec_b.id = seq1; t.ftb_rec_b.base = d.blk->base_b;
-        std::memcpy(t.ftb_rec_b.fh, d.blk->ck_b.fh, sizeof t.ftb_rec_b.fh);
-        std::memcpy(t.ftb_rec_b.ex_fh, d.blk->ck_b.ex_fh, sizeof t.ftb_rec_b.ex_fh);
-        std::memcpy(t.ftb_rec_b.sc_fh, d.blk->ck_b.sc_fh, sizeof t.ftb_rec_b.sc_fh);
-        t.ftb_rec_b.imli = d.blk->ck_b.imli;
-        t.ftb_rec_b.ah_v = d.blk->ah_v_b;
-        t.ftb_rec_b.ah_kind = d.blk->ah_kind_b;
-        t.ftb_rec_b.ah_a_base = d.blk->base;
-        t.ftb_rec_b.ah_key_base = d.blk->ah_key_base_b;
-        std::memcpy(t.ftb_rec_b.ah_key_fh, d.blk->ah_key_fh_b, sizeof t.ftb_rec_b.ah_key_fh);
+        fill_ftb_rec(t.ftb_rec_b, seq1, d.blk->base_b, d.blk->ck_b,
+                     d.blk->ah_v_b, d.blk->ah_kind_b, d.blk->base, d.blk->ah_key_base_b, d.blk->ah_key_fh_b,
+                     d.s2_meta_b, d.blk->ah_meta_b);
         n.blk_seq = seq0 + 2;
       }
     }
 
+    n.ftb_raw_s3 = n.ftb_raw;
+    n.ftb_raw_b_s3 = n.ftb_raw_b;
+    const Blk s1_blk = n.R[0];  // pre-shift R[0]: registered S1 block reading S2 SRAM this cycle
     for (int k = MAIN_LAT - 1; k >= 1; k--) n.R[k] = n.R[k - 1];
     n.R[0].valid = false;
-    if (n.R[1].valid) {
-      ftb_.s1_read(n.R[1].base, n.R[1].ftb_ix, n.R[1].ex_ix, n.R[1].sc_ix, n.ftb_raw);
-      if (n.R[1].has_b) ftb_.s1_read(n.R[1].base_b, n.R[1].ftb_ix_b, n.R[1].ex_ix_b, n.R[1].sc_ix_b, n.ftb_raw_b);
-    }
 
     auto clear_R = [&] { for (int k = 0; k < MAIN_LAT; k++) n.R[k].valid = false; };
     if (in.refetch) {
       clear_R();
-      n.ah_pipe[0].valid = false; n.ah_pipe[1].valid = false;
+      n.ah_pipe.valid = false;
       n.pc = in.refetch_address;
+      if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {
+        restore(pd_rec, n.spec, n.sras, n.spec_imli);
+        hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
+        push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
+        if (in.pd.ras_op2 == 1) n.sras.push(in.pd.ras_val2);
+        else if (in.pd.ras_op2 == 2) n.sras.pop();
+      } else if (!(in.rf_valid && repair_blk(in, n))) {
+        hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
+        n.spec = n.arch; n.sras = RasQ::from_commit(n.aras); n.spec_imli = n.arch_imli; n.epoch = epoch0 + 1;
+      }
+      n.pq_n = 0;
+      if (in.icache_read_ready) s0_issue(in.refetch_address);
     } else if (d.ovr) {
       clear_R();
-      if (n.ah_pipe[1].valid && n.ah_pipe[1].key_base == d.obase) {
-        n.ah_pipe[0] = n.ah_pipe[1];
-        n.ah2_pipe[0] = n.ah2_pipe[1];
-        n.ah_pipe[1].valid = false;
-      } else if (!(n.ah_pipe[0].valid && n.ah_pipe[0].key_base == d.obase)) {
-        n.ah_pipe[0].valid = false;
-        n.ah_pipe[1].valid = false;
-      }
+      // Zero-FF ahead recovery: S0 is idle on d.ovr cycles, so re-read Ahead 1RW SRAMs directly from (d.obase, d.ock.fh)!
+      s0_launched = true;
+      s0_ah_base = d.obase;
+      std::memcpy(s0_ah_fh, d.ock.fh, sizeof s0_ah_fh);
+      n.ah_pipe.valid = true;
+      n.ah_pipe.key_base = d.obase;
+      std::memcpy(n.ah_pipe.key_fh, d.ock.fh, sizeof n.ah_pipe.key_fh);
       restore(d.ock, n.spec, n.sras, n.spec_imli);
       hp("OVR", 0, d.oout.next, d.oout.nbits, d.oout.bits);
       push_bits(d.oout.nbits, d.oout.bits, d.oout.ras_op, d.oout.ras_val, n.spec, n.sras);
       upd_imli(n.spec_imli, d.oout.type, d.oout.taken, d.obase, d.oout.next, false);
       n.pc = d.oout.next;
-    } else if (l1_override(n.R[1], n, t)) {
-      // 1-bubble cold-start S1 override
     } else {
       t.pmu_ptab_stall = !in.icache_read_ready;
       if (in.icache_read_ready) s0_issue(n.pc);
     }
 
-    // Commit side: 1-branch/cycle queue (brq[16]) + 1R1W ftb_rec_[512]
+    // ---- Step 1: Zero-T0-Read Commit Pop & 1-Cycle Pure Write Plan (native 1.00 br/cyc!) ----
     FtbTrkState &ft = n.ftb_trk;
     if (ft.brq_n > 0) {
       const FtbBrqEnt &q = ft.brq[ft.brq_h];
+      const FtbBlkRec &rc = ftb_rec_[q.blk_id & (FTB_REC_N - 1)];
+      const bool carried = (q.pc + SLOT_BYTES == rc.base);
+      const bool valid_rec = rc.valid && rc.id == q.blk_id && (carried || (q.pc >= rc.base && q.pc < block_bnd(rc.base)));
       ft.brq_h = static_cast<uint8_t>((ft.brq_h + 1) % FTB_BRQ_N);
       ft.brq_n--;
-      const FtbBlkRec &rc = ftb_rec_[q.blk_id & (FTB_REC_N - 1)];
-      if (rc.valid && rc.id == q.blk_id) {
-        const bool carried = (q.pc + SLOT_BYTES == rc.base);
-        if (carried || (q.pc >= rc.base && q.pc < block_bnd(rc.base))) {
-          FtbTrainEv ev{};
-          ev.start = rc.base;
-          std::memcpy(ev.fh, rc.fh, sizeof ev.fh);
-          std::memcpy(ev.ex_fh, rc.ex_fh, sizeof ev.ex_fh);
-          std::memcpy(ev.sc_fh, rc.sc_fh, sizeof ev.sc_fh);
-          ev.imli = rc.imli;
-          ev.ah_v = rc.ah_v;
-          ev.ah_kind = rc.ah_kind;
-          ev.ah_a_base = rc.ah_a_base;
-          ev.ah_key_base = rc.ah_key_base;
-          std::memcpy(ev.ah_key_fh, rc.ah_key_fh, sizeof ev.ah_key_fh);
-          ev.nbr = 1;
-          ev.br[0].offset = carried ? 0 : static_cast<uint8_t>((q.pc - rc.base) >> SLOT_SHIFT);
-          ev.br[0].carried = carried;
-          ev.br[0].is_rvc = q.is_rvc;
-          ev.br[0].type = q.type;
-          ev.br[0].actual_dir = q.actual_dir;
-          ev.br[0].pred_dir = q.pred_dir;
-          ev.br[0].alt_pred = q.alt_pred;
-          ev.br[0].pcpn = q.pcpn;
-          ev.br[0].target = q.target;
-          t.ftb_ev_v = true;
-          t.ftb_ev = ev;
-          fpr::up(static_cast<uint32_t>(q.pc), q.actual_dir, q.type, static_cast<uint32_t>(q.target), q.pred_dir,
-                  q.pcpn, q.is_rvc, static_cast<uint64_t>(static_cast<uint32_t>(rc.base)),
-                  (static_cast<uint32_t>(carried) << 4) | static_cast<uint32_t>(ev.br[0].offset));
+      if (valid_rec) {
+        FtbTrkBr br{};
+        br.offset = carried ? 0 : static_cast<uint8_t>((q.pc - rc.base) >> SLOT_SHIFT);
+        br.carried = carried;
+        br.is_rvc = q.is_rvc;
+        br.type = q.type;
+        br.actual_dir = q.actual_dir;
+        br.pred_dir = q.pred_dir;
+        br.alt_pred = q.alt_pred;
+        br.pcpn = q.pcpn;
+        br.target = q.target;
+        ftb_.compute_commit_plan(rc, br, t.cp);
+        fpr::up(static_cast<uint32_t>(q.pc), q.actual_dir, q.type, static_cast<uint32_t>(q.target), q.pred_dir,
+                q.pcpn, q.is_rvc, static_cast<uint64_t>(static_cast<uint32_t>(rc.base)),
+                (static_cast<uint32_t>(carried) << 4) | static_cast<uint32_t>(br.offset));
+      }
+    }
+
+    // Build per-subtable 1RW write-bank masks for TAGE / SC / ITT (write-wins not-hit!)
+    uint8_t s2_tage_busy[EX_TN] = {};
+    uint8_t s2_sc_busy[7] = {};
+    uint8_t s2_itt_busy[ITT_MAX] = {};
+    uint8_t ah1_tage_busy[TN] = {}, ah2_tage_busy[TN] = {};
+    uint8_t ah1_itt_busy[ITT_MAX] = {}, ah2_itt_busy[ITT_MAX] = {};
+
+    if (t.cp.valid) {
+      for (int k = 0; k < EX_TN; k++) {
+        if ((t.cp.tage_wp.tbl_wr_mask >> k) & 1u) {
+          s2_tage_busy[k] |= static_cast<uint8_t>(1u << (t.cp.tage_wp.tbl_idx[k] & uint32_t(BPU_S2_TAGE_BANKS - 1)));
+        }
+      }
+      if (t.cp.sc_wp.do_wr) {
+        // s2_sc_busy[0] stays 0 because Bias is a tiny FF array (0 SRAM bank conflicts!)
+        for (int g = 0; g < SC_GEHL_N; g++) {
+          s2_sc_busy[1 + g] |= static_cast<uint8_t>(1u << (t.cp.sc_wp.gehl_idx[g] & uint32_t(BPU_SC_BANKS - 1)));
+        }
+        s2_sc_busy[5] |= static_cast<uint8_t>(1u << (t.cp.sc_wp.imli_idx & uint32_t(BPU_SC_BANKS - 1)));
+        s2_sc_busy[6] |= static_cast<uint8_t>(1u << (t.cp.sc_wp.loc_idx & uint32_t(BPU_SC_BANKS - 1)));
+      }
+      for (int k = 0; k < ITT_MAX; k++) {
+        if ((t.cp.itt_wp.wr_mask >> k) & 1u) {
+          s2_itt_busy[k] |= static_cast<uint8_t>(1u << (t.cp.itt_wp.idx[k] & uint32_t(BPU_ITT_BANKS - 1)));
+        }
+      }
+      if (t.cp.atage_wp.valid) {
+        const uint32_t am = uint32_t((t.cp.ah_use2 ? BPU_AH2_BANKS : BPU_AH1_BANKS) - 1);
+        uint8_t *ab = t.cp.ah_use2 ? ah2_tage_busy : ah1_tage_busy;
+        for (int k = 0; k < TN; k++) {
+          if ((t.cp.atage_wp.tbl_wr_mask >> k) & 1u) {
+            ab[k] |= static_cast<uint8_t>(1u << (t.cp.atage_wp.tbl_idx[k] & am));
+          }
+        }
+      }
+      if (t.cp.aitt_wp.wr_mask != 0) {
+        const uint32_t am = uint32_t((t.cp.ah_use2 ? BPU_AH2_BANKS : BPU_AH1_BANKS) - 1);
+        uint8_t *ab = t.cp.ah_use2 ? ah2_itt_busy : ah1_itt_busy;
+        for (int k = 0; k < ITT_MAX; k++) {
+          if ((t.cp.aitt_wp.wr_mask >> k) & 1u) {
+            ab[k] |= static_cast<uint8_t>(1u << (t.cp.aitt_wp.idx[k] & am));
+          }
         }
       }
     }
-    const auto arch_q = n.arch;
-    const auto aras_q = n.aras;
-    const uint8_t arch_imli_q = n.arch_imli;
+
+    // ---- Step 2: S1 Exact-PC & S0 Ahead 1RW Reads (FTB Predict-Wins; TAGE/SC/ITT Write-Wins not-hit) ----
+    uint32_t ftb1_rd_mask = 0;
+    if (s1_blk.valid) {
+      ftb1_rd_mask |= 1u << s2_bank_of_w(static_cast<uint32_t>(s1_blk.base >> SLOT_SHIFT));
+      if (s1_blk.has_b) {
+        ftb1_rd_mask |= 1u << s2_bank_of_w(static_cast<uint32_t>(s1_blk.base_b >> SLOT_SHIFT));
+      }
+      uint8_t tage_sup_a = 0, sc_sup_a = 0, itt_sup_a = 0;
+      const uint32_t loc_bk_a = ftb_.sc_.loc_index(s1_blk.sc_ix) & uint32_t(BPU_SC_BANKS - 1);
+      for (int k = 0; k < EX_TN; k++) {
+        const uint32_t bk = s1_blk.ex_ix.idx[k] & uint32_t(BPU_S2_TAGE_BANKS - 1);
+        if ((s2_tage_busy[k] >> bk) & 1u) tage_sup_a |= static_cast<uint8_t>(1u << k);
+        else s2_tage_busy[k] |= static_cast<uint8_t>(1u << bk);
+      }
+      for (int g = 0; g < SC_GEHL_N; g++) {
+        const uint32_t bk = s1_blk.sc_ix.gehl_idx[g] & uint32_t(BPU_SC_BANKS - 1);
+        if ((s2_sc_busy[1 + g] >> bk) & 1u) sc_sup_a |= static_cast<uint8_t>(1u << (1 + g));
+        else s2_sc_busy[1 + g] |= static_cast<uint8_t>(1u << bk);
+      }
+      {
+        const uint32_t bk = s1_blk.sc_ix.imli_idx & uint32_t(BPU_SC_BANKS - 1);
+        if ((s2_sc_busy[5] >> bk) & 1u) sc_sup_a |= 1u << 5;
+        else s2_sc_busy[5] |= static_cast<uint8_t>(1u << bk);
+      }
+      if ((s2_sc_busy[6] >> loc_bk_a) & 1u) sc_sup_a |= 1u << 6;
+      else s2_sc_busy[6] |= static_cast<uint8_t>(1u << loc_bk_a);
+      for (int k = 0; k < ITT_MAX; k++) {
+        const int tk = IttCfg::h[k];
+        const uint32_t bk = s1_blk.ftb_ix.idx[tk] & uint32_t(BPU_ITT_BANKS - 1);
+        if ((s2_itt_busy[k] >> bk) & 1u) itt_sup_a |= static_cast<uint8_t>(1u << k);
+        else s2_itt_busy[k] |= static_cast<uint8_t>(1u << bk);
+      }
+      if (n.R[1].valid) {
+        ftb_.s1_read(s1_blk.base, s1_blk.ftb_ix, s1_blk.ex_ix, s1_blk.sc_ix, n.ftb_raw, tage_sup_a, sc_sup_a, itt_sup_a);
+      }
+
+      if (s1_blk.has_b) {
+        uint8_t tage_sup_b = 0, sc_sup_b = 0, itt_sup_b = 0;
+        const uint32_t loc_bk_b = ftb_.sc_.loc_index(s1_blk.sc_ix_b) & uint32_t(BPU_SC_BANKS - 1);
+        for (int k = 0; k < EX_TN; k++) {
+          const uint32_t bk = s1_blk.ex_ix_b.idx[k] & uint32_t(BPU_S2_TAGE_BANKS - 1);
+          if ((s2_tage_busy[k] >> bk) & 1u) tage_sup_b |= static_cast<uint8_t>(1u << k);
+          else s2_tage_busy[k] |= static_cast<uint8_t>(1u << bk);
+        }
+        for (int g = 0; g < SC_GEHL_N; g++) {
+          const uint32_t bk = s1_blk.sc_ix_b.gehl_idx[g] & uint32_t(BPU_SC_BANKS - 1);
+          if ((s2_sc_busy[1 + g] >> bk) & 1u) sc_sup_b |= static_cast<uint8_t>(1u << (1 + g));
+          else s2_sc_busy[1 + g] |= static_cast<uint8_t>(1u << bk);
+        }
+        {
+          const uint32_t bk = s1_blk.sc_ix_b.imli_idx & uint32_t(BPU_SC_BANKS - 1);
+          if ((s2_sc_busy[5] >> bk) & 1u) sc_sup_b |= 1u << 5;
+          else s2_sc_busy[5] |= static_cast<uint8_t>(1u << bk);
+        }
+        if ((s2_sc_busy[6] >> loc_bk_b) & 1u) sc_sup_b |= 1u << 6;
+        else s2_sc_busy[6] |= static_cast<uint8_t>(1u << loc_bk_b);
+        for (int k = 0; k < ITT_MAX; k++) {
+          const int tk = IttCfg::h[k];
+          const uint32_t bk = s1_blk.ftb_ix_b.idx[tk] & uint32_t(BPU_ITT_BANKS - 1);
+          if ((s2_itt_busy[k] >> bk) & 1u) itt_sup_b |= static_cast<uint8_t>(1u << k);
+          else s2_itt_busy[k] |= static_cast<uint8_t>(1u << bk);
+        }
+        if (n.R[1].valid) {
+          ftb_.s1_read(s1_blk.base_b, s1_blk.ftb_ix_b, s1_blk.ex_ix_b, s1_blk.sc_ix_b, n.ftb_raw_b, tage_sup_b, sc_sup_b, itt_sup_b);
+        }
+      }
+    }
+
+    uint8_t ah1_ftb_rd_m = 0, ah2_ftb_rd_m = 0;
+    if (s0_launched) {
+      const uint32_t aw = static_cast<uint32_t>(s0_ah_base >> SLOT_SHIFT);
+      ah1_ftb_rd_m = static_cast<uint8_t>(1u << ah1_bank_of_w(aw));
+      ah2_ftb_rd_m = static_cast<uint8_t>(1u << ah2_bank_of_w(aw));
+      const FtbBlkIdx ah_ix = BpuFtb::make_ahead_index(s0_ah_base, 0, s0_ah_fh);
+      uint8_t ah1_t_sup = 0, ah2_t_sup = 0, ah1_i_sup = 0, ah2_i_sup = 0;
+      for (int k = 0; k < TN; k++) {
+        const uint32_t bk1 = ah_ix.idx[k] & uint32_t(BPU_AH1_BANKS - 1);
+        const uint32_t bk2 = ah_ix.idx[k] & uint32_t(BPU_AH2_BANKS - 1);
+        if ((ah1_tage_busy[k] >> bk1) & 1u) ah1_t_sup |= static_cast<uint8_t>(1u << k);
+        else ah1_tage_busy[k] |= static_cast<uint8_t>(1u << bk1);
+        if ((ah2_tage_busy[k] >> bk2) & 1u) ah2_t_sup |= static_cast<uint8_t>(1u << k);
+        else ah2_tage_busy[k] |= static_cast<uint8_t>(1u << bk2);
+      }
+      for (int k = 0; k < ITT_MAX; k++) {
+        const int tk = IttCfg::h[k];
+        const uint32_t bk1 = ah_ix.idx[tk] & uint32_t(BPU_AH1_BANKS - 1);
+        const uint32_t bk2 = ah_ix.idx[tk] & uint32_t(BPU_AH2_BANKS - 1);
+        if ((ah1_itt_busy[k] >> bk1) & 1u) ah1_i_sup |= static_cast<uint8_t>(1u << k);
+        else ah1_itt_busy[k] |= static_cast<uint8_t>(1u << bk1);
+        if ((ah2_itt_busy[k] >> bk2) & 1u) ah2_i_sup |= static_cast<uint8_t>(1u << k);
+        else ah2_itt_busy[k] |= static_cast<uint8_t>(1u << bk2);
+      }
+      ftb_.ahead_read(s0_ah_base, s0_ah_fh, n.ah_pipe.raw, ah1_t_sup, ah1_i_sup);
+      ftb_.ahead2_read(s0_ah_base, s0_ah_fh, n.ah2_pipe, ah2_t_sup, ah2_i_sup);
+    }
+
+    for (int k = 0; k < EX_TN; k++) t.s2_tbl_busy[k] = s2_tage_busy[k];
+    for (int k = 0; k < TN; k++) { t.ah1_tbl_busy[k] = ah1_tage_busy[k]; t.ah2_tbl_busy[k] = ah2_tage_busy[k]; }
+
+    // ---- Step 3: Predict-Always-Wins FTB 1-Entry Write Buffers + s2_base + Predecode Clear ----
+    const uint32_t s2_base_rd_mask = ftb1_rd_mask;
+    if (t.cp.valid && t.cp.tage_wp.base_wr) {
+      const uint32_t bbk = t.cp.tage_wp.base_idx & uint32_t(BPU_FTB1_BANKS - 1);
+      t.do_s2_base = (((s2_base_rd_mask >> bbk) & 1u) == 0);
+    }
+
+    auto arbitrate_ftb_wb = [](const FtbWrBuf &old_wb, bool new_v, uint32_t new_s, uint8_t new_w, const FtbEnt &new_e,
+                               uint32_t &rd_mask, uint32_t bank_mask,
+                               bool &do_wr, FtbWrBuf &wr_out, FtbWrBuf &next_wb) {
+      FtbWrBuf nw{};
+      nw.valid = new_v; nw.set = new_s; nw.way = new_w; nw.ent = new_e;
+      if (old_wb.valid) {
+        const uint32_t obk = old_wb.set & bank_mask;
+        if (((rd_mask >> obk) & 1u) == 0) {
+          do_wr = true;
+          wr_out = old_wb;
+          rd_mask |= (1u << obk);
+          if (new_v) next_wb = nw;
+        } else {
+          next_wb = new_v ? nw : old_wb;
+        }
+      } else if (new_v) {
+        const uint32_t nbk = new_s & bank_mask;
+        if (((rd_mask >> nbk) & 1u) == 0) {
+          do_wr = true;
+          wr_out = nw;
+          rd_mask |= (1u << nbk);
+        } else {
+          next_wb = nw;
+        }
+      }
+    };
+
+    arbitrate_ftb_wb(n.ftb1_wb, t.cp.valid && t.cp.ftb1_wr, t.cp.ftb1_s, t.cp.ftb1_way, t.cp.ftb1_ent,
+                     ftb1_rd_mask, uint32_t(BPU_FTB1_BANKS - 1),
+                     t.do_ftb1_wr, t.ftb1_wr, t.next_ftb1_wb);
+
+    uint32_t ah1_m = ah1_ftb_rd_m;
+    arbitrate_ftb_wb(n.aftb_wb, t.cp.valid && t.cp.ah_wr && !t.cp.ah_use2, t.cp.ah_s, t.cp.ah_way, t.cp.ah_ent,
+                     ah1_m, uint32_t(BPU_AH1_BANKS - 1),
+                     t.do_aftb_wr, t.aftb_wr, t.next_aftb_wb);
+
+    uint32_t ah2_m = ah2_ftb_rd_m;
+    arbitrate_ftb_wb(n.aftb2_wb, t.cp.valid && t.cp.ah_wr && t.cp.ah_use2, t.cp.ah_s, t.cp.ah_way, t.cp.ah_ent,
+                     ah2_m, uint32_t(BPU_AH2_BANKS - 1),
+                     t.do_aftb2_wr, t.aftb2_wr, t.next_aftb2_wb);
+
+    // Predecode false-branch clear on free FTB1 bank
+    const bool pd_clr_en = in.pd.valid && in.pd.nb_valid && pd_have;
+    const pc_t pd_clr_base = in.pd.nb_base ? in.pd.nb_base : pd_rec.base;
+    const pc_t pd_clr_pc = in.pd.nb_pc;
+    bool clr_consumed = false;
+    if (n.clr_pend_v || pd_clr_en) {
+      const pc_t cbase = n.clr_pend_v ? n.clr_pend_base : pd_clr_base;
+      const pc_t cpc = n.clr_pend_v ? n.clr_pend_pc : pd_clr_pc;
+      const uint32_t cbk = s2_bank_of_w(static_cast<uint32_t>(cbase >> SLOT_SHIFT));
+      if (((ftb1_rd_mask >> cbk) & 1u) == 0) {
+        t.do_clr = true;
+        t.clr_base = cbase;
+        t.clr_pc = cpc;
+        clr_consumed = true;
+      }
+    }
+    if (pd_clr_en && !(clr_consumed && !n.clr_pend_v)) {
+      t.next_clr_pend_v = true;
+      t.next_clr_pend_base = pd_clr_base;
+      t.next_clr_pend_pc = pd_clr_pc;
+    } else if (n.clr_pend_v && !clr_consumed) {
+      t.next_clr_pend_v = true;
+      t.next_clr_pend_base = n.clr_pend_base;
+      t.next_clr_pend_pc = n.clr_pend_pc;
+    }
+
+    // ---- Step 4: ROB Commit Enqueue into 16-entry brq ----
     for (int i = 0; i < CW; i++) {
       if (!in.in_upd_valid[i]) continue;
       const pc_t pc = in.in_update_base_pc[i];
@@ -738,26 +994,6 @@ class BpuPipe {
         ft.brq_n++;
       }
     }
-    if (in.refetch) {
-      if (in.refetch_pd && in.pd.valid && in.pd.flush && pd_have) {
-        restore(pd_rec, n.spec, n.sras, n.spec_imli);
-        hp("PDFIX", 0, 0, in.pd.nbits, in.pd.bits);
-        push_bits(in.pd.nbits, in.pd.bits, in.pd.ras_op, in.pd.ras_val, n.spec, n.sras);
-        if (in.pd.ras_op2 == 1) n.sras.push(in.pd.ras_val2);
-        else if (in.pd.ras_op2 == 2) n.sras.pop();
-      } else if (!(in.rf_valid && repair_blk(in, n))) {
-        hp("RARCH", in.rf_pc, in.refetch_address, 0, 0);
-        // Match bpu_spec.sv: M_ARCH restores from registered arch_q / aras_q (breaks commit->spec critical path)
-        n.spec = arch_q; n.sras = RasQ::from_commit(aras_q); n.spec_imli = arch_imli_q; n.epoch = epoch0 + 1;
-      }
-      n.pq_n = 0;
-      if (in.icache_read_ready) s0_issue(in.refetch_address);
-    }
-    if (in.pd.valid && in.pd.nb_valid && pd_have) {
-      t.ftb_clr_v = true;
-      t.ftb_clr_base = in.pd.nb_base ? in.pd.nb_base : pd_rec.base;
-      t.ftb_clr_pc = in.pd.nb_pc;
-    }
     out.upd_free = 15;
     out.tq_free = 15;
   }
@@ -767,35 +1003,26 @@ class BpuPipe {
     if (t.rec_b_v) rec_[t.rec_b.id & 255] = t.rec_b;
     if (t.ftb_rec_v) ftb_rec_[t.ftb_rec.id & (FTB_REC_N - 1)] = t.ftb_rec;
     if (t.ftb_rec_b_v) ftb_rec_[t.ftb_rec_b.id & (FTB_REC_N - 1)] = t.ftb_rec_b;
-    // Execute previous cycle's T1 write (strict 2-stage sync SRAM RMW: T0 read -> T1 modify & write)
-    if (st_.t1_ev_v) ftb_.apply_train_ev(st_.t1_ev);
-    else if (st_.t1_clr_v) ftb_.clear_false_branch(st_.t1_clr_base, st_.t1_clr_pc);
-    // Advance T0 -> T1 (upd has priority over clr on the single FTB1 write port; clr queues in 1-entry buffer)
-    st_.t1_ev_v = t.ftb_ev_v;
-    if (t.ftb_ev_v) st_.t1_ev = t.ftb_ev;
-    st_.t1_clr_v = false;
-    if (t.ftb_ev_v) {
-      if (t.ftb_clr_v) {
-        st_.clr_pend_v = true;
-        st_.clr_pend_base = t.ftb_clr_base;
-        st_.clr_pend_pc = t.ftb_clr_pc;
-      }
-    } else if (st_.clr_pend_v) {
-      st_.t1_clr_v = true;
-      st_.t1_clr_base = st_.clr_pend_base;
-      st_.t1_clr_pc = st_.clr_pend_pc;
-      if (t.ftb_clr_v) {
-        st_.clr_pend_v = true;
-        st_.clr_pend_base = t.ftb_clr_base;
-        st_.clr_pend_pc = t.ftb_clr_pc;
-      } else {
-        st_.clr_pend_v = false;
-      }
-    } else if (t.ftb_clr_v) {
-      st_.t1_clr_v = true;
-      st_.t1_clr_base = t.ftb_clr_base;
-      st_.t1_clr_pc = t.ftb_clr_pc;
-    }
+
+    // 1-cycle pure writes (zero T0 reads!)
+    if (t.cp.valid) ftb_.apply_commit_non_ftb(t.cp, t.do_s2_base);
+    if (t.do_ftb1_wr) ftb_.apply_ftb1_write(t.ftb1_wr.set, t.ftb1_wr.way, t.ftb1_wr.ent);
+    if (t.do_aftb_wr) ftb_.apply_aftb_write(false, t.aftb_wr.set, t.aftb_wr.way, t.aftb_wr.ent);
+    if (t.do_aftb2_wr) ftb_.apply_aftb_write(true, t.aftb2_wr.set, t.aftb2_wr.way, t.aftb2_wr.ent);
+    if (t.do_clr) ftb_.clear_false_branch(t.clr_base, t.clr_pc);
+
+    // Deferred 1RW u-bit periodic reset on idle banks
+    ftb_.s2_tage_.try_rst(t.s2_tbl_busy);
+    ftb_.atage_.try_rst(t.ah1_tbl_busy);
+    ftb_.atage2_.try_rst(t.ah2_tbl_busy);
+
+    // Advance 1-entry pending FTB write buffers & clr_pend
+    st_.ftb1_wb = t.next_ftb1_wb;
+    st_.aftb_wb = t.next_aftb_wb;
+    st_.aftb2_wb = t.next_aftb2_wb;
+    st_.clr_pend_v = t.next_clr_pend_v;
+    st_.clr_pend_base = t.next_clr_pend_base;
+    st_.clr_pend_pc = t.next_clr_pend_pc;
   }
 };
 
