@@ -157,9 +157,11 @@ void Rob::commit() {
       int blocks = 0, ctl = 0;
       const int upd_free = static_cast<int>(in.top_in->front_upd_free) - q.c_prev_ctl;
       const int tq_free = static_cast<int>(in.top_in->front_tq_free) - q.c_prev_blk;
+      const uint32_t ftq_head = ftq->ftq_head();
       for (int k = 0; k < lim && k < q.c_count; k++) {
         const Uop &u = q.cent((q.c_head + k) % ROB_NUM).uop;
         if (!rob_is_complete(u) || rob_is_flush_inst(u) || rob_is_fence(u) || rob_is_wfi(u)) break;
+        if (k > 0 && (((u->ftq_idx - ftq_head) & (FTQ_SIZE - 1)) >= COMMIT_WIDTH)) break;
         const InstType ty = rob_type(u);
         const bool is_ctl = ty == BR || ty == JAL || ty == JALR;
         if (k > 0 && is_ctl && ctl >= upd_free) break;               // the oldest one always goes (progress)

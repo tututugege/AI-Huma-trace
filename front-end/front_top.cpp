@@ -4,6 +4,7 @@
 #include "BPU/BPU.h"
 #include "BPU/BPU_pipe.h"
 #include "Pmu.h"
+#include "PreIduQueue.h"
 #include "front_IO.h"
 #include "front_core.h"
 #include "front_module.h"
@@ -94,29 +95,12 @@ struct RvcHeadFix {
 // ============================================================================
 
 
-// Alignment fingerprint of a PTAB write (see BPU/fpr.h)
-static void fpr_ptab(const PtabIn &p) {
+// Alignment fingerprint of a Unified FTQ S2 write (see BPU/fpr.h)
+static void fpr_ptab(const FtqFrontS2Req &s2) {
   if (!fpr::on()) return;
   uint32_t m = 0;
-  for (int i = 0; i < FETCH_WIDTH; i++) m |= uint32_t(p.wdata.predict_dir[i]) << i;
-  fpr::pt(static_cast<uint32_t>(p.wdata.predict_base_pc[0]), static_cast<uint32_t>(p.wdata.predict_next_fetch_address), m);
-}
-
-// PTAB write port from the BPU output.
-static void ptab_write_data(const bpuf::OutputPayload &bpu_output, wire<1> global_reset,
-                                  wire<1> global_refetch, PtabIn &ptab_in) {
-  ptab_in = {};
-  ptab_in.reset = global_reset;
-  ptab_in.refetch = global_refetch;
-  ptab_in.read_enable = false;
-  ptab_in.write_enable = true;
-  for (int i = 0; i < FETCH_WIDTH; i++) {
-    ptab_in.wdata.predict_dir[i] = bpu_output.out_pred_dir[i];
-    ptab_in.wdata.predict_base_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * SLOT_BYTES);
-  }
-  ptab_in.wdata.meta = bpu_output.meta;
-  ptab_in.wdata.predict_next_fetch_address = bpu_output.predict_next_fetch_address;
-  ptab_in.wdata.is_pair = bpu_output.ptab_pcs_valid;
+  for (int i = 0; i < FETCH_WIDTH; i++) m |= uint32_t(s2.pred_dir[i]) << i;
+  fpr::pt(static_cast<uint32_t>(s2.slot_pc[0]), static_cast<uint32_t>(s2.next_pc), m);
 }
 
 static void checker_input(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
@@ -131,65 +115,6 @@ static void checker_input(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
   checker_in.predict_next_fetch_address = ptab_out.predict_next_fetch_address;
 }
 
-// front2back FIFO write data (and, when the entry bypasses the FIFO, the output it would have produced).
-static void f2b_write_data(const InstFifoOut &fifo_out, const PtabOut &ptab_out,
-                                        const PredecodeCheckerOut &checker_out, bool bypass,
-                                        F2bFifoIn &fifo_in, F2bFifoOut &bypass_out) {
-  for (int i = 0; i < FETCH_WIDTH; i++) {
-    fifo_in.wdata.fetch_group[i] = fifo_out.instructions[i];
-    fifo_in.wdata.page_fault_inst[i] = fifo_out.page_fault_inst[i];
-    fifo_in.wdata.pf_inst_hi[i] = fifo_out.pf_inst_hi[i];
-    fifo_in.wdata.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
-    fifo_in.wdata.is_rvc[i] = fifo_out.is_rvc[i];
-    fifo_in.wdata.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
-    fifo_in.wdata.predict_base_pc[i] = ptab_out.predict_base_pc[i];
-    if (bypass) {
-      bypass_out.fetch_group[i] = fifo_out.instructions[i];
-      bypass_out.page_fault_inst[i] = fifo_out.page_fault_inst[i];
-      bypass_out.pf_inst_hi[i] = fifo_out.pf_inst_hi[i];
-      bypass_out.inst_valid[i] = fifo_out.inst_valid[i] && i < int(checker_out.keep_n);
-      bypass_out.is_rvc[i] = fifo_out.is_rvc[i];
-      bypass_out.predict_dir_corrected[i] = checker_out.predict_dir_corrected[i];
-      bypass_out.predict_base_pc[i] = ptab_out.predict_base_pc[i];
-    }
-  }
-  fifo_in.wdata.meta = ptab_out.meta;
-  fifo_in.wdata.meta.mask();
-  fifo_in.wdata.predict_next_fetch_address_corrected = checker_out.predict_next_fetch_address_corrected;
-  if (bypass) {
-    bypass_out.meta = ptab_out.meta;
-    bypass_out.front2back_FIFO_valid = true;
-    bypass_out.predict_next_fetch_address_corrected = checker_out.predict_next_fetch_address_corrected;
-  }
-}
-
-// Output toward the back end: the FIFO head, or the bypassed entry when the FIFO was empty.
-static void front_output(const F2bFifoOut &saved, const F2bFifoOut &bypass_out,
-                              bool use_bypass, FrontTopOut &out) {
-  out = {};
-  const F2bFifoOut *src = &saved;
-  if (!saved.front2back_FIFO_valid && use_bypass) src = &bypass_out;
-
-  out.FIFO_valid = src->front2back_FIFO_valid;
-  for (int i = 0; i < FETCH_WIDTH; i++) {
-    out.instructions[i] = src->fetch_group[i];
-    out.page_fault_inst[i] = src->page_fault_inst[i];
-    out.pf_inst_hi[i] = src->pf_inst_hi[i];
-    out.predict_dir[i] = src->predict_dir_corrected[i];
-    out.pc[i] = src->predict_base_pc[i];
-    out.inst_valid[i] = src->inst_valid[i];
-    out.is_rvc[i] = src->is_rvc[i];
-  }
-  out.meta.assign_prefix(src->meta);
-  for (int i = FETCH_WIDTH; i < BACKEND_FETCH_WIDTH; ++i) {
-    out.instructions[i] = INST_NOP;
-    out.page_fault_inst[i] = false;
-    out.pf_inst_hi[i] = false;
-    out.inst_valid[i] = false;
-  }
-  out.predict_next_fetch_address = src->predict_next_fetch_address_corrected;
-}
-
 
 // ---- the front end's control (front-end/front_ctrl.h) ----
 
@@ -200,42 +125,41 @@ void FrontControl::control() {
   out.global_reset = in.in->ctrl.reset;
   out.global_refetch = in.in->redirect.valid || in.rd->q.predecode_refetch;
   // BPU_PIPE: the pipeline's last stage may override an older block this cycle. The youngest squash_n fetch addresses are
-  // dropped, and the FIFO head is not popped when it is one of them. An entry is popped only when it is at least
-  // max(0, D-2) cycles old, so a block is never inside the ICache before the decision on its predecessor.
+  // dropped, and an entry is popped only when it is at least 1 cycle old (EXP-044: !fa_head_fresh()).
   bpu_pipe->decide(out.global_refetch, out.pipe_dec);
-  const auto &fa = in.rd->fetch_addr_fifo_rd_snapshot;
-  const int min_age = bpu_pipe->depth() > 2 ? bpu_pipe->depth() - 2 : 0;
-  // Timing cut (EXP-044): the decision of the BPU's last stage does not gate the pop in the same cycle; an entry is
-  // popped one cycle later, when every decision that can squash it has been made (and applied) in an earlier cycle.
-  out.pipe_head_ok = fa.head_age >= (bpu_pipe->depth() >= 2 ? min_age + 1 : min_age);
+  out.pipe_head_ok = ftq ? !ftq->fa_head_fresh() : true;
 }
 
-// The read enables of the FIFOs and the PTAB write of the BPU's block (bypassed to the checker when the last stage
-// decides this cycle).
+// The read enables of the Unified FTQ / inst_fifo and the S2 write enable (no ptab_bypass, no front2back_fifo).
 void FrontControl::enables() {
   const bpuf::OutputPayload &bpu_output = *in.bpu_output;
 
   const bool icache_ready = icache->read_ready(in.in->ctrl.itlb_flush || in.in->ctrl.fence_i, out.global_reset);
-  out.ptab_can_write = bpu_output.PTAB_write_enable && !out.global_reset && !out.global_refetch;
-  out.ptab_bypass = out.ptab_can_write && out.pipe_dec.valid;
-  out.fetch_addr_read_enable = icache_ready && !in.rd->q.fetch_addr_fifo_empty &&
-                           !out.global_reset && !out.global_refetch && out.pipe_head_ok;
-  out.fifo_read_enable = !in.rd->q.fifo_empty && (!in.rd->q.ptab_empty || out.ptab_bypass) &&
-                     !in.rd->q.f2b_full && !out.global_reset && !out.global_refetch;
+  const bool inst_fifo_room = int(in.rd->fifo_rd_snapshot.size) + int(in.rd->q.pend_valid) < INSTRUCTION_FIFO_SIZE;
+  out.s2_wr_en = bpu_output.PTAB_write_enable && !out.global_reset && !out.global_refetch;
+  out.fetch_addr_read_enable = icache_ready && ftq && !ftq->fa_empty() &&
+                               !out.global_reset && !out.global_refetch && out.pipe_head_ok && inst_fifo_room;
+  out.fetch_addr_head = {};
+  if (out.fetch_addr_read_enable) {
+    const FTQEntry &e = ftq->ifu_head();
+    out.fetch_addr_head.read_valid = true;
+    out.fetch_addr_head.fetch_address = e.fetch_addr;
+    out.fetch_addr_head.pair = e.fetch_pair;
+  }
   out.f2b_read_enable = in.in->ctrl.fifo_read_enable;
+  out.fifo_read_enable = out.f2b_read_enable && !in.rd->q.fifo_empty && ftq && !ftq->s2_empty() &&
+                         !out.global_reset && !out.global_refetch;
 }
 
-// The front end's registers of the next cycle, the output toward the back end, the PMU delivery split.
+// The front end's registers of the next cycle, the Unified FTQ write requests, the output toward the back end, the PMU delivery split.
 void FrontControl::finish() {
   const bpuf::OutputPayload &bpu_output = *in.bpu_output;
-  const FetchAddrFifoOut &fetch_addr_head = *in.fetch_addr_head;
-  const FetchAddrFifoReadData &fetch_addr_rd = *in.fetch_addr_rd;
+  const bool bpu_can_run = *in.bpu_can_run;
+  const FetchAddrFifoOut &fetch_addr_head = out.fetch_addr_head;
   const InstFifoReadData &fifo_rd = *in.fifo_rd;
-  const PtabReadData &ptab_rd = *in.ptab_rd;
-  const F2bFifoReadData &f2b_rd = *in.f2b_rd;
-  const F2bFifoOut &f2b_head = *in.f2b_head;
-  const F2bFifoOut &f2b_bypass = *in.f2b_bypass;
-  const bool use_f2b_bypass = *in.use_f2b_bypass;
+  const InstFifoOut &fifo_head = *in.fifo_head;
+  const PtabOut &grp_ptab = *in.grp_ptab;
+  const PredecodeCheckerOut &checker_out = *in.checker_out;
   const ICacheOut &ic_out = *in.ic_out;
   const ICacheOut &ic_k = *in.ic_k;
   const bool predecode_flush = *in.predecode_flush, lh_new_valid = *in.lh_new_valid, lh_updated = *in.lh_updated;
@@ -264,18 +188,86 @@ void FrontControl::finish() {
   out.front_state.d.predecode_refetch = predecode_flush;
   out.front_state.d.pd = pd_next;
   out.front_state.d.predecode_refetch_address = predecode_flush ? flush_address : 0;
-  out.front_state.d.fetch_addr_fifo_full = (fetch_addr_rd.size >= (FETCH_ADDR_FIFO_SIZE - 1));
-  out.front_state.d.fetch_addr_fifo_empty = (fetch_addr_rd.size == 0);
   out.front_state.d.fifo_full = (fifo_rd.size == INSTRUCTION_FIFO_SIZE);
   out.front_state.d.fifo_empty = (fifo_rd.size == 0);
-  out.front_state.d.ptab_empty = (ptab_rd.size == 0);
-  out.front_state.d.f2b_full = (f2b_rd.size == FRONT2BACK_FIFO_SIZE);
-  out.front_state.d.f2b_empty = (f2b_rd.size == 0);
 
-  front_output(f2b_head, f2b_bypass, use_f2b_bypass, *out.out);
-  out.out->commit_stall = bpu_output.update_queue_full;
-  out.out->commit_upd_free = bpu_output.upd_free;
-  out.out->commit_tq_free = bpu_output.tq_free;
+  FrontTopOut &fo = *out.out;
+  fo = {};
+  for (int i = 0; i < BACKEND_FETCH_WIDTH; ++i) {
+    fo.instructions[i] = INST_NOP;
+    fo.page_fault_inst[i] = false;
+    fo.pf_inst_hi[i] = false;
+    fo.inst_valid[i] = false;
+  }
+
+  // Unified FTQ-64 S0 allocate / S2-override tail drop / ICache issue pop
+  fo.ftq_s0.drop_tail_n = (!out.global_reset && !out.global_refetch && out.pipe_dec.ovr) ? out.pipe_dec.squash_n : 0;
+  if (bpu_output.icache_read_valid && bpu_can_run && !out.global_reset) {
+    fo.ftq_s0.wr_en = true;
+    fo.ftq_s0.addr = bpu_output.fetch_address;
+    if (bpu_output.pair_valid) {
+      fo.ftq_s0.pair.valid = true;
+      fo.ftq_s0.pair.addr2 = bpu_output.pair_addr2;
+      fo.ftq_s0.pair.a_len = bpu_output.pair_a_len;
+      fo.ftq_s0.pair.b_len = bpu_output.pair_b_len;
+    }
+  }
+  fo.ftq_s0.ifu_pop = out.fetch_addr_read_enable;
+
+  // Unified FTQ-64 S2 fill (prediction + ftq_meta written once at s2_ptr)
+  if (out.s2_wr_en) {
+    fo.ftq_s2.wr_en = true;
+    fo.ftq_s2.is_pair = bpu_output.ptab_pcs_valid;
+    fo.ftq_s2.next_pc = bpu_output.predict_next_fetch_address;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      fo.ftq_s2.pred_dir[i] = bpu_output.out_pred_dir[i];
+      fo.ftq_s2.slot_pc[i] = bpu_output.ptab_pcs_valid ? bpu_output.out_pred_pc[i] : bpu_output.out_pred_base_pc + (i * SLOT_BYTES);
+    }
+    fo.ftq_s2.meta = bpu_output.meta;
+    fo.ftq_s2.meta.mask();
+    fpr_ptab(fo.ftq_s2);
+  }
+
+  // Unified FTQ-64 Predecode in-place update + direct delivery to Front2Back (no front2back_fifo)
+  if (out.fifo_read_enable) {
+    bool no_taken = true;
+    int nslots = 0;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      const bool raw_v = fifo_head.inst_valid[i] && i < int(checker_out.keep_n);
+      const bool prev_raw_v = (i > 0) && fifo_head.inst_valid[i - 1] && (i - 1) < int(checker_out.keep_n);
+      if (i > 0 && !no_taken && prev_raw_v && raw_v &&
+          grp_ptab.predict_base_pc[i] != grp_ptab.predict_base_pc[i - 1] + ilen_of(fifo_head.is_rvc[i - 1]) &&
+          checker_out.predict_dir_corrected[i - 1]) {
+        no_taken = true;
+      }
+      const bool v = no_taken && raw_v;
+      if (v && checker_out.predict_dir_corrected[i]) no_taken = false;
+      fo.inst_valid[i] = v;
+      fo.instructions[i] = fifo_head.instructions[i];
+      fo.pc[i] = grp_ptab.predict_base_pc[i];
+      fo.is_rvc[i] = fifo_head.is_rvc[i];
+      fo.page_fault_inst[i] = fifo_head.page_fault_inst[i];
+      fo.pf_inst_hi[i] = fifo_head.pf_inst_hi[i];
+      fo.predict_dir[i] = checker_out.predict_dir_corrected[i];
+      fo.ftq_pd.slot_pc[i] = grp_ptab.predict_base_pc[i];
+      fo.ftq_pd.is_rvc[i] = fifo_head.is_rvc[i];
+      fo.ftq_pd.pred_dir[i] = v && checker_out.predict_dir_corrected[i];
+      if (v) nslots = i + 1;
+    }
+    fo.FIFO_valid = (nslots > 0);
+    fo.ftq_idx = ftq ? ftq->pd_idx() : 0;
+    fo.predict_next_fetch_address = checker_out.predict_next_fetch_address_corrected;
+    fo.meta.assign_prefix(grp_ptab.meta);
+    fo.ftq_pd.fire = true;
+    fo.ftq_pd.flush = predecode_flush;
+    fo.ftq_pd.empty_blk = (nslots == 0);
+    fo.ftq_pd.next_pc = checker_out.predict_next_fetch_address_corrected;
+    fo.ftq_pd.nslots = static_cast<uint8_t>(nslots);
+  }
+
+  fo.commit_stall = bpu_output.update_queue_full;
+  fo.commit_upd_free = bpu_output.upd_free;
+  fo.commit_tq_free = bpu_output.tq_free;
   // PMU frontend delivery split (EXP-025): how many instructions of this cycle's fetch group the back end gets, and why the other slots are empty
   {
     const uint64_t cyc = ctx ? ctx->perf.cycle : 0;
@@ -287,31 +279,28 @@ void FrontControl::finish() {
     pf.feo_cause = 0;
     if (pf.feo_ready) {
       int last = -1;
-      bool no_taken = true;
-      for (int j = 0; j < FETCH_WIDTH; j++) {   // the same cut as SimCpu::front_comb_before_back
-        if (j > 0 && !no_taken && out.out->inst_valid[j - 1] && out.out->inst_valid[j] && out.out->pc[j] != out.out->pc[j - 1] + ilen_of(out.out->is_rvc[j - 1]) && out.out->predict_dir[j - 1]) no_taken = true;
-        const bool v = no_taken && out.out->FIFO_valid && out.out->inst_valid[j];
-        if (v) { pf.feo_n++; last = j; if (out.out->predict_dir[j]) no_taken = false; }
+      for (int j = 0; j < FETCH_WIDTH; j++) {
+        if (fo.FIFO_valid && fo.inst_valid[j]) { pf.feo_n++; last = j; }
       }
       if (pf.feo_n > 0) {
         if (pf.feo_n < FETCH_WIDTH) {
           const uint32_t line = ICACHE_LINE_SIZE;
-          if (out.out->predict_dir[last]) pf.feo_cause = PMU_FEO_LOSS_TAKEN;
-          else if (((out.out->pc[last] + 4u) & ~(line - 1u)) != (out.out->pc[last] & ~(line - 1u))) pf.feo_cause = PMU_FEO_LOSS_LINE;
+          if (fo.predict_dir[last]) pf.feo_cause = PMU_FEO_LOSS_TAKEN;
+          else if (((fo.pc[last] + 4u) & ~(line - 1u)) != (fo.pc[last] & ~(line - 1u))) pf.feo_cause = PMU_FEO_LOSS_LINE;
           else pf.feo_cause = PMU_FEO_LOSS_SHORTOTH;
         }
       } else if (out.global_refetch || cyc - last_refetch <= 6) pf.feo_cause = PMU_FEO_LOSS_REFETCH;
       else if (ic_last.perf_miss_busy) pf.feo_cause = PMU_FEO_LOSS_ICMISS;
       else if (predecode_flush) pf.feo_cause = PMU_FEO_LOSS_PDFLUSH;
-      else if (in.rd->q.fetch_addr_fifo_empty && !bpu_output.icache_read_valid) {
+      else if ((!ftq || ftq->fa_empty()) && !bpu_output.icache_read_valid) {
         if (out.pipe_dec.ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_SD;
         else if (*in.pmu_l1_ovr) pf.feo_cause = PMU_FEO_LOSS_OVR_L1;
-        else if (in.rd->q.fetch_addr_fifo_full || *in.pmu_ptab_stall) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
+        else if ((ftq && ftq->ftq_full()) || *in.pmu_ptab_stall) pf.feo_cause = PMU_FEO_LOSS_PTABSTALL;
         else pf.feo_cause = PMU_FEO_LOSS_BPUOTHER;
       }
       else if (!ic_last.icache_read_ready) pf.feo_cause = PMU_FEO_LOSS_ICNOTRDY;
       else if (in.rd->q.fifo_empty) pf.feo_cause = PMU_FEO_LOSS_IFIFO;
-      else if (in.rd->q.ptab_empty) pf.feo_cause = PMU_FEO_LOSS_PTABLAG;
+      else if (!ftq || ftq->s2_empty()) pf.feo_cause = PMU_FEO_LOSS_PTABLAG;
       else pf.feo_cause = PMU_FEO_LOSS_F2B;
     }
   }
@@ -323,36 +312,10 @@ void ICacheTop::comb_invalidate() {
   if (*in.predecode_flush) invalidate_step(&out.ic_k);
 }
 
-// ---- the FIFO ports (front-end/front_fifo_ports.h) ----
+// ---- the instruction FIFO port (front-end/front_fifo_ports.h) ----
 
-void FetchAddrPort::comb_read() {
-  const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
-  const bpuf::Decision &pipe_dec = *in.pipe_dec;
-  out.fetch_addr_in = {};
-  out.fetch_addr_rd = in.rd->fetch_addr_fifo_rd_snapshot;
-  out.fetch_addr_head = {};
-  out.fetch_addr_fifo_req.clear_fifo = out.fetch_addr_fifo_req.push_en = out.fetch_addr_fifo_req.pop_en = false;
-  out.fetch_addr_fifo_req.drop_tail_n = 0;
-  out.fetch_addr_in.drop_tail_n = pipe_dec.ovr ? pipe_dec.squash_n : 0;
-  out.fetch_addr_in.reset = global_reset;
-  out.fetch_addr_in.refetch = global_refetch;
-  out.fetch_addr_in.read_enable = *in.fetch_addr_read_enable;
-  fifo->read(out.fetch_addr_in, out.fetch_addr_rd, out.fetch_addr_head, out.fetch_addr_fifo_req);
-}
-
-void FetchAddrPort::comb_write() {
-  const bpuf::OutputPayload &bpu_output = *in.bpu_output;
-  const bool bpu_can_run = *in.bpu_can_run, global_reset = *in.global_reset;
-
-  if (!(bpu_output.icache_read_valid && bpu_can_run && !global_reset)) return;
-  out.fetch_addr_in.fetch_address = bpu_output.fetch_address;
-  out.fetch_addr_in.pair = FetchPair{};
-  if (bpu_output.pair_valid) { out.fetch_addr_in.pair.valid = true; out.fetch_addr_in.pair.addr2 = bpu_output.pair_addr2; out.fetch_addr_in.pair.a_len = bpu_output.pair_a_len; out.fetch_addr_in.pair.b_len = bpu_output.pair_b_len; }
-  fifo->write(out.fetch_addr_in, out.fetch_addr_rd, out.fetch_addr_fifo_req);
-}
-
-// The head of the instruction FIFO as the checker sees it: FE_PAIR keeps only the slots that agree with the PTAB entry;
-// RVC=1 joins the carried half of a straddling instruction (rvc_head_fix).
+// The head of the instruction FIFO as the checker sees it: FE_PAIR keeps only the slots that agree with the Unified FTQ
+// pd_ptr entry; RVC=1 joins the carried half of a straddling instruction (rvc_head_fix).
 void InstPort::comb_read() {
   const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
   out.fifo_in = {};
@@ -364,7 +327,18 @@ void InstPort::comb_read() {
   out.rvc_n = 0;
   out.rvc_straddle = false;
   out.carry_low = 0;
-  out.grp_ptab = *in.ptab_head;
+  out.grp_ptab = {};
+  if (ftq && !ftq->s2_empty()) {
+    const FTQEntry &pe = ftq->pd_head();
+    out.grp_ptab.is_pair = pe.s2_is_pair;
+    out.grp_ptab.predict_next_fetch_address = pe.next_pc;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      out.grp_ptab.predict_dir[i] = pe.pred_taken_mask[i];
+      out.grp_ptab.predict_base_pc[i] = pe.slot_pc[i];
+    }
+    out.grp_ptab.meta.assign_prefix(ftq->pd_meta());
+    out.grp_ptab.meta.mask();
+  }
   out.fifo_in.reset = global_reset;
   out.fifo_in.refetch = global_refetch;
   out.fifo_in.read_enable = *in.fifo_read_enable;
@@ -560,52 +534,6 @@ void InstPort::comb_write() {
   fifo->write(out.fifo_in, out.fifo_rd, out.fifo_req);
 }
 
-// The block leaving S_D enters the PTAB; when the checker reads the PTAB in the same cycle (bypass) it is written
-// before the read.
-void PtabPort::comb_read() {
-  const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
-  const bpuf::OutputPayload &bpu_output = *in.bpu_output;
-  out.ptab_in = {};
-  out.ptab_rd = in.rd->ptab_rd_snapshot;
-  out.ptab_head = {};
-  out.ptab_req.clear_fifo = out.ptab_req.push_en = out.ptab_req.pop_en = false;
-  if (*in.ptab_bypass) { ptab_write_data(bpu_output, global_reset, global_refetch, out.ptab_in); out.ptab_in.write_enable = true; fpr_ptab(out.ptab_in); }
-  out.ptab_in.reset = global_reset;
-  out.ptab_in.refetch = global_refetch;
-  out.ptab_in.read_enable = *in.fifo_read_enable;
-  fifo->read(out.ptab_in, out.ptab_rd, out.ptab_head, out.ptab_req);
-  if (*in.ptab_can_write && !*in.ptab_bypass) {   // the write port (after the read port)
-    ptab_write_data(bpu_output, global_reset, global_refetch, out.ptab_in);
-    fpr_ptab(out.ptab_in);
-    fifo->write(out.ptab_in, out.ptab_rd, out.ptab_req);
-  }
-}
-
-void F2bPort::comb_read() {
-  out.f2b_in = {};
-  out.f2b_rd = in.rd->front2back_fifo_rd_snapshot;
-  out.f2b_head = {};
-  out.f2b_bypass = {};
-  out.use_f2b_bypass = false;
-  out.front2back_fifo_req.clear_fifo = out.front2back_fifo_req.push_en = out.front2back_fifo_req.pop_en = false;
-  out.f2b_in.reset = *in.global_reset;
-  out.f2b_in.refetch = in.in->redirect.valid;
-  out.f2b_in.read_enable = *in.f2b_read_enable;
-  fifo->read(out.f2b_in, out.f2b_rd, out.f2b_head, out.front2back_fifo_req);
-}
-
-// The checked entry goes to the front2back FIFO, or straight to the output when the FIFO is empty and the back end is
-// reading this cycle.
-void F2bPort::comb_write() {
-  const bool can_write = *in.fifo_read_enable && !in.rd->q.f2b_full && !*in.global_reset;
-  out.use_f2b_bypass = *in.f2b_read_enable && in.rd->q.f2b_empty &&
-                   !out.f2b_head.front2back_FIFO_valid && can_write;
-  if (!can_write) return;
-
-  f2b_write_data(*in.fifo_head, *in.grp_ptab, *in.checker_out, out.use_f2b_bypass, out.f2b_in, out.f2b_bypass);
-  if (!out.use_f2b_bypass) fifo->write(out.f2b_in, out.f2b_rd, out.front2back_fifo_req);
-}
-
 // The front end's BPU phase (front-end/BPU/BPU_pipe.h).
 void bpuf::BpuPipe::comb_front() {
   out = {};
@@ -613,7 +541,7 @@ void bpuf::BpuPipe::comb_front() {
   const Decision &pipe_dec = *in.pipe_dec;
 
   fpr::set_cycle(ctx ? ctx->perf.cycle : 0);
-  const bool bpu_stall = in.rd->q.fetch_addr_fifo_full;
+  const bool bpu_stall = ftq ? ftq->ftq_full() : false;
   out.bpu_can_run = (!bpu_stall || global_reset || global_refetch);
 
   bpuf::InputPayload bpu_input{};
@@ -623,8 +551,7 @@ void bpuf::BpuPipe::comb_front() {
   bpu_input.rf_blk = in.in->redirect.rf_blk; bpu_input.rf_slot = in.in->redirect.rf_slot; bpu_input.rf_type = in.in->redirect.rf_type; bpu_input.rf_pc = in.in->redirect.rf_pc; bpu_input.rf_is_rvc = in.in->redirect.rf_is_rvc;
   bpu_input.pd = in.rd->q.pd;
   bpu_input.refetch_address = in.in->redirect.valid ? in.in->redirect.address : in.rd->q.predecode_refetch_address;
-  bpu_input.icache_read_ready = out.bpu_can_run && !in.rd->q.fetch_addr_fifo_full;
-  bpu_input.ptab_size = in.rd->ptab_rd_snapshot.size > 255 ? 255 : in.rd->ptab_rd_snapshot.size;
+  bpu_input.icache_read_ready = !bpu_stall;
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     bpu_input.in_update_base_pc[i] = in.in->train[i].base_pc;
     bpu_input.in_update_is_rvc[i] = in.in->train[i].is_rvc;
@@ -749,10 +676,7 @@ void FrontChecker::comb() {
 // The modules' ports, bound once: each input at the output of the module that drives it (a port carries the name of
 // its wire)
 FrontCore::FrontCore() {
-  fa_port.fifo = &fetch_addr_fifo;
   inst_port.fifo = &inst_fifo;
-  ptab_port.fifo = &ptab;
-  f2b_port.fifo = &f2b_fifo;
   ctrl.bpu_pipe = &bpu_pipe;
   ctrl.icache = &icache;
   inst_port.icache = &icache;
@@ -767,44 +691,22 @@ FrontCore::FrontCore() {
   checker.in.carry_low = &inst_port.out.carry_low;
   icache.in.global_reset = &ctrl.out.global_reset;
   icache.in.global_refetch = &ctrl.out.global_refetch;
-  icache.in.fetch_addr_head = &fa_port.out.fetch_addr_head;
+  icache.in.fetch_addr_head = &ctrl.out.fetch_addr_head;
   icache.in.predecode_flush = &checker.out.predecode_flush;
   bpu_pipe.in.global_reset = &ctrl.out.global_reset;
   bpu_pipe.in.global_refetch = &ctrl.out.global_refetch;
   bpu_pipe.in.pipe_dec = &ctrl.out.pipe_dec;
-  fa_port.in.global_reset = &ctrl.out.global_reset;
-  fa_port.in.global_refetch = &ctrl.out.global_refetch;
-  fa_port.in.fetch_addr_read_enable = &ctrl.out.fetch_addr_read_enable;
-  fa_port.in.bpu_can_run = &bpu_pipe.out.bpu_can_run;
-  fa_port.in.pipe_dec = &ctrl.out.pipe_dec;
-  fa_port.in.bpu_output = &bpu_pipe.out.bpu_output;
   inst_port.in.global_reset = &ctrl.out.global_reset;
   inst_port.in.global_refetch = &ctrl.out.global_refetch;
   inst_port.in.fifo_read_enable = &ctrl.out.fifo_read_enable;
-  inst_port.in.ptab_head = &ptab_port.out.ptab_head;
   inst_port.in.ic_out = &icache.out.ic_out;
-  inst_port.in.fetch_addr_head = &fa_port.out.fetch_addr_head;
-  ptab_port.in.global_reset = &ctrl.out.global_reset;
-  ptab_port.in.global_refetch = &ctrl.out.global_refetch;
-  ptab_port.in.fifo_read_enable = &ctrl.out.fifo_read_enable;
-  ptab_port.in.ptab_bypass = &ctrl.out.ptab_bypass;
-  ptab_port.in.ptab_can_write = &ctrl.out.ptab_can_write;
-  ptab_port.in.bpu_output = &bpu_pipe.out.bpu_output;
-  f2b_port.in.global_reset = &ctrl.out.global_reset;
-  f2b_port.in.f2b_read_enable = &ctrl.out.f2b_read_enable;
-  f2b_port.in.fifo_read_enable = &ctrl.out.fifo_read_enable;
-  f2b_port.in.fifo_head = &inst_port.out.fifo_head;
-  f2b_port.in.grp_ptab = &inst_port.out.grp_ptab;
-  f2b_port.in.checker_out = &checker.out.checker_out;
+  inst_port.in.fetch_addr_head = &ctrl.out.fetch_addr_head;
   ctrl.in.bpu_output = &bpu_pipe.out.bpu_output;
-  ctrl.in.fetch_addr_head = &fa_port.out.fetch_addr_head;
-  ctrl.in.fetch_addr_rd = &fa_port.out.fetch_addr_rd;
+  ctrl.in.bpu_can_run = &bpu_pipe.out.bpu_can_run;
   ctrl.in.fifo_rd = &inst_port.out.fifo_rd;
-  ctrl.in.ptab_rd = &ptab_port.out.ptab_rd;
-  ctrl.in.f2b_rd = &f2b_port.out.f2b_rd;
-  ctrl.in.f2b_head = &f2b_port.out.f2b_head;
-  ctrl.in.f2b_bypass = &f2b_port.out.f2b_bypass;
-  ctrl.in.use_f2b_bypass = &f2b_port.out.use_f2b_bypass;
+  ctrl.in.fifo_head = &inst_port.out.fifo_head;
+  ctrl.in.grp_ptab = &inst_port.out.grp_ptab;
+  ctrl.in.checker_out = &checker.out.checker_out;
   ctrl.in.ic_out = &icache.out.ic_out;
   ctrl.in.ic_k = &icache.out.ic_k;
   ctrl.in.predecode_flush = &checker.out.predecode_flush;
@@ -819,6 +721,12 @@ FrontCore::FrontCore() {
 }
 FrontCore::~FrontCore() = default;
 
+void FrontCore::set_ftq(const PreIduQueue *ftq) {
+  ctrl.ftq = ftq;
+  bpu_pipe.ftq = ftq;
+  inst_port.ftq = ftq;
+}
+
 // The front end's inputs, registers and output (FrontTop's) and the context
 void FrontCore::bind(const FrontTopIn *in, const FrontReadData *rd, FrontTopOut *out, SimContext *c) {
   ctx = c;
@@ -826,13 +734,9 @@ void FrontCore::bind(const FrontTopIn *in, const FrontReadData *rd, FrontTopOut 
   ctrl.ctx = c;
   icache.in.in = in;
   bpu_pipe.in.in = in;
-  f2b_port.in.in = in;
   ctrl.in.in = in;
   bpu_pipe.in.rd = rd;
-  fa_port.in.rd = rd;
   inst_port.in.rd = rd;
-  ptab_port.in.rd = rd;
-  f2b_port.in.rd = rd;
   ctrl.in.rd = rd;
   ctrl.out.out = out;
 }
@@ -844,15 +748,10 @@ void FrontCore::comb() {
   ctrl.control();
   bpu_pipe.comb_front();
   ctrl.enables();
-  fa_port.comb_read();
-  ptab_port.comb_read();
   inst_port.comb_read();
-  f2b_port.comb_read();
-  fa_port.comb_write();
   icache.comb_fetch();
   inst_port.comb_write();
   checker.comb();
-  f2b_port.comb_write();
   icache.comb_invalidate();
   ctrl.finish();
   // END GENERATED
@@ -860,23 +759,18 @@ void FrontCore::comb() {
 
 void FrontCore::read_q(FrontReadData &rd) const {
   rd.q = q_;
-  fetch_addr_fifo.read_q(rd.fetch_addr_fifo_rd_snapshot);
   inst_fifo.read_q(rd.fifo_rd_snapshot);
-  ptab.read_q(rd.ptab_rd_snapshot);
-  f2b_fifo.read_q(rd.front2back_fifo_rd_snapshot);
 }
 
 void FrontCore::seq(const FrontTopIn &inp) {
+  (void)inp;
   icache.seq();   // first: the I-cache edge comes before everything below that reads the arrays / ITLB (FE_IPF)
   if (bpu_pipe.out.bpu_seq_txn.valid) {
     if (bpu_pipe.out.bpu_seq_txn.reset) bpu_pipe.reset();
     else bpu_pipe.seq();
     if (fpr::on() && fpr::in_dump()) bpu_pipe.dump_hist(static_cast<uint32_t>(fpr::cycle()));
   }
-  fetch_addr_fifo.seq(fa_port.out.fetch_addr_fifo_req);
   inst_fifo.seq(inst_port.out.fifo_req);
-  ptab.seq(ptab_port.out.ptab_req);
-  f2b_fifo.seq(f2b_port.out.front2back_fifo_req);
   if (ctrl.out.front_state.valid) {
     pc_t s2c[1];
     int n = 0;

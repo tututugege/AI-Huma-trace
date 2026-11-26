@@ -14,23 +14,20 @@ void Front2Back::comb() {
   if (q.hold_valid) o = q.hold;   // the held group
   else for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) o.valid[j] = false;   // (no group unless the front end delivers)
   if (*in.can_read) {
-    bool no_taken = true;
     for (int j = 0; j < BACKEND_FETCH_WIDTH; j++) {
-      // FE_PAIR: a fetch group may continue with a second block after a predicted-taken branch (pc discontinuity)
-      if (j > 0 && !no_taken && o.valid[j - 1] && fo.inst_valid[j] && fo.pc[j] != fo.pc[j - 1] + ilen_of(fo.is_rvc[j - 1]) && fo.predict_dir[j - 1])
-        no_taken = true;
-      o.valid[j] = no_taken && fo.FIFO_valid && fo.inst_valid[j];
+      o.valid[j] = fo.FIFO_valid && fo.inst_valid[j];
       o.pc[j] = fo.pc[j];
       o.is_rvc[j] = fo.is_rvc[j];
-      o.predict_next_fetch_address[j] = fo.predict_next_fetch_address;
       o.page_fault_inst[j] = fo.page_fault_inst[j];
       o.pf_inst_hi[j] = fo.pf_inst_hi[j];
       o.inst[j] = fo.instructions[j];
-      o.predict_dir[j] = fo.predict_dir[j];
-      if (o.valid[j] && fo.predict_dir[j]) no_taken = false;
     }
-    o.meta = fo.meta;
+    o.ftq_idx = fo.ftq_idx;
   }
+  // Unified FTQ-64 frontend writes pass straight through every cycle (never held on ibuf stall)
+  o.ftq_s0 = fo.ftq_s0;
+  o.ftq_s2 = fo.ftq_s2;
+  o.ftq_pd = fo.ftq_pd;
   o.front_stall = static_cast<bool>(fo.commit_stall);
   o.front_upd_free = fo.commit_upd_free;
   o.front_tq_free = fo.commit_tq_free;

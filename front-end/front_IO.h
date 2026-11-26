@@ -8,14 +8,6 @@
 
 struct CsrStatusIO;
 
-// FE_PAIR: a fetch-address entry may carry a second fetch block that is read in the same cycle (fetch across a predicted-taken branch).
-// The first block holds a_len instructions (up to and including its taken branch), the second b_len instructions starting at addr2.
-struct FetchPair {
-  bool valid = false;
-  pc_t addr2 = 0;
-  uint8_t a_len = 0, b_len = 0;
-};
-
 // The front end's inputs: control, the back end's redirect, the BPU training of the committing instructions.
 struct FrontCtrl {
   wire<1> reset;
@@ -66,6 +58,11 @@ struct FrontTopOut {
   wire<1> page_fault_inst[BACKEND_FETCH_WIDTH];
   wire<1> pf_inst_hi[BACKEND_FETCH_WIDTH] = {};
   wire<1> inst_valid[BACKEND_FETCH_WIDTH];
+  wire<FTQ_IDX_WIDTH> ftq_idx = 0;
+  // Unified FTQ-64 write requests (applied directly in PreIduQueue::seq() at the clock edge)
+  FtqFrontS0Req ftq_s0{};
+  FtqFrontS2Req ftq_s2{};
+  FtqFrontPdReq ftq_pd{};
 };
 
 
@@ -143,29 +140,11 @@ struct InstFifoOut {
 struct PtabOut {
   wire<1> full;
   wire<1> empty;
-  // to back-end
+  // to predecode checker (read from Unified FTQ-64 at pd_ptr)
   wire<1> predict_dir[FETCH_WIDTH];
   fetch_addr_t predict_next_fetch_address;
   pc_t predict_base_pc[FETCH_WIDTH];
   wire<1> is_pair = 0;
-  // for TAGE update
-  PredMeta meta;
-};
-
-
-struct F2bFifoOut {
-  wire<1> full;
-  wire<1> empty;
-  // to back-end
-  wire<1> front2back_FIFO_valid; // same as the previous FIFO_valid
-  inst_word_t fetch_group[FETCH_WIDTH];
-  wire<1> page_fault_inst[FETCH_WIDTH];
-  wire<1> pf_inst_hi[FETCH_WIDTH] = {};
-  wire<1> inst_valid[FETCH_WIDTH];
-  wire<1> is_rvc[FETCH_WIDTH];
-  wire<1> predict_dir_corrected[FETCH_WIDTH];
-  fetch_addr_t predict_next_fetch_address_corrected;
-  pc_t predict_base_pc[FETCH_WIDTH];
   PredMeta meta;
 };
 
@@ -199,28 +178,6 @@ struct InstFifoEntry {
   wire<1> alt_up_ok = 0;
 };
 
-struct PtabEntry {
-  wire<1> predict_dir[FETCH_WIDTH];
-  fetch_addr_t predict_next_fetch_address;
-  pc_t predict_base_pc[FETCH_WIDTH];
-  wire<1> is_pair = 0;
-  PredMeta meta;
-};
-
-struct F2bFifoEntry {
-  inst_word_t fetch_group[FETCH_WIDTH];
-  wire<1> page_fault_inst[FETCH_WIDTH];
-  wire<1> pf_inst_hi[FETCH_WIDTH] = {};
-  wire<1> inst_valid[FETCH_WIDTH];
-  wire<1> is_rvc[FETCH_WIDTH];
-  wire<1> predict_dir_corrected[FETCH_WIDTH];
-  fetch_addr_t predict_next_fetch_address_corrected;
-  pc_t predict_base_pc[FETCH_WIDTH];
-  PredMeta meta;
-};
-
-// The three entry FIFOs' inputs: the control of the cycle and the entry written (read in the same cycle when the
-// FIFO is empty: bypass).
 template <class Entry> struct FifoIn {
   wire<1> reset;          // clear the FIFO
   wire<1> refetch;        // clear the FIFO (a refetch)
@@ -229,23 +186,11 @@ template <class Entry> struct FifoIn {
   Entry wdata;
 };
 using InstFifoIn = FifoIn<InstFifoEntry>;
-using PtabIn = FifoIn<PtabEntry>;
-using F2bFifoIn = FifoIn<F2bFifoEntry>;
-
-struct FetchAddrFifoIn {
-  wire<1> reset;
-  wire<1> refetch;
-  wire<1> read_enable;
-  wire<1> write_enable;
-  fetch_addr_t fetch_address;
-  uint8_t drop_tail_n;  // BPU_PIPE: squash the n youngest entries (override of an older block)
-  FetchPair pair;       // FE_PAIR: second block of the entry
-};
 
 struct FetchAddrFifoOut {
   wire<1> full;
   wire<1> empty;
-  wire<1> read_valid;      // an address was popped this cycle
+  wire<1> read_valid;      // an address was popped from Unified FTQ-64 at ifu_ptr this cycle
   fetch_addr_t fetch_address;
   FetchPair pair;
 };

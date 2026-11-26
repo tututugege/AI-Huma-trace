@@ -4,6 +4,12 @@
 #include <cstdint>
 
 struct FTQEntry {
+  // S0 fetch-address & pair descriptor (shared with ICache issue at ifu_ptr)
+  fetch_addr_t fetch_addr = 0;
+  FetchPair fetch_pair{};
+  wire<1> s2_is_pair = false;
+  wire<1> empty_blk = false;    // RVC=1 straddle-dropped 0-instruction block (skipped by comm_ptr)
+
   wire<XLEN> slot_pc[BACKEND_FETCH_WIDTH];
   wire<1> slot_rvc[BACKEND_FETCH_WIDTH];
   wire<XLEN> next_pc; // Predicted Target of the block

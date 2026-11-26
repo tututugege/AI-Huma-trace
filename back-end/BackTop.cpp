@@ -121,6 +121,7 @@ void BackTop::install_arch_state(const CPU_state &state) {
 }
 
 void BackTop::restart_at(pc_t pc) {
+  pre->restart();
   out.flush = true;
   out.mispred = true;
   out.redirect_pc = pc;

@@ -43,13 +43,18 @@ struct FrontPreIO {
   wire<1> is_rvc[BACKEND_FETCH_WIDTH] = {};   // the instruction is 16 bits (RVC=1)
   wire<1> valid[BACKEND_FETCH_WIDTH] = {};
   wire<1> front_stall = {};
-  int front_upd_free = 255, front_tq_free = 255;  // free entries at the start of the cycle (registered)  // BPU update / uBTB train queue free entries (compact ROB credits, EXP-028)
+  int front_upd_free = 255, front_tq_free = 255;  // free entries at the start of the cycle (registered)
   wire<1> predict_dir[BACKEND_FETCH_WIDTH] = {};
 
   PredMetaT<BACKEND_FETCH_WIDTH> meta = {};
   wire<XLEN> predict_next_fetch_address[BACKEND_FETCH_WIDTH] = {};
   wire<1> page_fault_inst[BACKEND_FETCH_WIDTH] = {};
   wire<1> pf_inst_hi[BACKEND_FETCH_WIDTH] = {};
+  wire<FTQ_IDX_WIDTH> ftq_idx = 0;
+  // Unified FTQ-64 frontend write requests (unconditional per cycle, not held on ibuf stall)
+  FtqFrontS0Req ftq_s0{};
+  FtqFrontS2Req ftq_s2{};
+  FtqFrontPdReq ftq_pd{};
 };
 
 // Circular ROB-pointer age comparison: returns true iff (a_flag, a_idx) is strictly younger than (b_flag, b_idx).

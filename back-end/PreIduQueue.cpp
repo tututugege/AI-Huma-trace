@@ -20,35 +20,40 @@ FtqPc PreIduQueue::ftq_pc(uint32_t idx, uint32_t off) const {
   return r;
 }
 
-// FTQ: ring of fetch blocks, allocated at the tail when a block is accepted, freed at the head when its last
-// instruction commits, trimmed at the tail on a mispredict (the clock edge: the registers in place).
-
-void PreIduQueue::ftq_pop(int pop_cnt) {
-  for (int i = 0; i < pop_cnt && q_.ftq_count > 0; i++) {
-    q_.ftq_valid[q_.ftq_head] = false;
-    q_.ftq_head = (q_.ftq_head + 1) % FTQ_SIZE;
-    q_.ftq_count--;
-  }
-}
+// Unified FTQ-64: single 64-entry ring shared by BPU S0 (bpu_ptr), ICache (ifu_ptr),
+// BPU S2 (s2_ptr), Predecode (pd_ptr), and Commit (comm_ptr).
 
 // Drop every block younger than the one holding the mispredicted branch.
 void PreIduQueue::ftq_recover(int new_tail) {
-  const int tail = ((new_tail % FTQ_SIZE) + FTQ_SIZE) % FTQ_SIZE;
-  const int discarded = (q_.ftq_tail - tail + FTQ_SIZE) % FTQ_SIZE;
-  for (int i = 0; i < discarded; i++) q_.ftq_valid[(tail + i) % FTQ_SIZE] = false;
-  q_.ftq_tail = tail;
-  q_.ftq_count -= discarded;
+  const uint32_t tail = static_cast<uint32_t>(new_tail) & (FTQ_SIZE - 1);
+  const uint32_t discarded = (q_.bpu_ptr - tail) & (FTQ_SIZE - 1);
+  for (uint32_t i = 0; i < discarded; i++) {
+    const uint32_t idx = (tail + i) & (FTQ_SIZE - 1);
+    q_.ftq_valid[idx] = false;
+    q_.ftq_lookup_entries[idx].empty_blk = false;
+  }
+  q_.pd_ptr = q_.s2_ptr = q_.ifu_ptr = q_.bpu_ptr = tail;
+  q_.fresh_v = false;
 }
 
 void PreIduQueue::ftq_flush() {
-  q_.ftq_head = q_.ftq_tail = q_.ftq_count = 0;
-  for (int i = 0; i < FTQ_SIZE; i++) q_.ftq_valid[i] = false;
+  q_.comm_ptr = q_.pd_ptr = q_.s2_ptr = q_.ifu_ptr = q_.bpu_ptr = 0;
+  q_.fresh_v = false;
+  q_.fresh_slot = 0;
+  for (int i = 0; i < FTQ_SIZE; i++) {
+    q_.ftq_valid[i] = false;
+    q_.ftq_lookup_entries[i].empty_blk = false;
+  }
 }
 
 void PreIduQueue::init() {
   q_.ibuf.init();
-  q_.ftq_head = q_.ftq_tail = q_.ftq_count = 0;
+  q_.flush_q = false;
+  q_.comm_ptr = q_.pd_ptr = q_.s2_ptr = q_.ifu_ptr = q_.bpu_ptr = 0;
+  q_.fresh_v = false;
+  q_.fresh_slot = 0;
   push_count = 0;
+  push_bypass = false;
   for (int i = 0; i < FTQ_SIZE; i++) {
     q_.ftq_lookup_entries[i] = FTQEntry();
     q_.ftq_train_meta_fifo[i] = FTQTrainMetaEntry();
@@ -67,11 +72,10 @@ void PreIduQueue::begin_cycle() {
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) out.pre2front.fire[i] = false;
   push_count = 0;
   push_bypass = false;
-  accept_ = false;
 }
 
-// Accept one fetch block per cycle if the FTQ and the instruction buffer have room for all its instructions; the block
-// gets an FTQ entry and each instruction a buffer entry (and a uop-pool block).
+// Accept one checked fetch block per cycle if the instruction buffer has room for all its instructions;
+// its FTQ entry already lives at in.top_in->ftq_idx (allocated at BPU S0, filled at S2, updated at Predecode).
 void PreIduQueue::comb_accept_front() {
   const Regs &q = q_;
   begin_cycle();   // the first phase of the cycle: default outputs
@@ -80,22 +84,10 @@ void PreIduQueue::comb_accept_front() {
   int incoming = 0;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) incoming += in.top_in->valid[i] ? 1 : 0;
 
-  out.pre2front.ready = q.ftq_count < FTQ_SIZE && q.ibuf.can_accept(incoming);
+  out.pre2front.ready = q.ibuf.can_accept(incoming);
   if (!out.pre2front.ready || incoming == 0) return;
 
-  const int ftq_idx = q.ftq_tail;   // the block's FTQ entry (written at the edge)
-  accept_ = true;
-  FTQEntry &block = accept_block_;
-  block = FTQEntry();
-  block.next_pc = in.top_in->predict_next_fetch_address[0];
-  block.nslots = 0;
-  for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
-    block.slot_pc[i] = in.top_in->pc[i];
-    block.slot_rvc[i] = in.top_in->is_rvc[i];
-    block.pred_taken_mask[i] = in.top_in->predict_dir[i];
-    if (in.top_in->valid[i]) block.nslots = i + 1;
-  }
-  accept_meta_ = in.top_in->meta;
+  const uint32_t ftq_idx = in.top_in->ftq_idx;
 
   int last = -1;
   for (int i = 0; i < BACKEND_FETCH_WIDTH; i++) {
@@ -122,32 +114,99 @@ void PreIduQueue::comb_accept_front() {
   }
 }
 
-// The clock edge. The accepted block takes the FTQ tail. Instruction buffer: decode consumes from the front (a leading
-// run of fired slots), the accepted block is appended; flush and mispredict empty it (and the FTQ: everything, or what
-// is younger than the branch's block). Committed blocks leave the FTQ head.
+// The clock edge: update Unified FTQ-64 pointers/arrays (flush > mispred > S0/IFU/S2/PD/Commit) and ibuf.
 void PreIduQueue::seq() {
-  if (accept_) {
-    const int idx = q_.ftq_tail;
-    q_.ftq_tail = (q_.ftq_tail + 1) % FTQ_SIZE;
-    q_.ftq_count++;
-    q_.ftq_lookup_entries[idx] = accept_block_;
-    q_.ftq_train_meta_fifo[idx] = FTQTrainMetaEntry();
-    q_.ftq_train_meta_fifo[idx].meta = accept_meta_;
-    q_.ftq_valid[idx] = true;
-  }
   const bool flush = in.rob_bcast->flush, mispred = in.idu_br_latch->mispred;
   q_.flush_q = flush;   // the next cycle sees this cycle's ROB flush (accept_front stays closed)
   if (flush) {
     ftq_flush();
-  } else if (mispred) {
-    ftq_recover((in.idu_br_latch->ftq_idx + 1) % FTQ_SIZE);
+    q_.ibuf.clear();
+    return;
   }
-
-  if (flush || mispred) {
+  if (mispred) {
+    ftq_recover((in.idu_br_latch->ftq_idx + 1) & (FTQ_SIZE - 1));
     q_.ibuf.clear();
     return;
   }
 
+  // ---- 1. S0 allocate / S2-override tail drop / ICache issue pop ----
+  const FtqFrontS0Req &s0 = in.top_in->ftq_s0;
+  if (s0.drop_tail_n > 0) {
+    const uint32_t avail = (q_.bpu_ptr - q_.ifu_ptr) & (FTQ_SIZE - 1);
+    const uint32_t n = s0.drop_tail_n < avail ? s0.drop_tail_n : avail;
+    for (uint32_t i = 0; i < n; i++) {
+      const uint32_t idx = (q_.bpu_ptr - 1 - i) & (FTQ_SIZE - 1);
+      q_.ftq_valid[idx] = false;
+      q_.ftq_lookup_entries[idx].empty_blk = false;
+    }
+    q_.bpu_ptr = (q_.bpu_ptr - n) & (FTQ_SIZE - 1);
+  }
+  if (s0.wr_en) {
+    Assert(((q_.bpu_ptr - q_.comm_ptr) & (FTQ_SIZE - 1)) < (FTQ_SIZE - 1) && "Unified FTQ-64 overflow");
+    const uint32_t idx = q_.bpu_ptr;
+    FTQEntry &e = q_.ftq_lookup_entries[idx];
+    e = FTQEntry();
+    e.fetch_addr = s0.addr;
+    e.fetch_pair = s0.pair;
+    e.s2_is_pair = s0.pair.valid;
+    e.empty_blk = false;
+    q_.ftq_valid[idx] = true;
+    q_.fresh_v = true;
+    q_.fresh_slot = idx;
+    q_.bpu_ptr = (idx + 1) & (FTQ_SIZE - 1);
+  } else {
+    q_.fresh_v = false;
+  }
+  if (s0.ifu_pop) {
+    Assert(q_.ifu_ptr != q_.bpu_ptr && "Unified FTQ-64 ifu_ptr underflow");
+    q_.ifu_ptr = (q_.ifu_ptr + 1) & (FTQ_SIZE - 1);
+  }
+
+  // ---- 2. BPU S2 fill (writes prediction + ftq_meta once at s2_ptr) ----
+  const FtqFrontS2Req &s2 = in.top_in->ftq_s2;
+  if (s2.wr_en) {
+    const uint32_t idx = q_.s2_ptr;
+    FTQEntry &e = q_.ftq_lookup_entries[idx];
+    e.s2_is_pair = s2.is_pair;
+    e.next_pc = s2.next_pc;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      e.slot_pc[i] = s2.slot_pc[i];
+      e.pred_taken_mask[i] = s2.pred_dir[i];
+    }
+    q_.ftq_train_meta_fifo[idx] = FTQTrainMetaEntry();
+    q_.ftq_train_meta_fifo[idx].meta.assign_prefix(s2.meta);
+    q_.ftq_train_meta_fifo[idx].meta.mask();
+    q_.s2_ptr = (idx + 1) & (FTQ_SIZE - 1);
+  }
+
+  // ---- 3. Predecode in-place update at pd_ptr (+ frontend-only rollback on predecode flush) ----
+  const FtqFrontPdReq &pd = in.top_in->ftq_pd;
+  if (pd.fire) {
+    const uint32_t idx = q_.pd_ptr;
+    FTQEntry &e = q_.ftq_lookup_entries[idx];
+    e.next_pc = pd.next_pc;
+    e.nslots = pd.nslots;
+    e.empty_blk = pd.empty_blk;
+    for (int i = 0; i < FETCH_WIDTH; i++) {
+      e.slot_pc[i] = pd.slot_pc[i];
+      e.slot_rvc[i] = pd.is_rvc[i];
+      e.pred_taken_mask[i] = pd.pred_dir[i];
+    }
+    q_.pd_ptr = (idx + 1) & (FTQ_SIZE - 1);
+    if (pd.flush) {
+      // Frontend-only rollback: preserve entries < pd_ptr (already in ibuf / backend), squash >= pd_ptr
+      const uint32_t disc = (q_.bpu_ptr - q_.pd_ptr) & (FTQ_SIZE - 1);
+      for (uint32_t i = 0; i < disc; i++) {
+        const uint32_t d = (q_.pd_ptr + i) & (FTQ_SIZE - 1);
+        q_.ftq_valid[d] = false;
+        q_.ftq_lookup_entries[d].empty_blk = false;
+      }
+      q_.bpu_ptr = q_.ifu_ptr = q_.s2_ptr = q_.pd_ptr;
+      q_.fresh_v = false;
+    }
+  }
+
+  // ---- 4. InstructionBuffer pop / push ----
   int pop_count = 0;
   while (pop_count < DECODE_WIDTH && in.idu_consume->fire[pop_count]) pop_count++;
   int first_push = 0;
@@ -159,21 +218,34 @@ void PreIduQueue::seq() {
   if (pop_count > 0) q_.ibuf.pop_front(pop_count);
   for (int i = first_push; i < push_count; i++) q_.ibuf.push_back(push_entries[i]);
 
-  int committed_blocks = 0;
-  for (int i = 0; i < COMMIT_WIDTH; i++)
-    if (in.rob_commit->commit_entry[i].valid && in.rob_commit->commit_entry[i].uop.ftq_is_last) committed_blocks++;
-  ftq_pop(committed_blocks);
+  // ---- 5. ROB commit retire (comm_ptr jumps past highest committed ftq_is_last + skips leading empty_blk) ----
+  int last_cm = -1;
+  for (int i = 0; i < COMMIT_WIDTH; i++) {
+    if (in.rob_commit->commit_entry[i].valid && in.rob_commit->commit_entry[i].uop.ftq_is_last) last_cm = i;
+  }
+  uint32_t next_comm = q_.comm_ptr;
+  if (last_cm >= 0) {
+    next_comm = (in.rob_commit->commit_entry[last_cm].uop->ftq_idx + 1) & (FTQ_SIZE - 1);
+  }
+  while (q_.comm_ptr != next_comm) {
+    q_.ftq_valid[q_.comm_ptr] = false;
+    q_.ftq_lookup_entries[q_.comm_ptr].empty_blk = false;
+    q_.comm_ptr = (q_.comm_ptr + 1) & (FTQ_SIZE - 1);
+  }
+  // Skip at most one leading empty_blk (two consecutive empty straddlers cannot exist)
+  if (q_.comm_ptr != q_.pd_ptr && q_.ftq_lookup_entries[q_.comm_ptr].empty_blk) {
+    q_.ftq_valid[q_.comm_ptr] = false;
+    q_.ftq_lookup_entries[q_.comm_ptr].empty_blk = false;
+    q_.comm_ptr = (q_.comm_ptr + 1) & (FTQ_SIZE - 1);
+  }
+  Assert(!(q_.comm_ptr != q_.pd_ptr && q_.ftq_lookup_entries[q_.comm_ptr].empty_blk) &&
+         "Two consecutive empty straddler FTQ blocks");
 }
 
-
-
 // What the predictor needs to train on each committing instruction: the fetched PC / direction and the prediction
-// metadata of its block. Blocks commit in order, so the metadata cursor starts at the FTQ head and advances after the
-// last instruction of a block.
+// metadata of its block (guaranteed within 8-bank window [comm_ptr .. comm_ptr + 7]).
 void PreIduQueue::comb_commit_info() {
   const Regs &q = q_;
-  uint32_t cursor = static_cast<uint32_t>(q.ftq_head);
-  bool cursor_valid = q.ftq_count > 0;
 
   for (int i = 0; i < COMMIT_WIDTH; i++) {
     auto &resp = out.ftq_commit_info.resp[i];
@@ -182,26 +254,17 @@ void PreIduQueue::comb_commit_info() {
     if (!commit.valid) continue;
 
     const uint32_t idx = commit.uop->ftq_idx, off = commit.uop->ftq_offset;
+    Assert(((idx - q.comm_ptr) & (FTQ_SIZE - 1)) < COMMIT_WIDTH && "commit ftq_idx outside 8-bank window");
     if (idx < FTQ_SIZE && q.ftq_valid[idx]) {
       resp.pc = q.ftq_lookup_entries[idx].slot_pc[off];
       resp.is_rvc = q.ftq_lookup_entries[idx].slot_rvc[off];
       resp.pred_taken = q.ftq_lookup_entries[idx].pred_taken_mask[off];
-    }
-
-    if (cursor_valid) {
-      Assert(idx == cursor);
-      const auto &m = q.ftq_train_meta_fifo[cursor].meta;
+      const auto &m = q.ftq_train_meta_fifo[idx].meta;
       resp.alt_pred = m.alt_pred[off];
       resp.pcpn = m.pcpn[off];
       resp.ps_info = m.ps_info[off];
       resp.blk_id = m.blk_id[off];
       resp.ftq_is_last = commit.uop.ftq_is_last;
-    }
-
-    if (commit.uop.ftq_is_last && cursor_valid) {
-      const uint32_t next = (cursor + 1) % FTQ_SIZE;
-      if (next == static_cast<uint32_t>(q.ftq_tail)) cursor_valid = false;
-      else cursor = next;
     }
   }
 }

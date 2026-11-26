@@ -516,7 +516,6 @@ struct InputPayload {
   tage_idx_t in_tage_idxs[CW][TN];
   uint16_t in_blk_id[CW];
   wire<1> in_ftq_is_last[CW];
-  uint8_t ptab_size;  // BPU_PIPE: PTAB occupancy (credit for the blocks in flight)
   PdInfo pd;
   wire<1> rf_valid;    // BPA_REPAIR: the refetch is a backend branch mispredict
   uint16_t rf_blk; uint8_t rf_slot, rf_type; pc_t rf_pc; wire<1> rf_is_rvc;

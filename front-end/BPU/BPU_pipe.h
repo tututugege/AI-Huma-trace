@@ -19,6 +19,7 @@
 struct FrontTopIn;
 struct FrontReadData;
 class SimContext;
+class PreIduQueue;
 
 namespace bpuf {
 
@@ -177,7 +178,7 @@ struct RecP {
 };
 
 // The front end's BPU phase (ports named after the front end's wires).
-//   CONTRACT comb_front  in: in.global_refetch in.global_reset in.in.ctrl in.in.redirect in.in.train in.pipe_dec in.rd.ptab_rd_snapshot in.rd.q  out: out.bpu_can_run out.bpu_output out.bpu_seq_txn out.pmu_l1_ovr out.pmu_ptab_stall
+//   CONTRACT comb_front  in: in.global_refetch in.global_reset in.in.ctrl in.in.redirect in.in.train in.pipe_dec in.rd.q  out: out.bpu_can_run out.bpu_output out.bpu_seq_txn out.pmu_l1_ovr out.pmu_ptab_stall
 class BpuPipe {
  public:
   struct In {
@@ -187,6 +188,7 @@ class BpuPipe {
     const FrontReadData *rd = nullptr;
     const Decision *pipe_dec = nullptr;
   } in;
+  const ::PreIduQueue *ftq = nullptr;   // read-only registered Unified FTQ-64 state
   SimContext *ctx = nullptr;
   struct SeqTxn { bool valid = false, reset = false; };
   struct Out {
@@ -640,8 +642,6 @@ class BpuPipe {
       }
     }
 
-    int inflight = 0;
-    for (int k = 0; k < MAIN_LAT; k++) inflight += n.R[k].valid;
     for (int k = MAIN_LAT - 1; k >= 1; k--) n.R[k] = n.R[k - 1];
     n.R[0].valid = false;
     if (n.R[1].valid) {
@@ -672,9 +672,8 @@ class BpuPipe {
     } else if (l1_override(n.R[1], n, t)) {
       // 1-bubble cold-start S1 override
     } else {
-      const bool ptab_stall = in.icache_read_ready && (int(in.ptab_size) + inflight >= PTAB_SIZE - 1);
-      t.pmu_ptab_stall = ptab_stall;
-      if (in.icache_read_ready && !ptab_stall) s0_issue(n.pc);
+      t.pmu_ptab_stall = !in.icache_read_ready;
+      if (in.icache_read_ready) s0_issue(n.pc);
     }
 
     // Commit side: 1-branch/cycle queue (brq[16]) + 1R1W ftb_rec_[512]

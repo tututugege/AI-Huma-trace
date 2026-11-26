@@ -81,6 +81,7 @@ void SimCpu::init() {
   axi.init();
   // front.init() steps the BPU once and touches the I-cache's AXI port, so the AXI side is reset first
   icache_port_regs_seq();
+  front.core->set_ftq(back.pre.get());
   front.init();
   f2b.in.front_out = &front.out;
   f2b.in.can_read = &front.can_read;
@@ -129,15 +130,10 @@ void SimCpu::cycle() {
   front.core->ctrl.control();
   front.core->bpu_pipe.comb_front();
   front.core->ctrl.enables();
-  front.core->fa_port.comb_read();
-  front.core->ptab_port.comb_read();
   front.core->inst_port.comb_read();
-  front.core->f2b_port.comb_read();
-  front.core->fa_port.comb_write();
   front.core->icache.comb_fetch();
   front.core->inst_port.comb_write();
   front.core->checker.comb();
-  front.core->f2b_port.comb_write();
   front.core->icache.comb_invalidate();
   front.core->ctrl.finish();
   axi.comb_outputs();

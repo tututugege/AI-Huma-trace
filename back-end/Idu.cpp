@@ -22,9 +22,11 @@ void Idu::decode() {
     out.dec2ren.valid[i] = false;
     out.dec2ren.uop[i] = {};
   }
+  const uint32_t first_ftq = in.pre_issue->entries[0].ftq_idx;
   for (int i = 0; i < DECODE_WIDTH; i++) {
     const InstructionBufferEntry &e = in.pre_issue->entries[i];
     if (!e.valid) continue;
+    if (i > 0 && (((e.ftq_idx - first_ftq) & (FTQ_SIZE - 1)) >= DECODE_WIDTH)) break;
     out.dec2ren.valid[i] = true;
     Uop &u = out.dec2ren.uop[i];
     u = {};

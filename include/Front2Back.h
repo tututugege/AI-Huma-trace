@@ -8,7 +8,7 @@
 // held from the cycle the back end stalled. The front end's commit credits go through every cycle. The hold register:
 // when the back end stalls without a redirect, the group it saw minus the lanes it took.
 // Comb phases in its own ports (SimCpu::init binds them):
-//   CONTRACT comb  in: in.can_read in.front_out.FIFO_valid in.front_out.commit_stall in.front_out.commit_tq_free in.front_out.commit_upd_free in.front_out.inst_valid in.front_out.instructions in.front_out.is_rvc in.front_out.meta in.front_out.page_fault_inst in.front_out.pc in.front_out.pf_inst_hi in.front_out.predict_dir in.front_out.predict_next_fetch_address out.to_back.valid  out: out.to_back out.to_back.front_stall out.to_back.front_tq_free out.to_back.front_upd_free out.to_back.inst out.to_back.is_rvc out.to_back.meta out.to_back.page_fault_inst out.to_back.pc out.to_back.pf_inst_hi out.to_back.predict_dir out.to_back.predict_next_fetch_address out.to_back.valid
+//   CONTRACT comb  in: in.can_read in.front_out.FIFO_valid in.front_out.commit_stall in.front_out.commit_tq_free in.front_out.commit_upd_free in.front_out.ftq_idx in.front_out.ftq_pd in.front_out.ftq_s0 in.front_out.ftq_s2 in.front_out.inst_valid in.front_out.instructions in.front_out.is_rvc in.front_out.page_fault_inst in.front_out.pc in.front_out.pf_inst_hi  out: out.to_back out.to_back.front_stall out.to_back.front_tq_free out.to_back.front_upd_free out.to_back.ftq_idx out.to_back.ftq_pd out.to_back.ftq_s0 out.to_back.ftq_s2 out.to_back.inst out.to_back.is_rvc out.to_back.page_fault_inst out.to_back.pc out.to_back.pf_inst_hi out.to_back.valid
 class Front2Back {
 public:
   struct Regs {

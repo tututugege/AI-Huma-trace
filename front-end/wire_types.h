@@ -46,16 +46,10 @@ using fetch_addr_t = wire<XLEN>;
 using pc_t = wire<XLEN>;
 using inst_word_t = wire<32>;
 using target_addr_t = wire<XLEN>;
-using fetch_addr_fifo_size_t = wire<ceil_log2_u32(FETCH_ADDR_FIFO_SIZE + 1)>;
 using instruction_fifo_size_t =
     wire<ceil_log2_u32(INSTRUCTION_FIFO_SIZE + 1)>;
 static constexpr int instruction_fifo_size_t_BITS =
     ceil_log2_u32(INSTRUCTION_FIFO_SIZE + 1);
-using ptab_size_t = wire<ceil_log2_u32(PTAB_SIZE + 1)>;
-using front2back_fifo_size_t =
-    wire<ceil_log2_u32(FRONT2BACK_FIFO_SIZE + 1)>;
-static constexpr int front2back_fifo_size_t_BITS =
-    ceil_log2_u32(FRONT2BACK_FIFO_SIZE + 1);
 
 // Prediction/training metadata that travels with a fetch group from the BPU
 // through PTAB and the front2back FIFO to the back end (all lanes of one group).
@@ -86,6 +80,42 @@ struct PredMetaT {
     }
   }
 };using PredMeta = PredMetaT<FETCH_WIDTH>;
+
+// FE_PAIR: a fetch entry may carry a second fetch block that is read in the same cycle (fetch across a predicted-taken branch).
+struct FetchPair {
+  bool valid = false;
+  pc_t addr2 = 0;
+  uint8_t a_len = 0, b_len = 0;
+};
+
+// Unified FTQ-64 frontend write requests (applied in PreIduQueue::seq() at the clock edge)
+struct FtqFrontS0Req {
+  wire<1> wr_en = false;
+  fetch_addr_t addr = 0;
+  FetchPair pair{};
+  uint8_t drop_tail_n = 0;
+  wire<1> ifu_pop = false;
+};
+
+struct FtqFrontS2Req {
+  wire<1> wr_en = false;
+  wire<1> is_pair = false;
+  pc_t slot_pc[FETCH_WIDTH] = {};
+  wire<1> pred_dir[FETCH_WIDTH] = {};
+  fetch_addr_t next_pc = 0;
+  PredMeta meta{};
+};
+
+struct FtqFrontPdReq {
+  wire<1> fire = false;
+  wire<1> flush = false;
+  wire<1> empty_blk = false;
+  pc_t slot_pc[FETCH_WIDTH] = {};
+  wire<1> is_rvc[FETCH_WIDTH] = {};
+  wire<1> pred_dir[FETCH_WIDTH] = {};
+  fetch_addr_t next_pc = 0;
+  uint8_t nslots = 0;
+};
 
 
 #endif

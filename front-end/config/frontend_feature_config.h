@@ -159,18 +159,9 @@ static_assert(COMMIT_WIDTH > 0, "COMMIT_WIDTH must be positive");
 
 // ICACHE_LINE_SIZE comes from config.h; the miss latency is modelled by the shared AXI / DRAM path.
 
-// FIFO sizes
+// FIFO sizes (Unified FTQ-64 replaces fetch_addr_fifo, PTAB, and front2back_fifo)
 #ifndef INSTRUCTION_FIFO_SIZE
 #define INSTRUCTION_FIFO_SIZE 16
-#endif
-#ifndef PTAB_SIZE
-#define PTAB_SIZE 16
-#endif
-#ifndef FETCH_ADDR_FIFO_SIZE
-#define FETCH_ADDR_FIFO_SIZE 16
-#endif
-#ifndef FRONT2BACK_FIFO_SIZE
-#define FRONT2BACK_FIFO_SIZE 8
 #endif
 
 #endif

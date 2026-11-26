@@ -38,8 +38,8 @@ TOPS = {
 MODULES = [   # (path, class), in each top's tie-break order
     ('back.pre', 'PreIduQueue'), ('back.rename', 'Ren'), ('back.idu', 'Idu'), ('back.lsu', 'RealLsu'),
     ('back.rob', 'Rob'), ('back.dis', 'Dispatch'), ('back.exu', 'Exu'), ('back.isu', 'Isu'),
-    ('front.core.ctrl', 'FrontControl'), ('front.core.bpu_pipe', 'BpuPipe'), ('front.core.fa_port', 'FetchAddrPort'),
-    ('front.core.ptab_port', 'PtabPort'), ('front.core.inst_port', 'InstPort'), ('front.core.f2b_port', 'F2bPort'),
+    ('front.core.ctrl', 'FrontControl'), ('front.core.bpu_pipe', 'BpuPipe'),
+    ('front.core.inst_port', 'InstPort'),
     ('front.core.icache', 'ICacheTop'), ('front.core.checker', 'FrontChecker'),
     ('mem_subsystem.wb_', 'WriteBuffer'), ('mem_subsystem.mshr_', 'MSHR'), ('mem_subsystem.dcache_', 'RealDcache'),
     ('mem_subsystem.mem_route_block', 'MemRouteBlock'), ('mem_subsystem.ptw_block', 'MemPtwBlock'),
