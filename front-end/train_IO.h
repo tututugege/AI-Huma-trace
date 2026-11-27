@@ -36,6 +36,8 @@ struct FrontRegs {
   wire<1> pend_valid = false;   // FE_PAIR: the ICache request in flight and the second block that belongs to it
   fetch_addr_t pend_addr = 0;
   FetchPair pend_pair{};
+  wire<1> fdip_s2_en = false, fdip_s2_clear = false;  // Cut B1: 1-cycle registered BPU S2 -> FDIP pipe
+  pc_t fdip_s2_va = 0;
   uint64_t pmu_last_refetch = ~0ull;   // PMU: the cycle of the last refetch (front-end delivery attribution)
 };
 

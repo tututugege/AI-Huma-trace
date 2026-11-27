@@ -1,9 +1,11 @@
 #pragma once
-// Hardware-faithful Stage 2 8-table Long-History Block-TAGE + S2 Statistical Corrector (SC).
-// v10 (Zero-T0-Read Meta + WRBypass + Deep Multi-Bank 1RW):
-//   - Prediction captures compact Meta (pcpn, alt, prov_cnt, prov_u, base_cnt, useful[EX_TN], SC weights) into ftb_rec
-//   - Commit training performs ZERO SRAM reads (0 T0 ports): consults 8-entry FF WRBypass -> falls back to Meta -> 1-cycle pure write
-//   - Skip saturated no-op writes -> < 1.5% write-clash rate per bank under XiangShan write-wins not-hit 1RW arbitration
+// Hardware-faithful Stage 2 6-table Long-History Block-TAGE (Clean BPU v11: Plan A).
+//   - Deep Multi-Bank 1RW SRAMs (ZERO T0 read ports):
+//     * u_ftb1:    2-Bank 1RW (512-deep x 4w -> 3 x 512x72 macros/way = 24 macros total)
+//     * u_s2_tage: 6 tables x 8-Bank 1RW (512x64b -> 512x72 macros = 48 macros) + 4-Bank Base (1024x8b)
+//     * u_s2_itt:  3 tables x 2-Bank 1RW (128x52b -> 128x64 macros)
+//     * u_aftb:    2-Bank 1RW (128x8w), u_atage: 4 tables x 2-Bank 1RW (512x60b), u_aitt: 3 tables x 2-Bank 1RW
+//   - Unified single folded-history engine ex_fh[3][6] (lengths {5, 11, 22, 44, 89, 178}); NO StatCorrector / IMLI / 2-Ahead B.
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -12,17 +14,15 @@
 
 namespace bpuf {
 
-// Deep-macro 1RW bank geometry (eliminates 64x64 fragmented macros!)
-constexpr int BPU_FTB1_BANKS    = 4;  // 4-Bank 1RW (256-deep per bank -> 256x72 macros)
+// Deep-macro 1RW bank geometry (single-block 1-Taken -> ZERO intra-cycle A-vs-B conflicts!)
+constexpr int BPU_FTB1_BANKS    = 2;  // 2-Bank 1RW (512-deep per bank -> 512x72 macros)
+constexpr int BPU_S2_BASE_BANKS = 4;  // 4-Bank 1RW (1024x8b -> 2 x 512x8 macros)
 constexpr int BPU_S2_TAGE_BANKS = 8;  // 8-Bank 1RW (512-deep per bank -> 512x72 macros)
-constexpr int BPU_SC_BANKS      = 2;  // 2-Bank 1RW (GEHL 256x24, IMLI/LOC 128x24, Bias FF)
 constexpr int BPU_ITT_BANKS     = 2;  // 2-Bank 1RW (128x52 macros)
 constexpr int BPU_AH1_BANKS     = 2;  // 2-Bank 1RW (aftb 128-deep, atage 512-deep, aitt 128-deep)
-constexpr int BPU_AH2_BANKS     = 2;  // 2-Bank 1RW (aftb2 64-deep, atage2 256-deep, aitt2 128-deep)
 
 inline uint32_t s2_bank_of_w(uint32_t w)  { return (w ^ (w >> 10)) & uint32_t(BPU_FTB1_BANKS - 1); }
 inline uint32_t ah1_bank_of_w(uint32_t w) { return (w ^ (w >> 8))  & uint32_t(BPU_AH1_BANKS - 1); }
-inline uint32_t ah2_bank_of_w(uint32_t w) { return (w ^ (w >> 7))  & uint32_t(BPU_AH2_BANKS - 1); }
 
 // 38-bit Sv39 VA target compression (stores pc[38:1], sign-extends bit 38 to [63:39], bit 0 = 0)
 inline uint64_t sv39_va_roundtrip(uint64_t pc) {
@@ -30,18 +30,16 @@ inline uint64_t sv39_va_roundtrip(uint64_t pc) {
   return static_cast<uint64_t>(s);
 }
 
-constexpr int EX_TN = 8;
+constexpr int EX_TN = 6;
 constexpr int EX_FH_K = 3;
 constexpr int EX_TAGE_N = 4096;
 constexpr int EX_TAGE_BASE_N = 4096;
 constexpr uint16_t EX_TAGE_TAG_MASK = 0x7ffu;  // 11-bit tags
 constexpr int EX_TAGE_URST = 11;
-constexpr int EX_GHR_LEN[EX_TN] = {5, 11, 22, 44, 89, 178, 356, 712};
+constexpr int EX_GHR_LEN[EX_TN] = {5, 11, 22, 44, 89, 178};
 constexpr int EX_FH_LEN[EX_FH_K] = {12, 11, 10};
-
-constexpr int SC_GEHL_N = 4;
-constexpr int SC_GHR_LEN[SC_GEHL_N] = {4, 10, 20, 40};
-constexpr int SC_FH_LEN = 9;
+// Ahead 4-table TAGE & 3-table ITT directly project from the single unified ex_fh (lengths {5, 11, 44, 178})
+constexpr int AH_EX_MAP[4] = {0, 1, 3, 5};
 
 constexpr int BPU_WRB_N = 8;  // 8-entry fully-associative WRBypass CAM+Mem (tiny FF array)
 
@@ -52,35 +50,14 @@ struct ExTageIdx {
   uint16_t tag[EX_TN] = {};
 };
 
-struct ScIdx {
-  uint32_t w = 0;
-  uint32_t bias_set = 0;
-  uint32_t gehl_idx[SC_GEHL_N] = {};
-  uint32_t imli_idx = 0;
-  uint32_t lht_idx = 0;
-};
-
 inline ExTageIdx make_ex_tage_index(uint32_t w, const uint16_t ex_fh[EX_FH_K][EX_TN]) {
   ExTageIdx ix;
   ix.w = w;
-  // base_idx aligns low 2 bank bits with ftb1 (4-bank, bijective 4096 entries -> 0% A-vs-B conflict)
-  ix.base_idx = (((w ^ (w >> 12)) & uint32_t(EX_TAGE_BASE_N - 1)) & ~uint32_t(BPU_FTB1_BANKS - 1)) | s2_bank_of_w(w);
+  ix.base_idx = (w ^ (w >> 12)) & uint32_t(EX_TAGE_BASE_N - 1);
   for (int t = 0; t < EX_TN; t++) {
     ix.idx[t] = (w ^ (w >> 11) ^ uint32_t(ex_fh[0][t])) & uint32_t(EX_TAGE_N - 1);
     ix.tag[t] = static_cast<uint16_t>((w ^ (w >> 11) ^ uint32_t(ex_fh[1][t]) ^ (uint32_t(ex_fh[2][t]) << 1)) & EX_TAGE_TAG_MASK);
   }
-  return ix;
-}
-
-inline ScIdx make_sc_index(uint32_t w, const uint16_t sc_fh[SC_GEHL_N], uint8_t imli) {
-  ScIdx ix;
-  ix.w = w;
-  ix.bias_set = w & 63u;
-  for (int g = 0; g < SC_GEHL_N; g++) {
-    ix.gehl_idx[g] = (w ^ (w >> 9) ^ uint32_t(sc_fh[g])) & 511u;
-  }
-  ix.imli_idx = (w ^ (uint32_t(imli) * 13u)) & 255u;
-  ix.lht_idx = w & 63u;
   return ix;
 }
 
@@ -124,7 +101,7 @@ struct TageWrBypass {
   }
 };
 
-// 8-table long-history Block-TAGE for S2 (4096 entries = 8 banks x 512 x 64b 1RW packed wmask)
+// 6-table long-history Block-TAGE for S2 (4096 entries = 8 banks x 512 x 64b 1RW packed wmask)
 struct ExBlockTage {
   static constexpr int SLOTS = 4;
   std::vector<uint8_t> base[SLOTS];
@@ -157,7 +134,6 @@ struct ExBlockTage {
     uint8_t prov_cnt = 4;
     uint8_t base_cnt = 1;
   };
-  // Prediction-time Meta stored in ftb_rec (enables ZERO-T0-read commit write!)
   struct SlotMeta {
     uint8_t pcpn = EX_TN;
     bool pred = false;
@@ -216,7 +192,7 @@ struct ExBlockTage {
         if ((sup_mask >> t) & 1u) {
           r.s[sl].tag[t] = 0;
           r.s[sl].cnt[t] = 0;
-          r.s[sl].useful[t] = 1;  // suppressed 1RW bank: unread, never leak SRAM data into Meta
+          r.s[sl].useful[t] = 1;
         } else {
           const uint32_t ti = ix.idx[t];
           r.s[sl].tag[t] = tag[t][sl][ti];
@@ -336,7 +312,6 @@ struct ExBlockTage {
       const uint8_t nu = (pdir != alt)
                              ? ((pdir == real_dir) ? (u < 3 ? uint8_t(u + 1) : 3) : (u > 0 ? uint8_t(u - 1) : 0))
                              : u;
-      // Skip saturated no-op SRAM write!
       if (nc != c || nu != u) {
         wp.tbl_wr_mask |= static_cast<uint8_t>(1u << pcpn);
         wp.tbl_is_alloc[pcpn] = false;
@@ -374,7 +349,7 @@ struct ExBlockTage {
             wp.tbl_wr_mask |= static_cast<uint8_t>(1u << t);
             wp.tbl_is_alloc[t] = false;
             wp.tbl_idx[t] = ix.idx[t];
-            wp.tbl_tag[t] = 0;  // u-only write via wmask!
+            wp.tbl_tag[t] = 0;
             wp.tbl_cnt[t] = 0;
             wp.tbl_u[t] = static_cast<uint8_t>(u_eff[t] - 1);
           }
@@ -399,8 +374,7 @@ struct ExBlockTage {
       rst_row = (reset_cnt >> EX_TAGE_URST) & uint32_t(EX_TAGE_N - 1);
       rst_sl = static_cast<uint8_t>(wp.sl);
     }
-
-    if (do_base && wp.base_wr) {
+    if (wp.base_wr && do_base) {
       base[wp.sl][wp.base_idx] = wp.base_val;
       wrb.insert(EX_TN, static_cast<uint8_t>(wp.sl), static_cast<uint16_t>(wp.base_idx), wp.base_val, 0);
     }
@@ -417,7 +391,6 @@ struct ExBlockTage {
         useful[t][wp.sl][ti] = wp.tbl_u[t];
         wrb.insert(static_cast<uint8_t>(t), static_cast<uint8_t>(wp.sl), static_cast<uint16_t>(ti), wp.tbl_cnt[t], wp.tbl_u[t]);
       } else {
-        // u-only decrement via bit-level wmask (preserves tag & cnt without T0 read!)
         useful[t][wp.sl][ti] = wp.tbl_u[t];
       }
     }
@@ -432,223 +405,6 @@ struct ExBlockTage {
         rst_pend_mask &= static_cast<uint8_t>(~(1u << t));
       }
     }
-  }
-};
-
-// Tiny 8-entry WRBypass per SC subtable
-struct ScSubWrBypass {
-  struct Ent {
-    bool valid = false;
-    uint16_t key = 0;  // {idx, sl, bway}
-    int8_t val = 0;
-  };
-  Ent e[BPU_WRB_N];
-  uint8_t ptr = 0;
-
-  void reset() {
-    for (int i = 0; i < BPU_WRB_N; i++) e[i] = Ent{};
-    ptr = 0;
-  }
-  bool lookup(uint16_t key, int8_t &val_out) const {
-    for (int i = 0; i < BPU_WRB_N; i++) {
-      if (e[i].valid && e[i].key == key) { val_out = e[i].val; return true; }
-    }
-    return false;
-  }
-  void insert(uint16_t key, int8_t val) {
-    for (int i = 0; i < BPU_WRB_N; i++) {
-      if (e[i].valid && e[i].key == key) { e[i].val = val; return; }
-    }
-    e[ptr] = Ent{true, key, val};
-    ptr = static_cast<uint8_t>((ptr + 1) % BPU_WRB_N);
-  }
-};
-
-// S2 Statistical Corrector (Bias 64x4 FF + 4 Global GEHL 512 + IMLI 256 + Local 256, 2-Bank 1RW, Zero T0 Read)
-struct StatCorrector {
-  static constexpr int SLOTS = 4;
-  static constexpr int BIAS_SETS = 64;
-  static constexpr int GEHL_N = 512;
-  static constexpr int IMLI_N = 256;
-  static constexpr int LOC_N = 256;
-  static constexpr int LHT_N = 64;
-
-  std::vector<int8_t> bias[SLOTS][4];
-  std::vector<int8_t> gehl[SC_GEHL_N][SLOTS];
-  std::vector<int8_t> imli_tbl[SLOTS];
-  std::vector<int8_t> loc_tbl[SLOTS];
-  uint16_t lht[LHT_N] = {};
-  int thres[16] = {};
-  ScSubWrBypass wrb[7];
-
-  struct RawSlot {
-    uint8_t sup_mask = 0;
-    int8_t bias[4] = {};
-    int8_t gehl[SC_GEHL_N] = {};
-    int8_t imli = 0;
-    int8_t loc = 0;
-  };
-  struct Raw {
-    RawSlot s[SLOTS];
-    uint32_t loc_idx = 0;
-  };
-  struct WritePlan {
-    bool valid = false;
-    bool do_wr = false;
-    bool th_upd = false;
-    bool th_dec = false;
-    uint32_t th_idx = 0;
-    uint32_t lht_idx = 0;
-    uint16_t new_lht = 0;
-    int sl = 0;
-    uint32_t bway = 0;
-    uint32_t bias_set = 0;
-    uint32_t gehl_idx[SC_GEHL_N] = {};
-    uint32_t imli_idx = 0;
-    uint32_t loc_idx = 0;
-    int8_t bias_v = 0;
-    int8_t gehl_v[SC_GEHL_N] = {};
-    int8_t imli_v = 0;
-    int8_t loc_v = 0;
-  };
-
-  uint32_t loc_index(const ScIdx &ix) const {
-    const uint32_t lh = lht[ix.lht_idx];
-    return (ix.w ^ lh ^ (lh >> 6)) & (LOC_N - 1);
-  }
-
-  void init() {
-    for (int sl = 0; sl < SLOTS; sl++) {
-      for (int w = 0; w < 4; w++) bias[sl][w].assign(BIAS_SETS, 0);
-      for (int g = 0; g < SC_GEHL_N; g++) gehl[g][sl].assign(GEHL_N, 0);
-      imli_tbl[sl].assign(IMLI_N, 0);
-      loc_tbl[sl].assign(LOC_N, 0);
-    }
-    std::memset(lht, 0, sizeof(lht));
-    for (int i = 0; i < 16; i++) thres[i] = 35;
-    for (int i = 0; i < 7; i++) wrb[i].reset();
-  }
-
-  static int8_t sat_upd(int8_t v, bool taken) {
-    int nv = int(v) + (taken ? 1 : -1);
-    if (nv > 31) nv = 31;
-    if (nv < -32) nv = -32;
-    return static_cast<int8_t>(nv);
-  }
-
-  void read(const ScIdx &ix, Raw &r, uint8_t sup_mask = 0) const {
-    const uint32_t li = loc_index(ix);
-    r.loc_idx = li;
-    for (int sl = 0; sl < SLOTS; sl++) {
-      r.s[sl].sup_mask = sup_mask;
-      for (int way = 0; way < 4; way++) r.s[sl].bias[way] = bias[sl][way][ix.bias_set];
-      for (int g = 0; g < SC_GEHL_N; g++)
-        r.s[sl].gehl[g] = ((sup_mask >> (1 + g)) & 1u) ? int8_t(0) : gehl[g][sl][ix.gehl_idx[g]];
-      r.s[sl].imli = ((sup_mask >> 5) & 1u) ? int8_t(0) : imli_tbl[sl][ix.imli_idx];
-      r.s[sl].loc = ((sup_mask >> 6) & 1u) ? int8_t(0) : loc_tbl[sl][li];
-    }
-  }
-
-  static int eval_raw(const RawSlot &r, bool tage_pred, bool prov_hit, uint8_t prov_cnt, uint8_t base_cnt) {
-    const int tage_w = 2 * (prov_hit ? (2 * int(prov_cnt) - 7) : (2 * int(base_cnt) - 3));
-    const bool low_conf = prov_hit ? (prov_cnt == 3 || prov_cnt == 4) : (base_cnt == 1 || base_cnt == 2);
-    const uint32_t bway = (uint32_t(tage_pred) << 1) | uint32_t(low_conf);
-    int s = tage_w + (((r.sup_mask >> 0) & 1u) ? 0 : (2 * int(r.bias[bway]) + 1));
-    for (int g = 0; g < SC_GEHL_N; g++) s += (((r.sup_mask >> (1 + g)) & 1u) ? 0 : (2 * int(r.gehl[g]) + 1));
-    s += (((r.sup_mask >> 5) & 1u) ? 0 : (2 * int(r.imli) + 1));
-    s += (((r.sup_mask >> 6) & 1u) ? 0 : (2 * int(r.loc) + 1));
-    return s;
-  }
-
-  bool select_slot(uint32_t w, const RawSlot &r, bool tage_pred, bool prov_hit, uint8_t prov_cnt, uint8_t base_cnt) const {
-    const int lsum = eval_raw(r, tage_pred, prov_hit, prov_cnt, base_cnt);
-    const bool sc_pred = (lsum >= 0);
-    const int th = thres[(w >> 2) & 15u];
-    if (sc_pred != tage_pred && std::abs(lsum) >= th) return sc_pred;
-    return tage_pred;
-  }
-
-  // ZERO-T0-READ pure-const commit plan using ftb_rec Meta + WRBypass!
-  void compute_plan_from_meta(const ScIdx &ix, int sl, bool real_dir, bool tage_pred, bool prov_hit,
-                              uint8_t prov_cnt, uint8_t base_cnt, bool meta_valid, const Raw &meta_r,
-                              WritePlan &wp) const {
-    wp = WritePlan{};
-    if (sl < 0 || sl >= SLOTS) return;
-    wp.valid = true;
-    const uint32_t lh = lht[ix.lht_idx];
-    const uint32_t li = meta_valid ? meta_r.loc_idx : ((ix.w ^ lh ^ (lh >> 6)) & (LOC_N - 1));
-    const bool low_conf = prov_hit ? (prov_cnt == 3 || prov_cnt == 4) : (base_cnt == 1 || base_cnt == 2);
-    const uint32_t bway = (uint32_t(tage_pred) << 1) | uint32_t(low_conf);
-
-    RawSlot r = meta_valid ? meta_r.s[sl] : RawSlot{};
-    r.sup_mask = 0;
-    const uint16_t bk = static_cast<uint16_t>((ix.bias_set << 4) | (sl << 2) | bway);
-    wrb[0].lookup(bk, r.bias[bway]);
-    for (int g = 0; g < SC_GEHL_N; g++) {
-      const uint16_t gk = static_cast<uint16_t>((ix.gehl_idx[g] << 2) | sl);
-      wrb[1 + g].lookup(gk, r.gehl[g]);
-    }
-    wrb[5].lookup(static_cast<uint16_t>((ix.imli_idx << 2) | sl), r.imli);
-    wrb[6].lookup(static_cast<uint16_t>((li << 2) | sl), r.loc);
-
-    const int lsum = eval_raw(r, tage_pred, prov_hit, prov_cnt, base_cnt);
-    const bool sc_pred = (lsum >= 0);
-    const uint32_t th_i = (ix.w >> 2) & 15u;
-    const int th = thres[th_i];
-    wp.th_idx = th_i;
-    wp.lht_idx = ix.lht_idx;
-    wp.new_lht = static_cast<uint16_t>(((lh << 1) | uint16_t(real_dir)) & 0x3ffu);
-    wp.loc_idx = li;
-
-    if (sc_pred != tage_pred && std::abs(lsum) >= th - 4 && std::abs(lsum) <= th + 4) {
-      wp.th_upd = true;
-      wp.th_dec = (sc_pred == real_dir);
-    }
-
-    if (sc_pred != real_dir || std::abs(lsum) < th + 18) {
-      wp.do_wr = true;
-      wp.sl = sl;
-      wp.bway = bway;
-      wp.bias_set = ix.bias_set;
-      wp.bias_v = sat_upd(r.bias[bway], real_dir);
-      for (int g = 0; g < SC_GEHL_N; g++) {
-        wp.gehl_idx[g] = ix.gehl_idx[g];
-        wp.gehl_v[g] = sat_upd(r.gehl[g], real_dir);
-      }
-      wp.imli_idx = ix.imli_idx;
-      wp.imli_v = sat_upd(r.imli, real_dir);
-      wp.loc_v = sat_upd(r.loc, real_dir);
-    }
-  }
-
-  void apply_plan(const WritePlan &wp) {
-    if (!wp.valid) return;
-    if (wp.th_upd) {
-      int &th = thres[wp.th_idx];
-      if (wp.th_dec) { if (th > 5) th--; }
-      else { if (th < 63) th++; }
-    }
-    lht[wp.lht_idx] = wp.new_lht;
-    if (!wp.do_wr) return;
-    bias[wp.sl][wp.bway][wp.bias_set] = wp.bias_v;
-    wrb[0].insert(static_cast<uint16_t>((wp.bias_set << 4) | (wp.sl << 2) | wp.bway), wp.bias_v);
-    for (int g = 0; g < SC_GEHL_N; g++) {
-      gehl[g][wp.sl][wp.gehl_idx[g]] = wp.gehl_v[g];
-      wrb[1 + g].insert(static_cast<uint16_t>((wp.gehl_idx[g] << 2) | wp.sl), wp.gehl_v[g]);
-    }
-    imli_tbl[wp.sl][wp.imli_idx] = wp.imli_v;
-    wrb[5].insert(static_cast<uint16_t>((wp.imli_idx << 2) | wp.sl), wp.imli_v);
-    loc_tbl[wp.sl][wp.loc_idx] = wp.loc_v;
-    wrb[6].insert(static_cast<uint16_t>((wp.loc_idx << 2) | wp.sl), wp.loc_v);
-  }
-
-  // Used only by FastWarm
-  void update(const ScIdx &ix, int sl, bool real_dir, bool tage_pred, bool prov_hit, uint8_t prov_cnt, uint8_t base_cnt) {
-    Raw r;
-    read(ix, r, 0);
-    WritePlan wp;
-    compute_plan_from_meta(ix, sl, real_dir, tage_pred, prov_hit, prov_cnt, base_cnt, true, r, wp);
-    apply_plan(wp);
   }
 };
 
