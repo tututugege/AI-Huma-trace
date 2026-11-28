@@ -1,5 +1,5 @@
 test,status,wall_s,cycles
-add.bin,0,0,1950
+add.bin,0,0,1944
 add-longlong.bin,0,0,1938
 atomic-boundary.bin,0,0,2759
 bit.bin,0,0,1983
@@ -30,7 +30,7 @@ load-store-aligned.bin,0,0,2639
 matrix-mul.bin,0,0,3581
 max.bin,0,0,2476
 memory-boundary.bin,0,0,1987
-memory-stress-small.bin,0,0,310109
+memory-stress-small.bin,0,0,310212
 mersenne.bin,0,0,2250
 min3.bin,0,0,3207
 mov-c.bin,0,0,1641
@@ -38,7 +38,7 @@ movsx.bin,0,0,1715
 mul-longlong.bin,0,0,2285
 pascal.bin,0,0,2337
 pf-stress.bin,0,0,556257
-prime.bin,0,0,5965
+prime.bin,0,0,5962
 quick-sort.bin,0,0,5111
 recursion.bin,0,0,4120
 select-sort.bin,0,0,5523
@@ -59,5 +59,5 @@ to-lower-case.bin,0,0,1833
 trap-boundary.bin,0,0,3075
 trap-precise-store.bin,0,0,2100
 unalign.bin,0,0,2006
-wanshu.bin,0,0,3013
+wanshu.bin,0,0,2992
 wfi-boundary.bin,0,0,1533

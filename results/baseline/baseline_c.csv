@@ -1,5 +1,5 @@
 test,status,wall_s,cycles
-add.bin,0,0,1859
+add.bin,0,0,1776
 add-longlong.bin,0,0,1952
 atomic-boundary.bin,0,0,2607
 bit.bin,0,0,1902
@@ -21,7 +21,7 @@ fd-matmul.bin,0,0,27949
 fdoff.bin,0,0,9124
 fence-i-self-modify.bin,0,0,1984
 fib.bin,0,0,1795
-goldbach.bin,0,0,2704
+goldbach.bin,0,0,2710
 if-else.bin,0,0,1773
 illegal-instruction-trap.bin,0,0,1770
 interrupt-vectored.bin,0,0,4022
@@ -31,7 +31,7 @@ load-store-aligned.bin,0,0,2309
 matrix-mul.bin,0,0,3337
 max.bin,0,0,2276
 memory-boundary.bin,0,0,1853
-memory-stress-small.bin,0,0,296977
+memory-stress-small.bin,0,0,296788
 mersenne.bin,0,0,2054
 min3.bin,0,0,2846
 mov-c.bin,0,0,1409
@@ -39,7 +39,7 @@ movsx.bin,0,0,1561
 mul-longlong.bin,0,0,1945
 pascal.bin,0,0,2398
 pf-stress.bin,0,0,552646
-prime.bin,0,0,6012
+prime.bin,0,0,6035
 quick-sort.bin,0,0,4820
 recursion.bin,0,0,3706
 rvc-fencei.bin,0,0,114027
@@ -60,10 +60,10 @@ supervisor-trap-delegation.bin,0,0,2613
 switch.bin,0,0,1572
 test.bin,0,0,2563
 timer-interrupt-mask.bin,0,0,4914
-timer-mmio.bin,0,0,203601
+timer-mmio.bin,0,0,203427
 to-lower-case.bin,0,0,1840
 trap-boundary.bin,0,0,2405
 trap-precise-store.bin,0,0,1861
 unalign.bin,0,0,1777
-wanshu.bin,0,0,2932
+wanshu.bin,0,0,2950
 wfi-boundary.bin,0,0,1334
