@@ -93,8 +93,19 @@ void RealLsu::l2_decide() {
     case CF_HOLD: park(e, RC_HOLD, j, 0); break;
     case CF_DATA: park(e, RC_DATA, j, 0); break;
     case CF_FWD:
+      if (e.spec) {
+        const uint32_t off = (e.paddr - s.paddr) & ((XLEN / 8) - 1);
+        ms_ldq_[sb.ldq].cam_ok = true;
+        ms_ldq_[sb.ldq].cam_val = msd::load_extend(xlen_t(s.data) >> (8 * off), e.uop().func3);
+      }
       pw.wbd_v[i] = true;
       pw.wbd_ldq[i] = sb.ldq;
+      if (!e.second && e.uop().dest_preg != 0 && !in.rob_bcast->flush &&
+          !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {
+        out.lsu_awake.wake[2 * LD + i].valid = true;
+        out.lsu_awake.wake[2 * LD + i].preg = e.uop().dest_preg;
+        pw.l2b_w[i] = true;
+      }
       break;
     }
   }
@@ -103,14 +114,20 @@ void RealLsu::l2_decide() {
     const PL12 &sl = pcur.l12[i];
     if (!sl.v) continue;
     PLdq &e = pnxt.ldq[sl.ldq];
+    if (sl.spec_w && !in.rob_bcast->flush &&
+        !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {
+      pw.spec_w[i] = true;
+      pw.spec_ldq[i] = sl.ldq;
+      pw.spec_preg[i] = sl.spec_preg;
+    }
     if (!(e.st == L_PIPE && e.epoch == sl.epoch)) continue;  // killed after L1
-    {  // L2 speculative wake-up (LP_L2[3]): predicted L1D hit from registered L1/L2 state (independent of STQ CAM)
+    if (!sl.spec_w && !pw.l2b_w[i]) {  // L2a fallback speculative wake-up when L1 spec was filtered out
       const bool spec_w = sl.tlb == 0 && !sl.mmio && !sl.dcblk && !sl.bloom &&
           !e.second && e.uop().dest_preg != 0 &&
           !in.rob_bcast->flush && !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag));
       if (spec_w) {
-        out.lsu_awake.wake[i].valid = true;
-        out.lsu_awake.wake[i].preg = e.uop().dest_preg;
+        out.lsu_awake.wake[2 * LD + i].valid = true;
+        out.lsu_awake.wake[2 * LD + i].preg = e.uop().dest_preg;
         pw.spec_w[i] = true;
         pw.spec_ldq[i] = sl.ldq;
         pw.spec_preg[i] = e.uop().dest_preg;
@@ -126,6 +143,7 @@ void RealLsu::l2_decide() {
       continue;
     }
     if (sl.tlb == 1) {
+      e.no_l1_spec = 1;
       park(e, RC_TLB, 0, 0);
       continue;
     }
@@ -175,6 +193,11 @@ void RealLsu::dcache_load_responses() {
     if (!(e.st == L_DCW && e.epoch == ep)) continue;   // request of a load that forwarded / replayed / was killed
     e.rtype = (uint8_t)r.replay;
     if (r.replay == ReplayType::HIT) {
+      if (pcur_.ldq[idx].st == L_DCW && e.spec) {
+        xlen_t sv = 0;
+        ms_ldq_[idx].cam_ok = ms_load_value(pcur_, ms_stq_, e, ms_ldq_[idx], /*apply_skip=*/true, sv);
+        ms_ldq_[idx].cam_val = sv;
+      }
       if (pw.wbd_v[i]) {
         e.st = L_WBP;
       } else {
@@ -183,6 +206,7 @@ void RealLsu::dcache_load_responses() {
       }
     } else {
       e.miss = 1;
+      if (r.replay != ReplayType::CONFLICT) e.no_l1_spec = 1;
       park(e, RC_DC, 0, replay_wait(r.replay));
     }
   }
@@ -192,15 +216,33 @@ void RealLsu::dcache_load_responses() {
 void RealLsu::l3_register() {
   // a: the direct completions go through the L3 register (written back in the next cycle)
   for (int i = 0; i < LD; i++) {
-    const bool hit_direct = pw.wbd_v[i] && pw.wbd_ldq[i] == pw.spec_ldq[i];
+    const bool hit_direct = pw.wbd_v[i] && pw.wbd_ldq[i] == pw.spec_ldq[i] && pcur_.l12[i].tlb == 0;
     if (pw.spec_w[i] && !hit_direct) {
       pnxt.cn[i].v = 1;
       pnxt.cn[i].preg = pw.spec_preg[i];
     }
+    {  // Train 256x2b L1D hit confidence predictor (+1 / -1) on non-replay, non-dcblk L1 passes
+      const PL12 &sl = pcur_.l12[i];
+      if (sl.v && !sl.replay && !sl.dcblk) {
+        const PLdq &e = pnxt.ldq[sl.ldq];
+        if (e.st != L_EMPTY && e.epoch == sl.epoch && !e.second && e.uop().dest_preg != 0 &&
+            !in.rob_bcast->flush &&
+            !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag,
+                                                      in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {
+          const bool direct_ok = pw.wbd_v[i] && pw.wbd_ldq[i] == sl.ldq && sl.tlb == 0;
+          uint8_t &cnt = pnxt.l1_hit_pred[(e.pc() >> 1) & 0xFFu];
+          if (direct_ok) {
+            if (cnt < 3) cnt++;
+          } else {
+            if (cnt > 0) cnt--;
+          }
+        }
+      }
+    }
     if (!pw.wbd_v[i]) continue;
     pnxt.l3[i].v = 1;
     pnxt.l3[i].ldq = pw.wbd_ldq[i];
-    pnxt.l3[i].sw = pw.spec_w[i] && hit_direct;
+    pnxt.l3[i].sw = (pw.spec_w[i] && hit_direct) || pw.l2b_w[i];
     pnxt.ldq[pw.wbd_ldq[i]].st = L_WB3;
     pw.wbd_v[i] = false;
   }
@@ -264,7 +306,7 @@ void RealLsu::dcache2lsu_stq() {
 // ---------------------------------------------------------------------------------------------------------------
 // Write-back ports
 // ---------------------------------------------------------------------------------------------------------------
-void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) {
+void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken, int wbp_slot) {
   PLdq &l = pnxt.ldq[idx];
   MicroOp wb;
   wb.id = l.id;
@@ -281,9 +323,10 @@ void RealLsu::lp_emit_load_wb(int port, int idx, bool from_l3, bool spec_woken) 
   if (defer) wb.rob_defer = true;
   if (second) wb.flush_pipe = l.vio;
   if (!early && !l.pf && l.uop().dest_preg != 0 && !in.rob_bcast->flush &&
-      !(in.dec_bcast->mispred && is_younger_rob(l.uop().rob_idx, l.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {  // a2 + WBP: wake at write-back request
-    out.lsu_awake.wake[LD + port].valid = true;
-    out.lsu_awake.wake[LD + port].preg = l.uop().dest_preg;
+      !(in.dec_bcast->mispred && is_younger_rob(l.uop().rob_idx, l.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {  // a2 + WBP V2: wake at write-back request
+    const int wk_ch = from_l3 ? (LD + port) : (3 * LD + wbp_slot);
+    out.lsu_awake.wake[wk_ch].valid = true;
+    out.lsu_awake.wake[wk_ch].preg = l.uop().dest_preg;
     early = true;
   }
   wb.early_woken = early;
@@ -318,51 +361,68 @@ void RealLsu::lsu2exe() {
   for (int p = 0; p < LD; p++) {  // 1. the completions registered in L3 own their load port
     if (pcur.l3[p].v && pnxt.ldq[pcur.l3[p].ldq].st == L_WB3) {
       busy[p] = true;
-      lp_emit_load_wb(p, pcur.l3[p].ldq, true, pcur.l3[p].sw);
+      lp_emit_load_wb(p, pcur.l3[p].ldq, true, pcur.l3[p].sw, -1);
     }
   }
 
-  // 2. STA completions (age order from the head, first STA_COUNT; SC through a free load port)
-  int sta_n = 0, sc_n = 0;
-  for (uint32_t rank = 0; rank < pnxt.stq_count; rank++) {
-    const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
+  auto find_free_ld_port = [&]() -> int {
+    for (int q = 0; q < LD; q++)
+      if (!busy[q]) return q;
+    return -1;
+  };
+  auto emit_sc_wb = [&](uint32_t j, int p) {
     PStq &s = pnxt.stq[j];
-    if (!s.wbp) continue;
     MicroOp wb;
     wb.id = s.id;
+    wb.op = UOP_LOAD;
     wb.diag_val = s.vaddr;
     wb.page_fault_store = s.pf;
     wb.dest_en = false;
     wb.is_mmio = s.mmio;
-    if (s.lrsc) {  // SC reports pass/fail through a load write-back port
-      if (sc_n >= 1) continue;  // S: one SC completion per cycle
-      int p = -1;
-      for (int q = 0; q < LD && p < 0; q++)
-        if (!busy[q]) p = q;
-      if (p < 0) continue;
-      wb.op = UOP_LOAD;
-      if (s.pf) {
-        wb.result = s.vaddr;
-      } else {
-        const bool pass = cur.lrsc_unit.reserve_valid && cur.lrsc_unit.reserve_addr == s.paddr;
-        s.sc_pass = pass;
-        s.suppress = !pass;
-        nxt.lrsc_unit.reserve_valid = false;
-        wb.result = pass ? 0 : 1;
-        wb.dest_en = s.dest_preg != 0;
-        pw.ev_sc |= (stq_mask_t)1 << j;
-      }
-      busy[p] = true;
-      sc_n++;
-      out.lsu2exe.wb_req[p].valid = true;
-      out.lsu2exe.wb_req[p].uop = wb;
-    } else {
-      if (sta_n >= LSU_STA_COUNT) continue;
-      wb.op = UOP_STA;
+    if (s.pf) {
       wb.result = s.vaddr;
-      out.lsu2exe.sta_wb_req[sta_n].valid = true;
-      out.lsu2exe.sta_wb_req[sta_n++].uop = wb;
+    } else {
+      const bool pass = cur.lrsc_unit.reserve_valid && cur.lrsc_unit.reserve_addr == s.paddr;
+      s.sc_pass = pass;
+      s.suppress = !pass;
+      nxt.lrsc_unit.reserve_valid = false;
+      wb.result = pass ? 0 : 1;
+      wb.dest_en = s.dest_preg != 0;
+      pw.ev_sc |= (stq_mask_t)1 << j;
     }
+    busy[p] = true;
+    out.lsu2exe.wb_req[p].valid = true;
+    out.lsu2exe.wb_req[p].uop = wb;
+    s.wbp = 0;
+    s.wbd = 1;
+  };
+
+  // 2. STA completions (age order from the head, first STA_COUNT; SC deferred to 1-cycle pre-reg in V2)
+  int sta_n = 0;
+  bool sc_pv0 = false;
+  uint32_t sc_pick_idx = 0;
+  for (uint32_t rank = 0; rank < pnxt.stq_count; rank++) {
+    const uint32_t j = (pnxt.stq_head + rank) % STQ_SIZE;
+    PStq &s = pnxt.stq[j];
+    if (!s.wbp) continue;
+    if (s.lrsc) {
+      if (!sc_pv0) {
+        sc_pv0 = true;
+        sc_pick_idx = j;
+      }
+      continue;
+    }
+    if (sta_n >= LSU_STA_COUNT) continue;
+    MicroOp wb;
+    wb.id = s.id;
+    wb.op = UOP_STA;
+    wb.diag_val = s.vaddr;
+    wb.page_fault_store = s.pf;
+    wb.dest_en = false;
+    wb.is_mmio = s.mmio;
+    wb.result = s.vaddr;
+    out.lsu2exe.sta_wb_req[sta_n].valid = true;
+    out.lsu2exe.sta_wb_req[sta_n++].uop = wb;
     s.wbp = 0;
     s.wbd = 1;
   }
@@ -388,16 +448,49 @@ void RealLsu::lsu2exe() {
     }
   }
 
-  // 3. loads waiting for a port (forwarded after a data wait, MMIO data): lowest LDQ index first
-  for (int i = 0; i < LDQ_SIZE; i++) {
+  // 3. V2 WBP loads waiting for a port (priority over SC, up to NWBP picks): lowest LDQ index first
+  int wp_n = 0;
+  int wp_port[lp::NWBP] = {};
+  int wp_idx[lp::NWBP] = {};
+  for (int i = 0; i < LDQ_SIZE && wp_n < lp::NWBP; i++) {
     if (pnxt.ldq[i].st != L_WBP) continue;
     if (pcur.ldq[i].st != L_WBP && pw.mmio_ld != i) continue;  // F / FM: registered WBP bits (and this cycle's MMIO answer)
-    int p = -1;
-    for (int q = 0; q < LD && p < 0; q++)
-      if (!busy[q]) p = q;
+    const int p = find_free_ld_port();
     if (p < 0) break;
     busy[p] = true;
-    lp_emit_load_wb(p, i);
+    wp_port[wp_n] = p;
+    wp_idx[wp_n] = i;
+    wp_n++;
+  }
+
+  // 4. V2 lowest-priority 1-cycle pre-registered SC through remaining free load port
+  const bool sc_req_live = pcur.sc_req_v &&
+      stq_rank(pcur.sc_req_idx, pcur.stq_head) < pcur.stq_count &&
+      pcur.stq[pcur.sc_req_idx].wbp && pcur.stq[pcur.sc_req_idx].lrsc;
+  bool sc_fire = false;
+  if (sc_req_live) {
+    const int p = find_free_ld_port();
+    if (p >= 0) {
+      emit_sc_wb(pcur.sc_req_idx, p);
+      sc_fire = true;
+    }
+  }
+
+  // 5. Emit picked WBP loads
+  for (int m = 0; m < wp_n; m++) {
+    lp_emit_load_wb(wp_port[m], wp_idx[m], /*from_l3=*/false, /*spec_woken=*/false, /*wbp_slot=*/m);
+  }
+
+  // 6. Update pre-registered SC flip-flop (matches lp_wb.sv always_ff)
+  if (in.rob_bcast->flush || in.dec_bcast->mispred) {
+    pnxt.sc_req_v = 0;
+    pnxt.sc_req_idx = 0;
+  } else if (sc_req_live) {
+    pnxt.sc_req_v = sc_fire ? 0 : 1;
+    pnxt.sc_req_idx = pcur.sc_req_idx;
+  } else {
+    pnxt.sc_req_v = sc_pv0 ? 1 : 0;
+    pnxt.sc_req_idx = sc_pick_idx;
   }
 }
 

@@ -201,6 +201,21 @@ void RealLsu::tlb_out() {
     lslot |= 1u << n;
     n++;
   }
+  // L1 speculative load wakeup: driven purely from FF-registered/AGU pw.l1 + 256x2b L1D hit confidence predictor
+  for (int k = 0; k < LD; k++) {
+    if (!pw.l1[k].v) continue;
+    const PLdq &e = pnxt.ldq[pw.l1[k].ldq];
+    if (e.no_l1_spec || in.top_in->dcache2lsu.load_retry_busy[k]) continue;
+    if (!pw.l1[k].replay && pcur.l1_hit_pred[(e.pc() >> 1) & 0xFFu] < 2) continue;
+    if (!e.second && e.uop().dest_preg != 0 && !in.rob_bcast->flush &&
+        !(in.dec_bcast->mispred && is_younger_rob(e.uop().rob_idx, e.uop().rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag))) {
+      out.lsu_awake.wake[k].valid = true;
+      out.lsu_awake.wake[k].preg = e.uop().dest_preg;
+      out.lsu_awake.spec_l1_mask |= uint8_t(1u << k);
+      pw.l1[k].spec_w = true;
+      pw.l1[k].spec_preg = e.uop().dest_preg;
+    }
+  }
   for (int k = 0; k < LD; k++) {
     if (!pw.l1[k].v || !pw.l1[k].need_tlb) continue;
     tlb_req_[pw.l1[k].phys] = {true, pnxt.ldq[pw.l1[k].ldq].vaddr, 1};

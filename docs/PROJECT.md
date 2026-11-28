@@ -77,9 +77,9 @@ bridge 背后是跟随模型 dispatch 流(含错误路径)的功能 core(librefc
    (2026-11-19 以新默认配置(= RTL 配置:两个 INT 队列、合并访存队列、`FLUSH_REG` 等 13 个 `CFG_*` 默认值,EXP-044)重新生成,62 个程序周期都变了,几何平均 +1.96%;更早:2026-11-11 以 compact ROB(EXP-028)为默认,2026-11-09 带 write buffer(EXP-024);`baseline_nopf.csv` 是同一基线的关预取版本:`PF_ENABLE=0` 可复现,2026-11-19 同时重新生成)。
    全部以 difftest Success 结束,TB_CHECK 不一致数为 0。默认配置即等于 RTL 配置,与 RTL 比周期无需任何环境变量。
    **旧设计回归**(旧 LSU + 旧 BPU):两者都已删除(BPU_PIPE 0..2 在 exp/rvc-carry,旧 LSU / `LSU_PIPE=0` 与 `legacy_lsu_baseline*.csv` 于 2026-11-15 删除);要用请查历史。
-4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-28,EXP-072 EXU 无阻塞重构 + 真 5 物理 AGU;`docs/MAIN_RECORDS.md`):**
-   dhrystone 64 次 93,749 (IPC 2.756);coremark 2 次迭代 267,717 (IPC 2.360);memory-stress-small 310,480 (IPC 3.378)。
-   上一版 EXP-070(2026-11-27):dhrystone 93,928 (2.751);coremark 267,370 (2.363);memory-stress-small 310,550 (3.377);更早 EXP-069(2026-11-26):dhrystone 88,338 (2.925);coremark 206,578 (3.059);memory-stress-small 312,146 (3.360)。
+4. 大程序(源码和二进制在 `AI-Huma/rtl/programs/big`;clang + 桩 libc 头文件;缩短版构建自 2026-11-04 起固定为标准)。**当前默认值(2026-11-28,EXP-073 后端五墙合一时序切分;`docs/MAIN_RECORDS.md`):**
+   dhrystone 64 次 102,117 (IPC 2.530);coremark 2 次迭代 280,555 (IPC 2.252);memory-stress-small 311,806 (IPC 3.363)。
+   上一版 EXP-072(2026-11-28):dhrystone 93,749 (2.756);coremark 267,717 (2.360);memory-stress-small 310,480 (3.378);更早 EXP-070(2026-11-27):dhrystone 93,928 (2.751);coremark 267,370 (2.363);memory-stress-small 310,550 (3.377);更早 EXP-069(2026-11-26):dhrystone 88,338 (2.925);coremark 206,578 (3.059);memory-stress-small 312,146 (3.360)。
    更早的配置列在 `docs/MAIN_RECORDS.md`(每次合并一行)。
    这些周期数以 EXP-066 的存储系统为前提:DRAMsim3 `DDR4_8Gb_x8_3200` 加 32 ns 固定非核延迟,核频 2 GHz。
 5. 小 LLC 检查(`scripts/llc_small_check.sh $PWD <baseline-sim/src 的绝对路径>`(必须用绝对路径)):默认 4 MiB LLC 在小测试里从不发生替换,所以脚本用 64 KiB LLC 构建两个模拟器,在会发生替换的程序上比较周期。

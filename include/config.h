@@ -423,7 +423,7 @@ constexpr int IQ_INT_ENQ_WIDTH = 4;
 #define CFG_FP_IQ_ENQ_WIDTH 4
 #endif
 #ifndef CFG_FP_FMA_LAT
-#define CFG_FP_FMA_LAT 4     // fadd / fsub / fmul / fmadd family (S and D)
+#define CFG_FP_FMA_LAT 5     // fadd / fsub / fmul / fmadd family (S and D)
 #endif
 #ifndef CFG_FP_MISC_LAT
 #define CFG_FP_MISC_LAT 3    // fsgnj, fmin/fmax, fcmp, fclass, fcvt inside FP, FP -> integer

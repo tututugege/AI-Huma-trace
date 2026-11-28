@@ -39,6 +39,7 @@ struct IssueQueueConfig {
 struct IqStoredEntry {
   wire<1> valid;
   Uop uop;
+  uint8_t spec_t1 = 0;  // 4-bit L1-spec load port mask for uops woken this cycle / eligible to enter RR next cycle
 };
 
 struct IssueQueueIn {
@@ -88,6 +89,8 @@ private:
   // bits, the enqueue requests enter, then the flush / branch-clear.
   struct Regs {
     std::vector<IqStoredEntry> entry;
+    std::vector<uint8_t> spec_t1;  // valid for 1 cycle after L1-spec wakeup until grant or end-of-cycle clear
+    std::vector<uint8_t> spec_rr;  // non-zero while an issued L1-spec uop awaits cancel verdict in RR
     int count = 0;
     // Wakeup Matrix: [Physical Register] -> Bitmask of IQ slots
     std::vector<uint64_t> wake_matrix_src1;
@@ -99,14 +102,16 @@ private:
   // Slots changed at this edge: seq() refreshes only their ready bits.
   bool entry_dirty = false;
   bool entry_all_dirty = false;
+  bool has_spec_t1_ = false;
+  bool has_spec_rr_ = false;
   std::vector<uint64_t> slot_dirty;
   std::vector<uint64_t> d_vmask;     // bit i = entry[i].valid, so scans visit only the live slots
   std::vector<uint64_t> alloc_mask_; // CFG_IQ_SAME_CYCLE_REUSE = 0: the valid bits at the start of the edge (the slots an enqueue may take)
-  std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]), refreshed in seq()
+  std::vector<uint64_t> ready_bits;  // valid && is_ready(q_.entry[i]) && spec_rr[i] == 0, refreshed in seq()
   void refresh_ready(int i) {
     const Regs &q = q_;
     const uint64_t bit = 1ull << (i & 63);
-    if (q.entry[i].valid && is_ready(q.entry[i])) ready_bits[i >> 6] |= bit;
+    if (q.entry[i].valid && is_ready(q.entry[i]) && q.spec_rr[i] == 0) ready_bits[i >> 6] |= bit;
     else ready_bits[i >> 6] &= ~bit;
   }
   void mark_slot(int i) {
@@ -114,6 +119,7 @@ private:
     entry_dirty = true;
   }
   std::vector<uint32_t> wake_pregs_;   // this cycle's wake-ups (the valid channels of the bus), applied at seq
+  std::vector<uint8_t> wake_spec_masks_;
 
 public:
   IssueQueue(const IssueQueueConfig &cfg)
@@ -124,6 +130,8 @@ public:
       for (const auto &pb : ports) { port_lo = std::min(port_lo, pb.port_idx); port_hi = std::max(port_hi, pb.port_idx + 1); }
     }
     q_.entry.resize(size);
+    q_.spec_t1.assign(size, 0);
+    q_.spec_rr.assign(size, 0);
     slot_dirty.assign((size + 63) / 64, 0);
     ready_bits.assign((size + 63) / 64, 0);
     d_vmask.assign((size + 63) / 64, 0);
@@ -153,11 +161,19 @@ public:
   }
 
   // The registers woken this cycle (the valid channels of the wake-up bus, in channel order); applied at seq.
-  void set_wakeup(const uint32_t *pregs, int n) { wake_pregs_.assign(pregs, pregs + n); }
-  void set_cancel(const uint32_t *pregs, int n) { cancel_pregs_.assign(pregs, pregs + n); }
+  void set_wakeup(const uint32_t *pregs, int n, const uint8_t *spec_masks = nullptr) {
+    wake_pregs_.assign(pregs, pregs + n);
+    if (spec_masks) wake_spec_masks_.assign(spec_masks, spec_masks + n);
+    else wake_spec_masks_.assign(n, 0);
+  }
+  void set_cancel(const uint32_t *pregs, int n, uint8_t port_mask = 0) {
+    cancel_pregs_.assign(pregs, pregs + n);
+    cancel_port_mask_ = port_mask;
+  }
 
 private:
   std::vector<uint32_t> cancel_pregs_;
+  uint8_t cancel_port_mask_ = 0;
   bool in_cancel(uint32_t preg) const {
     for (uint32_t p : cancel_pregs_) if (p == preg) return true;
     return false;
@@ -168,15 +184,19 @@ private:
            (u->src2_en && in_cancel(u->src2_preg)) ||
            (u->src3_en && in_cancel(u->src3_preg));
   }
-  void apply_cancel() {
+  void apply_cancel(const std::vector<uint64_t> *must_restore = nullptr) {
     for (size_t w = 0; w < d_vmask.size(); w++)
       for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
         const int idx = int(w * 64) + __builtin_ctzll(m);
+        if (q_.spec_rr[idx] != 0) continue;
         auto &ent = q_.entry[idx];
         bool chg = false;
         if (ent.uop->src1_en && !ent.uop.src1_busy && in_cancel(ent.uop->src1_preg)) { ent.uop.src1_busy = true; chg = true; }
         if (ent.uop->src2_en && !ent.uop.src2_busy && in_cancel(ent.uop->src2_preg)) { ent.uop.src2_busy = true; chg = true; }
         if (ent.uop->src3_en && !ent.uop.src3_busy && in_cancel(ent.uop->src3_preg)) { ent.uop.src3_busy = true; chg = true; }
+        if (must_restore && ((*must_restore)[w] & (1ull << (idx & 63)))) {
+          Assert(chg && "cancelled spec_rr IQ slot missing src_busy restore");
+        }
         if (chg) {
           set_dep_bits_for_slot(ent, idx);
           mark_slot(idx);
@@ -189,6 +209,7 @@ private:
       if (preg >= TAG_NUM) {
         continue;
       }
+      const uint8_t spec_m = (i < int(wake_spec_masks_.size())) ? wake_spec_masks_[i] : 0;
       size_t row_base = matrix_row_base(preg);
 
       for (int w = 0; w < wake_words_per_row; w++) {
@@ -196,9 +217,10 @@ private:
         while (mask1) {
           int bit = __builtin_ctzll(mask1);
           int idx = (w << 6) + bit;
-          if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src1_en &&
+          if (idx < size && q_.entry[idx].valid && q_.spec_rr[idx] == 0 && q_.entry[idx].uop->src1_en &&
               q_.entry[idx].uop.src1_busy && q_.entry[idx].uop->src1_preg == preg) {
             q_.entry[idx].uop.src1_busy = false;
+            if (spec_m) { q_.spec_t1[idx] |= spec_m; has_spec_t1_ = true; }
             mark_slot(idx);
           }
           mask1 &= (mask1 - 1);
@@ -209,9 +231,10 @@ private:
         while (mask2) {
           int bit = __builtin_ctzll(mask2);
           int idx = (w << 6) + bit;
-          if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src2_en &&
+          if (idx < size && q_.entry[idx].valid && q_.spec_rr[idx] == 0 && q_.entry[idx].uop->src2_en &&
               q_.entry[idx].uop.src2_busy && q_.entry[idx].uop->src2_preg == preg) {
             q_.entry[idx].uop.src2_busy = false;
+            if (spec_m) { q_.spec_t1[idx] |= spec_m; has_spec_t1_ = true; }
             mark_slot(idx);
           }
           mask2 &= (mask2 - 1);
@@ -223,9 +246,10 @@ private:
           while (mask3) {
             int bit = __builtin_ctzll(mask3);
             int idx = (w << 6) + bit;
-            if (idx < size && q_.entry[idx].valid && q_.entry[idx].uop->src3_en &&
+            if (idx < size && q_.entry[idx].valid && q_.spec_rr[idx] == 0 && q_.entry[idx].uop->src3_en &&
                 q_.entry[idx].uop.src3_busy && q_.entry[idx].uop->src3_preg == preg) {
               q_.entry[idx].uop.src3_busy = false;
+              if (spec_m) { q_.spec_t1[idx] |= spec_m; has_spec_t1_ = true; }
               mark_slot(idx);
             }
             mask3 &= (mask3 - 1);
@@ -257,6 +281,7 @@ public:
       if (!why) {
         out.issue_grants[phys_port].valid = true;
         out.issue_grants[phys_port].uop = q.entry[entry_idx].uop;
+        out.issue_grants[phys_port].spec_t1 = q.spec_t1[entry_idx];
         grants_live = true;
         committed_indices.push_back(entry_idx);
       } else if (in.on_refuse) {
@@ -282,6 +307,9 @@ private:
 #endif
       q_.entry[i] = inst;
       q_.entry[i].valid = true;
+      q_.spec_t1[i] = inst.spec_t1;
+      q_.spec_rr[i] = 0;
+      if (inst.spec_t1) has_spec_t1_ = true;
       d_vmask[w] |= 1ull << (i & 63);
       set_dep_bits_for_slot(q_.entry[i], i);
 
@@ -299,6 +327,8 @@ private:
         if (!is_younger_rob(q_.entry[i].uop->rob_idx, q_.entry[i].uop->rob_flag, in.flush_rob_idx, in.flush_rob_flag)) continue;
         clear_dep_bits_for_slot(q_.entry[i], i);
         q_.entry[i].valid = false;
+        q_.spec_t1[i] = 0;
+        q_.spec_rr[i] = 0;
         d_vmask[w] &= ~(1ull << (i & 63));
         mark_slot(i);
         q_.count--;
@@ -308,6 +338,10 @@ private:
   void flush_all() {
     for (auto &e : q_.entry)
       e.valid = false;
+    std::fill(q_.spec_t1.begin(), q_.spec_t1.end(), 0);
+    std::fill(q_.spec_rr.begin(), q_.spec_rr.end(), 0);
+    has_spec_t1_ = false;
+    has_spec_rr_ = false;
     std::fill(d_vmask.begin(), d_vmask.end(), 0);
     entry_dirty = true;
     entry_all_dirty = true;
@@ -319,11 +353,17 @@ private:
     std::fill(q_.wake_matrix_src3.begin(), q_.wake_matrix_src3.end(), 0);
   }
 
-  // apply the issue selection (remove the selected entries)
+  // apply the issue selection (remove non-speculative picks; park L1-spec picks in spec_rr for 1-cycle cancel confirmation)
   void commit_issue(const std::vector<int> &indices) {
     for (int idx : indices) {
-      if (q_.entry[idx].valid) {
-        clear_dep_bits_for_slot(q_.entry[idx], idx);
+      if (!q_.entry[idx].valid) continue;
+      clear_dep_bits_for_slot(q_.entry[idx], idx);
+      if (q_.spec_t1[idx] != 0) {
+        q_.spec_rr[idx] = q_.spec_t1[idx];
+        q_.spec_t1[idx] = 0;
+        has_spec_rr_ = true;
+        mark_slot(idx);
+      } else {
         q_.entry[idx].valid = false;
         d_vmask[idx >> 6] &= ~(1ull << (idx & 63));
         mark_slot(idx);
@@ -333,13 +373,42 @@ private:
   }
 
 public:
-  // The clock edge: the picks of this cycle leave, the wake-ups clear busy bits, the enqueue requests enter (their
-  // wake-ups already applied by the Isu), then the flush / resolved-branch clear; the ready bits of the changed slots.
+  // The clock edge: resolve RR-parked spec picks, park/remove this cycle's picks, restore cancelled busy bits,
+  // apply wake-ups, enqueue, flush/branch-clear, then refresh ready bits.
   void seq() {
     alloc_mask_ = d_vmask;
+    std::vector<uint64_t> restored_rr_mask;
+    bool has_restored_rr = false;
+    if (has_spec_rr_) {
+      restored_rr_mask.assign(d_vmask.size(), 0);
+      for (size_t w = 0; w < d_vmask.size(); w++)
+        for (uint64_t m = d_vmask[w]; m; m &= m - 1) {
+          const int idx = int(w * 64) + __builtin_ctzll(m);
+          const uint8_t sm = q_.spec_rr[idx];
+          if (sm == 0) continue;
+          if ((sm & cancel_port_mask_) == 0) {
+            q_.entry[idx].valid = false;
+            q_.spec_rr[idx] = 0;
+            d_vmask[w] &= ~(1ull << (idx & 63));
+            mark_slot(idx);
+            q_.count--;
+          } else {
+            q_.spec_rr[idx] = 0;
+            restored_rr_mask[w] |= (1ull << (idx & 63));
+            has_restored_rr = true;
+            mark_slot(idx);
+          }
+        }
+      has_spec_rr_ = false;
+    }
     commit_issue(committed_indices);
     committed_indices.clear();
-    if (!cancel_pregs_.empty()) apply_cancel();
+    if (has_spec_t1_) {
+      std::fill(q_.spec_t1.begin(), q_.spec_t1.end(), 0);
+      has_spec_t1_ = false;
+    }
+    if (!cancel_pregs_.empty()) apply_cancel(has_restored_rr ? &restored_rr_mask : nullptr);
+    else Assert(!has_restored_rr && "restored spec_rr without cancel_pregs");
     if (!wake_pregs_.empty()) wakeup(wake_pregs_.data(), int(wake_pregs_.size()));
     for (const auto &req : in.enq_reqs) {
       if (!req.valid) continue;

@@ -29,12 +29,15 @@ void Isu::apply_wakeup_to_uop(Uop &uop) const {
 // Empties the wake slots (a global flush at the edge; init).
 void Isu::clear_wake_state() {
   for_each_wake_slot([](auto &e) { e = {}; });
+  for (auto &e : q_.wb_spec_q) e = {};
   q_.div_busy = 0;
   q_.div_rob_idx = 0;
   q_.div_rob_flag = 0;
+  q_.div_spec_mask = 0;
   q_.fdiv_cnt = 0;
   q_.fdiv_rob_idx = 0;
   q_.fdiv_rob_flag = 0;
+  q_.fdiv_spec_mask = 0;
 }
 
 extern uint64_t g_dbg_cycle;
@@ -48,6 +51,8 @@ void Isu::init() {
   iqs.clear();
   configs.clear();
   clear_wake_state();
+  div_busy_eff_ = false;
+  fdiv_cnt_eff_ = 0;
   for (int i = 0; i < IQ_NUM; i++) {
     const auto &iq = GLOBAL_IQ_CONFIG[i];
     IssueQueueConfig cfg;
@@ -73,10 +78,10 @@ void Isu::init() {
     q.in.presel_ok = [this](const Uop &u, int port) {
       const UopType t = decode_uop_type(u.op);
       if (port == 1) {
-        if (t == UOP_DIV) return !q_.div_busy;
-        return !in.exe2iss->div_wb_next;
+        if (t == UOP_DIV) return !div_busy_eff_;
+        return !in.exe2iss->div_wb_in2;
       }
-      if (t == UOP_FDIV && q_.fdiv_cnt > 0) return false;
+      if (t == UOP_FDIV && fdiv_cnt_eff_ > 0) return false;
       const int lat = get_latency(t, u->func7, u->is_word);
       return wb_busy_.free(port, (t == UOP_FDIV) ? lat + 1 : lat);
     };
@@ -123,6 +128,19 @@ void Isu::enq() {
       if (!in.dis2iss->req[i][w].valid) continue;
       slot.uop = in.dis2iss->req[i][w].uop;
       apply_wakeup_to_uop(slot.uop);
+      slot.spec_t1 = 0;
+      if (const uint8_t m = in.lsu_awake->spec_l1_mask) {
+        const auto &u = slot.uop;
+        for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++) {
+          if (!(m & (1u << k))) continue;
+          const uint32_t wp = in.lsu_awake->wake[k].preg;
+          if ((u->src1_en && u->src1_preg == wp) ||
+              (u->src2_en && u->src2_preg == wp) ||
+              (u->src3_en && u->src3_preg == wp)) {
+            slot.spec_t1 |= static_cast<uint8_t>(1u << k);
+          }
+        }
+      }
       if (isutr_on() && slot.uop->rob_idx == 14) std::fprintf(stderr, "ISUTR %llu ENQ q=%d op=%d rob=%d src1=%d(en%d busy%d) src2=%d(en%d busy%d) dest=%d\n", (unsigned long long)g_dbg_cycle, i, (int)slot.uop.op, (int)slot.uop->rob_idx, (int)slot.uop->src1_preg, (int)slot.uop->src1_en, (int)slot.uop.src1_busy, (int)slot.uop->src2_preg, (int)slot.uop->src2_en, (int)slot.uop.src2_busy, (int)slot.uop->dest_preg);
       slot.valid = true;
     }
@@ -145,19 +163,55 @@ int Isu::grant_gate(const Uop &u, int port, bool reserve) {
 
 // Every queue schedules; a grant needs the port's FU capability. No issue during a flush or mispredict.
 void Isu::issue() {
-  for (int i = 0; i < ISSUE_WIDTH; i++) out.iss2prf.iss_entry[i].valid = false;
+  for (int i = 0; i < ISSUE_WIDTH; i++) {
+    out.iss2prf.iss_entry[i].valid = false;
+    out.iss2prf.iss_entry[i].spec_mask = 0;
+  }
+  for (int a = 0; a < ALU_NUM; a++) {
+    out.iss_awake.cancel[a].valid = false;
+    out.iss_awake.cancel[a].preg = 0;
+  }
   wb_busy_.new_cycle(in.rob_bcast->flush);
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
   for (int k = 0; k < 4; k++) g_pmu_back.iss_ref[k] = g_pmu_back.iss_lost[k] = 0;
   // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
   static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_MEM, IQ_STD, IQ_BR, IQ_FP};
-  uint32_t cn_pregs[LSU_LOAD_WB_WIDTH];
+  uint32_t cn_pregs[LSU_LOAD_WB_WIDTH + ALU_NUM];
   int n_cn = 0;
+  uint8_t cn_port_mask = 0;
   for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
-    if (in.lsu_awake->cancel[p].valid) cn_pregs[n_cn++] = in.lsu_awake->cancel[p].preg;
+    if (in.lsu_awake->cancel[p].valid) {
+      cn_pregs[n_cn++] = in.lsu_awake->cancel[p].preg;
+      cn_port_mask |= static_cast<uint8_t>(1u << p);
+    }
+  div_busy_eff_ = q_.div_busy && !((q_.div_spec_mask & cn_port_mask) != 0);
+  fdiv_cnt_eff_ = (q_.fdiv_cnt > 0 && (q_.fdiv_spec_mask & cn_port_mask) != 0) ? 0 : q_.fdiv_cnt;
+  if (cn_port_mask != 0) {
+    for (int a = 0; a < ALU_NUM; a++) {
+      const auto &fs = q_.fast_spec_q[a];
+      if (!fs.valid || !(fs.spec_mask & cn_port_mask)) continue;
+      if (in.rob_bcast->flush ||
+          (in.dec_bcast->mispred && is_younger_rob(fs.rob_idx, fs.rob_flag, in.dec_bcast->redirect_rob_idx, in.dec_bcast->redirect_rob_flag)))
+        continue;
+      cn_pregs[n_cn++] = fs.dest_preg;
+      out.iss_awake.cancel[a].valid = true;
+      out.iss_awake.cancel[a].preg = fs.dest_preg;
+    }
+    if (!in.rob_bcast->flush) {
+      for (int p = 0; p < ISSUE_WIDTH; p++) {
+        const auto &w = q_.wb_spec_q[p];
+        if (!w.valid || !(w.spec_mask & cn_port_mask)) continue;
+        if (w.has_wb) wb_busy_.busy[p][w.wb_slot] = 0;
+        if (w.has_fpwb) {
+          Assert(fp_wb_busy_.busy[w.wb_slot] > 0);
+          fp_wb_busy_.busy[w.wb_slot]--;
+        }
+      }
+    }
+  }
   for (int qi : ORDER) {
     auto &q = iqs[qi];
-    q.set_cancel(cn_pregs, n_cn);
+    q.set_cancel(cn_pregs, n_cn, cn_port_mask);
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
     q.comb_issue();
     for (int p = q.port_lo; p < q.port_hi; p++) {
@@ -170,77 +224,115 @@ void Isu::issue() {
       Assert(!out.iss2prf.iss_entry[p].valid);
       out.iss2prf.iss_entry[p].valid = true;
       out.iss2prf.iss_entry[p].uop = grant.uop;
+      out.iss2prf.iss_entry[p].spec_mask = grant.spec_t1;
     }
   }
 }
 
-// Next state of the delayed wakeups (the edge): DIV/FP count down (an entry that fired is dropped), the MUL pipeline shifts,
-// and uops issued this cycle with a multi-cycle latency enter them (q: the registers of this cycle).
+// Next state of the delayed wakeups (the edge): DIV/FP count down (cancelled/fired entries are dropped), the MUL pipeline shifts,
+// and uops issued this cycle with a multi-cycle latency or unverified L1-spec wakeup enter tracking (q: the registers of this cycle).
 void Isu::calc_latency_next(const Regs &q) {
   Regs &d = q_;   // updated in place
+  uint8_t cn_port_mask = 0;
+  for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
+    if (in.lsu_awake->cancel[p].valid) cn_port_mask |= static_cast<uint8_t>(1u << p);
+
   const auto &g1 = out.iss2prf.iss_entry[1];
   const bool div_iss = g1.valid && decode_uop_type(g1.uop.op) == UOP_DIV;
-  Assert(!(q.div_busy && div_iss));
+  Assert(!(div_busy_eff_ && div_iss));
   if (div_iss) {
     d.div_busy = 1;
     d.div_rob_idx = g1.uop->rob_idx;
     d.div_rob_flag = g1.uop->rob_flag;
-  } else if (q.div_busy && !in.exe2iss->div_wb_next) {
+    d.div_spec_mask = g1.spec_mask;
+  } else if (div_busy_eff_ && !in.exe2iss->div_wb_in2) {
     d.div_busy = 1;
     d.div_rob_idx = q.div_rob_idx;
     d.div_rob_flag = q.div_rob_flag;
+    d.div_spec_mask = 0;
   } else {
     d.div_busy = 0;
     d.div_rob_idx = 0;
     d.div_rob_flag = 0;
+    d.div_spec_mask = 0;
   }
   const int fp_last = ISSUE_WIDTH - 1;
   const auto &gf = out.iss2prf.iss_entry[fp_last];
   const bool fdiv_iss = gf.valid && decode_uop_type(gf.uop.op) == UOP_FDIV;
-  Assert(!(q.fdiv_cnt > 0 && fdiv_iss));
+  Assert(!(fdiv_cnt_eff_ > 0 && fdiv_iss));
   if (fdiv_iss) {
     d.fdiv_cnt = get_latency(UOP_FDIV, gf.uop->func7, gf.uop->is_word);
     d.fdiv_rob_idx = gf.uop->rob_idx;
     d.fdiv_rob_flag = gf.uop->rob_flag;
-  } else if (q.fdiv_cnt > 1) {
-    d.fdiv_cnt = q.fdiv_cnt - 1;
+    d.fdiv_spec_mask = gf.spec_mask;
+  } else if (fdiv_cnt_eff_ > 1) {
+    d.fdiv_cnt = fdiv_cnt_eff_ - 1;
     d.fdiv_rob_idx = q.fdiv_rob_idx;
     d.fdiv_rob_flag = q.fdiv_rob_flag;
+    d.fdiv_spec_mask = 0;
   } else {
     d.fdiv_cnt = 0;
     d.fdiv_rob_idx = 0;
     d.fdiv_rob_flag = 0;
+    d.fdiv_spec_mask = 0;
   }
 
-  auto age = [](auto &cur, auto &nxt) {
-    for (size_t i = 0; i < std::size(cur); i++) {
-      nxt[i] = {};
-      if (cur[i].valid && cur[i].countdown > 0) {
-        nxt[i] = cur[i];
-        nxt[i].countdown--;
-      }
+  for (size_t i = 0; i < std::size(q.fp_wake_slots); i++) {
+    d.fp_wake_slots[i] = {};
+    if (q.fp_wake_slots[i].valid && q.fp_wake_slots[i].countdown > 0 &&
+        !(q.fp_wake_slots[i].spec_mask & cn_port_mask)) {
+      d.fp_wake_slots[i] = q.fp_wake_slots[i];
+      d.fp_wake_slots[i].countdown--;
+      d.fp_wake_slots[i].spec_mask = 0;
     }
-  };
-  age(q.fp_wake_slots, d.fp_wake_slots);
+  }
+
+  for (auto &e : d.fast_spec_q) e = {};
+  for (auto &e : d.wb_spec_q) e = {};
 
   for (auto &stage : d.mul_wake_pipe) for (auto &e : stage) e = {};
   if (MUL_MAX_LATENCY > 1)
     for (int stage = ISU_MUL_WAKE_DEPTH - 1; stage >= 1; stage--)
-      for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) d.mul_wake_pipe[stage][s] = q.mul_wake_pipe[stage - 1][s];
+      for (int s = 0; s < ISU_MUL_WAKE_SLOT_NUM; s++) {
+        const auto &src = q.mul_wake_pipe[stage - 1][s];
+        if (src.valid && !(src.spec_mask & cn_port_mask)) {
+          d.mul_wake_pipe[stage][s] = src;
+          d.mul_wake_pipe[stage][s].spec_mask = 0;
+        }
+      }
 
+  int alu_k = 0;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
+    const bool is_alu_port = (get_port_capability(i) & OP_MASK_ALU) != 0;
+    const int my_alu_k = is_alu_port ? alu_k++ : -1;
     const auto &inst = out.iss2prf.iss_entry[i];
-    if (!(inst.valid && inst.uop.dest_en)) continue;
+    if (!inst.valid) continue;
     const UopType op = decode_uop_type(inst.uop.op);
     const int lat = get_latency(op, inst.uop->func7, inst.uop->is_word);
-    if (lat <= 1) continue;
+    if (inst.spec_mask != 0) {
+      const int off = (op == UOP_FDIV) ? lat + 1 : lat;
+      auto &w = d.wb_spec_q[i];
+      w.valid = true;
+      w.spec_mask = inst.spec_mask;
+      w.wb_slot = static_cast<uint8_t>((sim_time + off) & (WbBusy::kRing - 1));
+      w.has_wb = (op != UOP_DIV);
+      w.has_fpwb = inst.uop.dest_en && inst.uop->dest_fp &&
+                   (op == UOP_FMA || op == UOP_FMISC || op == UOP_FDIV || op == UOP_I2F);
+    }
+    if (!inst.uop.dest_en) continue;
     auto put = [&](auto &e, int countdown) {
       e.valid = true;
+      e.spec_mask = inst.spec_mask;
       e.dest_preg = inst.uop->dest_preg;
       e.rob_idx = inst.uop->rob_idx;
       e.rob_flag = inst.uop->rob_flag;
       if constexpr (requires { e.countdown; }) e.countdown = countdown;
     };
+    if (lat <= 1) {
+      if (inst.spec_mask != 0 && op != UOP_LOAD && op != UOP_STA && my_alu_k >= 0)
+        put(d.fast_spec_q[my_alu_k], 0);
+      continue;
+    }
     auto free_slot = [&](auto &slots, int countdown) {
       for (auto &e : slots)
         if (!e.valid) { put(e, countdown); return true; }
@@ -286,17 +378,24 @@ void Isu::awake() {
       bus[lsu_base + i].preg = in.prf_awake->wake[i].preg;
     }
   if (in.exe2iss->div_wake_valid) drive(div_base, in.exe2iss->div_wake_preg, "Delayed writeback collision");
+  uint8_t cn_port_mask = 0;
+  for (int p = 0; p < LSU_LOAD_WB_WIDTH; p++)
+    if (in.lsu_awake->cancel[p].valid) cn_port_mask |= static_cast<uint8_t>(1u << p);
   {  // the FP slots fire on the FPW_CH channels after the fast ones, in slot order
     int ch = fast_base + ALU_NUM;
     for (int i = 0; i < ISU_FP_WAKE_SLOT_NUM; i++)
-      if (q.fp_wake_slots[i].valid && q.fp_wake_slots[i].countdown == 0) {
+      if (q.fp_wake_slots[i].valid && q.fp_wake_slots[i].countdown == 0 &&
+          !(q.fp_wake_slots[i].spec_mask & cn_port_mask)) {
         Assert(ch < fast_base + ALU_NUM + FPW_CH && "more FP wake-ups in one cycle than channels");
         drive(ch++, q.fp_wake_slots[i].dest_preg, "Delayed writeback collision");
       }
   }
   if (MUL_MAX_LATENCY > 1)
-    for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++)
-      if (q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].valid) drive(mul_base + i, q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i].dest_preg, "Delayed writeback collision");
+    for (int i = 0; i < ISU_MUL_WAKE_SLOT_NUM; i++) {
+      const auto &me = q.mul_wake_pipe[ISU_MUL_WAKE_DEPTH - 1][i];
+      if (me.valid && !(me.spec_mask & cn_port_mask))
+        drive(mul_base + i, me.dest_preg, "Delayed writeback collision");
+    }
   for (int i = 0; i < ISSUE_WIDTH; i++) {
     const auto &e = out.iss2prf.iss_entry[i];
     if (!(e.valid && e.uop.dest_en)) continue;
@@ -305,7 +404,7 @@ void Isu::awake() {
       drive(fast_ch[i], e.uop->dest_preg, "Fast writeback collision");
   }
 
-  {  // LSU channels after the fast ones ([p] unused since the speculative L2 wake-up was removed, [LD + p] L3 register)
+  {  // LSU channels after the fast ones ([p] L1 spec, [LD+p] L3, [2*LD+p] L2b STLF / L2a fallback, [3*LD..+1] V2 WBP)
     const int early_base = MAX_WAKEUP_PORTS;  // config.h channels first
     for (int i = 0; i < LSU_EARLY_WAKE_PORTS; i++)
       if (in.lsu_awake->wake[i].valid) {
@@ -314,16 +413,23 @@ void Isu::awake() {
       }
   }
   uint32_t woken[WAKE_CH_ALL];
+  uint8_t woken_spec[WAKE_CH_ALL];
   int n_woken = 0;
   const uint64_t ep = ++out.iss_awake.epoch;
   for (int i = 0; i < WAKE_CH_ALL; i++)
     if (bus[i].valid) {
-      woken[n_woken++] = bus[i].preg;
+      uint8_t sm = 0;
+      if (i >= MAX_WAKEUP_PORTS && i < MAX_WAKEUP_PORTS + LSU_LOAD_WB_WIDTH) {
+        const int lp = i - MAX_WAKEUP_PORTS;
+        if (in.lsu_awake->spec_l1_mask & (1u << lp)) sm = static_cast<uint8_t>(1u << lp);
+      }
+      woken[n_woken] = bus[i].preg;
+      woken_spec[n_woken++] = sm;
       if (bus[i].preg < TAG_NUM) out.iss_awake.woke_at[bus[i].preg] = ep;
     }
   { static const bool tr = std::getenv("ISSUE_TRACE") != nullptr;
     if (tr && trace_win::ok() && n_woken) { std::fprintf(stderr, "[WK] cyc=%lld p:", (long long)sim_time); for (int i = 0; i < n_woken; i++) std::fprintf(stderr, " %u", woken[i]); std::fprintf(stderr, "\n"); } }
-  for (auto &q : iqs) q.set_wakeup(woken, n_woken);   // (applied at the edge)
+  for (auto &q : iqs) q.set_wakeup(woken, n_woken, woken_spec);   // (applied at the edge)
 }
 
 // Flush / mispredict / branch-resolve handling for the queues (their inputs; applied by their seq) and the delayed wakeups. A flush empties everything,
@@ -350,11 +456,13 @@ void Isu::flush() {
       q_.div_busy = 0;
       q_.div_rob_idx = 0;
       q_.div_rob_flag = 0;
+      q_.div_spec_mask = 0;
     }
     if (q_.fdiv_cnt > 0 && is_younger_rob(q_.fdiv_rob_idx, q_.fdiv_rob_flag, r_idx, r_flag)) {
       q_.fdiv_cnt = 0;
       q_.fdiv_rob_idx = 0;
       q_.fdiv_rob_flag = 0;
+      q_.fdiv_spec_mask = 0;
     }
   }
 }

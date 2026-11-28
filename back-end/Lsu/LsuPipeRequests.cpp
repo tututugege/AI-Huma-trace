@@ -133,6 +133,7 @@ void RealLsu::lsu2dcache_ldq() {
     const PL1 &l = pw.l1[k];
     if (!l.v) continue;
     PLdq &e = pnxt.ldq[l.ldq];
+    Assert(!(l.spec_w && e.st != L_PIPE));
     if (e.st != L_PIPE) continue;  // killed in this cycle
     PL12 &sl = pnxt.l12[k];
     sl.v = 1;
@@ -141,6 +142,9 @@ void RealLsu::lsu2dcache_ldq() {
     sl.mmio = l.mmio;
     sl.dcblk = 0;
     sl.bloom = 0;
+    sl.replay = l.replay ? 1 : 0;
+    sl.spec_w = l.spec_w ? 1 : 0;
+    sl.spec_preg = l.spec_preg;
     const uint32_t bidx = (uint32_t(e.vaddr) >> 3) & 0xFFu;
     const bool bloom_hit = !l.replay && ((pcur_.stq_bloom[bidx >> 6] >> (bidx & 63u)) & 1u);
     // Launch DCache in L1 unless port is retry-busy or 256-bit STQ word bloom filter predicts STLF hit (first pass only).
@@ -395,6 +399,7 @@ void RealLsu::wake_loads() {
     case RC_DC:
       if (pw.fill && e.rtype == (uint8_t)ReplayType::MSHR_HIT && cache_line_match(e.paddr, pw.fill_addr)) {
         e.rwait = 0;
+        e.no_l1_spec = 0;
       } else if (pw.fill && e.rtype == (uint8_t)ReplayType::MSHR_FULL && full_wakes < (uint32_t)LD &&
                  pcur.ldq[i].st == L_RPW) {
         e.rwait = 0;
@@ -413,16 +418,29 @@ void RealLsu::wake_loads() {
         if (c == CF_REPLAY) e.st = L_RDY;
         else if (c == CF_HOLD) e.rcause = RC_HOLD;
         else if (c == CF_DATA) e.rcause = RC_DATA;
-        else if (c == CF_FWD) e.st = L_WBP;
+        else if (c == CF_FWD) {
+          if (e.spec) {
+            const uint32_t off = (e.paddr - s.paddr) & ((XLEN / 8) - 1);
+            ms_ldq_[i].cam_ok = true;
+            ms_ldq_[i].cam_val = msd::load_extend(xlen_t(s.data) >> (8 * off), e.uop().func3);
+          }
+          e.st = L_WBP;
+        }
       }
       break;
     case RC_HOLD:
       if ((pw.ev_ret | pw.ev_sc) & b) e.st = L_RDY;
       break;
     case RC_DATA:
-      if (ev_data & b)
+      if (ev_data & b) {
+        if (e.spec) {
+          const PStq &s = pcur.stq[e.blk_idx];
+          const uint32_t off = (e.paddr - s.paddr) & ((XLEN / 8) - 1);
+          ms_ldq_[i].cam_ok = true;
+          ms_ldq_[i].cam_val = msd::load_extend(xlen_t(s.data) >> (8 * off), e.uop().func3);
+        }
         e.st = L_WBP;  // the STD write is forwarded straight to the write-back (decision was already made at L2)
-      else if (pw.ev_ret & b)
+      } else if (pw.ev_ret & b)
         e.st = L_RDY;
       break;
     default: break;
@@ -454,6 +472,7 @@ void RealLsu::fill_replay_registers() {
     for (uint32_t k = 0; k < STQ_SIZE; k++) {
       const uint32_t j = (pnxt.srp_ptr + k) % STQ_SIZE;
       if (stq_rank(j, pnxt.stq_head) >= pnxt.stq_count || !pnxt.stq[j].trp) continue;
+      if (!pcur.stq[j].trp) continue;  // Wall #4: registered trp (cuts DTLB -> STQ -> lp_rp)
       pnxt.stq[j].trp = 0;
       pnxt.srp.v = 1;
       pnxt.srp.ldq = j;

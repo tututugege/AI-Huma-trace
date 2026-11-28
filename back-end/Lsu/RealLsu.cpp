@@ -18,6 +18,8 @@ void RealLsu::init() {
   nxt = {};
   pcur_ = {};
   pnxt = {};
+  std::fill_n(pcur_.l1_hit_pred, 256, uint8_t(2));
+  std::fill_n(pnxt.l1_hit_pred, 256, uint8_t(2));
   pw = {};
   dtlb.reset();
 }

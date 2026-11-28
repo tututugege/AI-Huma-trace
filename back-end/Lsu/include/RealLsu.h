@@ -42,7 +42,7 @@ struct BackIn;
 // of BackTop's shared input / output structs).
 //   CONTRACT comb_outputs  in: -  out: out.lsu2dis out.lsu2rob out.lsu_awake
 //   CONTRACT comb_writeback  in: in.dec_bcast in.rob_bcast in.rob_commit in.top_in.dcache2lsu  out: out.lsu2exe out.lsu_awake
-//   CONTRACT comb_translate  in: in.dec_bcast in.exe2lsu in.rob_bcast in.dtlb_walk  out: out.dtlb_walk
+//   CONTRACT comb_translate  in: in.dec_bcast in.exe2lsu in.rob_bcast in.dtlb_walk in.top_in.dcache2lsu  out: out.dtlb_walk out.lsu_awake
 //   CONTRACT comb_requests  in: in.dec_bcast in.dis2lsu in.exe2lsu in.rob_bcast in.rob_commit in.top_in.dcache2lsu out.lsu2dcache  out: out.lsu2dcache out.peripheral_req
 //   CONTRACT comb_commit_store  in: in.rob_bcast in.rob_commit  out: out.commit_store
 class RealLsu {
@@ -123,7 +123,7 @@ private:
   void check();
   void ms_capture_stores();   // LSU_MS_DATA: the trace's store data, the cycle after allocation
   void ms_load_written_back(int ldq_idx, bool defer);   // LSU_MS_DATA: the destination's (stale?) value at a load write-back
-  void lp_emit_load_wb(int port, int ldq_idx, bool from_l3 = false, bool spec_woken = false);
+  void lp_emit_load_wb(int port, int idx, bool from_l3 = false, bool spec_woken = false, int wbp_slot = -1);
   void tlb_out();
   void tlb_in_ldq();
   void tlb_in_stq();

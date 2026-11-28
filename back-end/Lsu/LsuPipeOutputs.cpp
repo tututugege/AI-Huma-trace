@@ -17,6 +17,7 @@ void RealLsu::cal() {
   for (int k = 0; k < LD; k++) pnxt.l3[k] = {};
   for (int k = 0; k < LD; k++) pnxt.cn[k] = {};
   for (auto &w : out.lsu_awake.wake) w = {};
+  out.lsu_awake.spec_l1_mask = 0;
   for (int k = 0; k < LD; k++) {
     out.lsu_awake.cancel[k].valid = pcur.cn[k].v;
     out.lsu_awake.cancel[k].preg = pcur.cn[k].preg;

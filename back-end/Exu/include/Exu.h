@@ -65,6 +65,7 @@ public:
   struct In {
     const DecBroadcastIO *dec_bcast = nullptr;
     const IssPrfIO *iss2prf = nullptr;
+    const LsuAwakeIO *lsu_awake = nullptr;  // used only in seq() to cancel unverified L1-spec ops in rr_q
     const LsuExeIO *lsu2exe = nullptr;
     const RobBroadcastIO *rob_bcast = nullptr;
   } in;
@@ -86,7 +87,10 @@ private:
   };
   // registers: q_ (read in comb through const Regs &q) and d (written by comb); seq: q_ = d. (The FU state in `units`
   // is still updated in place in comb: not yet under the contract.)
-  struct Regs { LoadWake lwake_r[LSU_LOAD_WB_WIDTH] = {}; };
+  struct Regs {
+    LoadWake lwake_r[LSU_LOAD_WB_WIDTH] = {};
+    IssPrfIO rr_q{};  // ISS -> RR pipeline stage register
+  };
   Regs q_;
   std::vector<FuUnit> units;
   bool port_slot_valid[ISSUE_WIDTH] = {};

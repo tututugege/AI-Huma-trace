@@ -164,15 +164,15 @@ struct PrfAwakeIO {
   WakeInfo wake[LSU_LOAD_WB_WIDTH] = {};
 };
 
-// wake-up channels of the issue-queue bus: the ones of config.h (MAX_WAKEUP_PORTS) + the LSU channels (2 per load port: [p] unused, [LD+p] L3)
-constexpr int LSU_EARLY_WAKE_PORTS = 2 * LSU_LOAD_WB_WIDTH;
+// wake-up channels of the issue-queue bus: the ones of config.h (MAX_WAKEUP_PORTS) + the LSU channels (3 per load port: [p] L1 spec, [LD+p] L3, [2*LD+p] L2b STLF / L2a fallback, +2 V2 WBP [3*LD..3*LD+1])
+constexpr int LSU_EARLY_WAKE_PORTS = 3 * LSU_LOAD_WB_WIDTH + 2;
 constexpr int WAKE_CH_ALL = MAX_WAKEUP_PORTS + LSU_EARLY_WAKE_PORTS;
 
-// Wake-ups driven by the LSU itself: [LD + p] from the L3 register (the [p] channels belonged to the removed speculative L2 wake-up
-// and stay empty; the wake-up bus keeps its channel layout)
+// Wake-ups driven by the LSU itself: [p] L1 spec, [LD + p] L3, [2*LD + p] L2b confirmed STLF / L2a fallback, [3*LD..3*LD+1] V2 WBP
 struct LsuAwakeIO {
-  WakeInfo wake[2 * LSU_LOAD_WB_WIDTH] = {};
+  WakeInfo wake[LSU_EARLY_WAKE_PORTS] = {};
   WakeInfo cancel[LSU_LOAD_WB_WIDTH] = {};
+  uint8_t spec_l1_mask = 0;  // bit k in 0..LD-1: wake[k] is an L1 speculative wake requiring RR-stage cancel tracking
 };
 
 struct DisIssIO {
@@ -198,6 +198,7 @@ struct IssDisIO {
 struct IssAwakeIO {
 
   WakeInfo wake[WAKE_CH_ALL] = {};
+  WakeInfo cancel[ALU_NUM] = {};  // cancelled 1-cycle ALU destinations from L1-spec wakeup (grandchild cancel to Dispatch)
   // the same bus as a lookup: preg p is on it iff woke_at[p] == epoch (each drive of the bus starts a new epoch)
   uint64_t epoch = 1;
   uint64_t woke_at[TAG_NUM] = {};
@@ -236,6 +237,7 @@ struct IssPrfIO {
   struct IssPrfEntry {
     wire<1> valid = {};
     Uop uop = {};
+    uint8_t spec_mask = 0;  // 4-bit load-port mask of unverified L1-spec loads that woke this uop
   };
 
   IssPrfEntry iss_entry[ISSUE_WIDTH] = {};
@@ -243,7 +245,7 @@ struct IssPrfIO {
 
 struct ExeIssIO {
 
-  wire<1> div_wb_next = 0;
+  wire<1> div_wb_in2 = 0;
   wire<1> div_wake_valid = 0;
   wire<PRF_IDX_WIDTH> div_wake_preg = 0;
 };

@@ -62,6 +62,7 @@ void BackTop::init() {
   isu->in.rob_bcast = &rob->out.rob_bcast_d;
   exu->in.dec_bcast = &idu->out.dec_bcast;
   exu->in.iss2prf = &isu->out.iss2prf;
+  exu->in.lsu_awake = &lsu->out.lsu_awake;
   exu->in.lsu2exe = &lsu->out.lsu2exe;
   exu->in.rob_bcast = &rob->out.rob_bcast_d;
   rob->in.dec_bcast = &idu->out.dec_bcast;

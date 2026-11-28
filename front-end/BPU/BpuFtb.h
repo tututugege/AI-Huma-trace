@@ -1066,12 +1066,13 @@ struct BpuFtb {
       if (ev.br[i].actual_dir) has_taken = true;
       if (!ev.br[i].actual_dir || ev.br[i].type == BR_RET || tab.tgt_fits(ev.start, ev.br[i].target)) any_fits = true;
     }
+    if (!any_fits) return nullptr;
     const uint32_t s = tab.index(ev.start);
     const uint16_t t = tab.tag(ev.start);
     int hit = -1;
     for (int w = 0; w < tab.W; w++) if (tab.e[s * tab.W + w].valid && tab.e[s * tab.W + w].tag == t) { hit = w; break; }
     if (hit < 0) {
-      if ((alloc_only_taken && !has_taken) || !any_fits) return nullptr;
+      if (alloc_only_taken && !has_taken) return nullptr;
       int vic = -1;
       for (int w = 0; w < tab.W; w++) if (!tab.e[s * tab.W + w].valid) { vic = w; break; }
       if (vic < 0) vic = tab.plru.victim(s);

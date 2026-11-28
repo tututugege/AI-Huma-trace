@@ -33,6 +33,7 @@ void Exu::init() {
                                 {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
                                 {FuKind::FMA, OP_MASK_FMA}, {FuKind::FDIV, OP_MASK_FDIV}, {FuKind::FMISC, OP_MASK_FMISC}};
   int agu = 0, sdu = 0;
+  q_ = {};
   div_fu_idx = -1;
   units.clear();
   for (int i = 0; i < ISSUE_WIDTH; i++) {
@@ -64,7 +65,7 @@ void Exu::init() {
 // Default (idle) outputs.
 void Exu::begin_cycle() {
   for (int i = 0; i < ROB_WB_WIDTH; i++) out.exu2rob.entry[i].valid = false;
-  out.exe2iss.div_wb_next = false;
+  out.exe2iss.div_wb_in2 = false;
   out.exe2iss.div_wake_valid = false;
   out.exe2iss.div_wake_preg = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = out.exe2lsu.agu_req[i].raw = false;
@@ -78,26 +79,26 @@ void Exu::begin_cycle() {
   out.exu2id.br_type = 0;
 }
 
-// Reserve port 1 write-back and wake consumers one cycle before DIV finishes.
+// Reserve port 1 write-back two cycles before DIV finishes (ISS -> RR -> EX) and wake consumers one cycle before completion.
 void Exu::ready() {
-  out.exe2iss.div_wb_next = false;
+  out.exe2iss.div_wb_in2 = false;
   out.exe2iss.div_wake_valid = false;
   out.exe2iss.div_wake_preg = 0;
   if (!in.rob_bcast->flush && div_fu_idx >= 0) {
     const FuUnit &f = units[div_fu_idx];
-    if (f.busy && f.done == sim_time + 1) {
-      out.exe2iss.div_wb_next = true;
-      if (f.cur.dest_en) {
-        out.exe2iss.div_wake_valid = true;
-        out.exe2iss.div_wake_preg = f.cur->dest_preg;
-      }
+    if (f.busy && f.done == sim_time + 1 && f.cur.dest_en) {
+      out.exe2iss.div_wake_valid = true;
+      out.exe2iss.div_wake_preg = f.cur->dest_preg;
+    }
+    if (f.busy && f.done == sim_time + 2) {
+      out.exe2iss.div_wb_in2 = true;
     }
   }
 }
 
 // The CSR uop sitting in port 0's issue slot drives the CSR file's read/write request.
-// The clock edge: the load write-back register; issued uops enter the per-port pipeline register (killed ones are dropped);
-// a flush empties them.
+// The clock edge: the load write-back register; RR advances into the per-port EX slots (dropping cancelled L1-spec ops),
+// and newly issued ops enter RR; a flush empties both.
 void Exu::seq() {
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
@@ -112,12 +113,18 @@ void Exu::seq() {
   }
   if (in.rob_bcast->flush) {
     for (int p = 0; p < ISSUE_WIDTH; p++) port_slot_valid[p] = false;
+    q_.rr_q = {};
     return;
   }
+  uint8_t cn_mask = 0;
+  for (int k = 0; k < LSU_LOAD_WB_WIDTH; k++)
+    if (in.lsu_awake->cancel[k].valid) cn_mask |= static_cast<uint8_t>(1u << k);
+  // Stage 1: RR -> EX per-port input register (dropping L1-spec cancelled or branch-killed ops)
   for (int p = 0; p < ISSUE_WIDTH; p++) {
     port_slot_valid[p] = false;
-    if (!in.iss2prf->iss_entry[p].valid) continue;
-    Uop iu = in.iss2prf->iss_entry[p].uop;   // (there is no register file: the operand values are facts of the trace)
+    const auto &re = q_.rr_q.iss_entry[p];
+    if (!re.valid || (re.spec_mask & cn_mask)) continue;
+    Uop iu = re.uop;   // (there is no register file: the operand values are facts of the trace)
     if (needs_ftq_pc(p, iu)) {
       const FtqPc r = ftq->ftq_pc(iu->ftq_idx, iu->ftq_offset);
       iu->pc = r.pc;
@@ -132,6 +139,17 @@ void Exu::seq() {
     if (is_br_killed(uop, (*in.dec_bcast))) continue;
     port_slot_valid[p] = true;
     port_slot[p] = uop;
+  }
+  // Stage 2: ISS -> RR pipeline register (dropping branch-killed grants)
+  for (int p = 0; p < ISSUE_WIDTH; p++) {
+    const auto &e = in.iss2prf->iss_entry[p];
+    q_.rr_q.iss_entry[p].valid = e.valid && !is_br_killed(e.uop, (*in.dec_bcast));
+    if (q_.rr_q.iss_entry[p].valid) {
+      q_.rr_q.iss_entry[p].uop = e.uop;
+      q_.rr_q.iss_entry[p].spec_mask = e.spec_mask;
+    } else {
+      q_.rr_q.iss_entry[p].spec_mask = 0;
+    }
   }
 }
 

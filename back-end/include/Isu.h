@@ -9,6 +9,7 @@
 // MUL fixed-latency wakeup entry (shift register)
 struct MulWakeEntry {
   wire<1> valid = 0;
+  uint8_t spec_mask = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<ROB_IDX_WIDTH> rob_idx = 0;
   wire<1> rob_flag = 0;
@@ -17,10 +18,29 @@ struct MulWakeEntry {
 // DIV / FP iterative wakeup entry (countdown slot)
 struct IterWakeEntry {
   wire<1> valid = 0;
+  uint8_t spec_mask = 0;
   int countdown = 0;
   wire<PRF_IDX_WIDTH> dest_preg = 0;
   wire<ROB_IDX_WIDTH> rob_idx = 0;
   wire<1> rob_flag = 0;
+};
+
+// Tracked 1-cycle ALU fast-wakeup destination from an unverified L1-spec load (1-level grandchild cancel)
+struct FastSpecEntry {
+  wire<1> valid = 0;
+  uint8_t spec_mask = 0;
+  wire<PRF_IDX_WIDTH> dest_preg = 0;
+  wire<ROB_IDX_WIDTH> rob_idx = 0;
+  wire<1> rob_flag = 0;
+};
+
+// Tracked WB / FP-WB reservation made by an unverified L1-spec grant (released on cancel)
+struct SpecWbRes {
+  wire<1> valid = 0;
+  uint8_t spec_mask = 0;
+  uint8_t wb_slot = 0;
+  bool has_wb = false;
+  bool has_fpwb = false;
 };
 
 constexpr int ISU_MUL_WAKE_UNIT_NUM = count_ports_with_mask(OP_MASK_MUL);
@@ -43,12 +63,16 @@ public:
   struct Regs {
     MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
     IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
+    FastSpecEntry fast_spec_q[ALU_NUM];                  // unverified L1-spec ALU destinations for 1-level grandchild cancel
+    SpecWbRes wb_spec_q[ISSUE_WIDTH];                    // unverified L1-spec WB/FP-WB reservations
     wire<1> div_busy = 0;
     wire<ROB_IDX_WIDTH> div_rob_idx = 0;
     wire<1> div_rob_flag = 0;
+    uint8_t div_spec_mask = 0;
     int fdiv_cnt = 0;
     wire<ROB_IDX_WIDTH> fdiv_rob_idx = 0;
     wire<1> fdiv_rob_flag = 0;
+    uint8_t fdiv_spec_mask = 0;
   };
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
@@ -107,11 +131,14 @@ private:
   int grant_gate(const Uop &u, int port, bool reserve);   // extra grant conditions (port completion cycle, FP write port): GateRefuse
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
-  // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
+  // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots, fast-spec entries).
   template <class F> void for_each_wake_slot(F f) {   // the wake slots (registers)
     for (auto &stage : q_.mul_wake_pipe) for (auto &e : stage) f(e);
     for (auto &e : q_.fp_wake_slots) f(e);
+    for (auto &e : q_.fast_spec_q) f(e);
   }
+  bool div_busy_eff_ = false;
+  int fdiv_cnt_eff_ = 0;
 
 private:
   // Completion-cycle table of the issue ports (EXP-034): a port completes one uop per cycle (one ROB / write-back entry), so the

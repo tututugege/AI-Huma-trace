@@ -29,6 +29,7 @@ namespace lp {
 typedef unsigned __int128 stq_mask_t;  // one bit per STQ entry (STQ_SIZE may exceed 64 in the EXP-024 write-buffer upper-bound runs)
 
 constexpr int LD = LSU_LDU_COUNT;      // load pipelines (L1/L2)
+constexpr int NWBP = 2;                // V2 WBP load write-back wake/pick bandwidth (64 -> 2)
 constexpr int STA = LSU_STA_COUNT;     // STA ports (AGU + DTLB)
 constexpr int STD = LSU_SDU_COUNT;     // store-data write ports
 constexpr int RP_MAX = 4;              // replay registers (runtime value 1..4, CFG_LSU_PIPE_RP / LSU_PIPE_RP)
@@ -89,6 +90,7 @@ struct PLdq {
   wire<1> vio = 0;            // a store address that arrived later overlaps this load: result is stale, re-execute
   wire<1> wait = 0;           // predictor: this load waited for unknown-address stores (no speculation)
   wire<1> second = 0;         // second pass (completion write-back or re-execution): no further speculation, no wake-up
+  wire<1> no_l1_spec = 0;     // parked on doomed polling replay (RC_TLB / MSHR miss): skip L1 spec wake until filled
 };
 
 struct PStq {
@@ -146,6 +148,9 @@ struct PL12 {
   wire<1> mmio = 0;
   wire<1> dcblk = 0;          // DCache request not launched: the port has a pending hidden retry -> short replay
   wire<1> bloom = 0;          // DCache request suppressed by 256-bit STQ word bloom filter (first pass only)
+  wire<1> replay = 0;         // request entered L1 from replay register (pcur.rp)
+  wire<1> spec_w = 0;         // L1 speculative wakeup fired
+  wire<PRF_IDX_WIDTH> spec_preg = 0;
 };
 // L2a -> L2b pipeline register (STLF-only: decouples 64-entry STQ CAM from stlf_confirm + lp_wk)
 struct PL2B {
@@ -202,6 +207,9 @@ struct LsuPipeState {
   wire<STQ_IDX_WIDTH> srp_ptr = 0;          // round-robin start of the STA replay register pick (fairness: no starvation of walk owners)
   wire<LDQ_IDX_WIDTH> rp_ptr = 0;           // round-robin start of the RDY find-first (fairness: no starvation of walk owners)
   uint64_t stq_bloom[4] = {};               // 256-bit registered bloom filter of STQ vaddr[10:3] (suppresses useless STLF DCache launches)
+  uint8_t l1_hit_pred[256] = {};            // 256x2b PC-indexed L1D hit confidence predictor (init 2, spec wake iff >= 2)
+  wire<1> sc_req_v = 0;                     // V2: 1-cycle pre-registered pending SC request
+  wire<STQ_IDX_WIDTH> sc_req_idx = 0;       // V2: STQ index of pre-registered SC request
 };
 
 // per-cycle combinational values that travel between the LSU comb phases (not registers)
@@ -217,6 +225,8 @@ struct PL1 {
   uint8_t cand = 0;
   bool launch = false;
   int8_t phys = -1;   // AGU_PORTS: the physical AGU / DTLB port of this request (-1: none)
+  bool spec_w = false;
+  uint32_t spec_preg = 0;
 };
 struct PSta {
   bool v = false;
@@ -229,9 +239,10 @@ struct PCycle {
   PSta s1[STA];
   bool wbd_v[LD] = {};           // L2 direct completion on load port p
   uint8_t wbd_ldq[LD] = {};
-  bool spec_w[LD] = {};          // L2 speculative wake-up issued this cycle
+  bool spec_w[LD] = {};          // L2/L1 speculative wake-up tracking this cycle
   uint8_t spec_ldq[LD] = {};
   uint16_t spec_preg[LD] = {};
+  bool l2b_w[LD] = {};           // L2b confirmed STLF wake-up this cycle
   stq_mask_t st_fullwake = 0;      // stores woken by an MSHR-full fill this cycle (bit = STQ index); cut G
   uint8_t st_rwpre[STQ_SIZE] = {};     // their replay wait before the wake
   stq_mask_t ev_sta = 0, ev_data = 0, ev_ret = 0, ev_sc = 0;  // STQ events of this cycle (bit = STQ index)
