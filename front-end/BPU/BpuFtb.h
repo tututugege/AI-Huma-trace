@@ -58,12 +58,16 @@ struct FtbEnt {
   }
 };
 
-// Block-level index/tag bundle for 4-table 1-Ahead TAGE & 3-table ITT (derived from unified ex_fh)
+// Block-level index/tag bundle for 4-table 1-Ahead TAGE & 3/4-table ITT (derived from unified ex_fh)
+constexpr int ITT_MAX_EXT = 4;
+constexpr int ITT_EX_MAP4[ITT_MAX_EXT] = {1, 2, 3, 5};
 struct FtbBlkIdx {
   uint32_t w = 0;
   uint32_t base_idx = 0;
   uint32_t idx[TN] = {};
   uint16_t tag[TN] = {};
+  uint32_t itt_idx[ITT_MAX_EXT] = {};
+  uint16_t itt_tag[ITT_MAX_EXT] = {};
 };
 
 // Tiny 8-entry FF WRBypass for FTB entries (allows single-way write without T0 SRAM read!)
@@ -83,6 +87,7 @@ struct FtbWrBypass {
     ptr = 0;
   }
   bool lookup(uint32_t set, uint32_t tag, uint8_t &way_out, FtbEnt &ent_out) const {
+    if (cfg_fe_no_wrb()) return false;
     for (int i = 0; i < BPU_WRB_N; i++) {
       if (e[i].valid && e[i].set == set && e[i].tag == tag) {
         way_out = e[i].way;
@@ -93,6 +98,7 @@ struct FtbWrBypass {
     return false;
   }
   void insert(uint32_t set, uint32_t tag, uint8_t way, const FtbEnt &ent) {
+    if (cfg_fe_no_wrb()) return;
     for (int i = 0; i < BPU_WRB_N; i++) {
       if (e[i].valid && e[i].set == set && e[i].tag == tag) {
         e[i].way = way;
@@ -503,7 +509,7 @@ struct BlockTage {
   }
 };
 
-// Single Block-level 3-table Indirect Target Table (2-Bank 1RW, Zero T0 Read via Meta)
+// Single Block-level 3/4-table Indirect Target Table (2-Bank 1RW, Zero T0 Read via Meta)
 struct BlockItt {
   struct Ent {
     bool valid = false;
@@ -513,7 +519,7 @@ struct BlockItt {
     target_addr_t target = 0;
   };
   struct Raw {
-    Ent e[ITT_MAX];
+    Ent e[ITT_MAX_EXT];
   };
   struct Meta {
     bool hit = false;
@@ -525,28 +531,29 @@ struct BlockItt {
   };
   struct WritePlan {
     uint8_t wr_mask = 0;
-    bool u_clr_only[ITT_MAX] = {};
-    uint32_t idx[ITT_MAX] = {};
-    Ent ent[ITT_MAX];
+    bool u_clr_only[ITT_MAX_EXT] = {};
+    uint32_t idx[ITT_MAX_EXT] = {};
+    Ent ent[ITT_MAX_EXT];
   };
 
   int N = FTB_ITT_N;
+  int nt = ITT_MAX;
   uint32_t mask = FTB_ITT_N - 1;
-  std::vector<Ent> tbl[ITT_MAX];
+  std::vector<Ent> tbl[ITT_MAX_EXT];
 
-  void init(int entries) {
+  void init(int entries, int ntables = ITT_MAX) {
     N = entries;
+    nt = ntables;
     mask = static_cast<uint32_t>(N - 1);
-    for (int k = 0; k < ITT_MAX; k++) tbl[k].assign(N, Ent{});
+    for (int k = 0; k < ITT_MAX_EXT; k++) tbl[k].assign(N, Ent{});
   }
 
   void read(const FtbBlkIdx &ix, Raw &r, uint8_t sup_mask = 0) const {
-    for (int k = 0; k < ITT_MAX; k++) {
+    for (int k = 0; k < nt; k++) {
       if ((sup_mask >> k) & 1u) {
         r.e[k] = Ent{};
       } else {
-        const int tk = IttCfg::h[k];
-        r.e[k] = tbl[k][ix.idx[tk] & mask];
+        r.e[k] = tbl[k][ix.itt_idx[k] & mask];
       }
     }
   }
@@ -554,14 +561,13 @@ struct BlockItt {
   bool select(const FtbBlkIdx &ix, const Raw &r, target_addr_t &tgt, Meta *meta_out = nullptr) const {
     if (meta_out) {
       *meta_out = Meta{};
-      for (int k = 0; k < ITT_MAX; k++) {
+      for (int k = 0; k < nt; k++) {
         if (r.e[k].valid) meta_out->valid_mask |= static_cast<uint8_t>(1u << k);
         if (r.e[k].u) meta_out->u_mask |= static_cast<uint8_t>(1u << k);
       }
     }
-    for (int k = ITT_MAX - 1; k >= 0; k--) {
-      const int tk = IttCfg::h[k];
-      if (r.e[k].valid && r.e[k].tag == ix.tag[tk]) {
+    for (int k = nt - 1; k >= 0; k--) {
+      if (r.e[k].valid && r.e[k].tag == ix.itt_tag[k]) {
         tgt = r.e[k].target;
         if (meta_out) {
           meta_out->hit = true;
@@ -581,12 +587,11 @@ struct BlockItt {
     actual_tgt = sv39_va_roundtrip(actual_tgt);
     const int hit = (meta_valid && m.hit) ? int(m.hit_k) : -1;
     bool correct = false;
-    if (hit >= 0) {
-      const int tk = IttCfg::h[hit];
-      const uint32_t id = ix.idx[tk] & mask;
+    if (hit >= 0 && hit < nt) {
+      const uint32_t id = ix.itt_idx[hit] & mask;
       Ent en{};
       en.valid = true;
-      en.tag = ix.tag[tk];
+      en.tag = ix.itt_tag[hit];
       en.conf = m.conf;
       en.u = (m.u_mask >> hit) & 1u;
       en.target = m.target;
@@ -610,17 +615,16 @@ struct BlockItt {
     if (!correct) {
       const int start_k = (hit >= 0) ? (hit + 1) : 0;
       int alloc = -1;
-      for (int k = start_k; k < ITT_MAX; k++) {
+      for (int k = start_k; k < nt; k++) {
         const bool v = meta_valid ? (((m.valid_mask >> k) & 1u) != 0) : false;
         const bool u = meta_valid ? (((m.u_mask >> k) & 1u) != 0) : false;
         if (!v || !u) { alloc = k; break; }
       }
       if (alloc >= 0) {
-        const int tk = IttCfg::h[alloc];
-        const uint32_t id = ix.idx[tk] & mask;
+        const uint32_t id = ix.itt_idx[alloc] & mask;
         Ent en{};
         en.valid = true;
-        en.tag = ix.tag[tk];
+        en.tag = ix.itt_tag[alloc];
         en.target = actual_tgt;
         en.conf = 1;
         en.u = 0;
@@ -628,18 +632,17 @@ struct BlockItt {
         wp.idx[alloc] = id;
         wp.ent[alloc] = en;
       } else {
-        for (int k = start_k; k < ITT_MAX; k++) {
-          const int tk = IttCfg::h[k];
+        for (int k = start_k; k < nt; k++) {
           wp.wr_mask |= static_cast<uint8_t>(1u << k);
           wp.u_clr_only[k] = true;
-          wp.idx[k] = ix.idx[tk] & mask;
+          wp.idx[k] = ix.itt_idx[k] & mask;
         }
       }
     }
   }
 
   void apply_plan(const WritePlan &wp) {
-    for (int k = 0; k < ITT_MAX; k++) {
+    for (int k = 0; k < nt; k++) {
       if (((wp.wr_mask >> k) & 1u) == 0) continue;
       if (wp.u_clr_only[k]) tbl[k][wp.idx[k]].u = 0;
       else tbl[k][wp.idx[k]] = wp.ent[k];
@@ -723,11 +726,32 @@ struct AheadFtbTab {
   void touch_lru(uint32_t s, int hit_w) {
     plru.touch(s, static_cast<uint8_t>(hit_w));
   }
+
+  void clear_slot(pc_t key_base, pc_t cur_base, pc_t br_pc) {
+    const bool carried = (br_pc + SLOT_BYTES == cur_base);
+    if (!carried && br_pc < cur_base) return;
+    const uint32_t off = carried ? 0u : static_cast<uint32_t>((br_pc - cur_base) >> SLOT_SHIFT);
+    const uint32_t s = index(key_base);
+    const uint32_t t = tag(key_base, cur_base);
+    for (int w = 0; w < W; w++) {
+      FtbEnt &en = e[s * W + w];
+      if (!(en.valid && en.tag32 == t)) continue;
+      bool any_v = false;
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        if (en.s[k].valid && en.s[k].offset == off) en.s[k] = FtbSlot{};
+        if (en.s[k].valid) any_v = true;
+      }
+      if (!any_v) en.valid = false;
+      wrb.insert(s, t, static_cast<uint8_t>(w), en);
+      return;
+    }
+  }
 };
 
 struct FtbAhRaw {
   AheadFtbTab::SetRaw ftb_set{};
   BlockTage::Raw tage_raw{};
+  ExBlockTage::Raw ex_tage_raw{};
   BlockItt::Raw itt_raw{};
 };
 
@@ -744,6 +768,8 @@ struct FtbRaw {
   FtbEnt ent{};
   ExBlockTage::Raw s2_tage_raw{};
   BlockItt::Raw itt_raw{};
+  bool self0_v = false;
+  FtbAhPipe self0_pipe{};
 };
 
 struct FtbTrkBr {
@@ -775,13 +801,16 @@ struct FtbBlkRec {
   pc_t base = 0;
   uint16_t ex_fh[EX_FH_K][EX_TN] = {};
   bool ah_v = false;
+  bool ah_self0 = false;
   pc_t ah_key_base = 0;
+  pc_t prev_base = 0;
   uint16_t ah_key_ex_fh[EX_FH_K][EX_TN] = {};
   FtbTab::LookupMeta ftb1_meta{};
   ExBlockTage::Meta s2_tage_meta{};
   BlockItt::Meta s2_itt_meta{};
   AheadFtbTab::LookupMeta ah_ftb_meta{};
   BlockTage::Meta ah_tage_meta{};
+  ExBlockTage::Meta ah_ex_tage_meta{};
   BlockItt::Meta ah_itt_meta{};
 };
 
@@ -816,17 +845,19 @@ struct FtbWrBuf {
 };
 
 struct BpuFtb {
-  FtbTab ftb0_;         // S0 uFTB (16x4 = 64 FF, 20b compressed target)
-  FtbTab ftb1_;         // S1/S2 Main FTB (4096 x 4, 2-Bank 1RW, 512-deep)
-  ExBlockTage s2_tage_; // S2 6-table Block-TAGE (4096 x 4 slots x 6 tables + 4-Bank Base, 8-Bank 1RW)
-  BlockItt itt_;        // S2 Single Block-ITT (256 x 3 tables, 2-Bank 1RW)
-  AheadFtbTab aftb_;    // 1-Ahead FTB A (2048 x 8, 2-Bank 1RW)
-  BlockTage atage_;     // 1-Ahead Block-TAGE A (1024 x 4 slots x 4 tables, 2-Bank 1RW)
-  BlockItt aitt_;       // 1-Ahead Block-ITT A (256 x 3 tables, 2-Bank 1RW)
+  FtbTab ftb0_;           // S0 uFTB (configurable FF, 20b compressed target)
+  FtbTab ftb1_;           // S1/S2 Main FTB (4096 x 4, 2-Bank 1RW, 512-deep)
+  ExBlockTage s2_tage_;   // S2 6-table Block-TAGE (4096 x 4 slots x 6 tables + 4-Bank Base, 8-Bank 1RW)
+  BlockItt itt_;          // S2 Single Block-ITT (256x3 or 512x4)
+  AheadFtbTab aftb_;      // Ahead FTB A (configurable 2048/4096 x 4/8, 2-Bank 1RW)
+  BlockTage atage_;       // Ahead Block-TAGE A (4-table)
+  ExBlockTage ah_ex_tage_;// Ahead 6-table ExBlockTage (used when FE_AH_EX_TAGE=1, base from AFTB ctr)
+  BlockItt aitt_;         // Ahead Block-ITT A (256x3 or 512x4)
 
   struct AhMeta {
     AheadFtbTab::LookupMeta ftb{};
     BlockTage::Meta tage{};
+    ExBlockTage::Meta ex_tage{};
     BlockItt::Meta itt{};
   };
   struct S2Meta {
@@ -836,13 +867,28 @@ struct BpuFtb {
   };
 
   void reset() {
-    ftb0_.init(FTB_S0_N, FTB_S0_W, FTB_S0_TAGB, FTB_S0_TGTB);
+    ftb0_.init(cfg_fe_uftb_n(), FTB_S0_W, FTB_S0_TAGB, FTB_S0_TGTB);
     ftb1_.init(FTB_S1_N, FTB_S1_W, FTB_S1_TAGB, 0);
-    s2_tage_.init();
-    itt_.init(FTB_ITT_N);
-    aftb_.init(FTB_AH_N, FTB_AH_W);
-    atage_.init(FTB_AH_TAGE_N, BPU_AH1_BANKS);
-    aitt_.init(FTB_ITT_N);
+    if (cfg_fe_pred_arch() == 2 && cfg_fe_s2_sup_tage() > 0) {
+      const int sup_m = cfg_fe_s2_sup_tage();
+      const int sup_n = (sup_m == 2) ? 2048 : 1024;
+      const int sup_b = (sup_n >= 2048) ? 4 : 2;
+      s2_tage_.init(sup_n, sup_b, cfg_fe_sup_tbl_mask());
+    } else {
+      s2_tage_.init();
+    }
+    const int itt_n = cfg_fe_itt_cfg() ? 512 : FTB_ITT_N;
+    const int itt_t = cfg_fe_itt_cfg() ? ITT_MAX_EXT : ITT_MAX;
+    itt_.init(itt_n, itt_t);
+    aftb_.init(cfg_fe_aftb_n(), cfg_fe_aftb_w());
+    const int at_n = cfg_fe_atage_n();
+    const int at_b = (at_n >= 4096) ? 8 : (at_n >= 2048 ? 4 : 2);
+    atage_.init(at_n, at_b);
+    const int ah_w = (cfg_fe_pred_arch() == 2) ? cfg_fe_ah_ways() : 1;
+    const int ah_s = at_n / ah_w;
+    const int ah_b = (ah_s >= 4096) ? 8 : (ah_s >= 2048 ? 4 : 2);
+    ah_ex_tage_.init(at_n, ah_b, 0x3fu, ah_w);
+    aitt_.init(itt_n, itt_t);
   }
 
   // Unified index builder for S2 ITT (projects directly from unified ex_fh[3][6])
@@ -856,53 +902,217 @@ struct BpuFtb {
       ix.idx[t] = w ^ (w >> 10) ^ uint32_t(ex_fh[0][e]);
       ix.tag[t] = static_cast<uint16_t>((w ^ (w >> 10) ^ uint32_t(ex_fh[1][e]) ^ (uint32_t(ex_fh[2][e]) << 1)) & FTB_TAGE_TAG_MASK);
     }
+    if (cfg_fe_itt_cfg() == 0) {
+      for (int k = 0; k < ITT_MAX; k++) {
+        ix.itt_idx[k] = ix.idx[IttCfg::h[k]];
+        ix.itt_tag[k] = ix.tag[IttCfg::h[k]];
+      }
+    } else {
+      for (int k = 0; k < ITT_MAX_EXT; k++) {
+        const int e = ITT_EX_MAP4[k];
+        ix.itt_idx[k] = w ^ (w >> 10) ^ uint32_t(ex_fh[0][e]);
+        ix.itt_tag[k] = static_cast<uint16_t>((w ^ (w >> 10) ^ uint32_t(ex_fh[1][e]) ^ (uint32_t(ex_fh[2][e]) << 1)) & FTB_TAGE_TAG_MASK);
+      }
+    }
     return ix;
   }
 
-  // Unified index builder for 1-Ahead TAGE & 1-Ahead ITT (projects directly from unified ex_fh[3][6])
-  static FtbBlkIdx make_ahead_index(pc_t key_base, pc_t cur_base, const uint16_t ex_fh[EX_FH_K][EX_TN]) {
+  // Unified index builder for 1-Ahead/2-Ahead TAGE & ITT (projects directly from unified ex_fh[3][6])
+  static FtbBlkIdx make_ahead_index(pc_t key_base, pc_t cur_base, const uint16_t ex_fh[EX_FH_K][EX_TN],
+                                    const uint16_t (*tag_ex_fh)[EX_TN] = nullptr,
+                                    uint64_t prev_base = 0, bool is_self0 = false) {
     FtbBlkIdx ix;
     const uint32_t wk = static_cast<uint32_t>(key_base >> SLOT_SHIFT);
     const uint32_t wc = static_cast<uint32_t>(cur_base >> SLOT_SHIFT);
+    const uint16_t (*tfh)[EX_TN] = (cfg_fe_ah_cur_tag() && tag_ex_fh != nullptr) ? tag_ex_fh : ex_fh;
+    const uint32_t sec = (!is_self0 && cfg_fe_ah_sec_tag() && prev_base != 0)
+                             ? (static_cast<uint32_t>(prev_base >> 1) ^ static_cast<uint32_t>(prev_base >> 7))
+                             : 0u;
+    const uint32_t self_xor = is_self0 ? 0x2aau : 0u;
     ix.w = wk;
     ix.base_idx = wk ^ (wk >> 11);
     for (int t = 0; t < TN; t++) {
       const int e = AH_EX_MAP[t];
       ix.idx[t] = wk ^ (wk >> 10) ^ uint32_t(ex_fh[0][e]);
-      ix.tag[t] = static_cast<uint16_t>((wc ^ (wc >> 10) ^ wk ^ uint32_t(ex_fh[1][e]) ^ (uint32_t(ex_fh[2][e]) << 1)) & FTB_TAGE_TAG_MASK);
+      ix.tag[t] = static_cast<uint16_t>((wc ^ (wc >> 10) ^ wk ^ uint32_t(tfh[1][e]) ^ (uint32_t(tfh[2][e]) << 1) ^ sec ^ self_xor) & FTB_TAGE_TAG_MASK);
+    }
+    if (cfg_fe_itt_cfg() == 0) {
+      for (int k = 0; k < ITT_MAX; k++) {
+        ix.itt_idx[k] = ix.idx[IttCfg::h[k]];
+        ix.itt_tag[k] = ix.tag[IttCfg::h[k]];
+      }
+    } else {
+      for (int k = 0; k < ITT_MAX_EXT; k++) {
+        const int e = ITT_EX_MAP4[k];
+        ix.itt_idx[k] = wk ^ (wk >> 10) ^ uint32_t(ex_fh[0][e]);
+        ix.itt_tag[k] = static_cast<uint16_t>((wc ^ (wc >> 10) ^ wk ^ uint32_t(tfh[1][e]) ^ (uint32_t(tfh[2][e]) << 1) ^ sec ^ self_xor) & FTB_TAGE_TAG_MASK);
+      }
     }
     return ix;
+  }
+
+  struct AhSlotTage {
+    uint8_t pcpn = EX_TN;
+    bool prov_dir = false;
+    bool alt_is_tagged = false;
+    bool alt_dir = false;
+    bool use_alt = false;
+  };
+  struct AhDirIttOut {
+    bool valid = false;
+    AhSlotTage s[FTB_SLOTS];
+    bool itt_hit = false;
+    target_addr_t itt_tgt = 0;
+  };
+
+  static bool resolve_ah_dir(const AhSlotTage &ts, uint8_t ftb_ctr, bool &alt_out, bool &used_alt_out) {
+    const bool bp = (ftb_ctr >= 2);
+    alt_out = ts.alt_is_tagged ? ts.alt_dir : bp;
+    if (ts.pcpn >= EX_TN) {
+      used_alt_out = false;
+      return bp;
+    }
+    used_alt_out = ts.use_alt;
+    return ts.use_alt ? alt_out : ts.prov_dir;
+  }
+
+  void ahead_read_tage_itt(pc_t key_base, const uint16_t key_ex_fh[EX_FH_K][EX_TN], FtbAhRaw &r,
+                           uint8_t tage_sup = 0, uint8_t itt_sup = 0) const {
+    const ExTageIdx ex_ix = make_ahead_ex_tage_index(key_base, 0, key_ex_fh, ah_ex_tage_.S);
+    ah_ex_tage_.read(ex_ix, r.ex_tage_raw, tage_sup);
+    const FtbBlkIdx ix = make_ahead_index(key_base, 0, key_ex_fh);
+    aitt_.read(ix, r.itt_raw, itt_sup);
+  }
+
+  void ahead_dir_itt_select(pc_t cur_base, const uint16_t cur_ex_fh[EX_FH_K][EX_TN],
+                            const FtbAhPipe &ah, AhDirIttOut &out, AhMeta *meta_out = nullptr,
+                            pc_t prev_base = 0, bool is_self0 = false) const {
+    out = AhDirIttOut{};
+    if (meta_out) *meta_out = AhMeta{};
+    if (!ah.valid) return;
+    out.valid = true;
+    const ExTageIdx ex_ix = make_ahead_ex_tage_index(ah.key_base, cur_base, ah.key_ex_fh, ah_ex_tage_.S,
+                                                     cur_ex_fh, prev_base, is_self0);
+    const FtbBlkIdx ix = make_ahead_index(ah.key_base, cur_base, ah.key_ex_fh, cur_ex_fh, prev_base, is_self0);
+    const uint8_t ua = ah_ex_tage_.use_alt[(ex_ix.w >> 2) & 15u];
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      const ExBlockTage::RawSlot &r = ah.raw.ex_tage_raw.s[k];
+      int pcpn = EX_TN, altpcpn = EX_TN;
+      int prov_w = 0, alt_w = 0;
+      for (int t = 0; t < EX_TN; t++) {
+        if (((r.sup_mask >> t) & 1u) != 0) continue;
+        for (int w = 0; w < ah_ex_tage_.W; w++) {
+          if (r.tag[t][w] == ex_ix.tag[t]) {
+            altpcpn = pcpn;
+            alt_w = prov_w;
+            pcpn = t;
+            prov_w = w;
+            break;
+          }
+        }
+      }
+      const uint8_t prov_cnt = (pcpn < EX_TN) ? r.cnt[pcpn][prov_w] : 0;
+      const bool weak = (pcpn < EX_TN) && (prov_cnt == 3 || prov_cnt == 4);
+      const bool ulow = (pcpn < EX_TN) && (r.useful[pcpn][prov_w] == 0);
+      out.s[k].pcpn = static_cast<uint8_t>(pcpn);
+      out.s[k].prov_dir = (pcpn < EX_TN) && (prov_cnt >= 4);
+      out.s[k].alt_is_tagged = (altpcpn < EX_TN);
+      out.s[k].alt_dir = (altpcpn < EX_TN) ? (r.cnt[altpcpn][alt_w] >= 4) : false;
+      out.s[k].use_alt = (pcpn < EX_TN) && weak && ulow && (ua <= 8);
+      if (meta_out) {
+        auto &sm = meta_out->ex_tage.s[k];
+        sm.pcpn = out.s[k].pcpn;
+        sm.prov_way = static_cast<uint8_t>(prov_w);
+        sm.prov_cnt = prov_cnt;
+        sm.prov_u = (pcpn < EX_TN) ? r.useful[pcpn][prov_w] : 0;
+        for (int t = 0; t < EX_TN; t++) {
+          for (int w = 0; w < ah_ex_tage_.W; w++) sm.useful[t][w] = r.useful[t][w];
+        }
+      }
+    }
+    out.itt_hit = aitt_.select(ix, ah.raw.itt_raw, out.itt_tgt, meta_out ? &meta_out->itt : nullptr);
   }
 
   void ahead_read(pc_t key_base, const uint16_t key_ex_fh[EX_FH_K][EX_TN], FtbAhRaw &r,
                   uint8_t tage_sup = 0, uint8_t itt_sup = 0) const {
     const FtbBlkIdx ix = make_ahead_index(key_base, 0, key_ex_fh);
     aftb_.read_set(key_base, r.ftb_set);
-    atage_.read(ix, r.tage_raw, tage_sup);
+    if (cfg_fe_ah_ex_tage()) {
+      const ExTageIdx ex_ix = make_ahead_ex_tage_index(key_base, 0, key_ex_fh, ah_ex_tage_.S);
+      ah_ex_tage_.read(ex_ix, r.ex_tage_raw, tage_sup);
+    } else {
+      atage_.read(ix, r.tage_raw, tage_sup);
+    }
     aitt_.read(ix, r.itt_raw, itt_sup);
   }
 
   template <class S0GuessT>
   bool ahead_select(pc_t base, pc_t bnd, const FtbAhPipe &ah, uint8_t rcnt, target_addr_t rtop, S0GuessT &g,
-                    AhMeta *meta_out = nullptr) const {
+                    AhMeta *meta_out = nullptr, bool *slot_dir_out = nullptr, PredMeta *pred_meta_out = nullptr,
+                    pc_t *ret_bpc_out = nullptr) const {
     if (meta_out) *meta_out = AhMeta{};
+    if (ret_bpc_out) *ret_bpc_out = 0;
+    if (slot_dir_out) for (int i = 0; i < FW; i++) slot_dir_out[i] = false;
+    if (pred_meta_out) {
+      for (int i = 0; i < FW; i++) {
+        pred_meta_out->pcpn[i] = TN;
+        pred_meta_out->alt_pred[i] = false;
+        pred_meta_out->ps_info[i] = 0;
+      }
+    }
     if (!ah.valid) return false;
     FtbEnt ent;
     const bool hit = aftb_.select_way(ah.raw.ftb_set, ah.key_base, base, ent, meta_out ? &meta_out->ftb : nullptr);
     const FtbBlkIdx ix = make_ahead_index(ah.key_base, base, ah.key_ex_fh);
     bool dirs[FTB_SLOTS] = {};
-    BlockTage::Pred tp[FTB_SLOTS];
-    for (int k = 0; k < FTB_SLOTS; k++) {
-      atage_.select_slot(ix, ah.raw.tage_raw.s[k], tp[k], (hit && ent.s[k].valid) ? int(ent.s[k].ctr) : 0,
-                         meta_out ? &meta_out->tage.s[k] : nullptr);
-      dirs[k] = tp[k].pred;
+    bool tp_alt[FTB_SLOTS] = {};
+    uint8_t tp_pcpn[FTB_SLOTS] = {};
+    bool tp_ualt[FTB_SLOTS] = {};
+    if (cfg_fe_ah_ex_tage()) {
+      const ExTageIdx ex_ix = make_ahead_ex_tage_index(ah.key_base, base, ah.key_ex_fh, ah_ex_tage_.S);
+      ExBlockTage::Pred etp[FTB_SLOTS];
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        const int base_ctr = (hit && ent.s[k].valid) ? int(ent.s[k].ctr) : 0;
+        ah_ex_tage_.select_slot(ex_ix, ah.raw.ex_tage_raw.s[k], etp[k],
+                                meta_out ? &meta_out->ex_tage.s[k] : nullptr, base_ctr);
+        dirs[k] = etp[k].pred;
+        tp_alt[k] = etp[k].alt;
+        tp_pcpn[k] = (etp[k].pcpn < EX_TN) ? static_cast<uint8_t>(std::min<int>(etp[k].pcpn, TN - 1)) : static_cast<uint8_t>(TN);
+        tp_ualt[k] = etp[k].used_alt;
+      }
+    } else {
+      BlockTage::Pred tp[FTB_SLOTS];
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        atage_.select_slot(ix, ah.raw.tage_raw.s[k], tp[k], (hit && ent.s[k].valid) ? int(ent.s[k].ctr) : 0,
+                           meta_out ? &meta_out->tage.s[k] : nullptr);
+        dirs[k] = tp[k].pred;
+        tp_alt[k] = tp[k].alt;
+        tp_pcpn[k] = tp[k].pcpn;
+        tp_ualt[k] = tp[k].used_alt;
+      }
     }
     target_addr_t itt_tgt = 0;
     const bool itt_hit = aitt_.select(ix, ah.raw.itt_raw, itt_tgt, meta_out ? &meta_out->itt : nullptr);
     if (!hit) return false;
     g = S0GuessT{};
     g.hit = true;
-    eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g);
+    bool slot_tk[FTB_SLOTS] = {};
+    eval_ent(base, bnd, ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, g,
+             (slot_dir_out || pred_meta_out) ? slot_tk : nullptr, ret_bpc_out);
+    if (slot_dir_out || pred_meta_out) {
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        const FtbSlot &sl = ent.s[k];
+        if (!sl.valid || sl.offset >= FW) continue;
+        if (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES >= bnd) continue;
+        const int off = sl.offset;
+        if (slot_dir_out) slot_dir_out[off] = slot_tk[k];
+        if (pred_meta_out) {
+          pred_meta_out->alt_pred[off] = tp_alt[k];
+          pred_meta_out->pcpn[off] = tp_pcpn[k];
+          pred_meta_out->ps_info[off] = ps_pack(sl.type, (br_ind(sl.type) && itt_hit) ? 4 : (sl.type == BR_RET && rcnt > 0 ? 7 : 1), tp_ualt[k]);
+        }
+      }
+    }
     return true;
   }
 
@@ -911,7 +1121,7 @@ struct BpuFtb {
                        bool use_dir_ovr, const bool dir_ovr[FTB_SLOTS],
                        bool itt_hit, target_addr_t itt_tgt,
                        uint8_t rcnt, target_addr_t rtop,
-                       GuessT &g, bool *slot_dir_out = nullptr) {
+                       GuessT &g, bool *slot_dir_out = nullptr, pc_t *ret_bpc_out = nullptr) {
     g.next = bnd;
     g.taken = false;
     g.slot = 0;
@@ -941,6 +1151,7 @@ struct BpuFtb {
       const pc_t bpc = (sl.offset == 0 && sl.carried)
                            ? (base - SLOT_BYTES)
                            : (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES);
+      if (ret_bpc_out) *ret_bpc_out = bpc;
       pc_t tgt = sl.target;
       if (sl.type == BR_RET && rcnt > 0) tgt = rtop;
       else if (br_ind(sl.type) && itt_hit) tgt = itt_tgt;
@@ -958,13 +1169,38 @@ struct BpuFtb {
   }
 
   template <class S0GuessT>
-  S0GuessT s0_lookup(pc_t base, pc_t bnd, uint8_t rcnt, target_addr_t rtop) const {
+  S0GuessT s0_lookup(pc_t base, pc_t bnd, uint8_t rcnt, target_addr_t rtop,
+                     bool *slot_dir_out = nullptr, PredMeta *pred_meta_out = nullptr) const {
+    if (slot_dir_out) for (int i = 0; i < FW; i++) slot_dir_out[i] = false;
+    if (pred_meta_out) {
+      for (int i = 0; i < FW; i++) {
+        pred_meta_out->pcpn[i] = TN;
+        pred_meta_out->alt_pred[i] = false;
+        pred_meta_out->ps_info[i] = 0;
+      }
+    }
     S0GuessT g{};
     g.next = bnd;
     FtbEnt ent;
     if (!ftb0_.lookup(base, ent)) return g;
     g.hit = true;
-    eval_ent(base, bnd, ent, false, nullptr, false, 0, rcnt, rtop, g);
+    bool slot_tk[FTB_SLOTS] = {};
+    eval_ent(base, bnd, ent, false, nullptr, false, 0, rcnt, rtop, g,
+             (slot_dir_out || pred_meta_out) ? slot_tk : nullptr);
+    if (slot_dir_out || pred_meta_out) {
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        const FtbSlot &sl = ent.s[k];
+        if (!sl.valid || sl.offset >= FW) continue;
+        if (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES >= bnd) continue;
+        const int off = sl.offset;
+        if (slot_dir_out) slot_dir_out[off] = slot_tk[k];
+        if (pred_meta_out) {
+          pred_meta_out->alt_pred[off] = (sl.ctr >= 2);
+          pred_meta_out->pcpn[off] = TN;
+          pred_meta_out->ps_info[off] = ps_pack(sl.type, (sl.type == BR_RET && rcnt > 0) ? 7 : 1, false);
+        }
+      }
+    }
     return g;
   }
 
@@ -1017,6 +1253,160 @@ struct BpuFtb {
       o.meta.alt_pred[off] = tp[k].alt;
       o.meta.pcpn[off] = (tp[k].pcpn < EX_TN) ? static_cast<uint8_t>(std::min<int>(tp[k].pcpn, TN - 1)) : static_cast<uint8_t>(TN);
       o.meta.ps_info[off] = ps_pack(sl.type, (br_ind(sl.type) && itt_hit) ? 4 : (sl.type == BR_RET && rcnt > 0 ? 7 : 1), tp[k].used_alt);
+    }
+  }
+
+  template <class S0GuessT>
+  S0GuessT s0_lookup_with_ah(pc_t base, pc_t bnd, const AhDirIttOut &ah_di,
+                             uint8_t rcnt, target_addr_t rtop) const {
+    S0GuessT g{};
+    g.next = bnd;
+    FtbEnt ent;
+    if (!ftb0_.lookup(base, ent)) return g;
+    g.hit = true;
+    bool dirs[FTB_SLOTS] = {};
+    bool unused_alt = false, unused_ualt = false;
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      dirs[k] = ah_di.valid ? resolve_ah_dir(ah_di.s[k], ent.s[k].ctr, unused_alt, unused_ualt)
+                            : (ent.s[k].ctr >= 2);
+    }
+    eval_ent(base, bnd, ent, true, dirs, ah_di.valid && ah_di.itt_hit, ah_di.itt_tgt, rcnt, rtop, g);
+    return g;
+  }
+
+  void s1_read_uni(pc_t base, const ExTageIdx &ex_ix, FtbRaw &r, uint8_t sup_tage_sup = 0) const {
+    r = FtbRaw{};
+    r.ftb_hit = ftb1_.lookup(base, r.ent, &r.ftb_meta);
+    if (cfg_fe_s2_sup_tage() > 0) {
+      s2_tage_.read(ex_ix, r.s2_tage_raw, sup_tage_sup);
+    }
+  }
+
+  template <class MainOutT>
+  void s2_select_uni(pc_t base, pc_t bnd, const ExTageIdx &ex_ix,
+                     const FtbRaw &r, bool ah_v, const AhDirIttOut &ah_di, const AhMeta &s0_ah_meta,
+                     const uint16_t cur_ex_fh[EX_FH_K][EX_TN],
+                     uint8_t rcnt, target_addr_t rtop,
+                     MainOutT &o, S2Meta *s2_meta_out = nullptr, AhMeta *ah_meta_out = nullptr,
+                     bool *self0_used_out = nullptr) const {
+    o = MainOutT{};
+    if (self0_used_out) *self0_used_out = false;
+    if (s2_meta_out) {
+      *s2_meta_out = S2Meta{};
+      s2_meta_out->ftb = r.ftb_meta;
+    }
+    bool eff_ah_v = ah_v;
+    AhDirIttOut self0_di{};
+    const AhDirIttOut *di_ptr = &ah_di;
+    if (cfg_fe_ah_self0() && !ah_v && r.self0_v) {
+      ahead_dir_itt_select(base, cur_ex_fh, r.self0_pipe, self0_di, ah_meta_out, 0, true);
+      eff_ah_v = true;
+      di_ptr = &self0_di;
+      if (self0_used_out) *self0_used_out = true;
+    } else if (ah_meta_out) {
+      *ah_meta_out = s0_ah_meta;
+    }
+    const AhDirIttOut &eff_di = *di_ptr;
+    o.next = bnd;
+    for (int i = 0; i < FW; i++) {
+      o.meta.pcpn[i] = TN;
+      o.meta.alt_pred[i] = false;
+    }
+    if (!r.ftb_hit) return;
+
+    const bool use_sup = (cfg_fe_s2_sup_tage() > 0);
+    bool dirs[FTB_SLOTS] = {};
+    bool slot_alt[FTB_SLOTS] = {};
+    uint8_t slot_pcpn[FTB_SLOTS] = {};
+    bool slot_ualt[FTB_SLOTS] = {};
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      bool ah_alt = (r.ent.s[k].ctr >= 2), ah_ualt = false;
+      const bool ah_dir = eff_ah_v ? resolve_ah_dir(eff_di.s[k], r.ent.s[k].ctr, ah_alt, ah_ualt)
+                                   : (r.ent.s[k].ctr >= 2);
+      if (ah_meta_out) {
+        auto &am = ah_meta_out->ex_tage.s[k];
+        am.base_cnt = r.ent.s[k].ctr;
+        am.alt = ah_alt;
+        am.pred = ah_dir;
+        if (am.pcpn >= EX_TN) am.prov_cnt = r.ent.s[k].ctr;
+      }
+      uint8_t win_pcpn = (eff_ah_v && eff_di.s[k].pcpn < EX_TN)
+                             ? static_cast<uint8_t>(std::min<int>(eff_di.s[k].pcpn, TN - 1))
+                             : static_cast<uint8_t>(TN);
+      bool win_alt = ah_alt;
+      bool win_ualt = ah_ualt;
+      bool win_dir = ah_dir;
+      if (use_sup) {
+        ExBlockTage::Pred sup_p;
+        s2_tage_.select_slot(ex_ix, r.s2_tage_raw.s[k], sup_p,
+                             s2_meta_out ? &s2_meta_out->tage.s[k] : nullptr,
+                             int(r.ent.s[k].ctr));
+        const bool sup_valid_hit = (sup_p.pcpn < EX_TN) && !sup_p.used_alt;
+        const bool sup_wins = sup_valid_hit && (!eff_ah_v || eff_di.s[k].pcpn >= EX_TN || ah_ualt);
+        if (sup_wins) {
+          win_dir = sup_p.pred;
+          win_alt = sup_p.alt;
+          win_pcpn = static_cast<uint8_t>(std::min<int>(sup_p.pcpn, TN - 1));
+          win_ualt = sup_p.used_alt;
+        }
+      }
+      dirs[k] = win_dir;
+      slot_alt[k] = win_alt;
+      slot_pcpn[k] = win_pcpn;
+      slot_ualt[k] = win_ualt;
+    }
+    const bool itt_hit = eff_ah_v && eff_di.itt_hit;
+    const target_addr_t itt_tgt = eff_di.itt_tgt;
+    bool slot_tk[FTB_SLOTS] = {};
+    eval_ent(base, bnd, r.ent, true, dirs, itt_hit, itt_tgt, rcnt, rtop, o, slot_tk);
+    if (o.taken) {
+      for (int k = 0; k < FTB_SLOTS; k++) {
+        if (r.ent.s[k].valid && r.ent.s[k].offset == o.slot) { o.rvc = r.ent.s[k].is_rvc; break; }
+      }
+    }
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      const FtbSlot &sl = r.ent.s[k];
+      if (!sl.valid || sl.offset >= FW) continue;
+      if (base + static_cast<pc_t>(sl.offset) * SLOT_BYTES >= bnd) continue;
+      const int off = sl.offset;
+      o.dir[off] = slot_tk[k];
+      o.meta.alt_pred[off] = slot_alt[k];
+      o.meta.pcpn[off] = slot_pcpn[k];
+      o.meta.ps_info[off] = ps_pack(sl.type, (br_ind(sl.type) && itt_hit) ? 4 : (sl.type == BR_RET && rcnt > 0 ? 7 : 1), slot_ualt[k]);
+    }
+  }
+
+  void mirror_ent_to_ftb0(pc_t base, const FtbEnt &main_ent, bool has_taken) {
+    FtbEnt u{};
+    u.tag = ftb0_.tag(base);
+    bool any_v = false;
+    for (int k = 0; k < FTB_SLOTS; k++) {
+      if (!main_ent.s[k].valid) continue;
+      if (main_ent.s[k].type != BR_RET && !ftb0_.tgt_fits(base, main_ent.s[k].target)) continue;
+      u.s[k] = main_ent.s[k];
+      any_v = true;
+    }
+    const uint32_t s = ftb0_.index(base);
+    const uint16_t tg = u.tag;
+    int hit = -1;
+    for (int w = 0; w < ftb0_.W; w++) {
+      if (ftb0_.e[s * ftb0_.W + w].valid && ftb0_.e[s * ftb0_.W + w].tag == tg) { hit = w; break; }
+    }
+    if (hit >= 0) {
+      if (any_v) {
+        u.valid = true;
+        ftb0_.e[s * ftb0_.W + hit] = u;
+        ftb0_.touch_lru(s, hit);
+      } else {
+        ftb0_.e[s * ftb0_.W + hit].valid = false;
+      }
+    } else if (has_taken && any_v) {
+      int vic = -1;
+      for (int w = 0; w < ftb0_.W; w++) if (!ftb0_.e[s * ftb0_.W + w].valid) { vic = w; break; }
+      if (vic < 0) vic = ftb0_.plru.victim(s);
+      u.valid = true;
+      ftb0_.e[s * ftb0_.W + vic] = u;
+      ftb0_.touch_lru(s, vic);
     }
   }
 
@@ -1098,21 +1488,55 @@ struct BpuFtb {
 
   // Used only by FastWarm
   void apply_train_ev(const FtbTrainEv &ev) {
-    FtbEnt *main_ent = update_tab(ftb1_, ev, false);
-    update_tab(ftb0_, ev, true);
-    if (!main_ent) return;
-    const uint32_t w = static_cast<uint32_t>(ev.start >> SLOT_SHIFT);
-    const FtbBlkIdx ix = make_index(ev.start, ev.ex_fh);
-    const ExTageIdx ex_ix = make_ex_tage_index(w, ev.ex_fh);
-    for (int i = 0; i < ev.nbr; i++) {
-      const FtbTrkBr &b = ev.br[i];
-      if (b.type == BR_DIRECT) {
-        int sl = -1;
-        for (int k = 0; k < FTB_SLOTS; k++) if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
-        if (sl >= 0) s2_tage_.update_slot(ex_ix, sl, b.actual_dir);
+    const int pred_arch = cfg_fe_pred_arch();
+    FtbEnt *main_ent = cfg_fe_single_pred() ? nullptr : update_tab(ftb1_, ev, false);
+    if (pred_arch == 2) {
+      bool any_taken = false;
+      for (int i = 0; i < ev.nbr; i++) if (ev.br[i].actual_dir) any_taken = true;
+      if (main_ent) mirror_ent_to_ftb0(ev.start, *main_ent, any_taken);
+      if (main_ent && cfg_fe_s2_sup_tage() > 0) {
+        const uint32_t w = static_cast<uint32_t>(ev.start >> SLOT_SHIFT);
+        const ExTageIdx ex_ix = make_ex_tage_index(w, ev.ex_fh);
+        for (int i = 0; i < ev.nbr; i++) {
+          const FtbTrkBr &b = ev.br[i];
+          if (b.type == BR_DIRECT) {
+            int sl = -1;
+            for (int k = 0; k < FTB_SLOTS; k++) if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
+            if (sl >= 0) s2_tage_.update_slot(ex_ix, sl, b.actual_dir, nullptr, int(main_ent->s[sl].ctr));
+          }
+        }
       }
-      if (br_ind(b.type) && b.actual_dir) itt_.update(ix, b.target);
+      if (main_ent && ev.ah_v && ev.nbr > 0) {
+        const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, ev.start, ev.ah_key_ex_fh, ev.ex_fh);
+        const ExTageIdx aex = make_ahead_ex_tage_index(ev.ah_key_base, ev.start, ev.ah_key_ex_fh, ah_ex_tage_.S, ev.ex_fh);
+        for (int i = 0; i < ev.nbr; i++) {
+          const FtbTrkBr &b = ev.br[i];
+          if (b.type == BR_DIRECT) {
+            int sl = -1;
+            for (int k = 0; k < FTB_SLOTS; k++) if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
+            if (sl >= 0) ah_ex_tage_.update_slot(aex, sl, b.actual_dir, nullptr, int(main_ent->s[sl].ctr));
+          }
+          if (br_ind(b.type) && b.actual_dir) aitt_.update(aix, b.target);
+        }
+      }
+      return;
     }
+    update_tab(ftb0_, ev, true);
+    if (main_ent) {
+      const uint32_t w = static_cast<uint32_t>(ev.start >> SLOT_SHIFT);
+      const FtbBlkIdx ix = make_index(ev.start, ev.ex_fh);
+      const ExTageIdx ex_ix = make_ex_tage_index(w, ev.ex_fh);
+      for (int i = 0; i < ev.nbr; i++) {
+        const FtbTrkBr &b = ev.br[i];
+        if (b.type == BR_DIRECT) {
+          int sl = -1;
+          for (int k = 0; k < FTB_SLOTS; k++) if (main_ent->s[k].valid && main_ent->s[k].offset == b.offset) { sl = k; break; }
+          if (sl >= 0) s2_tage_.update_slot(ex_ix, sl, b.actual_dir);
+        }
+        if (br_ind(b.type) && b.actual_dir) itt_.update(ix, b.target);
+      }
+    }
+    if (pred_arch == 1) return;
     if (ev.ah_v && ev.nbr > 0) {
       const uint32_t s = aftb_.index(ev.ah_key_base);
       const uint32_t t = aftb_.tag(ev.ah_key_base, ev.start);
@@ -1130,12 +1554,18 @@ struct BpuFtb {
       for (int i = 0; i < ev.nbr; i++) upsert_branch(aen, ev.br[i]);
       aftb_.touch_lru(s, hit);
       const FtbBlkIdx aix = make_ahead_index(ev.ah_key_base, ev.start, ev.ah_key_ex_fh);
+      const ExTageIdx aex = cfg_fe_ah_ex_tage()
+                                ? make_ahead_ex_tage_index(ev.ah_key_base, ev.start, ev.ah_key_ex_fh, ah_ex_tage_.S)
+                                : ExTageIdx{};
       for (int i = 0; i < ev.nbr; i++) {
         const FtbTrkBr &b = ev.br[i];
         if (b.type == BR_DIRECT) {
           int sl = -1;
           for (int k = 0; k < FTB_SLOTS; k++) if (aen.s[k].valid && aen.s[k].offset == b.offset) { sl = k; break; }
-          if (sl >= 0) atage_.update_slot(aix, sl, b.actual_dir, int(aen.s[sl].ctr));
+          if (sl >= 0) {
+            if (cfg_fe_ah_ex_tage()) ah_ex_tage_.update_slot(aex, sl, b.actual_dir, nullptr, int(aen.s[sl].ctr));
+            else atage_.update_slot(aix, sl, b.actual_dir, int(aen.s[sl].ctr));
+          }
         }
         if (br_ind(b.type) && b.actual_dir) aitt_.update(aix, b.target);
       }
@@ -1145,6 +1575,7 @@ struct BpuFtb {
   // ---- ZERO-T0-READ 1-Cycle Pure Commit Write Plan ----
   struct CommitPlan {
     bool valid = false;
+    bool ev_has_taken = false;
     FtbTrainEv ev{};
     bool ftb1_wr = false;
     uint32_t ftb1_s = 0;
@@ -1159,64 +1590,103 @@ struct BpuFtb {
     uint8_t ah_way = 0;
     FtbEnt ah_ent{};
     BlockTage::WritePlan atage_wp{};
+    ExBlockTage::WritePlan aex_tage_wp{};
     BlockItt::WritePlan aitt_wp{};
   };
 
   void compute_commit_plan(const FtbBlkRec &rc, const FtbTrkBr &b, CommitPlan &p) const {
     p = CommitPlan{};
     p.valid = true;
+    p.ev_has_taken = b.actual_dir;
     p.ev.start = rc.base;
     p.ev.nbr = 1;
     p.ev.br[0] = b;
 
-    // 1. Main FTB1 (Meta + WRBypass + commit-time PLRU victim)
-    const uint32_t s = ftb1_.index(rc.base);
-    const uint16_t tg = ftb1_.tag(rc.base);
-    uint8_t way = 0;
-    FtbEnt old_ent{};
-    bool had_hit = false;
-    if (ftb1_.wrb.lookup(s, tg, way, old_ent)) {
-      had_hit = old_ent.valid && (old_ent.tag == tg);
-    } else if (rc.ftb1_meta.hit) {
-      had_hit = true;
-      old_ent = rc.ftb1_meta.ent;
-      way = rc.ftb1_meta.way;
-    } else {
-      way = ftb1_.plru.victim(s);
-    }
-    FtbEnt en = had_hit ? old_ent : FtbEnt{};
-    if (!had_hit) {
-      en.valid = true;
-      en.tag = tg;
-    }
-    const int sl = upsert_branch(en, b);
-    bool any_v = false;
-    for (int k = 0; k < FTB_SLOTS; k++) if (en.s[k].valid) any_v = true;
-    if (!any_v) en.valid = false;
-    p.ftb1_s = s;
-    p.ftb1_tag = tg;
-    p.ftb1_way = way;
-    p.ftb1_ent = en;
-    p.ftb1_wr = any_v && (!had_hit || !en.payload_eq(old_ent));
+    const int pred_arch = cfg_fe_pred_arch();
+    if (!cfg_fe_single_pred()) {
+      // 1. Main FTB1 (Meta + WRBypass + commit-time PLRU victim)
+      const uint32_t s = ftb1_.index(rc.base);
+      const uint16_t tg = ftb1_.tag(rc.base);
+      uint8_t way = 0;
+      FtbEnt old_ent{};
+      bool had_hit = false;
+      if (ftb1_.wrb.lookup(s, tg, way, old_ent)) {
+        had_hit = old_ent.valid && (old_ent.tag == tg);
+      } else if (rc.ftb1_meta.hit) {
+        had_hit = true;
+        old_ent = rc.ftb1_meta.ent;
+        way = rc.ftb1_meta.way;
+      } else {
+        way = ftb1_.plru.victim(s);
+      }
+      FtbEnt en = had_hit ? old_ent : FtbEnt{};
+      if (!had_hit) {
+        en.valid = true;
+        en.tag = tg;
+      }
+      const int sl = upsert_branch(en, b);
+      bool any_v = false;
+      for (int k = 0; k < FTB_SLOTS; k++) if (en.s[k].valid) any_v = true;
+      if (!any_v) en.valid = false;
+      p.ftb1_s = s;
+      p.ftb1_tag = tg;
+      p.ftb1_way = way;
+      p.ftb1_ent = en;
+      p.ftb1_wr = any_v && (!had_hit || !en.payload_eq(old_ent));
 
-    const uint32_t w = static_cast<uint32_t>(rc.base >> SLOT_SHIFT);
-    const FtbBlkIdx ix = make_index(rc.base, rc.ex_fh);
-    const ExTageIdx ex_ix = make_ex_tage_index(w, rc.ex_fh);
-
-    // 2. S2 6-table ExBlockTage
-    if (b.type == BR_DIRECT && any_v && sl >= 0) {
-      const bool slot_meta_ok = rc.ftb1_meta.hit && rc.ftb1_meta.ent.s[sl].valid &&
+      const uint32_t w = static_cast<uint32_t>(rc.base >> SLOT_SHIFT);
+      const FtbBlkIdx ix = make_index(rc.base, rc.ex_fh);
+      const ExTageIdx ex_ix = make_ex_tage_index(w, rc.ex_fh);
+      const bool slot_meta_ok = rc.ftb1_meta.hit && (sl >= 0) && rc.ftb1_meta.ent.s[sl].valid &&
                                 (rc.ftb1_meta.ent.s[sl].offset == b.offset);
-      ExBlockTage::Pred ep;
-      s2_tage_.compute_plan_from_meta(ex_ix, sl, b.actual_dir, slot_meta_ok, rc.s2_tage_meta.s[sl], p.tage_wp, ep);
+
+      if (pred_arch == 2) {
+        const bool has_ah = rc.ah_v || rc.ah_self0;
+        if (cfg_fe_s2_sup_tage() > 0 && b.type == BR_DIRECT && any_v && sl >= 0) {
+          const bool ah_pred = has_ah ? rc.ah_ex_tage_meta.s[sl].pred
+                                      : (slot_meta_ok ? (rc.ftb1_meta.ent.s[sl].ctr >= 2) : false);
+          const bool sup_hit = slot_meta_ok && (rc.s2_tage_meta.s[sl].pcpn < EX_TN);
+          const bool allow_alloc = (!has_ah) || (ah_pred != b.actual_dir);
+          if (sup_hit || allow_alloc) {
+            ExBlockTage::Pred ep;
+            s2_tage_.compute_plan_from_meta(ex_ix, sl, b.actual_dir, slot_meta_ok,
+                                            rc.s2_tage_meta.s[sl], p.tage_wp, ep, int(en.s[sl].ctr), allow_alloc);
+          }
+        }
+        if (has_ah) {
+          const bool is_s0 = !rc.ah_v && rc.ah_self0;
+          const pc_t kbase = is_s0 ? rc.base : rc.ah_key_base;
+          const uint16_t (*kfh)[EX_TN] = is_s0 ? rc.ex_fh : rc.ah_key_ex_fh;
+          const pc_t pbase = is_s0 ? 0 : rc.prev_base;
+          if (b.type == BR_DIRECT && any_v && sl >= 0) {
+            const ExTageIdx aex = make_ahead_ex_tage_index(kbase, rc.base, kfh, ah_ex_tage_.S, rc.ex_fh, pbase, is_s0);
+            ExBlockTage::Pred ep;
+            ah_ex_tage_.compute_plan_from_meta(aex, sl, b.actual_dir, slot_meta_ok,
+                                               rc.ah_ex_tage_meta.s[sl], p.aex_tage_wp, ep, int(en.s[sl].ctr));
+          }
+          if (br_ind(b.type) && b.actual_dir) {
+            const FtbBlkIdx aix = make_ahead_index(kbase, rc.base, kfh, rc.ex_fh, pbase, is_s0);
+            aitt_.compute_plan_from_meta(aix, b.target, true, rc.ah_itt_meta, p.aitt_wp);
+          }
+        }
+        return;
+      }
+
+      // 2. S2 6-table ExBlockTage
+      if (b.type == BR_DIRECT && any_v && sl >= 0) {
+        ExBlockTage::Pred ep;
+        s2_tage_.compute_plan_from_meta(ex_ix, sl, b.actual_dir, slot_meta_ok, rc.s2_tage_meta.s[sl], p.tage_wp, ep);
+      }
+
+      // 3. S2 ITT
+      if (br_ind(b.type) && b.actual_dir) {
+        itt_.compute_plan_from_meta(ix, b.target, true, rc.s2_itt_meta, p.itt_wp);
+      }
     }
 
-    // 3. S2 ITT
-    if (br_ind(b.type) && b.actual_dir) {
-      itt_.compute_plan_from_meta(ix, b.target, true, rc.s2_itt_meta, p.itt_wp);
-    }
+    if (pred_arch == 1) return;
 
-    // 4. 1-Ahead A (aftb + atage + aitt)
+    // 4. Ahead (aftb + atage/ah_ex_tage + aitt)
     if (rc.ah_v) {
       const uint32_t as = aftb_.index(rc.ah_key_base);
       const uint32_t at = aftb_.tag(rc.ah_key_base, rc.base);
@@ -1248,8 +1718,15 @@ struct BpuFtb {
       if (b.type == BR_DIRECT && asl >= 0) {
         const bool ah_slot_ok = rc.ah_ftb_meta.hit && rc.ah_ftb_meta.ent.s[asl].valid &&
                                 (rc.ah_ftb_meta.ent.s[asl].offset == b.offset);
-        atage_.compute_plan_from_meta(aix, asl, b.actual_dir, int(aen.s[asl].ctr), ah_slot_ok,
-                                      rc.ah_tage_meta.s[asl], p.atage_wp);
+        if (cfg_fe_ah_ex_tage()) {
+          const ExTageIdx aex = make_ahead_ex_tage_index(rc.ah_key_base, rc.base, rc.ah_key_ex_fh, ah_ex_tage_.S);
+          ExBlockTage::Pred ep;
+          ah_ex_tage_.compute_plan_from_meta(aex, asl, b.actual_dir, ah_slot_ok,
+                                             rc.ah_ex_tage_meta.s[asl], p.aex_tage_wp, ep, int(aen.s[asl].ctr));
+        } else {
+          atage_.compute_plan_from_meta(aix, asl, b.actual_dir, int(aen.s[asl].ctr), ah_slot_ok,
+                                        rc.ah_tage_meta.s[asl], p.atage_wp);
+        }
       }
       if (br_ind(b.type) && b.actual_dir) {
         aitt_.compute_plan_from_meta(aix, b.target, true, rc.ah_itt_meta, p.aitt_wp);
@@ -1266,23 +1743,47 @@ struct BpuFtb {
 
   void apply_commit_non_ftb(const CommitPlan &p, bool do_s2_base) {
     if (!p.valid) return;
-    update_tab(ftb0_, p.ev, true);
-    if (p.ftb1_wr) {
-      ftb1_.wrb.insert(p.ftb1_s, p.ftb1_tag, p.ftb1_way, p.ftb1_ent);
-      ftb1_.plru.touch(p.ftb1_s, p.ftb1_way);
+    const int pred_arch = cfg_fe_pred_arch();
+    if (pred_arch == 2) {
+      mirror_ent_to_ftb0(p.ev.start, p.ftb1_ent, p.ev_has_taken);
+      if (p.ftb1_wr) {
+        ftb1_.wrb.insert(p.ftb1_s, p.ftb1_tag, p.ftb1_way, p.ftb1_ent);
+        ftb1_.plru.touch(p.ftb1_s, p.ftb1_way);
+      }
+      if (cfg_fe_s2_sup_tage() > 0 && p.tage_wp.valid) {
+        s2_tage_.apply_plan(p.tage_wp, false);
+      }
+      if (p.aex_tage_wp.valid) ah_ex_tage_.apply_plan(p.aex_tage_wp, false);
+      if (p.aitt_wp.wr_mask != 0) aitt_.apply_plan(p.aitt_wp);
+      return;
     }
+    update_tab(ftb0_, p.ev, true);
+    if (!cfg_fe_single_pred()) {
+      if (p.ftb1_wr) {
+        ftb1_.wrb.insert(p.ftb1_s, p.ftb1_tag, p.ftb1_way, p.ftb1_ent);
+        ftb1_.plru.touch(p.ftb1_s, p.ftb1_way);
+      }
+      s2_tage_.apply_plan(p.tage_wp, do_s2_base);
+      itt_.apply_plan(p.itt_wp);
+    }
+    if (pred_arch == 1) return;
     if (p.ah_wr) {
       aftb_.wrb.insert(p.ah_s, p.ah_tag, p.ah_way, p.ah_ent);
       aftb_.plru.touch(p.ah_s, p.ah_way);
     }
-    s2_tage_.apply_plan(p.tage_wp, do_s2_base);
-    itt_.apply_plan(p.itt_wp);
-    if (p.atage_wp.valid) atage_.apply_plan(p.atage_wp);
+    if (cfg_fe_ah_ex_tage()) {
+      if (p.aex_tage_wp.valid) ah_ex_tage_.apply_plan(p.aex_tage_wp, false);
+    } else {
+      if (p.atage_wp.valid) atage_.apply_plan(p.atage_wp);
+    }
     if (p.aitt_wp.wr_mask != 0) aitt_.apply_plan(p.aitt_wp);
   }
 
   void clear_false_branch_ftb0(pc_t base, pc_t nb_pc) {
     ftb0_.clear_slot(base, nb_pc);
+  }
+  void clear_false_branch_aftb(pc_t key_base, pc_t cur_base, pc_t nb_pc) {
+    aftb_.clear_slot(key_base, cur_base, nb_pc);
   }
   void apply_ftb1_clr_write(uint32_t s, uint16_t tg, uint8_t way, const FtbEnt &ent) {
     ftb1_.e[s * ftb1_.W + way] = ent;

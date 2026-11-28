@@ -75,6 +75,10 @@ private:
     int qh = 0, qn = 0;
     bool probe_v = false, probe_retry = false, probe_cancel = false;
     uint32_t probe_pa = 0;
+    uint32_t probe_idx = 0;
+    bool fb_v = false;
+    uint32_t fb_idx = 0, fb_ptag = 0;
+    uint32_t fb_line[ICACHE_WORD_NUM] = {};
   };
   FdipState fdip_q_{};
   FdipState fdip_d_{};

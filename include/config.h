@@ -201,12 +201,12 @@ static_assert(CONFIG_AXI_SUBSYSTEM_FREQ_DIV >= 1,
 #endif
 
 
-constexpr int ICACHE_WAY_NUM = 8;
+constexpr int ICACHE_WAY_NUM = 4;
 constexpr int ICACHE_OFFSET_BITS = clog2(ICACHE_LINE_SIZE);
-constexpr int ICACHE_INDEX_BITS = 12 - ICACHE_OFFSET_BITS;
+constexpr int ICACHE_INDEX_BITS = 8;
 constexpr int ICACHE_SET_NUM = 1 << ICACHE_INDEX_BITS;
 constexpr int ICACHE_WORD_NUM = ICACHE_LINE_SIZE / 4;
-constexpr int ICACHE_TAG_BITS = 32 - ICACHE_INDEX_BITS - ICACHE_OFFSET_BITS;
+constexpr int ICACHE_TAG_BITS = 20; // full physical PPN PA[31:12] for alias-safe VIPT
 constexpr uint32_t ICACHE_TAG_MASK = (1u << ICACHE_TAG_BITS) - 1u;
 
 constexpr int DCACHE_SETS_NUM = 256;

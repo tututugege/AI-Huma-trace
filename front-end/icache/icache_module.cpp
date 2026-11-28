@@ -96,7 +96,7 @@ inline int alloc_free_txid(const ICacheRegs &regs) {
 }
 
 inline uint32_t icache_line_base_addr(uint32_t ppn, uint32_t index) {
-  return (ppn << 12) | (index << ICACHE_OFFSET_BITS);
+  return (ppn << 12) | ((index & 0x3Fu) << ICACHE_OFFSET_BITS);
 }
 
 inline uint32_t icache_word_addr(uint32_t ppn, uint32_t pc) {

@@ -38,6 +38,8 @@ struct FrontRegs {
   FetchPair pend_pair{};
   wire<1> fdip_s2_en = false, fdip_s2_clear = false;  // Cut B1: 1-cycle registered BPU S2 -> FDIP pipe
   pc_t fdip_s2_va = 0;
+  wire<1> ic_f1_v = false;      // FE_ICACHE_PIPE=1: F0->F1 2-stage pipelined ICache register
+  InstFifoEntry ic_f1_entry{};
   uint64_t pmu_last_refetch = ~0ull;   // PMU: the cycle of the last refetch (front-end delivery attribution)
 };
 

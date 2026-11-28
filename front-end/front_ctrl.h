@@ -12,7 +12,7 @@ class PreIduQueue;
 // no front2back_fifo, explicit inst_fifo backpressure on ifu_ptr) and end-of-cycle state / FTQ write requests.
 //   CONTRACT control  in: in.in.ctrl in.in.redirect in.rd.q  out: out.front_state out.global_refetch out.global_reset out.pipe_dec out.pipe_head_ok
 //   CONTRACT enables  in: in.bpu_output in.in.ctrl in.rd.fifo_rd_snapshot in.rd.q  out: out.f2b_read_enable out.fetch_addr_head out.fetch_addr_read_enable out.fifo_read_enable out.s2_wr_en
-//   CONTRACT finish  in: in.bpu_can_run in.bpu_output in.checker_out in.fifo_head in.fifo_rd in.flush_address in.grp_ptab in.ic_k in.ic_out in.in.ctrl in.in.redirect in.lh_new_data in.lh_new_pc in.lh_new_valid in.lh_updated in.pd_next in.pmu_l1_ovr in.pmu_ptab_stall in.predecode_flush in.rd.q out.out.FIFO_valid out.out.ftq_s2 out.out.inst_valid out.out.meta out.out.pc out.out.predict_dir  out: out.front_state out.out out.out.commit_stall out.out.commit_tq_free out.out.commit_upd_free
+//   CONTRACT finish  in: in.bpu_can_run in.bpu_output in.checker_out in.f1_next_entry in.fifo_head in.fifo_rd in.flush_address in.grp_ptab in.ic_k in.ic_out in.in.ctrl in.in.redirect in.lh_new_data in.lh_new_pc in.lh_new_valid in.lh_updated in.pd_next in.pmu_l1_ovr in.pmu_ptab_stall in.predecode_flush in.rd.q out.out.FIFO_valid out.out.ftq_s2 out.out.inst_valid out.out.meta out.out.pc out.out.predict_dir  out: out.front_state out.out out.out.commit_stall out.out.commit_tq_free out.out.commit_upd_free
 class FrontControl {
 public:
   struct In {
@@ -22,6 +22,7 @@ public:
     const bool *bpu_can_run = nullptr;
     const InstFifoReadData *fifo_rd = nullptr;
     const InstFifoOut *fifo_head = nullptr;
+    const InstFifoEntry *f1_next_entry = nullptr;
     const PtabOut *grp_ptab = nullptr;
     const PredecodeCheckerOut *checker_out = nullptr;
     const ICacheOut *ic_out = nullptr, *ic_k = nullptr;

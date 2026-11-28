@@ -131,11 +131,17 @@ void FrontControl::control() {
 }
 
 // The read enables of the Unified FTQ / inst_fifo and the S2 write enable (no ptab_bypass, no front2back_fifo).
+static inline bool fe_icache_pipe() {
+  static const bool on = (!std::getenv("FE_ICACHE_PIPE") || std::atoi(std::getenv("FE_ICACHE_PIPE")) != 0);
+  return on;
+}
+
 void FrontControl::enables() {
   const bpuf::OutputPayload &bpu_output = *in.bpu_output;
 
   const bool icache_ready = icache->read_ready(in.in->ctrl.itlb_flush || in.in->ctrl.fence_i, out.global_reset);
-  const bool inst_fifo_room = int(in.rd->fifo_rd_snapshot.size) + int(in.rd->q.pend_valid) < INSTRUCTION_FIFO_SIZE;
+  const int f1_inflight = fe_icache_pipe() ? int(in.rd->q.ic_f1_v) : 0;
+  const bool inst_fifo_room = int(in.rd->fifo_rd_snapshot.size) + int(in.rd->q.pend_valid) + f1_inflight < INSTRUCTION_FIFO_SIZE;
   out.s2_wr_en = bpu_output.PTAB_write_enable && !out.global_reset && !out.global_refetch;
   out.fetch_addr_read_enable = icache_ready && ftq && !ftq->fa_empty() &&
                                !out.global_reset && !out.global_refetch && out.pipe_head_ok && inst_fifo_room;
@@ -193,6 +199,12 @@ void FrontControl::finish() {
   out.front_state.d.fdip_s2_en = out.global_reset ? false : bool(bpu_output.PTAB_write_enable);
   out.front_state.d.fdip_s2_va = out.global_reset ? 0 : bpu_output.predict_next_fetch_address;
   out.front_state.d.fdip_s2_clear = out.global_reset ? false : (out.global_refetch || out.pipe_dec.ovr);
+  if (fe_icache_pipe()) {
+    out.front_state.d.ic_f1_v = !out.global_reset && !out.global_refetch && !predecode_flush && ic_out.icache_read_complete;
+    out.front_state.d.ic_f1_entry = *in.f1_next_entry;
+  } else {
+    out.front_state.d.ic_f1_v = false;
+  }
 
   FrontTopOut &fo = *out.out;
   fo = {};
@@ -398,9 +410,20 @@ void InstPort::comb_read() {
 
 void InstPort::comb_write() {
   const bool global_reset = *in.global_reset, global_refetch = *in.global_refetch;
+  const bool pipe_ic = fe_icache_pipe();
   const ICacheOut &ic_out = *in.ic_out;
 
-  if (in.rd->q.fifo_full || !ic_out.icache_read_complete || global_reset || global_refetch) return;
+  if (pipe_ic) {
+    out.f1_next_entry = {};
+    if (in.rd->q.ic_f1_v && !in.rd->q.fifo_full && !global_reset && !global_refetch) {
+      out.fifo_in.wdata = in.rd->q.ic_f1_entry;
+      fifo->write(out.fifo_in, out.fifo_rd, out.fifo_req);
+    }
+    if (!ic_out.icache_read_complete || global_reset || global_refetch) return;
+  } else {
+    if (in.rd->q.fifo_full || !ic_out.icache_read_complete || global_reset || global_refetch) return;
+  }
+  InstFifoEntry entry{};
   // Same-Page Line-Straddle 2-Fetch: when a 32B block crosses a 64B cache-line boundary within the same 4KB page,
   // read the next sequential 64B line (always a different ICache bank, same physical page -> zero 2nd ITLB lookup!).
   inst_word_t grp[FETCH_WIDTH]; pc_t gpc[FETCH_WIDTH]; wire<1> gv[FETCH_WIDTH], gpf[FETCH_WIDTH];
@@ -454,28 +477,28 @@ void InstPort::comb_write() {
       grp[nv - 1] &= 0xffffu;   // (an inner FE_PAIR block end keeps its window: the upper half is in the same fetched line)
     }
   }
-  out.fifo_in.wdata.up16 = rvc_up16; out.fifo_in.wdata.up_ok = rvc_up_ok;
+  entry.up16 = rvc_up16; entry.up_ok = rvc_up_ok;
   for (int i = 0; i < FETCH_WIDTH; i++) {
-    out.fifo_in.wdata.raw16[i] = uint16_t(grp[i] & 0xffffu);
-    out.fifo_in.wdata.instructions[i] = grp[i];
-    out.fifo_in.wdata.pc[i] = gpc[i];
-    out.fifo_in.wdata.page_fault_inst[i] = gpf[i];
-    out.fifo_in.wdata.inst_valid[i] = gv[i];
+    entry.raw16[i] = uint16_t(grp[i] & 0xffffu);
+    entry.instructions[i] = grp[i];
+    entry.pc[i] = gpc[i];
+    entry.page_fault_inst[i] = gpf[i];
+    entry.inst_valid[i] = gv[i];
     if (gv[i]) {
       if constexpr (kRvc) {   // the window at this slot is a 16-bit instruction when its low bits are not 11: expand it (an illegal encoding becomes 0)
         if ((grp[i] & 3u) != 3u) {
           uint32_t ex = 0;
-          out.fifo_in.wdata.is_rvc[i] = true;
+          entry.is_rvc[i] = true;
           grp[i] = rvc::expand(grp[i] & 0xffffu, ex) ? ex : 0u;
-          out.fifo_in.wdata.instructions[i] = grp[i];
+          entry.instructions[i] = grp[i];
         }
       }
       const PredecodeResult result = predecode(grp[i], gpc[i]);
-      out.fifo_in.wdata.predecode_type[i] = result.type;
-      out.fifo_in.wdata.predecode_target_address[i] = result.target_address;
+      entry.predecode_type[i] = result.type;
+      entry.predecode_target_address[i] = result.target_address;
     } else {
-      out.fifo_in.wdata.predecode_type[i] = PREDECODE_NON_BRANCH;
-      out.fifo_in.wdata.predecode_target_address[i] = 0;
+      entry.predecode_type[i] = PREDECODE_NON_BRANCH;
+      entry.predecode_target_address[i] = 0;
     }
   }
   if constexpr (kRvc) {   // instruction starts: from slot 0 (start_a) or, when slot 0 is the second half of the previous block's last instruction, from slot 1 (start_b)
@@ -485,11 +508,11 @@ void InstPort::comb_write() {
     while (n < FETCH_WIDTH && gv[n]) n++;
     auto boundary = [&](int k) { return k > 0 && k < n && gpc[k] != gpc[k - 1] + SLOT_BYTES; };
     for (int pass = 0; pass < 2; pass++) {
-      wire<1> *st = pass ? out.fifo_in.wdata.start_b : out.fifo_in.wdata.start_a;
+      wire<1> *st = pass ? entry.start_b : entry.start_a;
       int pos = pass;
       while (pos < n) {
         st[pos] = true;
-        int nxt = pos + (out.fifo_in.wdata.is_rvc[pos] ? 1 : 2);
+        int nxt = pos + (entry.is_rvc[pos] ? 1 : 2);
         for (int k = pos + 1; k < nxt && k < n; k++) if (boundary(k)) { nxt = k; break; }
         pos = nxt;
       }
@@ -497,12 +520,17 @@ void InstPort::comb_write() {
   }
   if (want_pair) {   // 2-taken pair: next pc after the last valid slot
     int last = -1;
-    for (int i = 0; i < FETCH_WIDTH; i++) if (out.fifo_in.wdata.inst_valid[i]) last = i;
-    out.fifo_in.wdata.seq_next_pc = out.fifo_in.wdata.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
+    for (int i = 0; i < FETCH_WIDTH; i++) if (entry.inst_valid[i]) last = i;
+    entry.seq_next_pc = entry.pc[last] + SLOT_BYTES;   // the position after the last slot (RVC=1: a straddling last instruction continues there)
   } else
-  out.fifo_in.wdata.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
+  entry.seq_next_pc = sequential_next_pc(ic_out.fetch_pc, ic_out.inst_valid);
 
-  fifo->write(out.fifo_in, out.fifo_rd, out.fifo_req);
+  if (pipe_ic) {
+    out.f1_next_entry = entry;
+  } else {
+    out.fifo_in.wdata = entry;
+    fifo->write(out.fifo_in, out.fifo_rd, out.fifo_req);
+  }
 }
 
 // The front end's BPU phase (front-end/BPU/BPU_pipe.h).
@@ -686,6 +714,7 @@ FrontCore::FrontCore() {
   ctrl.in.lh_new_pc = &checker.out.lh_new_pc;
   ctrl.in.lh_new_data = &checker.out.lh_new_data;
   ctrl.in.pd_next = &checker.out.pd_next;
+  ctrl.in.f1_next_entry = &inst_port.out.f1_next_entry;
   ctrl.in.pmu_l1_ovr = &bpu_pipe.out.pmu_l1_ovr;
   ctrl.in.pmu_ptab_stall = &bpu_pipe.out.pmu_ptab_stall;
 }
