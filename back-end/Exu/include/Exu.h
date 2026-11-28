@@ -18,9 +18,6 @@ struct FuUnit {
   int lsu_sdu_port = -1;
   int depth = 0;  // PIPE: latency == capacity
 
-  bool slot_valid = false;
-  ExuInst slot{};
-
   struct PipeEntry {
     ExuInst uop;
     int64_t done_cycle = 0;
@@ -92,6 +89,9 @@ private:
   struct Regs { LoadWake lwake_r[LSU_LOAD_WB_WIDTH] = {}; };
   Regs q_;
   std::vector<FuUnit> units;
+  bool port_slot_valid[ISSUE_WIDTH] = {};
+  ExuInst port_slot[ISSUE_WIDTH] = {};
   std::vector<int> port_fus[ISSUE_WIDTH];  // FU indices of each port, in write-back priority order
   uint64_t port_fu_mask[ISSUE_WIDTH] = {};
+  int div_fu_idx = -1;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.h"
+#include "AguPorts.h"
 #include "DseCap.h"
 #include "IO.h"
 #include "util.h"
@@ -49,8 +50,7 @@ struct IssueQueueIn {
   wire<1> flush_br = 0;
   wire<ROB_IDX_WIDTH> flush_rob_idx = 0;
   wire<1> flush_rob_flag = 0;
-  wire<MAX_UOP_TYPE> port_fu_ready_mask[ISSUE_WIDTH] = {};
-  // extra grant condition (completion-cycle reservation of the port, FP write-port reservation, shared AGU): 0 = granted (the reservations
+  // extra grant condition (completion-cycle reservation of the port, FP write-port reservation): 0 = granted (the reservations
   // are made), otherwise the GateRefuse reason; called only for a grant about to be made
   std::function<int(const Uop &, int)> grant_gate;
   std::function<int(const Uop &, int)> gate_probe;     // the same check without reserving (statistics only)
@@ -252,10 +252,8 @@ public:
     for (const auto &pair : scheduled_pairs) {
       int entry_idx = pair.first;
       int phys_port = pair.second;
-      uint64_t req_bit = (1ULL << static_cast<uint32_t>(q.entry[entry_idx].uop.op));
       if (in.issue_block) continue;
-      const int why = !(in.port_fu_ready_mask[phys_port] & req_bit) ? GATE_REF_FU
-                      : in.grant_gate ? in.grant_gate(q.entry[entry_idx].uop, phys_port) : 0;
+      const int why = in.grant_gate ? in.grant_gate(q.entry[entry_idx].uop, phys_port) : 0;
       if (!why) {
         out.issue_grants[phys_port].valid = true;
         out.issue_grants[phys_port].uop = q.entry[entry_idx].uop;
@@ -379,7 +377,7 @@ private:
     for (int idx : ready_indices) {
       if (inst_issued[idx]) continue;
       const uint64_t bit = 1ULL << static_cast<uint32_t>(q_.entry[idx].uop.op);
-      if (!(ports[local].capability_mask & bit) || !(in.port_fu_ready_mask[phys_port] & bit)) continue;
+      if (!(ports[local].capability_mask & bit)) continue;
       if (!in.gate_probe || in.gate_probe(q_.entry[idx].uop, phys_port) == 0) return true;
     }
     return false;
@@ -399,12 +397,10 @@ private:
       }
 
     // 2. Port-centric scheduling: ready_indices is already sorted by slot index (lowest first).
-    // For IQ_MEM, the first port of each capability takes the oldest ready uop it can serve; other ports take lowest slot.
     inst_issued.assign(size, 0);
-    std::vector<int> by_age;
-    const bool age_policy = (id_ == IQ_MEM);
-    if (age_policy) {
-      by_age = ready_indices;
+    if (id_ == IQ_MEM) {
+      // IQ_MEM (5 physical AGUs: NL load-only, NM shared load>STA, NS STA-only): pick oldest + remaining lowest-slot Loads and STAs.
+      std::vector<int> by_age = ready_indices;
       std::sort(by_age.begin(), by_age.end(), [&](int lhs, int rhs) {
         const auto &a = q_.entry[lhs].uop;
         const auto &b = q_.entry[rhs].uop;
@@ -415,14 +411,44 @@ private:
         }
         return lhs < rhs;
       });
+      auto pick_kind = [&](UopType target, int cap) {
+        std::vector<int> picks;
+        int oldest = -1;
+        for (int idx : by_age)
+          if (q_.entry[idx].uop.op == target) { oldest = idx; picks.push_back(idx); break; }
+        for (int idx : ready_indices) {
+          if ((int)picks.size() >= cap) break;
+          if (idx != oldest && q_.entry[idx].uop.op == target) picks.push_back(idx);
+        }
+        return picks;
+      };
+      const std::vector<int> ld_picks = pick_kind(UOP_LOAD, LSU_LDU_COUNT);
+      const std::vector<int> sta_picks = pick_kind(UOP_STA, LSU_STA_COUNT);
+      uint32_t agu_used = 0;
+      for (size_t k = 0; k < ld_picks.size(); k++) {
+        const int ap = agu::ld_port(static_cast<int>(k));
+        const int phys = IQ_AGU_PORT_BASE + ap;
+        if (!in.presel_ok || in.presel_ok(q_.entry[ld_picks[k]].uop, phys)) {
+          result.push_back({ld_picks[k], phys});
+          inst_issued[ld_picks[k]] = 1;
+          agu_used |= 1u << ap;
+        }
+      }
+      for (size_t k = 0; k < sta_picks.size(); k++) {
+        const int ap = agu::st_port(static_cast<int>(k));
+        if (agu_used >> ap & 1) continue;
+        const int phys = IQ_AGU_PORT_BASE + ap;
+        if (!in.presel_ok || in.presel_ok(q_.entry[sta_picks[k]].uop, phys)) {
+          result.push_back({sta_picks[k], phys});
+          inst_issued[sta_picks[k]] = 1;
+          agu_used |= 1u << ap;
+        }
+      }
+      return result;
     }
+
     for (int p = 0; p < num_ports; p++) {
-      bool first_of_cap = true;
-      if (age_policy)
-        for (int q = 0; q < p; q++)
-          if (ports[q].capability_mask & ports[p].capability_mask) first_of_cap = false;
-      const std::vector<int> &order = (first_of_cap && age_policy) ? by_age : ready_indices;
-      for (int idx : order) {
+      for (int idx : ready_indices) {
         if (inst_issued[idx]) {
           continue;
         }

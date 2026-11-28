@@ -259,7 +259,7 @@ void Rob::single_actions(const Uop &u) {
 
 // Execution results mark their issue port's completion bit; load/store ports also record the address or the fault.
 void Rob::complete() {
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
+  for (int i = 0; i < ROB_WB_WIDTH; i++) {
     if (!in.exu2rob->entry[i].valid) continue;
     const Uop &wb = in.exu2rob->entry[i].uop;
     const int bank = get_rob_bank(wb->rob_idx), line = get_rob_line(wb->rob_idx);
@@ -272,8 +272,8 @@ void Rob::complete() {
     Assert(rob_cplt_popcount(u.cplt_mask) <= rob_cplt_popcount(u->expect_mask) && "ROB: completion overflow");
 
     const bool fault = rob_is_page_fault(wb);
-    const bool load_port = i >= IQ_LD_PORT_BASE && i < IQ_LD_PORT_BASE + LSU_LDU_COUNT;
-    const bool sta_port = i >= IQ_STA_PORT_BASE && i < IQ_STA_PORT_BASE + LSU_STA_COUNT;
+    const bool load_port = i >= ROB_WB_LD_BASE && i < ROB_WB_LD_BASE + LSU_LDU_COUNT;
+    const bool sta_port = i >= ROB_WB_STA_BASE && i < ROB_WB_STA_BASE + LSU_STA_COUNT;
     if (load_port || sta_port) {
       u.diag_val = wb.diag_val;  // resolved address, used by commit-time checks
       if (fault) {

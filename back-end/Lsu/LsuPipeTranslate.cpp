@@ -28,17 +28,23 @@ void RealLsu::exe2lsu() {
     if (e.pa_v && !e.wbp && !e.wbd) e.wbp = 1;
   }
   agu_raw_ = raw_ld_ = raw_st_ = 0;
-  for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    if (!x.agu_req[i].raw) continue;   // raw: occupied, dead or not (fixed-slot L1)
-    if (x.agu_req[i].uop.op == UOP_LOAD) { agu_raw_ |= 1u << agu::ld_port(i); raw_ld_ |= 1u << i; }
-    else if (x.agu_req[i].uop.op == UOP_STA) { agu_raw_ |= 1u << agu::st_port(i - LSU_LDU_COUNT); raw_st_ |= 1u << (i - LSU_LDU_COUNT); }
+  for (int p = 0; p < LSU_AGU_COUNT; p++) {
+    if (!x.agu_req[p].raw) continue;   // raw: occupied, dead or not (fixed-slot L1)
+    agu_raw_ |= 1u << p;
+    if (x.agu_req[p].uop.op == UOP_LOAD) {
+      Assert(agu::ld_can(p));
+      raw_ld_ |= 1u << p;
+    } else if (x.agu_req[p].uop.op == UOP_STA) {
+      Assert(agu::st_can(p));
+      raw_st_ |= 1u << agu::st_slot(p);
+    }
   }
   int ns = 0;
   int vio_new = 0;  // loads marked as violating in this cycle
   uint64_t vio_set = 0;
-  for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_STA)) continue;
-    const MicroOp &inst = x.agu_req[i].uop;
+  for (int p = 0; p < LSU_AGU_COUNT; p++) {
+    if (!(x.agu_req[p].valid && x.agu_req[p].uop.op == UOP_STA)) continue;
+    const MicroOp &inst = x.agu_req[p].uop;
     if (inst->stq_idx >= STQ_SIZE) continue;
     PStq &e = pnxt.stq[inst->stq_idx];
     if (lsutr_on()) std::fprintf(stderr, "LSUTR %llu STA stq=%d rob=%d/%d entry_rob=%d/%d %s\n", (unsigned long long)g_dbg_cycle, (int)inst->stq_idx, (int)inst->rob_idx, (int)inst->rob_flag, (int)e.rob_idx, (int)e.rob_flag, (e.rob_flag != inst->rob_flag || e.rob_idx != inst->rob_idx) ? "REJECT" : "ok");
@@ -57,10 +63,11 @@ void RealLsu::exe2lsu() {
     e.lrsc = inst->is_atomic && ((inst->func7 >> 2) == AmoOp::SC);
     e.trp = 0;
     LP_PORT_CHECK(ns + 1, LSU_STA_COUNT, "sta_agu");
-    const int ss = i - LSU_LDU_COUNT;
+    Assert(agu::st_can(p));
+    const int ss = agu::st_slot(p);
     pw.s1[ss].v = true;
     pw.s1[ss].stq = inst->stq_idx;
-    pw.s1[ss].phys = agu::st_port(i - LSU_LDU_COUNT);
+    pw.s1[ss].phys = p;
     ns++;
     pw.ev_sta |= (stq_mask_t)1 << inst->stq_idx;  // the partial address is known from now on
     {  // memory-order check: younger loads that passed this store while its address was unknown
@@ -91,9 +98,9 @@ void RealLsu::exe2lsu() {
     mdp_.trn |= vio_set;
   }
   int nl = 0;
-  for (int i = 0; i < LSU_AGU_COUNT; i++) {
-    if (!(x.agu_req[i].valid && x.agu_req[i].uop.op == UOP_LOAD)) continue;
-    const MicroOp &inst = x.agu_req[i].uop;
+  for (int p = 0; p < LSU_AGU_COUNT; p++) {
+    if (!(x.agu_req[p].valid && x.agu_req[p].uop.op == UOP_LOAD)) continue;
+    const MicroOp &inst = x.agu_req[p].uop;
     if (inst->ldq_idx >= LDQ_SIZE) continue;
     PLdq &e = pnxt.ldq[inst->ldq_idx];
     if (e.uop().rob_flag != inst->rob_flag || e.uop().rob_idx != inst->rob_idx) continue;
@@ -111,11 +118,12 @@ void RealLsu::exe2lsu() {
     e.snap_flag = inst->stq_flag;
     e.lrsc = is_amo_lr_uop(inst);
     LP_PORT_CHECK(nl + 1, LD, "load_agu");
-    const int ls = i;
+    Assert(agu::ld_can(p));
+    const int ls = p;
     pw.l1[ls].v = true;
     pw.l1[ls].need_tlb = true;
     pw.l1[ls].ldq = inst->ldq_idx;
-    pw.l1[ls].phys = agu::ld_port(i);
+    pw.l1[ls].phys = p;
     nl++;
   }
 }

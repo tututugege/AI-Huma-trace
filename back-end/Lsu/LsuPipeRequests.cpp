@@ -1,5 +1,6 @@
 // The staged LSU: requests phase functions (see RealLsuPipe.cpp, docs/LSU_PIPE.md).
 #include "LsuPipeInternal.h"
+#include "AguPorts.h"
 #include "DseCap.h"
 
 void RealLsu::mmio_out() {
@@ -360,7 +361,7 @@ void RealLsu::print_events() {
       if (in.exe2lsu->sdu_req[p].valid) std::fprintf(stderr, " D%d=%d", p, (int)in.exe2lsu->sdu_req[p].uop->stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
       if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_STA)
-        std::fprintf(stderr, " A%d=%d", p - LD, (int)in.exe2lsu->agu_req[p].uop->stq_idx);
+        std::fprintf(stderr, " A%d=%d", agu::st_slot(p), (int)in.exe2lsu->agu_req[p].uop->stq_idx);
     for (int p = 0; p < LSU_AGU_COUNT; p++)
       if (in.exe2lsu->agu_req[p].valid && in.exe2lsu->agu_req[p].uop.op == UOP_LOAD)
         std::fprintf(stderr, " G%d=%d", p, (int)in.exe2lsu->agu_req[p].uop->ldq_idx);

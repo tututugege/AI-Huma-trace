@@ -26,16 +26,19 @@ Exu::Exu(SimContext *ctx) : ctx(ctx) {}
 // Functional units are created per issue port, in write-back priority order (MUL first).
 void Exu::init() {
   struct Spec { FuKind kind; uint64_t mask; };
-  static const Spec kSpecs[] = {{FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV}, {FuKind::AGU, OP_MASK_LD},
-                                {FuKind::AGU, OP_MASK_STA}, {FuKind::SDU, OP_MASK_STD}, {FuKind::BRU, OP_MASK_BR},
+  static const Spec kSpecs[] = {{FuKind::MUL, OP_MASK_MUL}, {FuKind::DIV, OP_MASK_DIV},
+                                {FuKind::AGU, OP_MASK_LD | OP_MASK_STA}, {FuKind::SDU, OP_MASK_STD},
+                                {FuKind::BRU, OP_MASK_BR},
                                 {FuKind::I2F, OP_MASK_I2F},   // integer -> FP: ahead of the ALU, which would otherwise starve it (write-back priority = this order)
                                 {FuKind::ALU, OP_MASK_ALU}, {FuKind::CSR, OP_MASK_CSR},
                                 {FuKind::FMA, OP_MASK_FMA}, {FuKind::FDIV, OP_MASK_FDIV}, {FuKind::FMISC, OP_MASK_FMISC}};
   int agu = 0, sdu = 0;
+  div_fu_idx = -1;
   units.clear();
-  for (auto &m : port_fu_mask) m = 0;
   for (int i = 0; i < ISSUE_WIDTH; i++) {
+    port_slot_valid[i] = false;
     port_fus[i].clear();
+    port_fu_mask[i] = 0;
     for (const Spec &spec : kSpecs) {
       if (!(GLOBAL_ISSUE_PORT_CONFIG[i].support_mask & spec.mask)) continue;
       FuUnit u;
@@ -45,6 +48,7 @@ void Exu::init() {
       u.support_mask = spec.mask;
       if (spec.kind == FuKind::AGU) u.lsu_agu_port = agu++;
       if (spec.kind == FuKind::SDU) u.lsu_sdu_port = sdu++;
+      if (spec.kind == FuKind::DIV) div_fu_idx = static_cast<int>(units.size());
       if (u.mode == FuMode::PIPE) {
         u.depth = fu_pipe_latency(spec.kind);
         u.ring.resize(u.depth);
@@ -54,15 +58,13 @@ void Exu::init() {
       units.push_back(std::move(u));
     }
   }
-  Assert(static_cast<int>(units.size()) <= TOTAL_FU_COUNT && TOTAL_FU_COUNT <= 64);
+  Assert(static_cast<int>(units.size()) == TOTAL_FU_COUNT && TOTAL_FU_COUNT <= 64);
 }
 
 // Default (idle) outputs.
 void Exu::begin_cycle() {
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
-    out.exu2rob.entry[i].valid = false;
-    out.exe2iss.fu_ready_mask[i] = 0;
-  }
+  for (int i = 0; i < ROB_WB_WIDTH; i++) out.exu2rob.entry[i].valid = false;
+  out.exe2iss.div_wb_next = false;
   out.exe2iss.div_wake_valid = false;
   out.exe2iss.div_wake_preg = 0;
   for (int i = 0; i < LSU_AGU_COUNT; i++) out.exe2lsu.agu_req[i].valid = out.exe2lsu.agu_req[i].raw = false;
@@ -76,35 +78,26 @@ void Exu::begin_cycle() {
   out.exu2id.br_type = 0;
 }
 
-// Which operation classes each issue port can accept. After the collect phase an input slot is occupied only if its unit
-// could not take the uop, so a free slot is what makes a unit ready. Nothing is accepted during a flush.
+// Reserve port 1 write-back and wake consumers one cycle before DIV finishes.
 void Exu::ready() {
+  out.exe2iss.div_wb_next = false;
   out.exe2iss.div_wake_valid = false;
   out.exe2iss.div_wake_preg = 0;
-  for (int i = 0; i < ISSUE_WIDTH; i++) {
-    uint64_t mask = 0;
-    bool div_wb_next = false;
-    if (!in.rob_bcast->flush) {
-      for (int fu : port_fus[i]) {
-        const FuUnit &f = units[fu];
-        if (!f.slot_valid) mask |= f.support_mask;
-        if (f.kind == FuKind::DIV && f.busy && f.done == sim_time + 1) {
-          div_wb_next = true;
-          if (f.cur.dest_en) {
-            out.exe2iss.div_wake_valid = true;
-            out.exe2iss.div_wake_preg = f.cur->dest_preg;
-          }
-        }
+  if (!in.rob_bcast->flush && div_fu_idx >= 0) {
+    const FuUnit &f = units[div_fu_idx];
+    if (f.busy && f.done == sim_time + 1) {
+      out.exe2iss.div_wb_next = true;
+      if (f.cur.dest_en) {
+        out.exe2iss.div_wake_valid = true;
+        out.exe2iss.div_wake_preg = f.cur->dest_preg;
       }
-      if (div_wb_next) mask &= ~OP_MASK_ALU;  // reserve port 1 write-back for completing DIV next cycle
     }
-    out.exe2iss.fu_ready_mask[i] = mask;
   }
 }
 
-// The CSR uop sitting in port 0's FU slot drives the CSR file's read/write request.
-// The clock edge: the load write-back register; issued uops enter the FU input slots (killed ones are dropped, resolved
-// branch bits are cleared); a flush empties them.
+// The CSR uop sitting in port 0's issue slot drives the CSR file's read/write request.
+// The clock edge: the load write-back register; issued uops enter the per-port pipeline register (killed ones are dropped);
+// a flush empties them.
 void Exu::seq() {
   // the write-back register: loads that complete this cycle and were not woken early by the LSU
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
@@ -118,14 +111,11 @@ void Exu::seq() {
     l.rob_flag = e.uop->rob_flag;
   }
   if (in.rob_bcast->flush) {
-    for (auto &f : units) f.slot_valid = false;
+    for (int p = 0; p < ISSUE_WIDTH; p++) port_slot_valid[p] = false;
     return;
   }
-  for (auto &f : units) {
-    if (!f.slot_valid) continue;
-    if (is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
-  }
   for (int p = 0; p < ISSUE_WIDTH; p++) {
+    port_slot_valid[p] = false;
     if (!in.iss2prf->iss_entry[p].valid) continue;
     Uop iu = in.iss2prf->iss_entry[p].uop;   // (there is no register file: the operand values are facts of the trace)
     if (needs_ftq_pc(p, iu)) {
@@ -140,13 +130,8 @@ void Exu::seq() {
     }
     ExuInst uop = iu;
     if (is_br_killed(uop, (*in.dec_bcast))) continue;
-    const uint64_t bit = 1ULL << uop.op;
-    int target = -1;  // first FU of the port that supports the op and has a free input slot
-    for (int fu : port_fus[p])
-      if ((units[fu].support_mask & bit) && !units[fu].slot_valid) { target = fu; break; }
-    Assert(target >= 0 && "EXU enqueue without free FU input slot");
-    units[target].slot_valid = true;
-    units[target].slot = uop;
+    port_slot_valid[p] = true;
+    port_slot[p] = uop;
   }
 }
 
@@ -159,15 +144,10 @@ void Exu::exec() {
   const bool flush_any = flush_all || flush_br, flush = flush_all;
   const int64_t now = sim_time;
 
-  uint64_t cmask = 0;  // completing units
-  ExuInst *cinst[64];
-  for (size_t i = 0; i < units.size(); i++) {
-    FuUnit &f = units[i];
-    if (!f.slot_valid && f.idle()) continue;
-
-    // flush applied to the instructions held in the unit
-    if (f.mode == FuMode::PIPE) {
-      if (flush_any && f.count) {
+  // flush applied to the instructions held inside PIPE / ITER units
+  if (flush_any) {
+    for (FuUnit &f : units) {
+      if (f.mode == FuMode::PIPE && f.count) {
         if (flush_all) {
           f.count = 0;
         } else {
@@ -180,69 +160,86 @@ void Exu::exec() {
           }
           f.count = m;
         }
-      }
-    } else if (f.mode == FuMode::ITER) {
-      if (flush_any && f.busy && (flush_all || is_br_killed(f.cur, (*in.dec_bcast)))) {
+      } else if (f.mode == FuMode::ITER && f.busy && (flush_all || is_br_killed(f.cur, (*in.dec_bcast)))) {
         f.busy = false;
         f.done = 0;
       }
     }
+  }
 
-    // the input slot goes to the unit unless flushed or killed (that frees it)
-    bool en = false;
-    if (f.slot_valid && f.lsu_agu_port >= 0 && (f.slot.op == UOP_LOAD || f.slot.op == UOP_STA)) {   // the AGU is occupied, killed or not
+  uint64_t cmask = 0;  // completing units
+  ExuInst *cinst[64];
+  // per-port issue pipeline registers feed their target FU (non-stalling)
+  for (int p = 0; p < ISSUE_WIDTH; p++) {
+    if (!port_slot_valid[p]) continue;
+    ExuInst slot = port_slot[p];
+    port_slot_valid[p] = false;
+    const uint64_t bit = 1ULL << slot.op;
+    int target = -1;
+    for (int fu : port_fus[p])
+      if (units[fu].support_mask & bit) { target = fu; break; }
+    Assert(target >= 0 && "EXU enqueue without supporting FU");
+    FuUnit &f = units[target];
+    if (f.lsu_agu_port >= 0 && (slot.op == UOP_LOAD || slot.op == UOP_STA)) {   // the AGU is occupied, killed or not
       out.exe2lsu.agu_req[f.lsu_agu_port].raw = true;
-      out.exe2lsu.agu_req[f.lsu_agu_port].uop.op = f.slot.op;
+      out.exe2lsu.agu_req[f.lsu_agu_port].uop.op = slot.op;
     }
-    if (f.slot_valid) {
-      if (flush_all || is_br_killed(f.slot, (*in.dec_bcast))) f.slot_valid = false;
-      else en = true;
-    }
-
+    if (flush_all || is_br_killed(slot, (*in.dec_bcast))) continue;
     switch (f.mode) {
     case FuMode::SINGLE:
-      if (en) {
-        f.out = f.slot;
-        fu::compute(f.kind, f.out);
-        cinst[i] = &f.out;
-        cmask |= 1ULL << i;
-      }
+      f.out = slot;
+      fu::compute(f.kind, f.out);
+      cinst[target] = &f.out;
+      cmask |= 1ULL << target;
       break;
-    case FuMode::PIPE:
-      if (en && f.count < f.depth) {
-        FuUnit::PipeEntry e;
-        e.uop = f.slot;
-        fu::compute(f.kind, e.uop);
-        e.done_cycle = now + f.depth - 1;
-        f.push_back(e);
-      }
-      if (f.count && f.front().done_cycle <= now) {
-        cinst[i] = &f.front().uop;
-        cmask |= 1ULL << i;
-      }
+    case FuMode::PIPE: {
+      Assert(f.count < f.depth && "PIPE unit overflow");
+      FuUnit::PipeEntry e;
+      e.uop = slot;
+      fu::compute(f.kind, e.uop);
+      e.done_cycle = now + f.depth - 1;
+      f.push_back(e);
       break;
+    }
     case FuMode::ITER:
-      if (en && !f.busy) {
-        f.cur = f.slot;
-        fu::compute(f.kind, f.cur);
-        f.done = now + fu::iter_latency(f.kind, f.cur);
-        f.busy = true;
-      }
-      if (f.busy && f.done <= now) {
-        cinst[i] = &f.cur;
-        cmask |= 1ULL << i;
-      }
+      Assert(!f.busy && "ITER unit occupied while busy");
+      f.cur = slot;
+      fu::compute(f.kind, f.cur);
+      f.done = now + fu::iter_latency(f.kind, f.cur);
+      f.busy = true;
       break;
     }
   }
+
+  // completing PIPE / ITER units
+  for (size_t i = 0; i < units.size(); i++) {
+    FuUnit &f = units[i];
+    if (f.mode == FuMode::PIPE && f.count && f.front().done_cycle <= now) {
+      cinst[i] = &f.front().uop;
+      cmask |= 1ULL << i;
+    } else if (f.mode == FuMode::ITER && f.busy && f.done <= now) {
+      cinst[i] = &f.cur;
+      cmask |= 1ULL << i;
+    }
+  }
+
+  auto rob_wb_ch_from_port = [](int p) -> int {
+    if (p >= IQ_ALU_PORT_BASE && p < IQ_ALU_PORT_BASE + ALU_NUM) return ROB_WB_ALU_BASE + (p - IQ_ALU_PORT_BASE);
+    if (p >= IQ_STD_PORT_BASE && p < IQ_STD_PORT_BASE + LSU_SDU_COUNT) return ROB_WB_STD_BASE + (p - IQ_STD_PORT_BASE);
+    if (p >= IQ_BR_PORT_BASE && p < IQ_BR_PORT_BASE + BRU_NUM) return ROB_WB_BR_BASE + (p - IQ_BR_PORT_BASE);
+    if (p >= IQ_FP_PORT_BASE && p < IQ_FP_PORT_BASE + GLOBAL_IQ_CONFIG[IQ_FP].port_num)
+      return ROB_WB_FP_BASE + (p - IQ_FP_PORT_BASE);
+    Assert(0 && "EXU: unexpected port for direct ROB completion");
+    return 0;
+  };
 
   ExuEntry br_res[BRU_NUM] = {};
   uint64_t consumed = 0;
   for (int p = 0; p < ISSUE_WIDTH && cmask; p++) {
     const uint64_t pm = cmask & port_fu_mask[p];
     if (!pm) continue;
-    // (two units completing on one port: the later ones wait; the issue stage's completion reservation prevents it)
-    const int fu = __builtin_ctzll(pm);  // first completing unit in write-back priority order
+    Assert(__builtin_popcountll(pm) == 1 && "EXU: multiple FUs completing on one port");
+    const int fu = __builtin_ctzll(pm);
     FuUnit &winner = units[fu];
     ExuInst u = *cinst[fu];
     const bool dead = flush || is_br_killed(u, (*in.dec_bcast));
@@ -253,8 +250,9 @@ void Exu::exec() {
     }
     if (!dead) {
       if (u.op != UOP_LOAD && u.op != UOP_STA) {  // loads/stores complete when the LSU writes back
-        out.exu2rob.entry[p].valid = true;
-        out.exu2rob.entry[p].uop = u;
+        const int ch = rob_wb_ch_from_port(p);
+        out.exu2rob.entry[ch].valid = true;
+        out.exu2rob.entry[ch].uop = u;
       }
       if (u.op == UOP_STA || u.op == UOP_LOAD) {
         Assert(winner.lsu_agu_port >= 0 && winner.lsu_agu_port < LSU_AGU_COUNT);
@@ -273,32 +271,26 @@ void Exu::exec() {
     consumed |= 1ULL << fu;
   }
 
-  // units pop what was consumed; a unit that can take more frees its input slot
+  // units pop what was consumed
   for (uint64_t m = consumed; m; m &= m - 1) {
     FuUnit &f = units[__builtin_ctzll(m)];
     if (f.mode == FuMode::PIPE) f.pop_front();
     else if (f.mode == FuMode::ITER) { f.busy = false; f.done = 0; }
   }
-  for (auto &f : units) {
-    if (!f.slot_valid) continue;
-    const int i = static_cast<int>(&f - units.data());
-    const bool ready = f.mode == FuMode::SINGLE ? ((consumed >> i) & 1) : f.mode == FuMode::PIPE ? f.count < f.depth : !f.busy;
-    if (ready) f.slot_valid = false;
-  }
 
   // LSU write-backs: a load (or SC) and a store address complete in the ROB
-  auto rob_complete = [&](int port, const Uop &u) {
+  auto rob_complete = [&](int ch, const Uop &u) {
     if (!(flush || is_br_killed(u, (*in.dec_bcast)))) {
-      out.exu2rob.entry[port].valid = true;
-      out.exu2rob.entry[port].uop = u;
+      out.exu2rob.entry[ch].valid = true;
+      out.exu2rob.entry[ch].uop = u;
     }
   };
   for (int i = 0; i < LSU_LOAD_WB_WIDTH; i++) {
     if (!in.lsu2exe->wb_req[i].valid) continue;
-    rob_complete(IQ_LD_PORT_BASE + i, in.lsu2exe->wb_req[i].uop);
+    rob_complete(ROB_WB_LD_BASE + i, in.lsu2exe->wb_req[i].uop);
   }
   for (int i = 0; i < LSU_STA_COUNT; i++)
-    if (in.lsu2exe->sta_wb_req[i].valid) rob_complete(IQ_STA_PORT_BASE + i, in.lsu2exe->sta_wb_req[i].uop);
+    if (in.lsu2exe->sta_wb_req[i].valid) rob_complete(ROB_WB_STA_BASE + i, in.lsu2exe->sta_wb_req[i].uop);
 
   // branch resolution: every resolved branch frees its mask bit, the oldest mispredict redirects
   bool mispred = false;
@@ -311,7 +303,7 @@ void Exu::exec() {
     }
   }
 
-  for (int p = 0; p < ISSUE_WIDTH; p++) {
+  for (int p = 0; p < ROB_WB_WIDTH; p++) {
     if (!out.exu2rob.entry[p].valid) continue;
     const auto &u = out.exu2rob.entry[p].uop;
     const int op = (int)decode_uop_type(u.op);

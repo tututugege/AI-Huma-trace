@@ -29,6 +29,12 @@ void Isu::apply_wakeup_to_uop(Uop &uop) const {
 // Empties the wake slots (a global flush at the edge; init).
 void Isu::clear_wake_state() {
   for_each_wake_slot([](auto &e) { e = {}; });
+  q_.div_busy = 0;
+  q_.div_rob_idx = 0;
+  q_.div_rob_flag = 0;
+  q_.fdiv_cnt = 0;
+  q_.fdiv_rob_idx = 0;
+  q_.fdiv_rob_flag = 0;
 }
 
 extern uint64_t g_dbg_cycle;
@@ -66,7 +72,11 @@ void Isu::init() {
     q.in.gate_probe = [this](const Uop &u, int port) { return grant_gate(u, port, false); };
     q.in.presel_ok = [this](const Uop &u, int port) {
       const UopType t = decode_uop_type(u.op);
-      if (t == UOP_DIV) return true;  // variable-latency DIV reserves port 1 wb via exe2iss.div_wb_next
+      if (port == 1) {
+        if (t == UOP_DIV) return !q_.div_busy;
+        return !in.exe2iss->div_wb_next;
+      }
+      if (t == UOP_FDIV && q_.fdiv_cnt > 0) return false;
       const int lat = get_latency(t, u->func7, u->is_word);
       return wb_busy_.free(port, (t == UOP_FDIV) ? lat + 1 : lat);
     };
@@ -122,12 +132,6 @@ void Isu::enq() {
 // Extra grant conditions of a pick: its completion cycle on the port is free (EXP-035), and the FP register-file write cycle of an
 // FP-writing unit (EXP-032). The reservations are made here, only for a grant that is about to be made.
 int Isu::grant_gate(const Uop &u, int port, bool reserve) {
-  // Shared AGUs (AguPorts.h): the physical AGU port of a load / STA grant; the load queue is scheduled first, so a load wins a
-  // shared port and the STA grant is refused (its slot stays in the queue).
-  int agu_port = -1;
-  if (port >= IQ_LD_PORT_BASE && port < IQ_LD_PORT_BASE + LSU_LDU_COUNT) agu_port = agu::ld_port(port - IQ_LD_PORT_BASE);
-  if (port >= IQ_STA_PORT_BASE && port < IQ_STA_PORT_BASE + LSU_STA_COUNT) agu_port = agu::st_port(port - IQ_STA_PORT_BASE);
-  if (agu_port >= 0 && (agu_ports_used_ >> agu_port & 1)) return GATE_REF_AGU;
   const UopType t = decode_uop_type(u.op);
   const int lat = get_latency(t, u->func7, u->is_word);
   const int off = (t == UOP_FDIV) ? lat + 1 : lat;   // iterative FP units finish one cycle later than their wake-up latency
@@ -136,7 +140,6 @@ int Isu::grant_gate(const Uop &u, int port, bool reserve) {
   if (!reserve) return fpw && fp_wb_busy_.full(off) ? GATE_REF_FPWB : GATE_OK;
   if (fpw && !fp_wb_busy_.try_reserve(off)) return GATE_REF_FPWB;
   if (t != UOP_DIV) wb_busy_.reserve(port, off);
-  if (agu_port >= 0) agu_ports_used_ |= 1u << agu_port;
   return GATE_OK;
 }
 
@@ -145,7 +148,6 @@ void Isu::issue() {
   for (int i = 0; i < ISSUE_WIDTH; i++) out.iss2prf.iss_entry[i].valid = false;
   wb_busy_.new_cycle(in.rob_bcast->flush);
   fp_wb_busy_.new_cycle(in.rob_bcast->flush);
-  agu_ports_used_ = 0;
   for (int k = 0; k < 4; k++) g_pmu_back.iss_ref[k] = g_pmu_back.iss_lost[k] = 0;
   // The queues schedule in this order: the two INT queues first (the FP write-port reservation sees the I2F grants before the FP queue's)
   static constexpr int ORDER[IQ_NUM] = {IQ_INT, IQ_INT1, IQ_MEM, IQ_STD, IQ_BR, IQ_FP};
@@ -157,7 +159,6 @@ void Isu::issue() {
     auto &q = iqs[qi];
     q.set_cancel(cn_pregs, n_cn);
     q.in.issue_block = in.rob_bcast->flush || in.dec_bcast->mispred;
-    for (int p = q.port_lo; p < q.port_hi; p++) q.in.port_fu_ready_mask[p] = in.exe2iss->fu_ready_mask[p];
     q.comb_issue();
     for (int p = q.port_lo; p < q.port_hi; p++) {
       const auto &grant = q.out.issue_grants[p];
@@ -177,6 +178,40 @@ void Isu::issue() {
 // and uops issued this cycle with a multi-cycle latency enter them (q: the registers of this cycle).
 void Isu::calc_latency_next(const Regs &q) {
   Regs &d = q_;   // updated in place
+  const auto &g1 = out.iss2prf.iss_entry[1];
+  const bool div_iss = g1.valid && decode_uop_type(g1.uop.op) == UOP_DIV;
+  Assert(!(q.div_busy && div_iss));
+  if (div_iss) {
+    d.div_busy = 1;
+    d.div_rob_idx = g1.uop->rob_idx;
+    d.div_rob_flag = g1.uop->rob_flag;
+  } else if (q.div_busy && !in.exe2iss->div_wb_next) {
+    d.div_busy = 1;
+    d.div_rob_idx = q.div_rob_idx;
+    d.div_rob_flag = q.div_rob_flag;
+  } else {
+    d.div_busy = 0;
+    d.div_rob_idx = 0;
+    d.div_rob_flag = 0;
+  }
+  const int fp_last = ISSUE_WIDTH - 1;
+  const auto &gf = out.iss2prf.iss_entry[fp_last];
+  const bool fdiv_iss = gf.valid && decode_uop_type(gf.uop.op) == UOP_FDIV;
+  Assert(!(q.fdiv_cnt > 0 && fdiv_iss));
+  if (fdiv_iss) {
+    d.fdiv_cnt = get_latency(UOP_FDIV, gf.uop->func7, gf.uop->is_word);
+    d.fdiv_rob_idx = gf.uop->rob_idx;
+    d.fdiv_rob_flag = gf.uop->rob_flag;
+  } else if (q.fdiv_cnt > 1) {
+    d.fdiv_cnt = q.fdiv_cnt - 1;
+    d.fdiv_rob_idx = q.fdiv_rob_idx;
+    d.fdiv_rob_flag = q.fdiv_rob_flag;
+  } else {
+    d.fdiv_cnt = 0;
+    d.fdiv_rob_idx = 0;
+    d.fdiv_rob_flag = 0;
+  }
+
   auto age = [](auto &cur, auto &nxt) {
     for (size_t i = 0; i < std::size(cur); i++) {
       nxt[i] = {};
@@ -311,6 +346,16 @@ void Isu::flush() {
     for_each_wake_slot([&](auto &e) {
       if (e.valid && is_younger_rob(e.rob_idx, e.rob_flag, r_idx, r_flag)) e = {};
     });
+    if (q_.div_busy && is_younger_rob(q_.div_rob_idx, q_.div_rob_flag, r_idx, r_flag)) {
+      q_.div_busy = 0;
+      q_.div_rob_idx = 0;
+      q_.div_rob_flag = 0;
+    }
+    if (q_.fdiv_cnt > 0 && is_younger_rob(q_.fdiv_rob_idx, q_.fdiv_rob_flag, r_idx, r_flag)) {
+      q_.fdiv_cnt = 0;
+      q_.fdiv_rob_idx = 0;
+      q_.fdiv_rob_flag = 0;
+    }
   }
 }
 

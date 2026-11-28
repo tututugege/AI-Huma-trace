@@ -391,7 +391,10 @@ constexpr uint64_t OP_MASK_FPQ = OP_MASK_FMA | OP_MASK_FMISC | OP_MASK_FDIV;   /
 #define CFG_MEM_IQ_SIZE 64
 #endif
 constexpr int IQ_MEM_ENQ_WIDTH = 6;
-constexpr int LSU_AGU_SHARED = 2;
+#ifndef CFG_LSU_AGU_SHARED
+#define CFG_LSU_AGU_SHARED 2
+#endif
+constexpr int LSU_AGU_SHARED = CFG_LSU_AGU_SHARED;
 #ifndef CFG_STD_IQ_SIZE
 #define CFG_STD_IQ_SIZE 16
 #endif
@@ -462,29 +465,42 @@ constexpr IssuePortConfigInfo GLOBAL_ISSUE_PORT_CONFIG[] = {
 #if CFG_PLAIN_ALU_PORTS >= 2
     PORT_CFG(OP_MASK_ALU ), // plain ALU
 #endif
-// memory issue port counts (1..4 each)
-#if CFG_LD_PORTS >= 1
+// shared memory issue ports: CFG_LD_PORTS + CFG_STA_PORTS - CFG_LSU_AGU_SHARED physical AGUs
+// order: load-only, shared (load | STA, load priority on conflict), STA-only
+#if (CFG_LD_PORTS - CFG_LSU_AGU_SHARED) >= 1
     PORT_CFG(OP_MASK_LD),
 #endif
-#if CFG_LD_PORTS >= 2
+#if (CFG_LD_PORTS - CFG_LSU_AGU_SHARED) >= 2
     PORT_CFG(OP_MASK_LD),
 #endif
-#if CFG_LD_PORTS >= 3
+#if (CFG_LD_PORTS - CFG_LSU_AGU_SHARED) >= 3
     PORT_CFG(OP_MASK_LD),
 #endif
-#if CFG_LD_PORTS >= 4
+#if (CFG_LD_PORTS - CFG_LSU_AGU_SHARED) >= 4
     PORT_CFG(OP_MASK_LD),
 #endif
-#if CFG_STA_PORTS >= 1
+#if CFG_LSU_AGU_SHARED >= 1
+    PORT_CFG(OP_MASK_LD | OP_MASK_STA),
+#endif
+#if CFG_LSU_AGU_SHARED >= 2
+    PORT_CFG(OP_MASK_LD | OP_MASK_STA),
+#endif
+#if CFG_LSU_AGU_SHARED >= 3
+    PORT_CFG(OP_MASK_LD | OP_MASK_STA),
+#endif
+#if CFG_LSU_AGU_SHARED >= 4
+    PORT_CFG(OP_MASK_LD | OP_MASK_STA),
+#endif
+#if (CFG_STA_PORTS - CFG_LSU_AGU_SHARED) >= 1
     PORT_CFG(OP_MASK_STA),
 #endif
-#if CFG_STA_PORTS >= 2
+#if (CFG_STA_PORTS - CFG_LSU_AGU_SHARED) >= 2
     PORT_CFG(OP_MASK_STA),
 #endif
-#if CFG_STA_PORTS >= 3
+#if (CFG_STA_PORTS - CFG_LSU_AGU_SHARED) >= 3
     PORT_CFG(OP_MASK_STA),
 #endif
-#if CFG_STA_PORTS >= 4
+#if (CFG_STA_PORTS - CFG_LSU_AGU_SHARED) >= 4
     PORT_CFG(OP_MASK_STA),
 #endif
 #if CFG_STD_PORTS >= 1
@@ -591,9 +607,8 @@ constexpr int div_latency(bool word) { return (word) ? 9 : DIV_MAX_LATENCY; }
 // LSU / TLB config derived from issue port layout.
 constexpr int LSU_STA_COUNT = count_ports_with_mask(OP_MASK_STA);
 constexpr int LSU_LDU_COUNT = count_ports_with_mask(OP_MASK_LD);
-constexpr int LSU_AGU_COUNT = LSU_STA_COUNT + LSU_LDU_COUNT;
-// Shared AGUs (2 shared by load and STA pipes, loads win; 5 physical DTLB/AGU ports).
-constexpr int LSU_AGU_PHYS = LSU_STA_COUNT + LSU_LDU_COUNT - LSU_AGU_SHARED;
+constexpr int LSU_AGU_COUNT = count_ports_with_mask(OP_MASK_LD | OP_MASK_STA);
+static_assert(LSU_AGU_COUNT == LSU_STA_COUNT + LSU_LDU_COUNT - LSU_AGU_SHARED, "LSU_AGU_COUNT");
 static_assert(LSU_AGU_SHARED >= 0 && LSU_AGU_SHARED <= LSU_LDU_COUNT && LSU_AGU_SHARED <= LSU_STA_COUNT, "LSU_AGU_SHARED");
 constexpr int LSU_LDU_WIDTH = clog2(LSU_LDU_COUNT);
 constexpr int LSU_SDU_COUNT = count_ports_with_mask(OP_MASK_STD);
@@ -618,8 +633,7 @@ constexpr int MAX_WAKEUP_PORTS =
 // ============================================================
 
 constexpr int IQ_ALU_PORT_BASE = find_first_port_with_mask(OP_MASK_ALU);
-constexpr int IQ_LD_PORT_BASE = find_first_port_with_mask(OP_MASK_LD);
-constexpr int IQ_STA_PORT_BASE = find_first_port_with_mask(OP_MASK_STA);
+constexpr int IQ_AGU_PORT_BASE = find_first_port_with_mask(OP_MASK_LD | OP_MASK_STA);
 constexpr int IQ_STD_PORT_BASE = find_first_port_with_mask(OP_MASK_STD);
 constexpr int IQ_BR_PORT_BASE = find_first_port_with_mask(OP_MASK_BR);
 constexpr int IQ_FP_PORT_BASE = find_first_port_with_mask(OP_MASK_FPQ);
@@ -635,6 +649,15 @@ constexpr int WB_LD_BASE = WB_ALU_BASE + ALU_NUM;
 constexpr int WB_FP_BASE = WB_LD_BASE + LSU_LOAD_WB_WIDTH;
 constexpr int WB_LANES = WB_FP_BASE + count_ports_with_mask(OP_MASK_FPQ);
 
+// ROB completion channels: one per ALU, LDU, STA, SDU, BRU, and FP port (loads and STAs share physical AGUs but complete independently).
+constexpr int ROB_WB_ALU_BASE = 0;
+constexpr int ROB_WB_LD_BASE = ROB_WB_ALU_BASE + ALU_NUM;
+constexpr int ROB_WB_STA_BASE = ROB_WB_LD_BASE + LSU_LDU_COUNT;
+constexpr int ROB_WB_STD_BASE = ROB_WB_STA_BASE + LSU_STA_COUNT;
+constexpr int ROB_WB_BR_BASE = ROB_WB_STD_BASE + LSU_SDU_COUNT;
+constexpr int ROB_WB_FP_BASE = ROB_WB_BR_BASE + BRU_NUM;
+constexpr int ROB_WB_WIDTH = ROB_WB_FP_BASE + count_ports_with_mask(OP_MASK_FPQ);
+
 // ============================================================
 // Derived Counts
 // ============================================================
@@ -642,8 +665,8 @@ constexpr int WB_LANES = WB_FP_BASE + count_ports_with_mask(OP_MASK_FPQ);
 constexpr int calculate_total_fu_count() {
   int total = 0;
   uint64_t major_masks[] = {OP_MASK_ALU, OP_MASK_CSR, OP_MASK_MUL,
-                            OP_MASK_DIV, OP_MASK_BR,  OP_MASK_LD,
-                            OP_MASK_STA, OP_MASK_STD,
+                            OP_MASK_DIV, OP_MASK_BR,  OP_MASK_LD | OP_MASK_STA,
+                            OP_MASK_STD,
                             OP_MASK_FMA, OP_MASK_FMISC, OP_MASK_FDIV, OP_MASK_I2F};
   for (const auto &cfg : GLOBAL_ISSUE_PORT_CONFIG) {
     for (uint64_t m : major_masks) {
@@ -662,8 +685,8 @@ constexpr int TOTAL_FU_COUNT = calculate_total_fu_count();
 constexpr IQStaticConfig GLOBAL_IQ_CONFIG[] = {
     {IQ_INT, IQ_INT_SIZE, IQ_INT_ENQ_WIDTH,
      OP_MASK_ALU | OP_MASK_MUL | OP_MASK_DIV | OP_MASK_CSR, IQ_ALU_PORT_BASE, 3, 0x13},   // ports 0, 1, 4
-    {IQ_MEM, CFG_MEM_IQ_SIZE, IQ_MEM_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_LD_PORT_BASE,
-     CFG_LD_PORTS + CFG_STA_PORTS},
+    {IQ_MEM, CFG_MEM_IQ_SIZE, IQ_MEM_ENQ_WIDTH, OP_MASK_LD | OP_MASK_STA, IQ_AGU_PORT_BASE,
+     LSU_AGU_COUNT},
     {IQ_STD, CFG_STD_IQ_SIZE, CFG_STD_IQ_ENQ_WIDTH, OP_MASK_STD, IQ_STD_PORT_BASE,
      count_ports_with_mask(OP_MASK_STD)},
     {IQ_BR, CFG_BR_IQ_SIZE, CFG_BR_IQ_ENQ_WIDTH, OP_MASK_BR, IQ_BR_PORT_BASE,
@@ -771,8 +794,7 @@ static_assert(LSU_STA_COUNT <= LSU_AGU_COUNT,
 static_assert(ALU_NUM > 0, "ALU_NUM must be positive");
 static_assert(BRU_NUM > 0, "BRU_NUM must be positive");
 static_assert(IQ_ALU_PORT_BASE >= 0, "IQ_ALU_PORT_BASE not found");
-static_assert(IQ_LD_PORT_BASE >= 0, "IQ_LD_PORT_BASE not found");
-static_assert(IQ_STA_PORT_BASE >= 0, "IQ_STA_PORT_BASE not found");
+static_assert(IQ_AGU_PORT_BASE >= 0, "IQ_AGU_PORT_BASE not found");
 static_assert(IQ_STD_PORT_BASE >= 0, "IQ_STD_PORT_BASE not found");
 static_assert(IQ_BR_PORT_BASE >= 0, "IQ_BR_PORT_BASE not found");
 static_assert(DTLB_ENTRIES > 0, "DTLB_ENTRIES must be positive");

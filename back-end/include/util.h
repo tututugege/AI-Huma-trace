@@ -63,25 +63,25 @@ inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_kind(int kind) {
 }
 
 inline wire<ROB_CPLT_MASK_WIDTH> rob_cplt_mask_from_issue_port(int port_idx) {
-  if (port_idx >= IQ_ALU_PORT_BASE && port_idx < IQ_ALU_PORT_BASE + ALU_NUM) {
+  if (port_idx >= ROB_WB_ALU_BASE && port_idx < ROB_WB_ALU_BASE + ALU_NUM) {
     return ROB_CPLT_G0;
   }
-  if (port_idx >= IQ_LD_PORT_BASE &&
-      port_idx < IQ_LD_PORT_BASE + LSU_LOAD_WB_WIDTH) {
+  if (port_idx >= ROB_WB_LD_BASE &&
+      port_idx < ROB_WB_LD_BASE + LSU_LOAD_WB_WIDTH) {
     return ROB_CPLT_G0;
   }
-  if (port_idx >= IQ_FP_PORT_BASE && port_idx < IQ_FP_PORT_BASE + GLOBAL_IQ_CONFIG[IQ_FP].port_num) {
+  if (port_idx >= ROB_WB_FP_BASE && port_idx < ROB_WB_FP_BASE + GLOBAL_IQ_CONFIG[IQ_FP].port_num) {
     return ROB_CPLT_G0;
   }
-  if (port_idx >= IQ_BR_PORT_BASE && port_idx < IQ_BR_PORT_BASE + BRU_NUM) {
+  if (port_idx >= ROB_WB_BR_BASE && port_idx < ROB_WB_BR_BASE + BRU_NUM) {
     return ROB_CPLT_G1;
   }
-  if (port_idx >= IQ_STA_PORT_BASE &&
-      port_idx < IQ_STA_PORT_BASE + LSU_STA_COUNT) {
+  if (port_idx >= ROB_WB_STA_BASE &&
+      port_idx < ROB_WB_STA_BASE + LSU_STA_COUNT) {
     return ROB_CPLT_G1;
   }
-  if (port_idx >= IQ_STD_PORT_BASE &&
-      port_idx < IQ_STD_PORT_BASE + GLOBAL_IQ_CONFIG[IQ_STD].port_num) {
+  if (port_idx >= ROB_WB_STD_BASE &&
+      port_idx < ROB_WB_STD_BASE + GLOBAL_IQ_CONFIG[IQ_STD].port_num) {
     return ROB_CPLT_G2;
   }
   Assert(0 && "Unknown issue port for ROB completion mask");

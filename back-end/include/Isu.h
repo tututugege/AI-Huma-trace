@@ -43,6 +43,12 @@ public:
   struct Regs {
     MulWakeEntry mul_wake_pipe[ISU_MUL_WAKE_DEPTH][ISU_MUL_WAKE_SLOT_NUM];
     IterWakeEntry fp_wake_slots[ISU_FP_WAKE_SLOT_NUM];
+    wire<1> div_busy = 0;
+    wire<ROB_IDX_WIDTH> div_rob_idx = 0;
+    wire<1> div_rob_flag = 0;
+    int fdiv_cnt = 0;
+    wire<ROB_IDX_WIDTH> fdiv_rob_idx = 0;
+    wire<1> fdiv_rob_flag = 0;
   };
   const Regs &q() const { return q_; }
   Regs &q_mut() { return q_; }   // checkpoint restore only
@@ -98,8 +104,7 @@ public:
 private:
   void add_iq(const IssueQueueConfig &cfg);
   int get_latency(UopType uop_type, wire<7> func7, bool word = false);
-  uint32_t agu_ports_used_ = 0;   // physical AGU ports granted this cycle (AguPorts.h)
-  int grant_gate(const Uop &u, int port, bool reserve);   // extra grant conditions (port completion cycle, FP write port, AGU): GateRefuse
+  int grant_gate(const Uop &u, int port, bool reserve);   // extra grant conditions (port completion cycle, FP write port): GateRefuse
   void apply_wakeup_to_uop(Uop &uop) const;
   void clear_wake_state();
   // Apply f to every delayed-wakeup slot of the working copy (MUL pipeline stages, DIV and FP slots).
